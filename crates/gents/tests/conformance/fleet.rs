@@ -1,6 +1,3 @@
-//! Fleet conformance home: generated inference/fleet slot-accounting
-//! contract rows over the derived InferenceCall projection.
-
 use super::*;
 
 fn slot_rows_from_contract<'a>(

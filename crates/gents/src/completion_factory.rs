@@ -16,9 +16,6 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
-/// Build the admission-wrapped completion model for a behavior. The owned loop
-/// (#400) drives this model directly — there is no rig `Agent`; per-request
-/// configuration is produced separately by [`loop_config`] / [`loop_config_for_request`].
 pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
@@ -33,9 +30,6 @@ where
     AdmittedCompletionClient::new(client, admission).completion_model(&behavior.model_name)
 }
 
-/// Build a [`LoopConfig`] from a behavior: tool choice when tools are present,
-/// behavior-level sampling, provider params, and the behavior turn cap. This is
-/// the base config (no per-request overrides).
 pub(crate) fn loop_config(
     behavior: &AgentBehavior,
     preamble: String,
@@ -46,8 +40,6 @@ pub(crate) fn loop_config(
         context_message: None,
         temperature: behavior.sampling.temperature,
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
-        // Provider-specific reasoning defaults are the leftmost base so that
-        // behavior sampling and per-request overrides win key-by-key.
         additional_params: merge_optional_params(
             merge_optional_params(
                 thinking_default_params(behavior.backend_provider_kind, behavior.openai_wire_api),
@@ -63,10 +55,6 @@ pub(crate) fn loop_config(
     }
 }
 
-/// Base [`loop_config`] with per-request sampling overrides applied — the
-/// owned-loop replacement for the old `agent_with_request_sampling`. Request
-/// temperature/max_tokens replace the defaults; request additional params merge
-/// on top of the behavior/provider params.
 pub(crate) fn loop_config_for_request(
     behavior: &AgentBehavior,
     preamble: String,
@@ -109,8 +97,6 @@ fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> Sam
         temperature: request.temperature.or(defaults.temperature),
         top_p: request.top_p.or(defaults.top_p),
         top_k: request.top_k.or(defaults.top_k),
-        // No per-request override exists for these today; the profile's value
-        // (or the served model's default, when unset) stands.
         min_p: defaults.min_p,
         frequency_penalty: defaults.frequency_penalty,
         presence_penalty: defaults.presence_penalty,

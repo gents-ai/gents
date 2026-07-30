@@ -1,8 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Codex step attaches a Tauri event listener for the auth-url fallback;
-// stub it so the component mounts and runs outside the native shell.
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
 }));
@@ -66,7 +64,6 @@ describe("InferenceSetupWizard", () => {
         }),
       );
     });
-    // The behavior is re-saved so it re-derives its model from the new backend.
     expect(props.onSaveBehaviorConfig).toHaveBeenCalledWith(
       expect.objectContaining({ behaviorId: "default", backendId: "backend-a" }),
     );

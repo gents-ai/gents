@@ -1,10 +1,3 @@
-//! Self-registration and heartbeat daemon for the `PeerRegistry` collection.
-//!
-//! Each running node writes (and periodically refreshes) its own row in
-//! `PeerRegistry`, keyed by `peer_id`. This makes nodes discoverable to peers
-//! that replicate the collection — the foundation of the service-discovery
-//! layer described in `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,21 +10,12 @@ use crate::graphql::escape_graphql_string;
 use super::graphql_helpers::{graphql_nullable_string_literal, graphql_string_list_literal};
 use super::templates::resolve_template;
 
-/// How often the node refreshes its `updated_at` heartbeat in `PeerRegistry`.
 pub const REGISTRY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Default discovery network id a node self-registers under. A single logical
-/// network is the prototype default; multiple networks are not yet a first-class
-/// configuration surface (see #490 review L4).
 pub const DEFAULT_NETWORK_ID: &str = "default";
 
-/// Environment variable overriding [`DEFAULT_NETWORK_ID`]. A seam so multiple
-/// discovery networks can coexist without a code change until network id becomes
-/// a first-class config field.
 pub const NETWORK_ID_ENV: &str = "GENTS_NETWORK_ID";
 
-/// Resolve the discovery network id from [`NETWORK_ID_ENV`], falling back to
-/// [`DEFAULT_NETWORK_ID`].
 pub fn resolve_network_id() -> String {
     std::env::var(NETWORK_ID_ENV)
         .ok()
@@ -40,17 +24,8 @@ pub fn resolve_network_id() -> String {
         .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
 }
 
-/// The scope templates a node offers by default when none are explicitly
-/// configured: a node advertises that it is willing to replicate a peer's
-/// conversation slice (filtered push) and the shared agent-config set. These
-/// are the two everyday pairing intents; both resolve in the built-in catalog.
 pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
 
-/// Filter a set of offered template ids down to those that resolve in the
-/// built-in catalog, preserving order and de-duplicating. An unknown id is a
-/// node advertising something a peer could not honor, so it is dropped rather
-/// than advertised. Falls back to [`DEFAULT_OFFERED_TEMPLATES`] when the result
-/// would otherwise be empty, so a node always offers at least the defaults.
 pub fn validate_offered_templates<I, S>(offered: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -76,61 +51,24 @@ where
     out
 }
 
-/// The fields this node self-reports into `PeerRegistry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryEntry {
-    /// The libp2p peer ID of this node.
     pub peer_id: String,
-    /// The agent DID (principal identity) running on this node.
     pub agent_did: String,
-    /// Shareable multiaddrs (e.g. `/ip4/.../tcp/.../p2p/<peer_id>`).
     pub addresses: Vec<String>,
-    /// Scope templates this node offers (null when empty). A peer materializes a
-    /// scoped pairing from one of these (see the discovery reconciler).
     pub templates: Vec<String>,
-    /// Optional human-readable name for this node.
     pub display_name: Option<String>,
-    /// Liveness hint: `"online"` or `"offline"`.
     pub status: String,
-    /// Which network this node belongs to.
     pub network_id: String,
-    /// DID of the member that issued the signed invite admitting this node.
     pub invited_by: Option<String>,
 }
 
-/// Controls which fields the `update` branch of [`registry_upsert_mutation`]
-/// writes.
-///
-/// - `Full` (operator register, `p2p network register`): the update includes
-///   all fields — `display_name`, `templates`, `addresses`, `status`, and
-///   `updated_at` — because the operator explicitly supplied them.
-/// - `Heartbeat` (daemon self-registration tick): the update writes ONLY
-///   `status`, `updated_at`, `addresses` (network location can change), and
-///   `templates` (the node's offered scope-template set), and deliberately omits
-///   `display_name`. This preserves any operator-set `display_name` rather than
-///   resetting it to null every 30 seconds, while still keeping the offered
-///   templates fresh on every heartbeat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertKind {
-    /// Full operator-supplied registration — update writes all fields.
     Full,
-    /// Daemon heartbeat tick — update writes liveness fields plus the offered
-    /// `templates`, preserving the operator-set `display_name`.
     Heartbeat,
 }
 
-/// Build a GraphQL upsert mutation for `PeerRegistry`.
-///
-/// - Filters on `peer_id`.
-/// - The `add` branch (first registration) always sets every field from the
-///   entry, including `display_name`, `templates`, and `registered_at`.
-/// - The `update` branch behaviour depends on `kind`:
-///   - [`UpsertKind::Full`]: updates all fields (operator register path).
-///   - [`UpsertKind::Heartbeat`]: updates `status`, `updated_at`, `addresses`,
-///     and `templates` (the offered scope-template set, which the heartbeat
-///     re-advertises), leaving operator-set `display_name` intact.
-/// - `templates`, `invited_by`, and `display_name` emit `null` when absent to
-///   avoid the DefraDB empty-list / nil-column corruption (never `[]`).
 pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
     let agent_did = escape_graphql_string(&entry.agent_did);
@@ -142,10 +80,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let invited_by = graphql_nullable_string_literal(entry.invited_by.as_deref());
     let now = escape_graphql_string(now);
 
-    // The update block differs by kind: Full rewrites every field; Heartbeat
-    // writes the liveness fields (status, updated_at, addresses) plus the offered
-    // templates, so a node re-advertises its scope offer on every tick while its
-    // operator-set display_name is never clobbered by the 30s heartbeat.
     let update_block = match kind {
         UpsertKind::Full => format!(
             r#"update: {{
@@ -191,12 +125,6 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     )
 }
 
-/// Background daemon: self-register this node into `PeerRegistry` at startup
-/// and refresh the heartbeat every [`REGISTRY_HEARTBEAT_INTERVAL`].
-///
-/// Mirrors the structure of `run_pairing_reconciler` — if the embedded node
-/// has no P2P transport the daemon exits immediately (idle). On cancel it
-/// optionally writes an `"offline"` row before returning.
 pub async fn run_registry_heartbeat(
     node: Arc<EmbeddedNode>,
     agent_did: String,
@@ -212,7 +140,6 @@ pub async fn run_registry_heartbeat(
     let mut interval = tokio::time::interval(super::intervals::heartbeat_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    // Perform the initial registration immediately, then heartbeat.
     if let Err(error) = tick_registry(&node, &p2p, &agent_did, &network_id, "online").await {
         tracing::warn!(
             agent_did = %agent_did,
@@ -222,15 +149,11 @@ pub async fn run_registry_heartbeat(
         );
     }
 
-    // `tokio::time::interval` makes its first tick immediately ready. Consume
-    // that scheduling tick after the explicit startup write so entering the
-    // loop does not issue a redundant second upsert during startup contention.
     interval.tick().await;
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                // Best-effort offline write; never block shutdown on a write failure.
                 if let Err(error) =
                     tick_registry(&node, &p2p, &agent_did, &network_id, "offline").await
                 {
@@ -289,9 +212,6 @@ async fn tick_registry(
         peer_id: peer_id.clone(),
         agent_did: agent_did.to_string(),
         addresses,
-        // A node advertises the scope templates it is willing to replicate. With
-        // no operator override, that is the default offer (conversation +
-        // agent-config), validated against the built-in catalog.
         templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied()),
         display_name: None,
         status: status.to_string(),
@@ -300,10 +220,6 @@ async fn tick_registry(
     };
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    // Use Heartbeat variant so recurring ticks never overwrite operator-set
-    // display_name (the add branch on first registration sets it from the entry,
-    // which is empty here — the operator path sets it). The heartbeat still
-    // re-advertises the offered templates so the registry offer stays fresh.
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
     let response = crate::retry::execute_graphql_with_conflict_retry(
         node,

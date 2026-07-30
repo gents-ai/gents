@@ -600,6 +600,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PairingReconcileShutdownBoundaryCases".to_string(),
         ));
     }
+    if !snapshot
+        .pairing_reconcile_sweep_retry_boundary_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "pairing_reconcile_cases".to_string(),
+            "PairingReconcileSweepRetryBoundaryCases".to_string(),
+        ));
+    }
     if !snapshot.pairing_reconcile_sweep_scheduling_cases.is_empty() {
         emitted.insert((
             "pairing_reconcile_cases".to_string(),
@@ -951,7 +960,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
 
-    // Keep this mirrored with the category strings in CoverageLedger.lean.
     let valid_categories = [
         "vocabulary",
         "state_machine",

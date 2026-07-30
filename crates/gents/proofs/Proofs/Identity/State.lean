@@ -1,13 +1,6 @@
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Image
 
-/-!
-# Identity — State
-
-Records and well-formedness for the `AgentPrincipal` /
-`AgentBehavior` / `AgentDeployment` split (#185).
--/
-
 namespace Identity
 
 abbrev DID := String

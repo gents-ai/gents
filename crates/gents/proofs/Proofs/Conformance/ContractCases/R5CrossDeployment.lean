@@ -1,14 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# R5 Cross-Deployment Subagent Conformance Cases
-
-Finite witnesses for the agent-facing R5 dispatch lifecycle. The rows pin the
-production contract around `spawn_subagent`: a parent bridge row is persisted,
-the child request materializes with parent linkage, and routing either crosses
-deployment boundaries or falls back to same-deployment materialization.
--/
-
 namespace Conformance.ContractCases
 
 def r5CrossDeploymentCase

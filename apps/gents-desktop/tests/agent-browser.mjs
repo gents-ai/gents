@@ -475,9 +475,6 @@ async function pageState(page) {
 }
 
 function spawnVite({ baseUrl, port }) {
-  // Vite may be hoisted to the workspace root; resolve its package root
-  // through Node (its exports map hides bin/) instead of assuming a nested
-  // node_modules layout.
   const vitePath = resolve(
     dirname(createRequire(import.meta.url).resolve("vite/package.json")),
     "bin/vite.js",
@@ -503,8 +500,6 @@ function spawnVite({ baseUrl, port }) {
   return {
     child,
     logs,
-    // Return the child before readiness so fatal startup cleanup can always
-    // stop it, including a live Vite process that never serves the harness.
     startup: waitForHttp(
       `${baseUrl}/tests/ui-harness/harness.html`,
       child,
@@ -600,9 +595,7 @@ function waitForRunnerReady(child, timeoutMs) {
             if (message.kind === "ready") {
               finish(resolveReady, { ready: message, logs });
             }
-          } catch {
-            // Rust tracing can emit non-JSON output before the ready record.
-          }
+          } catch {}
         }
         newline = stdoutBuffer.indexOf("\n");
       }
@@ -643,9 +636,7 @@ async function waitForHttp(url, child, logs, timeoutMs) {
       if (response.ok) {
         return;
       }
-    } catch {
-      // Vite has not bound yet.
-    }
+    } catch {}
     await delay(200);
   }
   throw new Error(`timed out waiting for Vite at ${url}\n${formatLogs(logs)}`);

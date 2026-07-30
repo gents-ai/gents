@@ -1,8 +1,4 @@
 //! MCP client connection pool — lazy-connect, cached connections to remote MCP servers.
-//!
-//! Each data service (hf-data, x-data, coding-session, etc.) exposes an MCP
-//! endpoint.  The pool connects on first use and caches the running client for
-//! subsequent `list_tools` / `call_tool` calls.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -27,20 +23,10 @@ use resume::SessionResumePolicy;
 
 pub const AGENT_DID_HEADER: &str = "x-agent-did";
 
-/// Bound on establishing an MCP connection (TCP connect + MCP handshake).
-/// A blackholed endpoint — e.g. the tailscale address of a powered-off host —
-/// drops packets silently, so without this bound the connect future never
-/// resolves (#622). rmcp's transport carries no timeout of its own.
 const MCP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Bound on one tools/list round-trip. list_tools is a safe read on
-/// interactive paths (discover / describe / argument preflight) and the pool
-/// retries it once after eviction, so a caller waits at most two of these.
 const MCP_LIST_TOOLS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Wrapper that stores list_tools / call_tool closures over a concrete
-/// `RunningService` so that the pool doesn't need to name the transport
-/// generic parameter (which includes rmcp's internal reqwest 0.13 Client).
 type ListToolsFuture = Pin<Box<dyn Future<Output = Result<ListToolsResult>> + Send + 'static>>;
 type CallToolFuture = Pin<Box<dyn Future<Output = Result<CallToolResult>> + Send + 'static>>;
 type ConnectFuture = Pin<Box<dyn Future<Output = Result<McpConnection>> + Send + 'static>>;
@@ -57,8 +43,6 @@ struct McpConnection {
     list_tools_fn: Box<ListToolsFn>,
     call_tool_fn: Box<CallToolFn>,
     last_used: std::sync::Mutex<std::time::Instant>,
-    /// The transport's SSE retry policy (#639). Once it reports poisoned,
-    /// this connection must be replaced, never reused.
     resume_policy: Arc<SessionResumePolicy>,
 }
 
@@ -164,8 +148,6 @@ async fn connect_mcp_service(
     let mut config =
         streamable_http_transport_config(endpoint, agent_did_header, &trace_context_headers)?;
     let resume_policy = Arc::new(SessionResumePolicy::new(service_id, resume_stats));
-    // Bounded SSE resume (#639): without this, rmcp's default policy resumes
-    // a dead session forever (a graceful stream close resets its counter).
     config.retry_config = Arc::clone(&resume_policy)
         as Arc<dyn rmcp::transport::common::client_side_sse::SseRetryPolicy>;
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
@@ -200,8 +182,6 @@ fn default_connect_fn(stats: ResumeStatsRegistry) -> Arc<ConnectFn> {
     )
 }
 
-/// Per-service [`McpResumeStats`] registry, shared between the pool and the
-/// connections it creates.
 #[derive(Clone, Default)]
 struct ResumeStatsRegistry {
     inner: Arc<std::sync::Mutex<HashMap<String, Arc<McpResumeStats>>>>,
@@ -275,12 +255,6 @@ pub(crate) fn tool_retry_disposition(
     }
 }
 
-/// Connection pool for MCP data-service clients.
-///
-/// Connections are created lazily on the first `list_tools` or `call_tool`
-/// request for a given `service_id` and reused for subsequent calls.
-///
-/// `McpPool` is cheaply cloneable (all state lives behind `Arc`).
 #[derive(Clone)]
 pub struct McpPool {
     inner: Arc<RwLock<HashMap<String, McpConnection>>>,
@@ -314,27 +288,17 @@ impl ParkKey {
     }
 }
 
-/// Per-service-endpoint-principal connect-parking state (#639). Strikes are
-/// connect failures and poisoned-session detections; the park horizon grows
-/// exponentially so a flapping server ends up parked with a long retry
-/// horizon instead of converting the resume hot-loop into an init hot-loop.
 #[derive(Debug, Clone, Copy)]
 struct ParkState {
     strikes: u32,
     last_strike: tokio::time::Instant,
     parked_until: tokio::time::Instant,
     connect_in_flight: bool,
-    /// One-shot escape hatch for the existing safe-read retry after a poison
-    /// recovery reconnect. It is not granted for plain connect failures.
     safe_read_retry_credit: bool,
 }
 
-/// First park horizon; doubles per strike up to [`MCP_PARK_MAX`].
 const MCP_PARK_BASE: std::time::Duration = std::time::Duration::from_secs(1);
-/// Ceiling on the park horizon for a persistently failing service.
 const MCP_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-/// A strike this long after the previous one resets the strike count: a
-/// service that stayed clean for this window earned a fresh horizon.
 const MCP_STRIKE_DECAY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 enum DialReservation {
@@ -365,11 +329,6 @@ enum ParkAdmission {
     SafeReadRetry,
 }
 
-/// Default idle TTL for pooled MCP connections.
-///
-/// A connection idle past this is replaced (and its session terminated) on
-/// next use. Bounds how long a wedged transport — e.g. one stuck in the rmcp
-/// dead-session SSE resume loop — can live unattended.
 pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl McpPool {
@@ -385,15 +344,11 @@ impl McpPool {
         }
     }
 
-    /// Replace connections idle longer than `ttl` on their next use (the old
-    /// session is terminated). Bounds how long a wedged transport can live.
     pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
         self.idle_ttl = Some(ttl);
         self
     }
 
-    /// Resume/re-init counters for `service_id` (#639). Created on first
-    /// access; shared with the connections the pool creates for the service.
     pub fn resume_stats(&self, service_id: &str) -> Arc<McpResumeStats> {
         self.resume_stats.stats_for(service_id)
     }
@@ -469,11 +424,6 @@ impl McpPool {
         )
     }
 
-    /// List the tools exposed by the MCP server at `endpoint`.
-    ///
-    /// Connects lazily — if no cached connection exists for `service_id`, one is
-    /// created.  If the cached connection points at a *different* endpoint the
-    /// old connection is dropped and a fresh one is opened.
     pub async fn list_tools(&self, service_id: &str, endpoint: &str) -> Result<ListToolsResult> {
         self.list_tools_with_agent_did(service_id, endpoint, None)
             .await
@@ -622,15 +572,6 @@ impl McpPool {
         call_tool.await
     }
 
-    // -----------------------------------------------------------------------
-    // Internal: double-checked locking connect
-    // -----------------------------------------------------------------------
-
-    /// Ensure a valid connection for `service_id` exists in the pool.
-    ///
-    /// 1. Read-lock: check if a connection exists and the endpoint matches.
-    /// 2. If not, re-check under the write lock, then connect with no lock
-    ///    held and insert the result. Duplicate racing connects are benign.
     async fn get_or_connect(
         &self,
         service_id: &str,
@@ -639,10 +580,7 @@ impl McpPool {
         park_admission: ParkAdmission,
     ) -> Result<()> {
         let agent_did_header = agent_did.map(ToOwned::to_owned);
-        // rmcp's streamable HTTP worker keeps custom headers in its transport
-        // config, so trace context is part of the connection context.
         let trace_context_headers = (self.trace_context_headers_fn)();
-        // Fast path — read lock
         {
             let guard = self.inner.read().await;
             if let Some(conn) = guard.get(service_id) {
@@ -693,10 +631,6 @@ impl McpPool {
                     "MCP connection context changed, reconnecting"
                 );
                 if resume_poisoned {
-                    // Terminal resume (#639): drop the dead session now —
-                    // through the #626 drop → cancellation → worker-cleanup
-                    // DELETE path — whether or not the fresh connect below
-                    // succeeds.
                     self.resume_stats
                         .stats_for(service_id)
                         .session_reinits
@@ -707,12 +641,6 @@ impl McpPool {
             }
         }
 
-        // Park gate (#639): while a service is parked after repeated connect
-        // failures or poisoned sessions, fail fast instead of dialing. Once a
-        // service has strike history, reserve the single dial allowed through
-        // an expired horizon so concurrent callers do not stampede. Services
-        // with no strike history keep the existing benign duplicate cold-start
-        // connects.
         let park_agent_did_header = agent_did_header.clone();
         let _dial_reservation = self.reserve_dial_if_struck(
             service_id,
@@ -756,19 +684,11 @@ impl McpPool {
             Ok(Ok(connection)) => connection,
         };
 
-        // Concurrent cold-start callers for a service with no strike history
-        // may both reach here; the last insert wins and the loser's connection
-        // is dropped. Once a service has strike history,
-        // `reserve_dial_if_struck` above admits only one in-flight dial per
-        // expired park horizon.
         let mut guard = self.inner.write().await;
         guard.insert(service_id.to_string(), connection);
         Ok(())
     }
 
-    /// Fail fast while `service_id` is inside its park horizon, and reserve
-    /// the single dial admitted for a struck service once the horizon expires
-    /// (#639).
     fn reserve_dial_if_struck(
         &self,
         service_id: &str,
@@ -834,10 +754,6 @@ impl McpPool {
         );
     }
 
-    /// Record a strike (a failed connect or a poisoned session) and extend
-    /// the park horizon. Strikes are only recorded for actual attempts —
-    /// calls blocked by the park gate never strike — so the horizon reflects
-    /// how the service behaves, not how often callers knock.
     fn record_strike(
         &self,
         service_id: &str,
@@ -868,9 +784,6 @@ impl McpPool {
             .saturating_mul(2u32.saturating_pow(state.strikes.saturating_sub(1).min(30)))
             .min(MCP_PARK_MAX);
         state.parked_until = now + horizon;
-        // Bounded by construction: at most one strike per attempt, and
-        // attempts are park-gated — a flapping service converges to one warn
-        // per park horizon (≤ one per 15 minutes at the ceiling).
         tracing::warn!(
             service_id,
             endpoint,
@@ -915,9 +828,6 @@ fn build_call_tool_params(tool_name: &str, arguments: serde_json::Value) -> Call
     params
 }
 
-/// Resolve the best MCP URL for a service given local network context.
-///
-/// Priority: localhost (same host) > LAN IP (same subnet) > Tailscale IP.
 pub fn resolve_mcp_url(
     service_hostname: &str,
     service_tailscale_ip: &str,

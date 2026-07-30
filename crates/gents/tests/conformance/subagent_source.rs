@@ -1,11 +1,10 @@
-//! Bucket 3 runtime conformance for R3 SubagentSource.
-
 use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::interrupt::{fetch_interrupt_requested_at, interrupt_request};
+use gents::retry::execute_graphql_with_conflict_retry;
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
@@ -99,9 +98,6 @@ async fn ensure_parent_subagent_authorization(
     background_enabled: bool,
 ) {
     let selection_id = format!("{behavior_id}-r3-subagent-tools");
-    // Each bare behavior id becomes a named local target whose `name` equals the
-    // behavior id (so the model-facing spawn args, which carry `behavior_id`
-    // / fall back to it as the name, still match an allowed target).
     let target_entries = subagent_targets
         .into_iter()
         .map(|target_behavior_id| {
@@ -211,9 +207,6 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     }
 }
 
-/// #683 party-scope fence: the targeted bridge is the complete remote parent
-/// edge. A host must materialize without a replicated parent AgentRequest and
-/// stamp the coordinator DID onto the child request's immutable return route.
 #[tokio::test]
 async fn trusted_path_uses_targeted_bridge_without_parent_request() {
     let db = test_db("r3-subagent-source-xdep-targeted-bridge").await;
@@ -293,15 +286,6 @@ async fn trusted_path_normalizes_requester_did_before_stamping_route() {
     );
 }
 
-/// Bounded wait for the parent-interrupt latch to propagate to a child
-/// request. Propagation is async relative to the caller: the booted daemon's
-/// live cascade, the source's post-create re-check, and recovery all race to
-/// write the latch, so a single post-call snapshot is not a valid observation
-/// (#591). The contract stays exact — the latch must land within the bound.
-///
-/// The bound matches `wait_for_child_request`'s 10s: on a saturated CI runner
-/// the propagation itself is scheduler-starved, and a 5s bound could expire
-/// before any of the racing writers landed the latch (the residual #591 flake).
 async fn wait_for_child_interrupt_latch(
     node: &EmbeddedNode,
     child_request_id: &str,
@@ -941,9 +925,6 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     running.booted.shutdown().await;
 }
 
-/// Change 2 (#377): DID-anchored single-creator gate. On the non-trusted path a
-/// node must NOT materialize a child whose resolved target DID is not its own
-/// local DID. The peer that owns the target DID is the single creator.
 #[tokio::test]
 async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     let db = test_db("r3-subagent-source-did-anchor").await;
@@ -959,10 +940,6 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     )
     .await;
 
-    // Authorize a target named "remote-target" owned by a DIFFERENT (remote) DID.
-    // Cross-deployment is enabled so the spawn is authorized; the DID-anchor gate
-    // in SubagentSource is what must prevent this (non-owning) node from creating
-    // the child.
     let remote_did = "did:key:zRemotePeerNotUs";
     let selection_id = format!("{behavior_id}-r3-did-anchor-tools");
     upsert_tool_selection(
@@ -1044,7 +1021,6 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     )
     .await;
 
-    // Bridge args carry the RESOLVED remote target DID, as the spawn hook writes.
     let args = serde_json::json!({
         "name": "remote-target",
         "agent_did": remote_did,
@@ -1069,7 +1045,6 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     );
     lifecycle.start_running().await.unwrap();
 
-    // This node does not own the remote DID, so it must not create the child.
     assert_no_child_request_for_tool(
         db.node.as_ref(),
         parent_tool_call_id,
@@ -1080,10 +1055,6 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     booted.shutdown().await;
 }
 
-/// Change 3 (#377): orphan-child-escapes-cancel race. If the parent is
-/// interrupted before `SubagentSource` materializes the child, the source must
-/// re-check after the create and interrupt the just-created child so it does not
-/// run uncancellable.
 #[tokio::test]
 async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
     let db = test_db("r3-subagent-source-orphan-cancel").await;
@@ -1101,9 +1072,6 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
     )
     .await;
 
-    // Latch the parent interrupt BEFORE writing the running bridge, so by the time
-    // SubagentSource creates the child the parent is already interrupted. The
-    // post-create re-check must then interrupt the orphan child.
     interrupt_request(db.node.as_ref(), parent_request_id)
         .await
         .unwrap();
@@ -1130,7 +1098,6 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
     );
     lifecycle.start_running().await.unwrap();
 
-    // The child gets materialized, then immediately interrupted by the source.
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     wait_for_child_interrupt_latch(
         db.node.as_ref(),
@@ -1142,11 +1109,6 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
     running.booted.shutdown().await;
 }
 
-/// Change 1 (#377): receiver-side trusted-paired-peer gate. A cross-deployment
-/// bridge (parent authored by a paired peer) must NOT materialize a child when
-/// the TARGET behavior's `subagent_allow_cross_deployment` flag is off
-/// (default). The trusted-peer branch bypasses `subagent_spawn_denial`, so this
-/// gate is enforced separately by reading the target behavior's flag directly.
 #[tokio::test]
 async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     let db = test_db("r3-subagent-source-xdep-flag-off").await;
@@ -1155,7 +1117,6 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     let target_behavior_id = "xdep-target-flag-off";
     let remote_parent_did = "did:key:zPairedPeerParent";
 
-    // Target behavior on THIS node with the cross-deployment flag OFF.
     upsert_target_behavior_with_cross_deployment(
         db.node.as_ref(),
         &local_did,
@@ -1164,7 +1125,6 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     )
     .await;
 
-    // Parent request authored by the paired-peer (remote) DID.
     let parent_request_id = "r3-parent-xdep-flag-off";
     let parent_session_id = "r3-session-xdep-flag-off";
     let parent_tool_call_id = "r3-tc-xdep-flag-off";
@@ -1177,8 +1137,6 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     )
     .await;
 
-    // Spawn the source first so this test exercises the subscription path
-    // deterministically rather than waiting for the periodic rescan.
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
     let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
@@ -1201,7 +1159,6 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     )
     .await;
 
-    // Flag off -> refuse: no child materialized.
     assert_no_child_request_for_tool(
         db.node.as_ref(),
         parent_tool_call_id,
@@ -1210,8 +1167,6 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     .await;
 }
 
-/// Change 1 (#377): with the TARGET behavior's flag ON, the trusted-paired-peer
-/// branch proceeds and materializes the cross-deployment child locally.
 #[tokio::test]
 async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on() {
     let db = test_db("r3-subagent-source-xdep-flag-on").await;
@@ -1240,7 +1195,6 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     )
     .await;
 
-    // Spawn the source FIRST so its subscription is open before the bridge write.
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
     let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
@@ -1263,16 +1217,12 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     )
     .await;
 
-    // Flag on -> proceed: child materialized and locally owned.
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
     assert_eq!(child.agent_did, local_did);
     assert_eq!(child.behavior_id, target_behavior_id);
 }
 
-/// A paired-peer bridge is still owner-scoped: when the immutable
-/// `spawn_target_did` names a different host, this runtime must not materialize
-/// the child even if the target behavior allows cross-deployment spawns.
 #[tokio::test]
 async fn trusted_path_refuses_spawn_targeting_other_host() {
     let db = test_db("r3-subagent-source-xdep-wrong-host").await;
@@ -1332,9 +1282,6 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     .await;
 }
 
-/// Trusted paired-peer materialization requires the immutable routing field
-/// itself. Resolved args alone are not enough, because a null row target cannot
-/// be owner-scoped by the replication filter.
 #[tokio::test]
 async fn trusted_path_refuses_missing_spawn_target_did() {
     let db = test_db("r3-subagent-source-xdep-missing-target").await;
@@ -1394,10 +1341,6 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
     .await;
 }
 
-/// Change 2 (#377): recovery gate. Recovery must REFUSE to materialize a
-/// cross-deployment orphan child when the parent behavior's
-/// `subagent_allow_cross_deployment` flag is off, even when the target is
-/// otherwise an allowed subagent target.
 #[tokio::test]
 async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     let db = test_db("r3-subagent-source-orphan-xdep-flag-off").await;
@@ -1407,7 +1350,6 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     let child_request_id = "child-orphan-xdep";
     let remote_target_did = "did:key:zRemoteTargetForRecovery";
 
-    // Authorize a target owned by a REMOTE DID with cross-deployment OFF.
     let selection_id = format!("{}-orphan-xdep-tools", crate::support::AGENT_NAME);
     upsert_tool_selection(
         db.node.as_ref(),
@@ -1492,10 +1434,6 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     assert_tool_call_not_allowed(&tool, "/name", "remote-recovery-target");
 }
 
-/// Recovery is intentionally local-parent scoped, not a trusted-paired-peer
-/// materialization path. A replicated remote-parent bridge that targets this
-/// local DID must wait for the live SubagentSource owner gate instead of being
-/// recovered by this local agent's orphan sweep.
 #[tokio::test]
 async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
     let db = test_db("r3-subagent-source-orphan-remote-parent").await;
@@ -1546,11 +1484,6 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
     .await;
 }
 
-/// Change 3 (#377), real race: drive the cascade (parent interrupt) CONCURRENTLY
-/// with `SubagentSource` materialization rather than pre-latching before the
-/// bridge is written. The bridge is written first (so the source begins
-/// materializing), then the parent is interrupted in the same window; the
-/// post-create re-check must still interrupt the orphan child.
 #[tokio::test]
 async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     let db = test_db("r3-subagent-source-orphan-cancel-race").await;
@@ -1589,10 +1522,6 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
         running.booted.agent_did.clone(),
     );
 
-    // Drive the bridge create and the parent interrupt CONCURRENTLY. The source
-    // observes the bridge and begins materializing while the cascade latches the
-    // parent interrupt. Whichever wins the window, the post-create re-check must
-    // converge the orphan child to interrupted.
     let node_for_interrupt = db.node.clone();
     let parent_for_interrupt = parent_request_id.to_string();
     let interrupt_task = tokio::spawn(async move {
@@ -1614,13 +1543,6 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     running.booted.shutdown().await;
 }
 
-/// Change 3 (#377), parent reached a CANCEL-WORTHY terminal without setting the
-/// interrupt latch: the parent reaches `dead`/`error` (NOT clean `completed`) in
-/// the materialize window. The cascade only fires on the interrupt latch, and a
-/// parent that errored/died would never cascade to a child that did not yet
-/// exist. Mirroring the recovery cascade (which drives a Cascade child to
-/// `.interrupted` on any cancel-worthy terminal parent), the source's post-create
-/// re-check MUST interrupt the just-created Cascade orphan child.
 #[tokio::test]
 async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_terminal() {
     let db = test_db("r3-subagent-source-orphan-parent-dead").await;
@@ -1638,8 +1560,6 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     )
     .await;
 
-    // Terminalize the parent to a CANCEL-WORTHY terminal (dead) WITHOUT setting
-    // the interrupt latch. Only the parent-terminal re-check can catch this.
     mark_request_dead(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
@@ -1675,11 +1595,6 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     running.booted.shutdown().await;
 }
 
-/// Regression guard for the #377 over-broad re-check: a CASCADE child whose
-/// parent completed NORMALLY must NOT be interrupted. A cleanly-completed parent
-/// does not cascade-cancel its tools anywhere else (live cascade fires only on
-/// `.cancelled`; recovery cascade fires on cancel-worthy terminals, not clean
-/// completion). A background subagent of a completed parent must keep running.
 #[tokio::test]
 async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_normally() {
     let db = test_db("r3-subagent-source-cascade-parent-completed").await;
@@ -1697,7 +1612,6 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
     )
     .await;
 
-    // Parent completes NORMALLY (no interrupt latch). This is NOT a cancel signal.
     mark_request_completed(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
@@ -1733,11 +1647,6 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
     running.booted.shutdown().await;
 }
 
-/// A DETACHED (cancel_policy != Cascade) child outlives its parent and must NOT
-/// be interrupted by the source's post-create re-check, EVEN when the parent is
-/// interrupted in the materialize window. Mirrors `bridge_cancel_cascade`
-/// (`if self.cancel_policy != CancelPolicy::Cascade { return None } // detached`)
-/// and `recovery::is_detached_subagent_tool` (no cascade on interrupt).
 #[tokio::test]
 async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupted() {
     let db = test_db("r3-subagent-source-detached-parent-interrupted").await;
@@ -1755,8 +1664,6 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
     )
     .await;
 
-    // Latch the parent interrupt BEFORE the bridge — the strongest cancel signal.
-    // A Cascade child would be interrupted here; a DETACHED child must survive.
     interrupt_request(db.node.as_ref(), parent_request_id)
         .await
         .unwrap();
@@ -2000,16 +1907,10 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
     assert_tool_call_not_allowed(&tool, "/await_mode", "background");
 }
 
-/// The fixture `SubagentSource` opens its global Update subscription lazily on
-/// the first `next_fire` poll. Give the spawned source task a moment to open
-/// its subscription when a test wants to exercise the event path directly.
 async fn wait_for_subagent_source_subscription() {
     tokio::time::sleep(Duration::from_millis(250)).await;
 }
 
-/// Settle, then assert the child request was NOT interrupted. Used to verify a
-/// detached child (or a Cascade child of a normally-completed parent) is left
-/// running by the source's post-create re-check.
 async fn assert_child_not_interrupted(
     node: &EmbeddedNode,
     child_request_id: &str,
@@ -2038,7 +1939,8 @@ async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "mark test request dead").await;
     assert!(
         !response.has_errors(),
         "mark_request_dead failed: {:?}",
@@ -2059,7 +1961,8 @@ async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "mark test request completed").await;
     assert!(
         !response.has_errors(),
         "mark_request_completed failed: {:?}",
@@ -2067,10 +1970,6 @@ async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
     );
 }
 
-/// Upsert a target behavior on THIS node with a ToolSelection whose
-/// `subagent_allow_cross_deployment` flag is set as requested. The behavior id
-/// equals its own allowed target name so the trusted-peer receiver path can
-/// resolve the target locally.
 async fn upsert_target_behavior_with_cross_deployment(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -2181,8 +2080,6 @@ async fn write_targeted_cross_deployment_bridge(
     );
 }
 
-/// Write a parent `AgentRequest` authored by a remote (paired-peer) DID, as it
-/// would appear after P2P replication from the originating deployment.
 async fn create_remote_parent_request(
     node: &EmbeddedNode,
     remote_agent_did: &str,
@@ -2223,9 +2120,6 @@ async fn create_remote_parent_request(
     );
 }
 
-/// Write a running `spawn_subagent` bridge whose args carry the RESOLVED target
-/// `(name, agent_did, behavior_id)` for a cross-deployment spawn, as the spawn
-/// hook on the originating node would write before replication.
 #[allow(clippy::too_many_arguments)]
 async fn write_cross_deployment_bridge(
     node: &EmbeddedNode,
@@ -2312,9 +2206,6 @@ async fn write_cross_deployment_bridge_with_spawn_target(
     );
 }
 
-/// Write a running orphan `spawn_subagent` bridge whose args carry a RESOLVED
-/// REMOTE target `(name, agent_did, behavior_id)`, used by the recovery gate
-/// test.
 #[allow(clippy::too_many_arguments)]
 async fn create_orphan_cross_deployment_tool_call(
     node: &EmbeddedNode,

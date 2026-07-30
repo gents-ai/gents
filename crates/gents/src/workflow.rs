@@ -9,14 +9,9 @@ pub(crate) const FAN_OUT_AND_SYNTHESIZE_TOOL_NAME: &str = "fan_out_and_synthesiz
 pub(crate) const WORKFLOW_ROLE_FAN_OUT_CHILD: &str = "fan_out_child";
 pub(crate) const WORKFLOW_ROLE_SYNTHESIS: &str = "synthesis";
 
-/// Fan-out width cap (D6: `1 <= N <= maxBackgroundedPerParent`). This is the
-/// SAME quantity as the runtime backgrounded-per-parent ceiling, because fan-out
-/// children are background bridges counted against that cap — derived from it so
-/// the two cannot silently drift.
 pub(crate) const MAX_FAN_OUT_TASKS: usize =
     crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 
-/// Persisted bridge states that count as terminal for workflow barriers.
 pub const WORKFLOW_TERMINAL_TOOL_STATES: &[&str] =
     &["completed", "failed", "timedOut", "cancelled"];
 
@@ -48,11 +43,6 @@ pub(crate) struct FanOutTask {
     pub prompt: String,
 }
 
-/// Projection predicate for `fan_out_and_synthesize` barrier legality.
-///
-/// A group is legal when it is non-empty and, if synthesis exists, every
-/// fan-out bridge is terminal in the parent-visible `AgentToolCall` lifecycle
-/// vocabulary. Without synthesis, the group may still contain running children.
 pub fn workflow_barrier_projection_legal<'a>(
     group_states: impl IntoIterator<Item = &'a str>,
     synthesis_present: bool,
@@ -87,9 +77,6 @@ impl WorkflowBridgeRow {
     }
 }
 
-/// Load every persisted bridge row in one workflow group (the durable barrier
-/// projection surface). Ordered by `started_at` so adopted fan-out indices are
-/// stable across a reclaim.
 pub async fn load_workflow_group_bridges(
     node: &EmbeddedNode,
     session_id: &str,
@@ -128,15 +115,6 @@ pub async fn load_workflow_group_bridges(
         .unwrap_or_default())
 }
 
-/// Decide whether the fan-out barrier is satisfied over the DURABLE bridge rows
-/// of one workflow group: synthesis may proceed only when exactly
-/// `expected_fan_out` fan-out-child bridges are present and every one is terminal
-/// in the persisted lifecycle vocabulary. Fail-CLOSED: a row with a missing
-/// `lifecycle_state` counts as non-terminal (mapped to `""`, not dropped), and a
-/// row-count mismatch refuses synthesis — so a NULL state or an unexpected/extra
-/// row can never let the barrier pass open. This is the exact gate the engine
-/// runs before spawning synthesis; it is pure over the rows so it is hermetically
-/// testable without live inference.
 pub fn fan_out_barrier_satisfied(rows: &[WorkflowBridgeRow], expected_fan_out: usize) -> bool {
     let fan_out_states: Vec<&str> = rows
         .iter()

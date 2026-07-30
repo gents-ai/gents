@@ -12,8 +12,6 @@ import {
 
 const mockedInvoke = vi.mocked(invoke);
 
-// Simulate the Tauri desktop bridge being available so that invokeDesktop()
-// passes its hasTauriInvokeBridge() guard and reaches the mocked invoke.
 beforeEach(() => {
   Object.defineProperty(window, "__TAURI_INTERNALS__", {
     value: { invoke: mockedInvoke },

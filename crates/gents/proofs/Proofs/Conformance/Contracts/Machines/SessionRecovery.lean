@@ -1,10 +1,6 @@
 import Proofs.Conformance.Contracts.Machines.Request
 import Proofs.Conformance.ContractCases.SessionRecovery
 
-/-!
-# Session-Recovery Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

@@ -35,14 +35,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Generous timeout for a local reconcile tick to land an applied row. The
-/// reconciler sweeps periodically AND on Update events; pairings set triggers a
-/// write that wakes it, but we stay generous because the suite runs many
-/// server-spawning tests in parallel.
 const APPLIED_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Poll until a `PeerPairingApplied` row exists for `peer_id`, returning the row
-/// with `replicator_filter` selected (the shared helper omits it). Times out.
 async fn wait_for_applied_with_filter(
     graphql: &str,
     peer_id: &str,
@@ -62,10 +56,6 @@ async fn wait_for_applied_with_filter(
     }
 }
 
-/// Like `wait_for_applied_with_filter` but waits until the row also carries a
-/// replicator. A Replicate-delivery template subscribes collections first and
-/// installs the replicator second, so the applied row exists (with collections)
-/// before `replicator_addresses` is populated — poll past that window.
 async fn wait_for_applied_replicator(
     graphql: &str,
     peer_id: &str,
@@ -104,8 +94,6 @@ async fn applied_row_with_filter(graphql: &str, peer_id: &str) -> Result<Value> 
     Ok(first_graphql_row(&response, "PeerPairingApplied")?.clone())
 }
 
-/// Poll until the applied row's `replicator_filter` JSON contains `needle`
-/// (e.g. a specific scoped DID), or time out. Returns the matching row.
 async fn wait_for_applied_filter_contains(
     graphql: &str,
     peer_id: &str,
@@ -148,9 +136,6 @@ fn nonempty_replicator(row: &Value) -> bool {
         .is_some_and(|rows| !rows.is_empty())
 }
 
-/// Spawn a P2P-enabled server node (discovery + relay disabled, ephemeral P2P
-/// port) and wait for it to be runtime-ready. Returns the live process handle
-/// (kept alive for the test) and its readiness JSON.
 async fn spawn_p2p_node(
     home: &std::path::Path,
     port: u16,
@@ -195,11 +180,6 @@ fn peer_id_of(readiness: &Value) -> Result<String> {
         .ok_or_else(|| anyhow!("readiness JSON missing p2p_peer_id: {readiness}"))
 }
 
-/// Test 1 (green now). Pair via the `conversation` (Push) template and assert
-/// the local applied row is a *filtered push*: a replicator is installed
-/// (replicator_addresses non-empty), the scope filter is recorded
-/// (replicator_filter carries the peer's DID through each collection's
-/// canonical route field), and NO collections are subscribed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_push_template_installs_filtered_replicator_no_subscription() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -247,9 +227,6 @@ async fn conversation_push_template_installs_filtered_replicator_no_subscription
     let peer_addr_src = listen_address(&readiness_src)?;
     let peer_id_src = peer_id_of(&readiness_src)?;
 
-    // The peer node pairs toward the source via the conversation (Push)
-    // template. Its local reconciler installs the filtered replicator and
-    // records the applied row — no document transit required.
     let set = run_cli_json(
         &home_peer,
         &[
@@ -260,8 +237,6 @@ async fn conversation_push_template_installs_filtered_replicator_no_subscription
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--template` is the sole scope source; the reconciler derives the
-            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -302,10 +277,6 @@ async fn conversation_push_template_installs_filtered_replicator_no_subscription
     Ok(())
 }
 
-/// Test 2 (green now). Pair via the `agent-config` (Replicate) template and
-/// assert the local applied row is a *whole-collection subscribe+replicate*:
-/// collections ARE subscribed AND a replicator is installed with an EMPTY
-/// (unfiltered) filter.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -363,8 +334,6 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--template` is the sole scope source; the reconciler derives the
-            // collection set from the template id alone.
             "--template",
             "agent-config",
         ],
@@ -391,7 +360,6 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
         nonempty_replicator(&applied),
         "Replicate template must install a replicator: {applied}"
     );
-    // EMPTY filter is persisted as a null/absent String column (unfiltered).
     let filter = applied
         .get("replicator_filter")
         .and_then(Value::as_str)
@@ -404,11 +372,6 @@ async fn agent_config_replicate_template_subscribes_with_empty_filter() -> Resul
     Ok(())
 }
 
-/// Test 3 (green now, local). Pair via the `conversation` (Push) template, then
-/// change the scoped value (the peer's DID) so the resolved filter
-/// differs. Assert the applied `replicator_filter` updates — the reconciler
-/// reinstalls the replicator under the new filter identity. Asserted entirely
-/// on one node's applied row; no cross-node transit needed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -456,8 +419,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
     let peer_addr_src = listen_address(&readiness_src)?;
     let peer_id_src = peer_id_of(&readiness_src)?;
 
-    // First scope: filter on the real source DID. (Use the same --peer on both
-    // sets so the desired row is upserted in place and the peer_id is stable.)
     let set_a = run_cli_json(
         &home_peer,
         &[
@@ -470,8 +431,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
             agent_did_src.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--template` is the sole scope source; the reconciler derives the
-            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -499,9 +458,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
         "initial filter must scope on the first DID: {filter_a}"
     );
 
-    // Change the scoped value: re-set the SAME peer with a DIFFERENT DID. The
-    // template re-resolves the per-peer filter to the new DID, making the
-    // replicator's (address, filter) identity distinct and forcing reinstall.
     let new_did = format!("{agent_did_src}-rescoped");
     let set_b = run_cli_json(
         &home_peer,
@@ -515,8 +471,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
             new_did.as_str(),
             "--address",
             peer_addr_src.as_str(),
-            // `--template` is the sole scope source; the reconciler derives the
-            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -527,8 +481,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
         "second pairings set output: {set_b}"
     );
 
-    // The applied filter must update to the new scope. Poll for the new DID to
-    // appear in the recorded filter (reinstall under the new identity).
     let applied_b = wait_for_applied_filter_contains(
         &graphql_peer,
         &peer_id_src,
@@ -549,7 +501,6 @@ async fn filter_change_reinstalls_replicator_under_new_scope() -> Result<()> {
         filter_a, filter_b,
         "applied replicator_filter must change after the scope flip"
     );
-    // A replicator is still installed (reinstalled, not torn down to nothing).
     assert!(
         nonempty_replicator(&applied_b),
         "replicator must remain installed after reinstall: {applied_b}"
@@ -613,13 +564,9 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
     let (_serve_peer, readiness_peer) =
         spawn_p2p_node(&home_peer, port_peer, &graphql_peer, &agent_did_peer).await?;
 
-    // The peer's DID is the scope: conversation Push filters the source's
-    // documents down to those whose immutable requester route names the peer.
     let scoped_did = agent_did_peer.clone();
     let other_did = format!("{agent_did_peer}-other");
 
-    // Write one AgentRequest for the scoped DID and one for an unrelated DID on
-    // the SOURCE node. Only the scoped one should ever land on the peer.
     let scoped_request_id = format!("scoped-{}", Uuid::new_v4().simple());
     let other_request_id = format!("other-{}", Uuid::new_v4().simple());
     write_agent_request(
@@ -631,8 +578,6 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
     .await?;
     write_agent_request(&graphql_src, &other_request_id, &agent_did_src, &other_did).await?;
 
-    // Source pairs toward the peer via conversation (Push): it installs a
-    // filtered replicator pushing only the peer-scoped slice.
     let peer_addr_peer = listen_address(&readiness_peer)?;
     let set = run_cli_json(
         &home_src,
@@ -644,8 +589,6 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
             scoped_did.as_str(),
             "--address",
             peer_addr_peer.as_str(),
-            // `--template` is the sole scope source; the reconciler derives the
-            // collection set from the template id alone.
             "--template",
             "conversation",
         ],
@@ -656,11 +599,8 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
         "pairings set output: {set}"
     );
 
-    // The scoped doc must replicate to the peer.
     wait_for_agent_request(&graphql_peer, &scoped_request_id, Duration::from_secs(90)).await?;
 
-    // The unscoped doc must NEVER replicate to the peer. Give transit a fair
-    // window, then assert absence.
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert!(
         !agent_request_exists(&graphql_peer, &other_request_id).await?,
@@ -670,7 +610,6 @@ async fn end_to_end_scoped_filtering_only_replicates_scoped_did() -> Result<()> 
     Ok(())
 }
 
-/// Write a minimal `AgentRequest` document with an immutable requester route.
 async fn write_agent_request(
     graphql: &str,
     request_id: &str,

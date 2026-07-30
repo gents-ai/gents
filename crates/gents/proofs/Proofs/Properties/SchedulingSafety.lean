@@ -2,10 +2,6 @@ import Proofs.Fleet
 
 open AdmissionState SchedulerState FleetState
 
-/-!
-# Scheduling Safety Properties S7-S9
--/
-
 theorem capacity_invariant_preserved
     {pre post : FleetState}
     (h_inv : SchedulerState.capacityInvariant pre.scheduler)

@@ -2,8 +2,6 @@ import { defineConfig, devices } from "@playwright/test";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-// Vite may be hoisted to the workspace root; resolve it instead of assuming
-// a nested node_modules layout.
 const viteBin = join(
   dirname(createRequire(import.meta.url).resolve("vite/package.json")),
   "bin/vite.js",

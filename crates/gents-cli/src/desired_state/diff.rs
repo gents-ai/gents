@@ -40,10 +40,6 @@ pub(crate) fn diff_manifests(
             &desired.projection_acp_bindings,
             &live.projection_acp_bindings,
         ),
-        // Pairing manifests are authoritative for rows carrying this root's
-        // provenance marker. Managed live rows absent from the root (or named
-        // by an `enabled: false` entry) are always removals; unrelated sources
-        // are excluded from `live` before this boundary.
         peer_pairings: diff_peer_pairings(&desired.peer_pairings, &live.peer_pairings),
         tasks: diff_manifest_collection(&desired.tasks, &live.tasks),
         schedules: diff_manifest_collection(&desired.schedules, &live.schedules),
@@ -82,9 +78,6 @@ fn diff_peer_pairings(
     let mut delete = BTreeSet::new();
     let mut unchanged = BTreeSet::new();
 
-    // Claim active rows by their unique database key before considering
-    // disabled entries. This permits safe peer-DID corrections (and even DID
-    // swaps) as updates instead of create/delete conflicts on `peer_id`.
     for pairing in desired.iter().filter(|pairing| pairing.enabled) {
         let desired_peer_id = pairing
             .resolved_peer_id()

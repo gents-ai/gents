@@ -1,11 +1,5 @@
 import Proofs.Transcript.Transition
 
-/-!
-# Transcript Properties
-
-Local invariant theorems over the transcript transition vocabulary.
--/
-
 namespace Transcript
 
 theorem append_preserves_ordered
@@ -97,11 +91,6 @@ theorem tool_result_message_has_completed_tool_call
       call.resultKey = some key :=
   h_coherent.pairClosed.2.2 row h_mem callId key h_kind
 
-/-- Completing one tool call's result preserves every reservation already held
-by a persisted message: the message list only grows and existing rows are
-untouched. Runtime reading: once a multi-call assistant turn is persisted, the
-first streamed tool result must NOT revoke the persisted turn that still
-reserves the remaining calls. -/
 theorem complete_tool_with_result_preserves_persisted_reservation
     (s : TranscriptState)
     (completedCallId : ToolExecution.ToolCallId)
@@ -114,18 +103,11 @@ theorem complete_tool_with_result_preserves_persisted_reservation
       row'.reservesToolCall otherCallId sessionId sequence :=
   ⟨row, List.mem_append_left _ h_mem, h_reserves⟩
 
-/-- Completing a result clears the in-memory assistant-turn reservation. With
-an UNPERSISTED turn this would orphan the turn's sibling calls (post-state
-incoherent), which is why `complete_tool_with_result` is only legal once the
-turn's reservation lives in a persisted message — the runtime's "cannot persist
-streamed tool result before its assistant turn is persisted" guard. -/
 theorem complete_tool_with_result_clears_assistant_turn
     (s : TranscriptState) (callId : ToolExecution.ToolCallId)
     (messageId : MessageId) (key : ToolResultKey) :
     (s.completeToolWithResult callId messageId key).assistantTurn = none := rfl
 
-/-- Completing one call leaves a distinct call's in-flight membership intact:
-result #1 of a parallel turn does not evict siblings from `inFlight`. -/
 theorem complete_tool_with_result_preserves_other_inflight
     (s : TranscriptState)
     (callId otherCallId : ToolExecution.ToolCallId)
@@ -135,8 +117,6 @@ theorem complete_tool_with_result_preserves_other_inflight
     otherCallId ∈ (s.completeToolWithResult callId messageId key).inFlight := by
   simp [TranscriptState.completeToolWithResult, Finset.mem_erase, h_ne, h_in]
 
-/-- Completing one call with key `key` keeps any distinct key fresh: result #1
-does not consume the dedupe freshness of its siblings' keys. -/
 theorem complete_tool_with_result_preserves_fresh_key
     (s : TranscriptState)
     (callId : ToolExecution.ToolCallId) (messageId : MessageId)
@@ -149,12 +129,6 @@ theorem complete_tool_with_result_preserves_fresh_key
   refine ⟨h_fresh, ?_, trivial⟩
   simp [MessageRow.isToolResultFor, MessageKind.toolResultKey?, h_ne.symm]
 
-/-- Composed multi-result witness: after `persist_assistant`, completing the
-first parallel result leaves EVERY `complete_tool_with_result` precondition
-intact for a distinct sibling call with a distinct fresh key. This is the
-model-side statement that streamed results of one accumulated assistant turn
-complete independently; the runtime hook must keep the persisted-turn gate open
-for all of them. -/
 theorem parallel_results_complete_independently
     (s : TranscriptState)
     (firstCallId siblingCallId : ToolExecution.ToolCallId)

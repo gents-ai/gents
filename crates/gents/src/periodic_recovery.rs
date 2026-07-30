@@ -22,18 +22,13 @@ const REQUEST_TERMINAL_REPAIR_SWEEP_IDS: &[&str] = &["request_lifecycle_recover_
 const TERMINAL_PARENT_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_terminal_parent_owned_tools"];
 
-/// Lean-facing metadata for one Rust periodic recovery executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
-    /// Lean sweep IDs covered by this executor. Multiple Lean sweeps may share
-    /// one Rust reconciler when a single database pass maintains both
-    /// predicates.
     pub sweep_ids: &'static [&'static str],
     /// Fully-qualified Rust function name emitted in the Lean contract.
     pub rust_function: &'static str,
 }
 
-/// Outcome from a periodic recovery executor.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PeriodicRecoverySweepOutcome {
     RequestTerminalRepair(TerminalRepairReport),
@@ -51,7 +46,6 @@ impl PeriodicRecoverySweepOutcome {
     }
 }
 
-/// One executed periodic recovery registry entry.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepRun {
     pub metadata: PeriodicRecoverySweepMetadata,
@@ -102,12 +96,10 @@ const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
     },
 ];
 
-/// Registry metadata consumed by conformance tests and operator projections.
 pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMetadata] {
     PERIODIC_RECOVERY_SWEEP_METADATA
 }
 
-/// Run every registered periodic recovery sweep once.
 pub async fn run_periodic_recovery_sweeps(
     node: &EmbeddedNode,
     agent_did: &str,

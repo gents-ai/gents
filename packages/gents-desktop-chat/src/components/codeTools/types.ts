@@ -5,7 +5,6 @@ export type FileEditView = {
   kind: "fileEdit";
   path: string;
   created: boolean;
-  /** True when write_file replaced content that cannot be reconstructed. */
   overwrite: boolean;
   replacementsApplied: number;
   diff: DiffLine[];

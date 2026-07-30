@@ -1,19 +1,3 @@
-//! PromptAssembly conformance (issue #448).
-//!
-//! Mirrors the Lean PromptAssembly provider-input boundary against the Rust
-//! implementation in `compaction::sanitize_history_for_provider`. Each test
-//! names the theorem it fences; the vectors are the same row-granular shapes
-//! the Lean `Executable` definitions compute over, with the Rust assertions
-//! additionally enforcing the stricter provider shape that tool results must
-//! close the active assistant tool-call block before normal conversation
-//! resumes.
-//!
-//! Content-order normalization (`normalize_assistant_content_order`) is part
-//! of the Rust sanitizer but NOT yet part of the Lean model (deferred to the
-//! `MessageKind` content-order extension); all vectors here use
-//! canonical-content messages so the full Rust composition is exercised while
-//! staying within the modeled fragment.
-
 use gents::compaction::sanitize_history_for_provider;
 use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -60,10 +44,6 @@ fn user(text: &str) -> Message {
     }
 }
 
-/// Provider-valid history at row granularity: every assistant tool-call row
-/// opens a pending result block, only matching tool results may appear while
-/// that block is open, and ordinary conversation may resume only after the
-/// pending block is closed.
 fn assert_provider_valid(msgs: &[Message]) {
     let mut pending: Vec<String> = Vec::new();
     for message in msgs {
@@ -127,15 +107,14 @@ fn assert_provider_valid(msgs: &[Message]) {
     );
 }
 
-/// T1 (`sanitize_sound`): arbitrary dirty input sanitizes to ProviderValid.
 #[test]
 fn t1_sanitize_is_sound_on_dirty_input() {
     let dirty = vec![
-        result("call-gone"), // orphaned result
+        result("call-gone"),
         user("hello"),
         assistant_calls(&["call-a", "call-unpaired"]),
         result("call-a"),
-        assistant_calls(&["call-dangling"]), // unpaired, whole turn drops
+        assistant_calls(&["call-dangling"]),
     ];
     let out = sanitize_history_for_provider(dirty);
     assert_provider_valid(&out);
@@ -146,19 +125,12 @@ fn t1_sanitize_is_sound_on_dirty_input() {
     );
 }
 
-/// T1 ordering direction: the composition runs orphan-drop FIRST. The Lean
-/// counterexample `[result A, call A]` must sanitize to [] — with the
-/// swapped composition the call survives on the strength of the result it
-/// then drops, and an unpaired call reaches the provider.
 #[test]
 fn t1_composition_order_result_before_call_sanitizes_to_empty() {
     let out = sanitize_history_for_provider(vec![result("call-a"), assistant_calls(&["call-a"])]);
     assert!(out.is_empty(), "expected empty, got {out:?}");
 }
 
-/// T1 active-turn direction: a result that matches an earlier call is still
-/// stale if normal conversation resumed first. The result must drop, and then
-/// the now-unpaired assistant call drops too.
 #[test]
 fn t1_result_after_conversation_resumes_sanitizes_to_plain_history() {
     let out = sanitize_history_for_provider(vec![
@@ -170,8 +142,6 @@ fn t1_result_after_conversation_resumes_sanitizes_to_plain_history() {
     assert_provider_valid(&out);
 }
 
-/// T2 (`sanitize_fixpoint`): provider-valid history passes through
-/// unchanged — nothing valid is dropped or reordered.
 #[test]
 fn t2_sanitize_is_identity_on_valid_history() {
     let valid = vec![
@@ -185,7 +155,6 @@ fn t2_sanitize_is_identity_on_valid_history() {
     assert_eq!(out, valid);
 }
 
-/// T3 (`sanitize_idempotent`): one pass through the boundary is enough.
 #[test]
 fn t3_sanitize_is_idempotent() {
     let dirty = vec![
@@ -198,9 +167,6 @@ fn t3_sanitize_is_idempotent() {
     assert_eq!(twice, once);
 }
 
-/// T4 (`sanitize_split_stable`): a pair-blind split's recent window — here
-/// cutting between a call and its result, and mid multi-call turn —
-/// sanitizes to ProviderValid. Instance of T1 over the suffix.
 #[test]
 fn t4_pair_blind_split_windows_sanitize_clean() {
     let transcript = vec![
@@ -212,8 +178,6 @@ fn t4_pair_blind_split_windows_sanitize_clean() {
         result("call-c"),
         user("end"),
     ];
-    // Every possible split point: the recent window must always sanitize
-    // to provider-valid history.
     for split in 0..=transcript.len() {
         let recent = transcript[split..].to_vec();
         let out = sanitize_history_for_provider(recent);
@@ -221,10 +185,6 @@ fn t4_pair_blind_split_windows_sanitize_clean() {
     }
 }
 
-/// T5 (`threaded_turn_fixpoint`): the owned loop's threaded turn shape —
-/// one assistant tool-call turn followed by its results — is a fixpoint.
-/// This is the justification for the `run_loop_stream` entry chokepoint
-/// sanitizing only the LOADED history, never the loop's in-flight messages.
 #[test]
 fn t5_loop_threaded_turn_is_a_fixpoint() {
     let threaded = vec![
@@ -273,19 +233,8 @@ fn pairing_identity_uses_call_id_over_item_id() {
     assert_provider_valid(&out);
 }
 
-// ===== ToolArgs (issues #589/#590): value-granular argument-shape contract =====
-//
-// Mirrors `Proofs/PromptAssembly/ToolArgs.lean` against the Rust normalizer
-// `llm::tool::normalize_tool_call_arguments` (applied at both rig-converter
-// seams). The Lean model is below row granularity — normalization is pointwise
-// per tool call and never changes row shape — so these vectors fence the value
-// contract the row-granular sanitize theorems cannot see.
-
 use gents::llm::tool::normalize_tool_call_arguments;
 
-/// The #589 production poison (Amy's persisted row `Rrt-HmhWfFSmkh1HSUmHt`):
-/// out-of-channel contamination with LITERAL newlines inside strings,
-/// duplicated keys, and the intended call surviving as the final `tool_name`.
 const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
      \"service_id\": \"observability-mcp\", \"tool房\n</think\": \"\n<tool_call>\n\
      <function=describe_tool>\", \"raw_schema\": false, \
@@ -295,9 +244,6 @@ fn normalize_args(value: &serde_json::Value) -> serde_json::Value {
     normalize_tool_call_arguments("conformance", "echo", value)
 }
 
-/// All non-object shapes a `serde_json::Value` can carry into the seam:
-/// the #590 reproduction matrix (string-encoded and native forms) plus the
-/// #589 corrupt raw string.
 fn nonobject_vectors() -> Vec<serde_json::Value> {
     vec![
         serde_json::Value::Null,
@@ -319,9 +265,6 @@ fn nonobject_vectors() -> Vec<serde_json::Value> {
     ]
 }
 
-/// Lean `normalize_isObject` (N1, soundness): normalization always yields an
-/// object, whatever shape came in — no egress path can hand the provider a
-/// non-object `arguments` value.
 #[test]
 fn tool_args_n1_normalize_always_yields_object() {
     for vector in nonobject_vectors() {
@@ -333,8 +276,6 @@ fn tool_args_n1_normalize_always_yields_object() {
     }
 }
 
-/// Lean `normalize_fixpoint_of_isObject` (N2, object fixpoint): a well-formed
-/// object passes through byte-identical — the healthy flow has no regression.
 #[test]
 fn tool_args_n2_object_passes_through_unchanged() {
     let objects = [
@@ -351,8 +292,6 @@ fn tool_args_n2_object_passes_through_unchanged() {
     }
 }
 
-/// Lean `normalize_idempotent` (N3): the ingest and egress seams compose —
-/// a value persisted normalized re-egresses identical.
 #[test]
 fn tool_args_n3_normalize_is_idempotent() {
     for vector in nonobject_vectors() {
@@ -365,10 +304,6 @@ fn tool_args_n3_normalize_is_idempotent() {
     }
 }
 
-/// Lean `normalize_salvages_str` (N4, salvage): a string that (post-repair)
-/// parses to an object recovers THAT object — the intended call survives
-/// rather than collapsing to the empty fallback. Includes the #589 corrupt
-/// production payload.
 #[test]
 fn tool_args_n4_stringified_object_recovers_its_payload() {
     assert_eq!(
@@ -386,8 +321,6 @@ fn tool_args_n4_stringified_object_recovers_its_payload() {
     );
 }
 
-/// Lean `normalize_nonobject_to_empty`: the non-salvageable shapes collapse to
-/// exactly the EMPTY object, pinning the entire coercion table.
 #[test]
 fn tool_args_nonobject_collapses_to_empty_object() {
     for vector in [

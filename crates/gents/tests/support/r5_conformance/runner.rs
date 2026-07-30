@@ -38,12 +38,8 @@ pub struct Observation {
     pub b_child_requests: Vec<RequestObservation>,
     pub subagent_notifications: Vec<String>,
     pub background_wakeup_keys: Vec<String>,
-    /// Process-identity generation of node A (bumped by honest Crash).
     pub a_process_generation: u64,
-    /// Process-identity generation of node B (bumped by honest Crash).
     pub b_process_generation: u64,
-    /// Node id that just crashed for this snapshot, if the preceding action
-    /// was `Crash`. `None` when the snapshot is not post-crash.
     pub crashed_node: Option<NodeId>,
 }
 
@@ -210,11 +206,6 @@ impl Harness {
                     RequestLifecycle::recover_all(self.node(node)?.db.node.as_ref(), did).await?;
             }
             Action::Crash { node } => {
-                // TLA lead (`SubagentCompletion` CrashA/CrashB,
-                // `SubagentCancelPropagation` Crash): clear process-local
-                // state while retaining durable intent/rows. The R5 harness
-                // owns only the embedded store, so the honest boundary is
-                // shutdown + exclusive drop + reopen on the same data path.
                 self.crash_node(node).await?;
             }
             Action::AdvanceClockOn { node, seconds } => {
@@ -416,9 +407,6 @@ async fn write_parent_tool_call(
     behavior_id: &str,
     unclaimed_deadline_at: Option<&str>,
 ) -> Result<()> {
-    // Stamp immutable agent_did so startup recovery scopes match production
-    // (`load_running_tool_call_rows_for_agent`). Without it, Crash →
-    // RunRecoverySweepOn cannot see the bridge.
     let agent_did = load_request(node, parent_request_id)
         .await
         .map(|row| row.agent_did)
@@ -583,8 +571,6 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_id = str_field(row, "tool_call_id")?;
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
-    // Prefer the exported owner; if absent, scope to the destination node
-    // (same rule as write_parent_tool_call) rather than always NODE_A.
     let agent_did = opt_str_field(row, "agent_did").unwrap_or(if node.id == "B" {
         NODE_B_DID
     } else {

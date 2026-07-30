@@ -20,9 +20,6 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
     {
         anyhow::bail!("stream_liveness_timeout_secs must be positive");
     }
-    // Reject out-of-domain sampling values here rather than letting the
-    // provider reject the completion at request time — a profile is desired
-    // state, and a bad value would fail every request the behavior makes.
     if args
         .top_p
         .is_some_and(|value| !(0.0..=1.0).contains(&value))

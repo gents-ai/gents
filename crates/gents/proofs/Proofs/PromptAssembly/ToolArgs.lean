@@ -1,57 +1,7 @@
 import Proofs.Basic
 
-/-!
-# PromptAssembly ToolArgs (issues #589 / #590)
-
-Value-granular model of the tool-call **argument-shape** invariant at the
-provider boundary: every `tool_calls[].function.arguments` a provider
-receives must be a JSON **object**. Backends render history through
-templates that iterate `arguments.items()`, so a non-object value —
-`Value::String` (the #589/#590 production poison), `Array`, scalar, or
-`null` — deterministically crashes template rendering before any token is
-generated.
-
-This module is BELOW the row granularity of `PromptAssembly.State`: a
-`Transcript.MessageRow` carries only the call-id set of an assistant turn,
-so argument payloads are invisible to `sanitize` and its theorems (T1–T5).
-Argument normalization is applied POINTWISE to each tool call and never
-adds, drops, or reorders rows, so the row-granular theorems are untouched
-by construction; this module carries the value-granular contract instead.
-
-The abstraction: a payload type `P` stands for the (opaque) content of a
-JSON object, and the one JSON-specific fact the model needs — whether a
-string re-parses to an object after the tolerant escape-only repair pass
-(Rust `llm::tool::repair_tool_arguments`) — is baked into the constructor:
-`.str (some p)` is a string that salvages to object `p`; `.str none` is a
-string that does not (non-object JSON or unparseable even after repair).
-
-Rust mirror: `llm::tool::normalize_tool_call_arguments`, applied at BOTH
-seams of the rig converter — `rig_compat::from_rig_tool_call` (ingest:
-nothing non-object is ever accumulated into durable history) and
-`rig_compat::to_rig_tool_call` (egress: pre-existing poisoned durable
-history self-heals at request build). The theorems:
-
-- **N1 `normalize_isObject`** — normalization always yields an object
-  (provider-shape soundness; egress can never emit a non-object).
-- **N2 `normalize_fixpoint_of_isObject`** — an object passes through
-  UNCHANGED (the healthy tool-call flow has no regression).
-- **N3 `normalize_idempotent`** — ingest-then-egress normalization
-  collapses; double application is harmless.
-- **N4 `normalize_salvages_str`** — a string that (post-repair) parses to
-  an object recovers THAT object, not the empty fallback (the #589
-  corrupt-payload salvage: the intended call survives).
-
-Rust conformance: `crates/gents/tests/conformance/prompt_assembly.rs`
-(the `PromptAssembly` home in the structure fence).
--/
-
 namespace PromptAssembly
 
-/-- A tool-call `arguments` value, abstracted to its provider-relevant
-shape. `P` is the opaque payload of a JSON object. `.str (some p)` models a
-JSON string that re-parses (after the escape-only repair pass) to the
-object `p`; `.str none` models a string that does not. `.array`, `.scalar`
-and `.null` cover the remaining non-object JSON shapes. -/
 inductive ToolArgs (P : Type) where
   | object (payload : P)
   | str (parsed : Option P)
@@ -59,7 +9,6 @@ inductive ToolArgs (P : Type) where
   | scalar
   | null
 
-/-- Provider-valid argument shape: a JSON object. -/
 def ToolArgs.IsObject {P : Type} : ToolArgs P → Prop
   | .object _ => True
   | _ => False
@@ -67,11 +16,6 @@ def ToolArgs.IsObject {P : Type} : ToolArgs P → Prop
 @[simp] theorem ToolArgs.isObject_object {P : Type} (p : P) :
     (ToolArgs.object p).IsObject := trivial
 
-/-- The shared normalization policy (Rust
-`llm::tool::normalize_tool_call_arguments`): an object is unchanged; a
-string that salvages to an object becomes that object; every other shape —
-unsalvageable string, array, scalar, null — becomes the empty object
-`empty`. -/
 def normalizeArgs {P : Type} (empty : P) : ToolArgs P → ToolArgs P
   | .object p => .object p
   | .str (some p) => .object p
@@ -80,8 +24,6 @@ def normalizeArgs {P : Type} (empty : P) : ToolArgs P → ToolArgs P
   | .scalar => .object empty
   | .null => .object empty
 
-/-- **N1 (soundness).** Normalization always yields an object: no egress
-path can hand the provider a non-object `arguments` value. -/
 theorem normalize_isObject {P : Type} (empty : P) (v : ToolArgs P) :
     (normalizeArgs empty v).IsObject := by
   cases v with
@@ -91,8 +33,6 @@ theorem normalize_isObject {P : Type} (empty : P) (v : ToolArgs P) :
   | scalar => trivial
   | null => trivial
 
-/-- N1 in existential form: the normalized value IS `.object` of some
-payload. -/
 theorem normalize_eq_object {P : Type} (empty : P) (v : ToolArgs P) :
     ∃ p, normalizeArgs empty v = .object p := by
   cases v with
@@ -104,8 +44,6 @@ theorem normalize_eq_object {P : Type} (empty : P) (v : ToolArgs P) :
   | scalar => exact ⟨empty, rfl⟩
   | null => exact ⟨empty, rfl⟩
 
-/-- **N2 (object fixpoint).** A well-formed object passes through
-unchanged: the healthy tool-call flow is untouched by the boundary. -/
 theorem normalize_fixpoint_of_isObject {P : Type} (empty : P)
     {v : ToolArgs P} (h : v.IsObject) : normalizeArgs empty v = v := by
   cases v with
@@ -115,21 +53,13 @@ theorem normalize_fixpoint_of_isObject {P : Type} (empty : P)
   | scalar => exact absurd h not_false
   | null => exact absurd h not_false
 
-/-- **N3 (idempotence).** Normalizing twice is normalizing once: the ingest
-seam and the egress seam compose without drift, so a value persisted
-normalized re-egresses byte-identical. -/
 theorem normalize_idempotent {P : Type} (empty : P) (v : ToolArgs P) :
     normalizeArgs empty (normalizeArgs empty v) = normalizeArgs empty v :=
   normalize_fixpoint_of_isObject empty (normalize_isObject empty v)
 
-/-- **N4 (salvage).** A stringified object recovers its own payload — the
-intended call survives the boundary rather than collapsing to the empty
-fallback. This is the #589 recovery guarantee for the salvageable class. -/
 theorem normalize_salvages_str {P : Type} (empty : P) (p : P) :
     normalizeArgs empty (.str (some p)) = .object p := rfl
 
-/-- Non-object shapes collapse to the EMPTY object — never to some other
-payload. Together with N4 this pins the entire coercion table. -/
 theorem normalize_nonobject_to_empty {P : Type} (empty : P)
     (v : ToolArgs P) (hobj : ¬ v.IsObject)
     (hsalvage : ∀ p, v ≠ .str (some p)) :
@@ -143,52 +73,15 @@ theorem normalize_nonobject_to_empty {P : Type} (empty : P)
   | scalar => rfl
   | null => rfl
 
-/-! ## Repair (#652)
-
-`repair_provider_input` is the last-resort transform the completion-retry
-`Repair` directive applies after the provider has already REJECTED the input
-(the vLLM parse-signature 400). It is strictly more aggressive than
-`normalizeArgs`: on top of the shape coercion it runs a **lossy leaf
-sanitizer** over every JSON string in the arguments (newline and tab become
-their two-character escapes, other control characters are dropped).
-
-That lossiness is why repair may not live at egress: it would corrupt
-legitimate multi-line tool arguments on every request. It is correct only on a
-request the provider has already refused.
-
-The hole #652 reports is that the Rust repair pass rewrote only the
-run-threaded `new_messages` and never the loaded `history` — while the
-motivating 400 originates from tool-call arguments in the INPUT TRANSCRIPT,
-i.e. exactly the history it skipped. Repair therefore re-issued the same
-poisoned input and failed identically.
-
-Modeling repair here is what lets the fence be honest: it says what the
-transform does to a whole assembled input, and the theorems below are what
-license applying it to loaded history without disturbing the row-granular
-assembly guarantees (T1–T5) proven over `sanitize`.
--/
-
-/-- The lossy leaf sanitizer, abstracted to its only provider-relevant
-property: it is a function on payloads that, once applied, is stable. Rust
-`sanitize_json_string_leaves` / `sanitize_provider_arg_string`: '\n' and '\t'
-become the two characters '\\','n' / '\\','t' (neither of which is a control
-character) and every other control character is dropped — so a second pass
-finds nothing left to rewrite. -/
 class LeafSanitizer (P : Type) where
   sanitize : P → P
-  /-- The sanitizer is its own fixpoint: no control character survives the
-  first pass, so a second pass is the identity. -/
   idempotent : ∀ p, sanitize (sanitize p) = sanitize p
 
-/-- The repair transform on one argument value: normalize the shape, then
-sanitize the payload's string leaves. -/
 def repairArgs {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) : ToolArgs P :=
   match normalizeArgs empty v with
   | .object p => .object (LeafSanitizer.sanitize p)
   | other => other
 
-/-- **R1 (soundness).** Repair always yields a provider-valid object — it
-inherits N1, so repairing can never make the shape worse. -/
 theorem repair_isObject {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) :
     (repairArgs empty v).IsObject := by
   have hn := normalize_isObject empty v
@@ -200,11 +93,6 @@ theorem repair_isObject {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P
   | scalar => rw [h] at hn; exact absurd hn not_false
   | null => rw [h] at hn; exact absurd hn not_false
 
-/-- **R2 (idempotence).** Repair is its own fixpoint. Repair runs on an input
-the provider already refused, and a retry may re-enter the path; a second pass
-must not keep mangling arguments (each pass would otherwise re-escape its own
-escapes). This is what makes repair safe to apply to already-repaired
-history. -/
 theorem repair_on_object {P : Type} [LeafSanitizer P] (empty : P) (p : P) :
     repairArgs empty (.object p) = .object (LeafSanitizer.sanitize p) := rfl
 
@@ -221,23 +109,10 @@ theorem repair_idempotent {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs
   | scalar => rw [h] at hn; exact absurd hn not_false
   | null => rw [h] at hn; exact absurd hn not_false
 
-/-- **R3 (repair subsumes normalize).** A repaired value is already normalized:
-running the egress normalizer over repair's output changes nothing. Egress
-(`to_rig_tool_call`) normalizes every message including loaded history, so this
-is what says repairing history does not fight the egress boundary. -/
 theorem repair_normalize_fixpoint {P : Type} [LeafSanitizer P] (empty : P) (v : ToolArgs P) :
     normalizeArgs empty (repairArgs empty v) = repairArgs empty v :=
   normalize_fixpoint_of_isObject empty (repair_isObject empty v)
 
-/-- **R4 (payload-granularity).** Repair rewrites only the argument PAYLOAD of a
-tool call: it never inspects or produces rows, roles, call ids, or ordering.
-
-This is the same pointwise argument the module header makes for `normalizeArgs`
-— argument payloads are invisible to `sanitize`, so T1–T5 (sanitize soundness,
-fixpoint, idempotence, split-stability, threaded-turn fixpoint) hold verbatim
-over a history whose tool-call arguments have been repaired. That is precisely
-the license #652 needs: repair may be widened from the run-threaded messages to
-the loaded history without touching the proven assembly. -/
 theorem repair_is_payload_only {P : Type} [LeafSanitizer P] (empty : P) (p : P) :
     repairArgs empty (.object p) = .object (LeafSanitizer.sanitize p) :=
   repair_on_object empty p

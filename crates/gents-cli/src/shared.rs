@@ -53,9 +53,6 @@ pub(crate) struct InitSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredInitConfig {
-    /// Filesystem-only bootstrap context. Runtime configuration lives in DefraDB
-    /// documents; these fields let later CLI commands find the local key and
-    /// operator tool ceiling without asking for flags on every run.
     pub(crate) home: String,
     pub(crate) agent_name: String,
     pub(crate) agent_did: String,
@@ -104,9 +101,6 @@ pub(crate) enum CodexShimHealth {
 }
 
 impl CodexShimHealth {
-    /// Whether this state should show up as a degraded check. `Off` is a
-    /// deliberate operator choice, and a live listener is fine; everything else
-    /// means the advertised port is closed.
     pub(crate) fn is_degraded(&self) -> bool {
         matches!(self, Self::Pending { .. } | Self::Disabled { .. })
     }
@@ -142,11 +136,8 @@ impl CodexShimHealth {
     }
 }
 
-/// Shared so the shim supervisor can flip it long after `/healthz` started serving.
 pub(crate) type CodexShimHealthHandle = std::sync::Arc<std::sync::RwLock<CodexShimHealth>>;
 
-/// Persisted so `/status`, `gents status`, and `/metrics` can report the
-/// knobs that matter during hub saturation (#630) without re-resolving CLI args.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct P2pAdmissionState {
     pub(crate) max_pending_dags: usize,
@@ -181,14 +172,11 @@ pub(crate) struct StoredRuntimeState {
     pub(crate) p2p_peer_id: Option<String>,
     #[serde(default)]
     pub(crate) p2p_listen_addresses: Vec<String>,
-    /// Admission knobs resolved at serve start (None when P2P is disabled or
-    /// the runtime.json was written by an older binary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
 }
 
 fn default_p2p_transport() -> String {
-    // Matches P2pTransportArg::Iroh.as_str()
     "iroh".to_string()
 }
 
@@ -239,9 +227,6 @@ pub(crate) struct P2pReplicatorRequest {
     pub(crate) filters: std::collections::BTreeMap<String, P2pReplicatorFilter>,
 }
 
-/// One field-equality predicate in a [`P2pReplicatorRequest`]. Mirrors defradb's
-/// `ReplicationFilter`: `Value` is JSON, and a bare string scopes by equality
-/// (e.g. `agent_did == "did:key:alice"`).
 #[derive(Debug, Serialize)]
 pub(crate) struct P2pReplicatorFilter {
     #[serde(rename = "Field")]

@@ -27,8 +27,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     .await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
-    // Parent has a completed AgentRequest + AgentResponse so the parent is idle
-    // (no active runtime lifecycle_state) and fork is allowed.
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_request(
         &db.node,
@@ -219,9 +217,6 @@ async fn transition_to_interrupted_from_claimed() {
 
 #[tokio::test]
 async fn processing_interrupted_preserves_partial_response() {
-    // Simulates: response streaming was in progress with partial content, then an
-    // interrupt fires. Expected: content is preserved on the response row, response
-    // has `interrupted_at` stamped, and the request row transitions to interrupted.
     let db = test_db("processing-interrupted").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -260,7 +255,6 @@ async fn processing_interrupted_preserves_partial_response() {
     .await;
     lifecycle.set_response_doc_id(&response_doc_id);
 
-    // Stamp interrupted_at on the response row first, then transition the request.
     let stream_writer =
         DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(50));
     let interrupt_at = chrono::Utc::now().to_rfc3339();
@@ -398,12 +392,6 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
 
 #[tokio::test]
 async fn transition_to_interrupted_from_processing() {
-    // Validates the lifecycle transition from `processing` to `interrupted`. The
-    // daemon-level tie-break race (interrupt vs deadline both firing in the same
-    // poll) cannot be expressed at the lifecycle layer alone — that is exercised
-    // end-to-end in Task 11. Here we verify the transition succeeds from the
-    // processing state (the typical in-flight state when the daemon's select arm
-    // fires).
     let db = test_db("processing-tie-break").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -430,11 +418,9 @@ async fn transition_to_interrupted_from_processing() {
     lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.begin_execution().await.unwrap();
 
-    // Submitter requests interrupt while the request is processing.
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
 
-    // Interrupt arm wins: transition_to_interrupted succeeds from processing.
     lifecycle.transition_to_interrupted().await.unwrap();
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
@@ -445,9 +431,6 @@ async fn transition_to_interrupted_from_processing() {
 
 #[tokio::test]
 async fn fail_after_interrupt_latch_prefers_interrupted() {
-    // B3's second step is interrupt_processing: once interruptRequestedAt is
-    // latched on a processing request, a later failure path must not classify
-    // the terminal state as failed.
     let db = test_db("fail-after-interrupt-latch").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -488,11 +471,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 
 #[tokio::test]
 async fn interrupt_request_is_idempotent() {
-    // Two calls to `interrupt_request` on the same doc must latch exactly
-    // once: the daemon observer relies on the first submitter's timestamp
-    // so the interruption audit trail points at who pressed Esc, not at
-    // whichever caller wrote last. Proof: S7 (latch-once) in
-    // `proofs/Interrupt.lean`.
     let db = test_db("interrupt-idempotent").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -510,8 +488,6 @@ async fn interrupt_request_is_idempotent() {
         "first interrupt should latch the field"
     );
 
-    // Sleep long enough that, without the idempotent latch, a second write
-    // would produce a strictly later RFC3339 timestamp.
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     gents::interrupt_request(&db.node, &request_id)
         .await
@@ -527,12 +503,6 @@ async fn interrupt_request_is_idempotent() {
 
 #[tokio::test]
 async fn interrupt_request_errors_on_unknown_request_id() {
-    // Interrupting a request id that doesn't exist must surface as an error
-    // (not a silent no-op). Previously, `fetch_interrupt_requested_at`
-    // returned `Ok(None)` for both "field is empty" and "row does not exist",
-    // so `interrupt_request` would fall through to a filter-update that
-    // matched zero rows and return `Ok(())`, tricking the caller into
-    // thinking a bogus id had been successfully latched.
     let db = test_db("interrupt-unknown").await;
     let err = gents::interrupt_request(&db.node, "bogus-id-that-does-not-exist").await;
     assert!(
@@ -548,9 +518,6 @@ async fn interrupt_request_errors_on_unknown_request_id() {
 
 #[tokio::test]
 async fn interrupt_on_already_terminal_is_noop() {
-    // A completed request that later gets an interrupt_requested_at write must not
-    // regress. `transition_to_interrupted` filters on `status._nin` of terminal
-    // statuses, so the mutation is a no-op on completed rows.
     let db = test_db("interrupt-terminal-noop").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -581,8 +548,6 @@ async fn interrupt_on_already_terminal_is_noop() {
     assert_eq!(before.status, "completed");
     assert_eq!(before.lifecycle_state, "completed");
 
-    // Late-arriving interrupt request: the field gets written to DB, but
-    // transition_to_interrupted must not mutate the terminal row.
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
     lifecycle.transition_to_interrupted().await.unwrap();
@@ -624,36 +589,20 @@ async fn valid_until_cached_at_claim_ignores_post_claim_extension() {
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    // Caller rewrites valid_until to a far-future value after claim. Lifecycle should
-    // not observe it: S8 says the scheduler reads valid_until exactly once at claim.
     let much_later = (chrono::Utc::now() + chrono::Duration::hours(10)).to_rfc3339();
     set_valid_until(&db.node, &doc_id, &much_later).await;
 
-    // Assert the cached field on the lifecycle is unchanged from what was read at claim.
     let expected = chrono::DateTime::parse_from_rfc3339(&future)
         .unwrap()
         .with_timezone(&chrono::Utc);
     assert_eq!(lifecycle.valid_until_at_claim_for_test(), Some(expected));
 }
 
-// ---------------------------------------------------------------------------
-// Property tests enforcing Lean invariants S7 / S8 / S1 + persistence ordering
-// + the conformance mapping round-trip. Each test's comment cites the Lean
-// theorem it guards against regression.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
-    // Per S7 (`interrupt_monotonicity`) in
-    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: once
-    // `interruptRequestedAt.isSome`, no `RequestContext.Transition` rewrites
-    // it. The Rust mutations must preserve this latch across every lifecycle
-    // transition that touches the row.
-
     let db = test_db("s7-interrupt-latch").await;
     let t0 = "2026-04-20T12:00:00+00:00".to_string();
 
-    // Sequence A: pending -> interrupted (via claim's pre-claim branch)
     let request_id_a = uuid::Uuid::new_v4().to_string();
     let session_id_a = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -697,7 +646,6 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
         "S7: interrupt_before_claim must not rewrite interrupt_requested_at"
     );
 
-    // Sequence B: fresh row, claimed -> interrupted (via transition_to_interrupted)
     let request_id_b = uuid::Uuid::new_v4().to_string();
     let session_id_b = uuid::Uuid::new_v4().to_string();
     let doc_id_b = create_request(
@@ -726,7 +674,6 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     );
     assert_eq!(lifecycle_b.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    // Submitter sets interrupt mid-flight, then the lifecycle flips the row.
     set_interrupt_requested_at(&db.node, &doc_id_b, &t0).await;
     let snap_b_pre = fetch_request_snapshot_raw(&db.node, &doc_id_b).await;
     assert_eq!(
@@ -745,12 +692,6 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
 
 #[tokio::test]
 async fn s8_valid_until_never_rewritten_by_transitions() {
-    // Per S8 (`valid_until_monotonicity`) in
-    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: no
-    // `RequestContext.Transition` rewrites `validUntil` (unconditional). Run a
-    // full claim + begin_execution + transition_to_interrupted sequence and
-    // assert `valid_until` is unchanged after each persisted transition.
-
     let db = test_db("s8-valid-until-preserved").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -762,7 +703,6 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
     let snap0 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
     assert_eq!(snap0.valid_until.as_deref(), Some(t0.as_str()));
 
-    // Claim (pending → claimed)
     let request = build_request(
         doc_id.clone(),
         request_id.clone(),
@@ -786,7 +726,6 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
         "S8: claim must not rewrite valid_until"
     );
 
-    // begin_execution (claimed → processing)
     lifecycle.prepare_session_with_identity().await.unwrap();
     lifecycle.begin_execution().await.unwrap();
     let snap2 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
@@ -796,7 +735,6 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
         "S8: begin_execution must not rewrite valid_until"
     );
 
-    // transition_to_interrupted (processing → interrupted)
     lifecycle.transition_to_interrupted().await.unwrap();
     let snap3 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
     assert_eq!(
@@ -808,13 +746,6 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
 
 #[tokio::test]
 async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
-    // Per S1 (`terminal_irreversibility`) in
-    // `crates/gents/proofs/Proofs/Properties/Safety.lean`: no transition
-    // leaves `.interrupted` for a non-terminal state. Transition a claimed
-    // request to interrupted, then attempt subsequent transitions and assert
-    // the DB row stays `interrupted` regardless of whether the Rust method
-    // returns `Ok(())` (idempotent no-op) or `Err(...)` (caller mis-sequenced).
-
     let db = test_db("s1-interrupted-terminal").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -846,8 +777,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     assert_lean_transition_is_illegal("Request", "interrupted", "failed");
     assert_lean_transition_is_illegal("Request", "interrupted", "processing");
 
-    // Idempotent: calling transition_to_interrupted again is a no-op because
-    // the `status._nin` filter excludes terminal rows.
     lifecycle.transition_to_interrupted().await.unwrap();
     let snap1 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -856,9 +785,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
     assert_eq!(snap1.status, "interrupted");
 
-    // complete() on an interrupted lifecycle may return Err (state mismatch)
-    // or Ok (caller is expected to tolerate either). Either way, the DB row
-    // must stay interrupted.
     let _complete_result = lifecycle.complete().await;
     let snap2 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -867,7 +793,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
     assert_eq!(snap2.status, "interrupted");
 
-    // fail() same treatment.
     let _fail_result = lifecycle.fail().await;
     let snap3 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -896,7 +821,6 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    // Set up a claimed request with a streaming response that has partial content.
     let request = build_request(
         doc_id.clone(),
         request_id.clone(),
@@ -928,9 +852,6 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
     .await;
     lifecycle.set_response_doc_id(&response_doc_id);
 
-    // Execute the 6-step flow sequence (mirroring run_inference's path):
-    //   1. write interrupted_at on the response row
-    //   2. transition the request to interrupted
     let intent_at = chrono::Utc::now().to_rfc3339();
     let stream_writer =
         DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(50));
@@ -941,7 +862,6 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
     assert!(stamped, "ordering: interrupted_at must be stamped");
     lifecycle.transition_to_interrupted().await.unwrap();
 
-    // Assert both writes are present.
     let response_interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
     let request_snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(request_snap.lifecycle_state, "interrupted");
@@ -950,18 +870,12 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
         Some(intent_at.as_str()),
         "ordering: if request.lifecycle_state=interrupted, response.interrupted_at must also be set"
     );
-    // The partial content must be preserved verbatim.
     let response_content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(response_content, partial_content);
 }
 
 #[test]
 fn conformance_mapping_all_9_lifecycle_states_round_trip() {
-    // Per `Proofs/Conformance/Gents.lean::toIdeal`, every
-    // `GentsLifecycleState` maps to a specific `RequestState`. The Rust
-    // `RequestLifecycleState` enum in `gents-protocol::client_protocol`
-    // mirrors the Lean-generated RequestState vocabulary. Assert every Lean
-    // string form parses and round-trips, and that unknown strings reject.
     use gents_protocol::client_protocol::RequestLifecycleState;
 
     let lean_states = lean_vocabulary_values("RequestState");
@@ -986,7 +900,6 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
         "inputRequired"
     );
 
-    // Unknown strings must reject.
     assert!(RequestLifecycleState::try_from("bogus").is_err());
     assert!(RequestLifecycleState::try_from("").is_err());
     assert!(RequestLifecycleState::try_from("INTERRUPTED").is_err());
@@ -994,11 +907,6 @@ fn conformance_mapping_all_9_lifecycle_states_round_trip() {
 
 #[test]
 fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
-    // The client projection must map `RequestLifecycleState::Interrupted`
-    // onto the distinct `ClientTurnState::Interrupted` terminal. This keeps
-    // the Rust projection in sync with `Proofs/Client.lean::deriveAttempt`,
-    // which now maps `.interrupted => .interrupted` rather than conflating
-    // it with `.failed`.
     use gents_protocol::client_protocol::{
         derive_attempt, AttemptView, ClientTurnState, RequestLifecycleState, RequestSnapshot,
     };
@@ -1017,27 +925,6 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     assert_eq!(ClientTurnState::Interrupted.rank(), 2);
 }
 
-// -----------------------------------------------------------------------------
-// Manual-kind request lifecycle transitions (Task 19 / PR 3)
-//
-// The trigger engine's Schedule and Event paths materialize directly at
-// `claimed`, because the scheduler spawns them. The Manual path is different:
-// the shared `write_manual_agent_request` helper (used by CLI `config task
-// run` and the desktop "Run Now" button) writes at `pending`, and the running
-// agent's normal intake watcher is the thing that claims the row. Two
-// invariants follow from this split and both need pinning:
-//
-//   * Manual helper lands the row at `(status="pending", lifecycle_state=
-//     "pending")` — NOT claimed. Regressing to a claimed landing would
-//     short-circuit intake and break the out-of-process CLI path.
-//   * The manual lineage tuple (`caused_by_trigger_kind="manual"`,
-//     `caused_by_trigger_id=null`) survives the Pending → Claimed transition
-//     untouched. The claim path must not clobber lineage.
-// -----------------------------------------------------------------------------
-
-/// Pin: the shared manual helper produces `(status="pending", lifecycle_state=
-/// "pending")`. Regression guard for the CLI's out-of-process intake path,
-/// which relies on the row being visible to the running agent's watcher.
 #[tokio::test]
 async fn manual_run_materializes_pending_request() {
     let db = test_db("manual-run-materializes-pending").await;
@@ -1053,8 +940,6 @@ async fn manual_run_materializes_pending_request() {
     .await
     .expect("write_manual_agent_request should succeed on a fresh node");
 
-    // Status + lifecycle_state must both be "pending" — the CLI path does NOT
-    // land at claimed (the running agent's intake is the thing that claims).
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
         snap.status, "pending",
@@ -1078,10 +963,6 @@ async fn manual_run_materializes_pending_request() {
     );
     assert_eq!(snap.behavior_id, AGENT_NAME);
 
-    // Lineage tuple is already set at the helper boundary — independent of
-    // the lifecycle_state pinning above, but worth asserting here so a
-    // regression that silently conflates "pending" with default lineage
-    // fails loudly.
     let lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
     assert_eq!(
         lineage,
@@ -1093,15 +974,6 @@ async fn manual_run_materializes_pending_request() {
     );
 }
 
-/// Pin: the Pending → Claimed transition preserves the manual lineage tuple.
-///
-/// Sequence mirrors the running agent's intake path: helper writes the
-/// pending row, the watcher observes it, reconstructs the `AgentRequest`,
-/// and invokes `lifecycle.claim()`. After the transition `lifecycle_state`
-/// flips to `claimed`, `claimed_at` + `deadline` get stamped, but the
-/// lineage tuple (`caused_by_trigger_id=null`, `caused_by_trigger_kind=
-/// "manual"`) must be untouched — regressing that would break trigger-kind
-/// aggregations (recent runs, lineage badges) for manual originators.
 #[tokio::test]
 async fn manual_run_preserves_lineage_through_claim_transition() {
     let db = test_db("manual-run-lineage-through-claim").await;
@@ -1117,7 +989,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
     .await
     .expect("write_manual_agent_request should succeed");
 
-    // Sanity: lineage is set and lifecycle is pending before we claim.
     let pre_claim_lineage = fetch_request_lineage_snapshot(&db.node, &doc_id).await;
     assert_eq!(
         pre_claim_lineage,
@@ -1133,10 +1004,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         "pending"
     );
 
-    // Read back the persisted row to reconstruct the in-memory AgentRequest
-    // that the intake watcher would build. We need `request_id` + `session_id`
-    // + `created_at` from the actual document so the lifecycle wrapper
-    // operates on the right row.
     let escaped_doc_id = escape_graphql_string(&doc_id);
     let query = format!(
         r#"{{
@@ -1187,9 +1054,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         created_at,
     );
 
-    // Drive the Pending → Claimed transition. `ExecutionOrigin::Interactive`
-    // matches the row the helper already wrote — the claim must not flip
-    // origin either.
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
@@ -1206,8 +1070,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
     );
     assert_lean_transition_is_legal("Request", "pending", "claimed");
 
-    // Post-claim: lifecycle_state flips to claimed; claimed_at / deadline
-    // are stamped; lineage and execution origin are UNCHANGED.
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "claimed");
     assert_eq!(snap.status, "processing");

@@ -1,5 +1,3 @@
-//! R4 agent-facing subagent tool integration tests.
-
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
@@ -27,14 +25,6 @@ use crate::support::{first_optional_row, first_row, test_db};
 const PARENT_BEHAVIOR_ID: &str = "r4-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-child";
 
-/// Result of `setup_spawn_fixture`: a standalone `DefraSessionHook` (which the
-/// R4 tests drive via `on_tool_call`) plus a standalone `SubagentSource`
-/// running against the SAME node. The `SubagentSource` materializes child
-/// `AgentRequest`s from the `AgentToolCall` bridge rows the hook writes.
-///
-/// We run only the `SubagentSource` (not a full `Gents`) so the runtime
-/// does not also claim and process the pending child requests — these tests
-/// drive child completion by hand.
 struct SpawnFixture {
     db: crate::support::TestDb,
     hook: DefraSessionHook,
@@ -131,8 +121,6 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
-            // Each target's friendly `name` equals its behavior id so the spawn
-            // args (which pass `name`) resolve. agent_did is the local owner.
             subagent_targets: Some(
                 targets
                     .into_iter()
@@ -197,9 +185,6 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .await
     .unwrap();
 
-    // Run only the `SubagentSource` (not a full `Gents`) against the same
-    // node the hook writes to. The snapshot lists only the local child behavior
-    // so cross-deployment targets are declined deterministically.
     let source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
@@ -474,10 +459,6 @@ async fn wait_for_child_request_for_tool(
     }
 }
 
-/// After the spawn convergence (#377) the background spawn receipt no longer
-/// carries the child session id (the child is materialized asynchronously by
-/// `SubagentSource`). Tests that need the child session resolve it from the DB
-/// once `SubagentSource` has created the child `AgentRequest`.
 async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {

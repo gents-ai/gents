@@ -1,11 +1,5 @@
 import Proofs.Conformance.Contracts.Machines
 
-/-!
-# Shared JSON Helpers
-
-Helpers used by the conformance JSON serializer shards.
--/
-
 namespace Conformance.Contracts
 
 def jsonStringMatrix (values : List (List String)) : String :=

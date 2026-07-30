@@ -37,8 +37,6 @@ use rand::Rng;
 
 use crate::error::InferenceError;
 
-/// Raw retry knobs carried by an `InferenceProfile` and copied onto a resolved
-/// [`crate::config::AgentBehavior`]. `None` means "use the origin default".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
     pub retry_max_transport: Option<i64>,
@@ -95,14 +93,10 @@ pub struct CompletionRetryPolicy {
     pub transport_backoff: Vec<Duration>,
     /// Resample retry budget (`Budget.resampleRetries` in Lean).
     pub max_resample: u32,
-    /// Whether a one-shot repair (sanitizer re-pass) is available at all
-    /// (`Budget.allowRepair` in Lean).
     pub allow_repair: bool,
 }
 
 impl CompletionRetryPolicy {
-    /// Resolve the concrete retry policy for one request from profile fields
-    /// and the request's execution origin.
     pub fn resolve(
         fields: &CompletionRetryProfileFields,
         origin: crate::lifecycle::ExecutionOrigin,
@@ -137,9 +131,6 @@ impl CompletionRetryPolicy {
         }
     }
 
-    /// Resolves the default policy for an execution origin: interactive
-    /// requests get the short single-retry ladder, scheduled requests the
-    /// patient one.
     pub fn default_for_origin(origin: crate::lifecycle::ExecutionOrigin) -> Self {
         match origin {
             crate::lifecycle::ExecutionOrigin::Interactive => Self::interactive_default(),
@@ -147,8 +138,6 @@ impl CompletionRetryPolicy {
         }
     }
 
-    /// Default policy for scheduled (background/unattended) execution:
-    /// a patient transport ladder, one resample attempt, repair allowed.
     pub fn scheduled_default() -> Self {
         Self {
             transport_backoff: vec![
@@ -161,9 +150,6 @@ impl CompletionRetryPolicy {
         }
     }
 
-    /// Default policy for interactive execution: a single short transport
-    /// retry, no resample budget (parse-400s go straight to repair), repair
-    /// allowed.
     pub fn interactive_default() -> Self {
         Self {
             transport_backoff: vec![Duration::from_secs(2)],
@@ -223,16 +209,12 @@ fn nonnegative_u32(value: i64) -> Option<u32> {
     (value >= 0).then(|| u32::try_from(value).ok()).flatten()
 }
 
-/// Retry kind carried on a [`PreStreamDirective::RetryAfter`], distinguishing
-/// a transport-ladder retry (same completion attempt) from a parse-400
-/// resample (fresh generation, same turn).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryKind {
     Transport,
     Resample,
 }
 
-/// Directive produced by [`CompletionRetryState::on_pre_stream_failure`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreStreamDirective {
     RetryAfter { delay: Duration, kind: RetryKind },
@@ -240,7 +222,6 @@ pub enum PreStreamDirective {
     Fail { reason: String },
 }
 
-/// Directive produced by [`CompletionRetryState::on_mid_stream_failure`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MidStreamDirective {
     RetractAndResample { delay: Duration },
@@ -248,9 +229,6 @@ pub enum MidStreamDirective {
     Fail { reason: String },
 }
 
-/// Per-request retry ledger: the policy plus the mutable counters the Lean
-/// `State` tracks (`transportUsed`, `resampleUsed`, `repairUsed`,
-/// `lastParseError`).
 #[derive(Debug, Clone)]
 pub struct CompletionRetryState {
     policy: CompletionRetryPolicy,
@@ -326,11 +304,6 @@ impl CompletionRetryState {
                 let is_fresh = self.last_parse_error.as_deref() != Some(error_text);
                 let resample_budget_spent = self.resample_used >= self.policy.max_resample;
 
-                // The resample delay saturates at the ladder's last step, so a
-                // budget larger than the ladder is honored in full (#653). A
-                // ladder with no steps at all has no pacing to offer: that is
-                // the only case with no resample delay, and it falls through to
-                // repair rather than pretending the budget was spent.
                 let resample_pacing =
                     resample_delay(&self.policy.transport_backoff, self.resample_used);
 
@@ -401,16 +374,6 @@ fn ladder_delay(backoff: &[Duration], used: u32) -> Option<Duration> {
     backoff.get(used as usize).copied()
 }
 
-/// Delay for the next resample, drawn from the transport ladder but SATURATING
-/// at its last step (#653).
-///
-/// The resample budget is independent of the ladder — the Lean model's only
-/// guard is `resampleUsed < budget.resampleRetries`, and `transportRetries` is
-/// what the ladder length means. Indexing the ladder by `resampleUsed` and
-/// treating "ran off the end" as "budget spent" silently capped the resample
-/// budget at the ladder length and, worse, hard-failed instead of falling
-/// through to repair. The ladder is a *pacing* source here, not a budget: once
-/// its steps are used up, keep pacing at the slowest one.
 fn resample_delay(backoff: &[Duration], used: u32) -> Option<Duration> {
     backoff
         .get(used as usize)
@@ -439,10 +402,6 @@ fn chrono_duration_from_std(delay: Duration) -> chrono::Duration {
     chrono::Duration::milliseconds(delay.as_millis().min(i64::MAX as u128) as i64)
 }
 
-/// Applies +/-25% jitter to `base_delay`, floored at 100ms. Mirrors the
-/// arithmetic in `RetryPolicy::delay_for_attempt` (`crate::retry`), but takes
-/// an injected RNG so tests can seed it deterministically; production
-/// callers pass `rand::rng()`.
 fn jitter(base_delay: Duration, rng: &mut impl Rng) -> Duration {
     let base_ms = base_delay.as_millis().min(u64::MAX as u128) as u64;
     let jitter_range = base_ms / 4;

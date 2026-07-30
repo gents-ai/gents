@@ -25,16 +25,11 @@ describe("CodeContextHeader", () => {
     );
     expect(screen.getByTestId("code-context-files")).toHaveTextContent("read / write");
     expect(screen.getByTestId("code-context-bash")).toHaveTextContent("read-only");
-    // The honest host identity is the peer, not a (possibly agent-relative)
-    // GraphQL endpoint.
     expect(screen.getByTestId("code-context-host")).toHaveTextContent("Local Agent");
     expect(screen.getByTestId("code-context-host")).toHaveTextContent("peer-1");
   });
 
   it("resolves the SELECTED behavior's tool selection, not the default or [0]", () => {
-    // Fixture: behavior "default" -> tools-a (files on), behavior "ops" ->
-    // tools-b (files off). A regression to "always default" or "always
-    // toolSelections[0]" would show tools-a's boundary and fail here.
     render(
       <CodeContextHeader
         deployment={deployment}

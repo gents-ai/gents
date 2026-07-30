@@ -161,8 +161,6 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
     {
         let node = open_local_node(&home_dir).await?;
         ensure_runtime_schemas(node.as_ref()).await?;
-        gents::migration::ensure_tool_call_migrations(node.clone()).await?;
-        gents::migration::ensure_subagent_extensions_migrations(node.clone()).await?;
 
         create_local_processing_request(
             node.as_ref(),
@@ -579,11 +577,6 @@ async fn request_lifecycle_state(graphql: &str, request_id: &str) -> Result<Stri
         .ok_or_else(|| anyhow!("AgentRequest {request_id} missing lifecycle_state: {row}"))
 }
 
-/// Mock backend for cascade-cancel tests: the first turn whose user prompt
-/// matches `target_prompt` (and carries no tool result yet) replies with a
-/// `spawn_subagent` tool call naming the configured behavior id; every other
-/// request hangs until the mock is dropped. Built on the shared robust
-/// [`support::mocks::fake_llm::FakeLlm`].
 struct BlockingSpawnEndpoint {
     inner: support::mocks::fake_llm::FakeLlm,
     behavior_id: Arc<Mutex<String>>,

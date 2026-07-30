@@ -67,7 +67,6 @@ describe("config dirty state", () => {
     });
     expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
 
-    // Post-save snapshot refresh: the view now carries the edited value.
     const saved = makeDeployment();
     saved.inferenceBackends[0].endpoint = "http://edited:9999/v1";
     rerender(

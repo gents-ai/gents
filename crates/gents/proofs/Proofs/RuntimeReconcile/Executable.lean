@@ -1,15 +1,7 @@
 import Proofs.RuntimeReconcile.Transition
 
-/-!
-# Executable Runtime Reconcile Semantics
-
-Executable actions, step function, replay, and equivalence with the relational
-runtime reconcile transition model.
--/
-
 namespace RuntimeState
 
-/-- Executable runtime-reconcile actions mirroring `Transition`. -/
 inductive Action where
   | ackWrite (resolved : ResolvedSnapshot)
   | observeDoc (resolved : ResolvedSnapshot)
@@ -25,7 +17,6 @@ inductive Action where
   | retireGeneration (generation : Generation)
   deriving DecidableEq, Repr
 
-/-- Finite guard for safe generation retirement. -/
 def noInFlightDependsOn (s : RuntimeState) (generation : Generation) : Prop :=
   s.inFlight.filter (fun rid => s.requestGeneration rid = generation) = ∅
 
@@ -46,7 +37,6 @@ theorem noInFlightDependsOn_iff
   · intro h_clear
     exact Finset.filter_eq_empty_iff.mpr (by intro rid h_rid h_eq; exact h_clear rid h_rid h_eq)
 
-/-- Executable transition function for the runtime reconcile layer. -/
 def step? (pre : RuntimeState) : Action → Option RuntimeState
   | .ackWrite resolved =>
       some { pre with ackedResolved := some resolved }
@@ -128,13 +118,11 @@ def step? (pre : RuntimeState) : Action → Option RuntimeState
       else
         none
 
-/-- A trace is a sequence of valid runtime reconcile transitions. -/
 inductive Trace : RuntimeState → RuntimeState → Prop where
   | refl {s : RuntimeState} : Trace s s
   | step {s₁ s₂ s₃ : RuntimeState} :
       Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
-/-- Replay a finite action list through the executable runtime reconcile semantics. -/
 def replay? : RuntimeState → List Action → Option RuntimeState
   | s, [] => some s
   | s, action :: rest =>

@@ -6,9 +6,6 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { getDesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
-/// The behavior's RESOLVED tool surface, computed by the runtime's explain
-/// machinery over the live documents — what the model actually gets, not
-/// what the raw ToolSelection says. Fetched on expand/refresh only.
 export function BehaviorToolSurface({
   agentDid,
   api,

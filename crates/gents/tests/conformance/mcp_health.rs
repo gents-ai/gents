@@ -1,10 +1,3 @@
-//! MCPHealth conformance home: pins the shape of the generated health-checker
-//! transition cases. The transition behavior itself is witnessed by the
-//! ledger-registered `health_checker::tests` consumer driving `step_service`
-//! over the K=1 projection; this fence keeps the emitted case set honest from
-//! the conformance binary (including the H7 K=1 Healthy→Evicted collapse and
-//! the K≥2 future rows).
-
 use super::*;
 
 pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {

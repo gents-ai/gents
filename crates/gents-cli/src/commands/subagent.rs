@@ -43,18 +43,10 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
     let cause = parse_cancel_cause(&args.cause)?;
     let wait_timeout = resolve_wait_timeout(args.wait, args.timeout.as_deref())?;
 
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ true,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let snapshots = match access {
         ConfigAccess::Graphql(graphql) => {
-            // Live GraphQL mode latches request interrupts and lets the daemon
-            // transition any in-flight bridge tool-calls it owns. Local mode
-            // has no daemon process, so it performs bridge transitions itself.
             let affected = cancel_subagent_graphql(&graphql, &request_id, args.cascade).await?;
             if let Some(timeout) = wait_timeout {
                 wait_for_terminal_graphql(&graphql, &affected, timeout).await?
@@ -63,12 +55,6 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
             }
         }
         ConfigAccess::Local(node) => {
-            // Migrations already ran via the single sanctioned entry point inside
-            // `resolve_config_access` (it calls
-            // `migration::ensure_all_runtime_migrations` for every Local node,
-            // including the `agent_did` scope key that `ToolCallLifecycle::load`
-            // selects). Running them again here would be a redundant double-run in
-            // this path.
             let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
                 .context("resolving local agent_did for cascade ownership checks")?;
             let affected =
@@ -172,9 +158,6 @@ async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()
         return Ok(());
     }
 
-    // TODO: Route this through a server-side interrupt endpoint once one
-    // exists, so idempotency and queue-drain behavior stay centralized with
-    // gents::interrupt_request.
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -672,8 +655,7 @@ struct SubagentCancelRender {
 }
 
 async fn subagent_list(args: SubagentListArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let rows = match args.root.as_deref().and_then(non_empty_str) {
         Some(root) => load_rooted_lineage(&access, root, args.depth).await?,
         None => load_lineage_forest(&access, args.depth).await?,
@@ -713,8 +695,6 @@ async fn load_rooted_lineage(
             continue;
         }
 
-        // TODO: replace per-parent child lookups with a batched load if large
-        // rooted trees make this operator command noticeably latent.
         let children = load_children(access, &request_id).await?;
         for child in children.into_iter().rev() {
             stack.push((child, depth + 1));

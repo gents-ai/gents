@@ -33,6 +33,12 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Install elan
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" --version
+
       - name: Install workspace dependencies
         run: npm ci
 

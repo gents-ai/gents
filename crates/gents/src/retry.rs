@@ -18,15 +18,11 @@ pub const DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS: u64 = 100;
 pub const TERMINAL_PERSISTENCE_MAX_RETRIES: u32 = 3;
 pub const TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS: u64 = 100;
 
-/// Retry policy for inference calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RetryPolicy {
-    /// Maximum number of retry attempts (0 = no retries).
     pub max_retries: u32,
-    /// Base delay before first retry.
     pub base_delay_ms: u64,
-    /// Maximum delay between retries.
     pub max_delay_ms: u64,
 }
 
@@ -48,7 +44,6 @@ impl RetryPolicy {
         let exponential = base.saturating_mul(1u64 << attempt.min(10));
         let capped = exponential.min(self.max_delay_ms);
 
-        // +/- 25% jitter
         let jitter_range = capped / 4;
         let jitter = if jitter_range > 0 {
             let mut rng = rand::rng();
@@ -61,7 +56,6 @@ impl RetryPolicy {
         Duration::from_millis(final_ms)
     }
 
-    /// Whether the policy allows any retries.
     pub fn has_retries(&self) -> bool {
         self.max_retries > 0
     }

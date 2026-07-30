@@ -24,7 +24,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             .trigger_id
             .as_ref()
             .map(|trigger_id| (trigger_id.clone(), trigger_kind));
-        let expects_target_supersede = target_key.as_ref().map_or(false, |(trigger_id, kind)| {
+        let expects_target_supersede = target_key.as_ref().is_some_and(|(trigger_id, kind)| {
             case.expected_supersede_call_keys.iter().any(|key| {
                 key.trigger_id == *trigger_id && trigger_kind_from_lean(&key.trigger_kind) == *kind
             })
@@ -35,12 +35,9 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
         let mut superseded_prior_ids = case.superseded_prior_ids.iter();
         for key in &case.prior_nonterminal_keys {
             let (prior_trigger_id, prior_trigger_kind) = trigger_key_from_lean(key);
-            if target_key
-                .as_ref()
-                .map_or(false, |(target_id, target_kind)| {
-                    target_id == &prior_trigger_id && *target_kind == prior_trigger_kind
-                })
-            {
+            if target_key.as_ref().is_some_and(|(target_id, target_kind)| {
+                target_id == &prior_trigger_id && *target_kind == prior_trigger_kind
+            }) {
                 if let Some(request_id) = superseded_prior_ids.next() {
                     materializer.mark_nonterminal_request(
                         &prior_trigger_id,

@@ -27,7 +27,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let behavior_did = self.behavior.agent_did().to_string();
         let request = request.clone();
         let model = Arc::clone(&self.model);
-        // Title generation: a tool-free single completion with fixed sampling.
         let mut title_config = crate::completion_factory::loop_config(
             self.behavior.as_ref(),
             title_generation_preamble(),
@@ -108,7 +107,6 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
 
     for attempt in 1..=TITLE_GENERATION_MAX_ATTEMPTS {
         let prompt = prompt.clone();
-        // Owned loop (#400): a non-persisting, tool-free single completion.
         let model = (*model).clone();
         let loop_config = config.clone();
         match admission::scope_call(CallKind::OneOff, attempt, async move {

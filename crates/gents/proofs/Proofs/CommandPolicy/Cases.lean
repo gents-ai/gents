@@ -2,15 +2,6 @@ import Proofs.CommandPolicy.Validation
 import Proofs.CommandPolicy.Sandbox
 import Proofs.CommandPolicy.Env
 
-/-!
-# Command Policy Generated Cases
-
-Finite executable witnesses for the Rust command-policy conformance tests.
-These cases intentionally cover only local policy ordering, sandbox selection
-labels, and shell-environment filtering. External binary read-only behavior and
-host kernel sandbox correctness remain conformance boundaries.
--/
-
 namespace CommandPolicy
 
 structure CommandPolicyCase where

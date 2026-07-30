@@ -29,15 +29,12 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     )
     .await?;
 
-    let (access, _) = resolve_config_access(Some(&home_dir), None, true).await?;
+    let (access, _) = resolve_config_access(Some(&home_dir), None).await?;
     let bound = binding::load_bound_manifest(binding::ManifestBindingOptions {
         root: &args.root,
         home: Some(&home_dir),
         graphql: None,
         bind_agent_did: Some(ManifestAgentDidBindingArg::Home),
-        // Provisioning deliberately binds a portable manifest to the identity
-        // initialized for this home. Interactive config binding keeps the
-        // explicit force requirement for replacing a different concrete DID.
         force_rebind_concrete_did: true,
         access: Some(&access),
     })

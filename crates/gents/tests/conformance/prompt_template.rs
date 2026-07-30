@@ -1,5 +1,3 @@
-//! PromptAssembly.Template conformance (issue #497).
-
 use gents::template::catalog::{default_catalog, Volatility};
 use gents::template::reads::{collect_system_reads, validate_system_template};
 use gents::template::{render_template, TemplateScope};

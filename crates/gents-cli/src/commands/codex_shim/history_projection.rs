@@ -510,10 +510,6 @@ pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadR
     })
 }
 
-/// Reshape the derived v2 thread git metadata (`{sha, branch, originUrl}`) into
-/// the v1 `ConversationGitInfo` shape (`{sha, branch, origin_url}`) used by
-/// `getConversationSummary`. Without this, the typed round-trip in
-/// `send_typed_json_result` drops the camelCase `originUrl` and loses the remote.
 fn conversation_summary_git_info(git_info: &Option<Value>) -> Option<Value> {
     let object = git_info.as_ref()?.as_object()?;
     let field = |name: &str| object.get(name).and_then(Value::as_str);
@@ -617,9 +613,6 @@ fn append_request_items(
         });
     }
 
-    // The runtime performs automatic compaction after accepting this request
-    // and before entering the owned inference/tool loop. Preserve that durable
-    // order in replay: user request, compaction, then model-derived items.
     items.extend(
         compactions
             .iter()

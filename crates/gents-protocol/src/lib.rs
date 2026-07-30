@@ -1,7 +1,3 @@
-//! Shared substrate for any DefraDB peer participating in a `gents`
-//! control plane: GraphQL schema strings, client turn-observation protocol,
-//! and serde row mirrors for every replicated collection.
-
 pub mod bearer_token;
 pub mod client_protocol;
 pub mod graphql;

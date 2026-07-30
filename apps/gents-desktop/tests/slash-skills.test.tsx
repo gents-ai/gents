@@ -76,7 +76,6 @@ describe("slashSkillSuggestion", () => {
   it("only suggests within the leading selector block", () => {
     expect(slashSkillSuggestion("hello /", 7, skills)).toBeNull();
     expect(slashSkillSuggestion("body line\n/", 11, skills)).toBeNull();
-    // A selector line above keeps the block leading.
     const second = slashSkillSuggestion("/review-skill\n/", 15, skills);
     expect(second?.items.length).toBeGreaterThan(0);
   });
@@ -126,7 +125,6 @@ describe("composer slash menu", () => {
     const input = screen.getByTestId("composer-input");
     fireEvent.change(input, { target: { value: "/", selectionStart: 1 } });
 
-    // Draft is controlled by the parent; re-render with the typed value.
     expect(onDraftChange).toHaveBeenCalledWith("/");
   });
 

@@ -53,13 +53,6 @@ impl ConformanceConsumer {
     }
 }
 
-/// Registry for `CoverageLedger.lean` consumer ids.
-///
-/// When a generated Lean contract gets a new Rust or TypeScript consumer, add
-/// the test here in the same change as the Lean ledger entry. Rust entries
-/// resolve to a real `#[test]` or `#[tokio::test]` function at the named module
-/// path in the named source file; TypeScript entries resolve to a concrete test
-/// in the named suite.
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
@@ -657,6 +650,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer",

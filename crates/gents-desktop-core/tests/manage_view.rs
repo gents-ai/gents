@@ -192,9 +192,6 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         .find(|row| row.profile_id == "profile-amy")
         .expect("inference profile should be present");
     assert_eq!(profile.display_name.as_deref(), Some("Amy Profile"));
-    // #649: the desktop's profile writer and reader must carry the sampling
-    // knobs, not just compile against them — a dropped field here would silently
-    // strand `top_p`/`top_k` at the served checkpoint's default.
     assert_eq!(profile.top_p, Some(0.95));
     assert_eq!(profile.top_k, Some(40));
     let tools = snapshot
@@ -214,8 +211,6 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(tools.subagent_background_enabled, Some(true));
     assert_eq!(tools.subagent_allow_cross_deployment, Some(true));
     assert_eq!(tools.cross_deployment_spawn_timeout_seconds, Some(45));
-    // SP2 Phase B: the unified-policy parity fields must survive the
-    // save (mutation) → store refresh (read query) round-trip, not silently drop.
     assert_eq!(tools.enable_defra_query, Some(true));
     assert_eq!(
         tools.defra_query_collections,
@@ -259,11 +254,6 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     assert_eq!(schedule.task_id.as_deref(), Some("task-amy-daily"));
     assert_eq!(schedule.interval_secs, Some(300));
     assert_eq!(schedule.enabled, Some(true));
-    // `save_schedule` only writes apply-owned fields; `next_run_at`
-    // is carried on the desktop draft so the UI can display it, but
-    // the runtime owns this field and may not seed it on first write.
-    // We only assert that the schedule exists with the expected
-    // apply-owned shape here.
 
     core.delete_skill("amy-skill", "did:test:amy").await?;
     let snapshot = core.store().snapshot();

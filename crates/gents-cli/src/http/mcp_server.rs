@@ -1,13 +1,3 @@
-//! MCP server surface for `defra_query`.
-//!
-//! Exposes the read-only structured query as an MCP tool over streamable-HTTP,
-//! mounted at `/mcp` on the running `gents server`. External consumers
-//! (e.g. a trace/eval pipeline) can call `defra_query` instead of hand-rolling
-//! a GraphQL client. The tool delegates to the same
-//! [`run_defra_query`](crate::commands::query::run_defra_query) helper the CLI
-//! uses, so both surfaces share the filter rendering, the always-on
-//! secret-field guard, and the collection scope.
-
 use std::sync::Arc;
 
 use gents::defra_query::{CollectionScope, DefraQueryParams};
@@ -85,7 +75,6 @@ impl DefraQueryMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DefraQueryMcp {
     fn get_info(&self) -> ServerInfo {
-        // ServerInfo (InitializeResult) is #[non_exhaustive]; default then set.
         #[allow(clippy::field_reassign_with_default)]
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -99,8 +88,6 @@ impl ServerHandler for DefraQueryMcp {
     }
 }
 
-/// Build the streamable-HTTP MCP service to mount at `/mcp`. A fresh handler is
-/// created per session; all share the same graphql endpoint and collection scope.
 pub(crate) fn defra_query_mcp_service(
     graphql: String,
     scope: CollectionScope,

@@ -1,10 +1,6 @@
 import Proofs.StorageObservation
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Storage Observation Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def storageObservationStates : List StorageObservation :=

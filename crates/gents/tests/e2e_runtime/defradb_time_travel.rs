@@ -1,11 +1,3 @@
-//! Spike/regression coverage for rendered-request projection (#519).
-//!
-//! Rendered completion requests should be reconstructable as projections from
-//! durable database state. This test confirms that the pinned DefraDB node
-//! accepts CID time-travel GraphQL through `EmbeddedNode::execute`, which lets a
-//! future projection read behavior/config documents as they existed when the
-//! model call was made.
-
 use std::sync::Arc;
 
 use gents::defra_node::EmbeddedNode;

@@ -1,12 +1,5 @@
 import Proofs.Transcript.Dedupe
 
-/-!
-# Transcript Executable Conformance Rows
-
-Finite witness rows for Rust conformance tests. These are case rows, not a
-phase-machine table, because transcript correctness is cross-row.
--/
-
 namespace Transcript
 
 structure TranscriptCase where
@@ -93,11 +86,6 @@ def distinctResultIdsAppendDistinctRowsCase : TranscriptCase :=
   , expectedStrongDrain := true
   }
 
-/-- Three parallel tool calls accumulate in ONE assistant turn; after that turn
-persists once, EACH streamed result appends its own user row
-(`parallel_results_complete_independently`). Sequences: user 1, assistant 2,
-results 3..5. `resultSequence`/`logicalResultId`/`payloadHash` describe the
-FIRST result; the driver derives the siblings by offset. -/
 def parallelResultsShareAssistantTurnCase : TranscriptCase :=
   { name := "parallel_results_share_assistant_turn"
   , group := "ordering"

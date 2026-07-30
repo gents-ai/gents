@@ -28,13 +28,6 @@ import { createFixtureHelpers } from "./live-bridge-runner/adapter";
  * subscription path at all.
  */
 describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
-  // Witness: D1_delivery_convergence + D2_fair_delivery_latency.
-  // Write a behavior document on the *remote* node (node A).  Read the
-  // desktop snapshot from the *desktop* node (node B).  The mutation must
-  // appear on B within the 5-second window, proving that iroh gossip +
-  // the subscription path delivers the document without waiting for the
-  // rescan tick.  If the test takes >5s the latency guarantee (D2) is
-  // violated — DO NOT loosen this timeout.
   it("D1/D2: a remote write converges on the desktop node within the subscription window", async () => {
     await withLiveDesktop(async ({ runner, deployment }) => {
       const behavior =
@@ -43,9 +36,6 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
 
       const sentinel = `repl-d1-${Date.now()}`;
 
-      // Write on the remote node (node A).  The bridge runner's
-      // /desktop/test-fixture/remote-save-behavior endpoint targets
-      // fixture.remote_core() rather than fixture.desktop_core().
       const fixture = createFixtureHelpers(runner);
       await fixture.saveBehaviorConfigOnRemote({
         agentDid: runner.agentDid,
@@ -60,9 +50,6 @@ describeLive("Tauri app live replication (EventDelivery witnesses)", () => {
         `D1/D2 remote write issued behaviorId=${behavior!.behaviorId} sentinel=${sentinel}`,
       );
 
-      // Read on the desktop node (node B).  The assertion must pass inside
-      // the 5-second D2 window.  If propagation takes longer, the test
-      // fails — that is a real D2 violation, not a test artifact.
       await waitFor(
         async () => {
           const snapshot = await runner.fetchSnapshot();

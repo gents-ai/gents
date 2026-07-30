@@ -6,10 +6,6 @@ use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::{extract_mutation_doc_id, print_json, EXPORT_SKILL_FIELDS};
 
-/// Run a write mutation inside a transaction and commit it. A transaction
-/// commit emits the DefraDB `Update` event the runtime control watcher
-/// reconciles on (a bare auto-committed single mutation does not), so live
-/// skill changes take effect without an agent restart.
 async fn execute_committed(access: &ConfigAccess, mutation: &str) -> Result<Value> {
     let txn = access.begin_apply_txn().await?;
     match txn.execute(mutation).await {
@@ -40,8 +36,6 @@ fn gql_string_list(values: &[String]) -> String {
     format!("[{items}]")
 }
 
-/// A skill to create/update, independent of where it came from (CLI flags or a
-/// SKILL.md file).
 struct SkillInput {
     skill_id: String,
     agent_did: String,
@@ -51,8 +45,6 @@ struct SkillInput {
     instructions: Option<String>,
     tool_refs: Vec<String>,
     display_name: Option<String>,
-    /// Opaque UI metadata (the whole `agents/openai.yaml` `interface` block) as
-    /// a JSON string. Round-trips through export; never affects privilege.
     interface_json: Option<String>,
     enabled: bool,
 }
@@ -124,8 +116,6 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         instructions,
         tool_refs: args.tool_refs.clone(),
         display_name: args.display_name.clone(),
-        // `config skill add` has no flag for opaque UI metadata; it arrives only
-        // via `config skill import` from an `agents/openai.yaml` interface block.
         interface_json: None,
         enabled: args.enabled,
     };
@@ -230,8 +220,6 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
     Ok(())
 }
 
-// ---- Import a Codex-format SKILL.md directory tree ----
-
 #[derive(Default, serde::Deserialize)]
 struct SkillFrontmatter {
     name: Option<String>,
@@ -240,10 +228,6 @@ struct SkillFrontmatter {
 
 #[derive(Default, serde::Deserialize)]
 struct OpenAiYaml {
-    /// The whole `interface` mapping is captured opaquely (icons, brand,
-    /// default_prompt, …) so it round-trips through `interface_json`; only
-    /// `display_name` is promoted to a typed column. UI metadata, not
-    /// load-bearing.
     interface: Option<serde_yaml::Value>,
     dependencies: Option<OpenAiDependencies>,
 }
@@ -257,8 +241,6 @@ struct OpenAiTool {
     value: Option<String>,
 }
 
-/// Split a SKILL.md into (frontmatter, body): the YAML between a leading `---`
-/// line and the next `---` line, then everything after as the instruction body.
 fn parse_skill_md(contents: &str) -> (SkillFrontmatter, String) {
     let mut lines = contents.lines();
     if lines.next().map(str::trim) == Some("---") {
@@ -285,8 +267,6 @@ fn parse_skill_md(contents: &str) -> (SkillFrontmatter, String) {
     (SkillFrontmatter::default(), contents.trim().to_string())
 }
 
-/// Derive a stable `skill_id` from a skill directory name: lowercased, with
-/// runs of non-alphanumeric characters collapsed to single hyphens.
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();
     let mut id = String::new();
@@ -304,7 +284,6 @@ fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     (!id.is_empty()).then_some(id)
 }
 
-/// Recursively find directories that directly contain a `SKILL.md`, depth-bounded.
 fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
@@ -360,7 +339,6 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         };
         let (frontmatter, body) = parse_skill_md(&contents);
 
-        // Optional agents/openai.yaml: tool dependencies + opaque UI interface.
         let mut tool_refs = Vec::new();
         let mut display_name = None;
         let mut interface_json = None;
@@ -376,8 +354,6 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
                             .collect();
                     }
                     if let Some(interface) = parsed.interface {
-                        // Promote display_name to its typed column; preserve the
-                        // whole interface block opaquely so export round-trips it.
                         display_name = interface
                             .get("display_name")
                             .and_then(serde_yaml::Value::as_str)
@@ -434,19 +410,12 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         "imported": imported,
         "errors": errors,
     }))?;
-    // Partial success is fine for a bulk import — per-skill errors are reported
-    // above. Only fail when nothing imported despite errors (total failure).
     if imported.is_empty() && !errors.is_empty() {
         anyhow::bail!("no skills imported ({} error(s))", errors.len());
     }
     Ok(())
 }
 
-// ---- Export Skill documents to a SKILL.md directory tree ----
-
-/// Render a Skill row as `SKILL.md` text: YAML frontmatter (name + optional
-/// description) followed by the instruction body. Round-trips through
-/// `parse_skill_md`.
 fn render_skill_md(skill: &Value) -> Result<String> {
     #[derive(serde::Serialize)]
     struct Frontmatter<'a> {
@@ -472,8 +441,6 @@ fn render_skill_md(skill: &Value) -> Result<String> {
     Ok(format!("---\n{frontmatter}---\n\n{instructions}\n"))
 }
 
-/// Render `agents/openai.yaml` for a skill that declares tool_refs or a display
-/// name; `None` when there is nothing to write.
 fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
     #[derive(serde::Serialize)]
     struct Tool {
@@ -503,8 +470,6 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
                 .collect()
         })
         .unwrap_or_default();
-    // Prefer the opaque round-tripped interface block; fall back to a minimal
-    // `{display_name}` when only the typed column is set.
     let interface = match skill
         .get("interface_json")
         .and_then(Value::as_str)
@@ -675,7 +640,6 @@ mod tests {
             Some("Research")
         );
 
-        // No tool_refs / display_name -> nothing to write.
         assert!(render_openai_yaml(&json!({ "skill_id": "x" }))
             .unwrap()
             .is_none());
@@ -683,8 +647,6 @@ mod tests {
 
     #[test]
     fn import_captures_and_export_round_trips_opaque_interface() {
-        // An interface block richer than display_name (icons, brand, …) must
-        // survive import (captured opaquely into interface_json) and export.
         let yaml = "interface:\n  display_name: Research\n  icon: telescope\n  brand:\n    color: \"#0af\"\n";
         let parsed: OpenAiYaml = serde_yaml::from_str(yaml).unwrap();
         let interface = parsed.interface.expect("interface present");
@@ -697,7 +659,6 @@ mod tests {
         assert!(interface_json.contains("icon"));
         assert!(interface_json.contains("telescope"));
 
-        // Export reconstructs the full block from interface_json (not just name).
         let skill = json!({
             "skill_id": "research",
             "display_name": display_name,
@@ -739,7 +700,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"research".to_string()));
         assert!(names.contains(&"writing".to_string()));
-        assert!(!names.iter().any(|n| n == ".hidden")); // dotdirs skipped
+        assert!(!names.iter().any(|n| n == ".hidden"));
         assert_eq!(dirs.len(), 2);
     }
 }

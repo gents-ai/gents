@@ -101,7 +101,7 @@ describe("ActiveChatWorkspace interrupt flow", () => {
     const btn = await screen.findByRole("button", { name: /interrupt/i });
     fireEvent.click(btn);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(mockedInterrupt).not.toHaveBeenCalled(); // not until user confirms
+    expect(mockedInterrupt).not.toHaveBeenCalled();
   });
 
   it("routes a parent-only interrupt through the selected deployment", async () => {

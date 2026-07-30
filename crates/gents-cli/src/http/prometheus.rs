@@ -157,19 +157,13 @@ where
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_else(|| "unknown".to_string()))
 }
 
-/// Live + configured P2P hub admission observability for Prometheus scrapes.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct P2pMetricsSnapshot {
     pub(crate) enabled: bool,
     pub(crate) connected_peers: usize,
     pub(crate) replicators: usize,
     pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
-    /// Typed live state from DefraDB's `/p2p/sync/status` contract.
     pub(crate) sync_status: Option<gents::P2pSyncStatusSnapshot>,
-    /// True when live P2P data is held from a prior successful refresh (or an
-    /// admission-only bootstrap) because the self-fetch timed out or failed.
-    /// Prevents false zeroes during hub saturation when `/metrics` must not
-    /// block on multi-hop HTTP.
     pub(crate) stale: bool,
 }
 
@@ -481,8 +475,6 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
 
     render_p2p_sync_metrics(lines, snapshot.sync_status.as_ref());
 
-    // Requested admission bounds from serve-start args — not necessarily the
-    // effective upstream floors (e.g. rate may be clamped to MIN_REQUEST_REFILL_RATE).
     push_metric_prelude(
         lines,
         "gents_p2p_admission_max_pending_dags",
@@ -1165,14 +1157,6 @@ pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> Metrics
     data
 }
 
-/// Per-backend metric samples with the local runtime's measured probe
-/// health overlaid (#640). When the prober has measured a backend, the
-/// `status` label carries the MEASURED state and the sample value is 1 iff
-/// that state is healthy — so `gents_backend_probe_status` genuinely
-/// reads 0 for a dead endpoint instead of pinning at the stored document
-/// constant. Backends the prober never measures (ChatGPT-Codex, or an HTTP
-/// surface without an in-process runtime) fall back to the document's
-/// `probe_status`/`last_probe`.
 pub(crate) fn push_backend_metrics(
     lines: &mut Vec<String>,
     backends: &[MetricsBackendRow],
@@ -1284,10 +1268,6 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
 
-    /// #640 ledger consumer (`backend-health.operatorCli`): the probe-status
-    /// metric must report the local runtime's MEASURED health — value 0 with
-    /// the measured status label for a dead endpoint, fresh last_probe from
-    /// the measurement, doc fallback only where the prober has no opinion.
     #[test]
     fn backend_probe_status_metric_reflects_measured_health() {
         fn doc_row(
@@ -1322,14 +1302,9 @@ mod tests {
         }
 
         let backends = vec![
-            // The fleet-evidence shape: document pinned "healthy", endpoint
-            // measured dead — the metric MUST read 0.
             doc_row("sparks-cluster", "healthy", None),
-            // Measured healthy: 1 with a fresh measured last_probe.
             doc_row("workstation-1", "healthy", Some("2026-07-01T00:00:00Z")),
-            // Below-threshold blip: truthful degraded label, value 0.
             doc_row("spark-2", "healthy", None),
-            // Never probed (e.g. ChatGPT-Codex): document status governs.
             doc_row("codex", "healthy", Some("2026-07-06T00:00:00Z")),
             doc_row("unprobed-unknown", "unknown", None),
         ];
@@ -1384,7 +1359,6 @@ mod tests {
         )));
         assert!(rendered
             .contains(r#"gents_backend_probe_status{backend_id="spark-2",status="degraded"} 0"#));
-        // Doc fallback: measured absent.
         assert!(rendered
             .contains(r#"gents_backend_probe_status{backend_id="codex",status="healthy"} 1"#));
         let doc_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-06T00:00:00Z")
@@ -1396,7 +1370,6 @@ mod tests {
         assert!(rendered.contains(
             r#"gents_backend_probe_status{backend_id="unprobed-unknown",status="unknown"} 0"#
         ));
-        // No last_probe series at all when neither measurement nor doc has one.
         assert!(!rendered
             .contains(r#"gents_backend_last_probe_seconds{backend_id="unprobed-unknown"}"#));
     }

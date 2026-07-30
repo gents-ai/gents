@@ -17,7 +17,6 @@ use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteRep
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Runtime-local admin adapter over an embedded DefraDB node's P2P operations.
 #[derive(Clone)]
 pub struct EmbeddedRemoteP2pAdmin {
     node: Arc<EmbeddedNode>,
@@ -134,9 +133,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // The P2P subscription set (`get_collections`) is keyed by collection id,
-        // but desired state carries collection names; resolve via the local schema
-        // catalog so the reconcile diff compares both sides in id-space.
         match self.node.get_collection(name) {
             Ok(Some(def)) => Ok(Some(def.collection_id)),
             Ok(None) => Ok(None),
@@ -147,9 +143,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // Walk the local catalog to invert id → name. The subscribe/unsubscribe
-        // adapter calls take names, but `PairingApplied` records ids, so teardown
-        // of a no-longer-desired collection must recover the name here.
         let names = self.node.list_collections().map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
         })?;
@@ -247,11 +240,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 }
 
-/// Translate our `PairingFilters` seam type into defradb's `ReplicationFilters`
-/// (per-collection equality predicate), passed straight to the filtered
-/// `add_replicator` on the pinned #1033 rev. Filters are translated 1:1 and
-/// validated (fail-closed) by defradb — there is no unfiltered fallback. Our
-/// predicate values are agent DIDs (strings), so they map to JSON strings.
 fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
     filters
         .iter()
@@ -261,8 +249,6 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
                 ReplicationFilter {
                     field: predicate.field.clone(),
                     value: serde_json::Value::String(predicate.value.clone()),
-                    // gents's pairing scope is a simple field==value filter;
-                    // the rich `Conditions` predicate (added upstream) is unused.
                     conditions: None,
                 },
             )
@@ -302,7 +288,7 @@ mod tests {
     use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
     use super::*;
-    use crate::agent::p2p_reconcile::templates::SUBAGENT_HOST_TEMPLATE;
+    use crate::agent::p2p_reconcile::templates::{Scope, SUBAGENT_HOST_TEMPLATE};
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
@@ -586,6 +572,85 @@ mod tests {
         assert!(collections.contains(&expected_collection_id));
 
         node.shutdown().await;
+    }
+
+    /// Catalog-wide fence for defradb's replication-filter validation: every
+    /// builtin template's filter fields must be `@immutable` in the target
+    /// collection's schema, or `add_replicator` rejects the install at
+    /// pairing time (the exact failure that shipped in #873's merge: the
+    /// machine template filters `AgentDirectoryEntry.source_did`, which the
+    /// amended schema left mutable). Runs against real runtime schemas so a
+    /// new template or filter rule cannot pass review while violating the
+    /// constraint defradb only enforces at install time.
+    #[tokio::test]
+    async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
+        let local_test = runtime_test_node().await;
+        let remote_test = runtime_test_node().await;
+        let local = Arc::clone(&local_test.node);
+        let remote = Arc::clone(&remote_test.node);
+        let local_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&local));
+        let remote_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&remote));
+        let remote_addresses = wait_for_peer_info(&remote_admin).await;
+        local_admin
+            .connect(&remote_addresses)
+            .await
+            .expect("connect remote");
+        wait_for_active_peer(&local_admin).await;
+        wait_for_active_peer(&remote_admin).await;
+
+        for template in super::super::templates::builtin_templates() {
+            if template.collections.is_empty() {
+                continue; // app-collections: bring-your-own collection set.
+            }
+            let filters = super::super::templates::scope_filter(
+                &template.scope,
+                template.collections,
+                "did:key:z6MkPeerForFilterValidation",
+                "did:key:z6MkSelfForFilterValidation",
+            );
+            match &template.scope {
+                Scope::Unscoped => assert!(
+                    filters.is_empty(),
+                    "unscoped template '{}' unexpectedly has filters",
+                    template.id
+                ),
+                Scope::PerCollection(_) => {
+                    let filter_collections =
+                        filters.keys().map(String::as_str).collect::<BTreeSet<_>>();
+                    let template_collections = template
+                        .collections
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>();
+                    assert_eq!(
+                        filter_collections, template_collections,
+                        "per-collection template '{}' must filter every collection",
+                        template.id
+                    );
+                }
+                Scope::PeerDid { .. } => {}
+            }
+            local_admin
+                .add_replicator(
+                    &remote_addresses,
+                    &template
+                        .collections
+                        .iter()
+                        .map(|c| (*c).to_string())
+                        .collect::<Vec<_>>(),
+                    &filters,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "template '{}' filter set rejected by add_replicator: {error:#}",
+                        template.id
+                    )
+                });
+        }
+
+        local.shutdown().await;
+        remote.shutdown().await;
     }
 
     #[tokio::test]

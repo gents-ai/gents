@@ -29,8 +29,6 @@ import type {
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
 const STARTED_AT = "2026-06-17T00:00:00.000Z";
-// Relative-time fixtures must be offsets from *now*: a fixed date drifts one
-// label per day and breaks the near-exact visual baselines.
 const THIRTY_DAYS_AGO = new Date(Date.now() - 30 * 86_400_000).toISOString();
 const TWO_HOURS_AGO = new Date(Date.now() - 2 * 3_600_000).toISOString();
 
@@ -61,8 +59,6 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
-  // Held-approval fixtures: only the operations-rich scenario starts with a
-  // parked call, so default-scenario visual baselines stay hold-free.
   let heldToolCalls: HeldToolCallView[] =
     scenario === "operations-rich"
       ? [
@@ -176,8 +172,6 @@ export function createDesktopUiHarness(
                     fields: [],
                   },
                   result: {
-                    // Mirrors the runtime's edit_file envelope (EditFileMetadata
-                    // + human body line) — see toolset/file_tools.rs.
                     rawText:
                       'gents_fs: {"ok":true,"status":"success","tool":"edit_file","path":"src/parser.rs","returned_count":1,"total_count":1,"truncated":false,"replacements_applied":1,"replace_all":false,"bytes_written":36}\nedit_file: edited src/parser.rs (1 replacement)',
                     fields: [],
@@ -192,8 +186,6 @@ export function createDesktopUiHarness(
                     fields: [],
                   },
                   result: {
-                    // Mirrors the runtime's command envelope framing
-                    // (render_command_output in toolset/shared/command.rs).
                     rawText:
                       'gents_exec: {"ok":true,"status":"success","command":"cargo test parser","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 2 passed\nstderr:\n(empty)',
                     fields: [],
@@ -987,9 +979,6 @@ export function createDesktopUiHarness(
       const prior = deployment.toolSelections.find(
         (selection) => selection.selectionId === selectionId,
       );
-      // Mirror the bridge's preserve-on-absent semantics: overlay the request on
-      // the prior row so display-only fields the panel never sends (writeTools,
-      // toolPolicyVersion) survive a save.
       deployment = {
         ...deployment,
         toolSelections: upsertBy(
@@ -1612,7 +1601,6 @@ function createDeployment(): DeploymentView {
         enableSessionHistoryTool: true,
         enableDefraQuery: true,
         defraQueryCollections: ["AgentRequest", "AgentResponse"],
-        // JSON-serialized WriteToolDecl entries, as the real bridge emits.
         writeTools: [
           '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
           '{"tool_name":"delete_task","collection":"Task","description":"","fields":[]}',

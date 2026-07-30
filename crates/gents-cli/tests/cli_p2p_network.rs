@@ -1,20 +1,3 @@
-//! End-to-end integration proof for the peer-registry + signed-invite service
-//! discovery feature (R7). These tests boot real multi-node server processes and
-//! exercise the three layers the design keeps distinct:
-//!
-//! 1. **Discovery** — the replicated `PeerRegistry` collection (`discovery`
-//!    profile) makes peers findable; the discovery reconciler materializes
-//!    `source="registry"` `PeerPairingDesired` rows.
-//! 2. **Replication** — `PeerPairingDesired` + the proven pairing reconciler move
-//!    documents.
-//! 3. **Authorization** — a member-signed invite gates *entry* (join), and
-//!    `subagent_allow_cross_deployment` gates *delegation* (subagent dispatch).
-//!
-//! See `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
-//!
-//! All waits are condition-polled with timeouts (no fixed sleeps): flaky tests
-//! are defects here.
-
 mod support;
 use support::*;
 
@@ -28,11 +11,6 @@ use gents::{load_tool_selection, subagent_target_entry, upsert_tool_selection};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Shared local node + boot helpers
-// ---------------------------------------------------------------------------
-
-/// The standard loopback P2P flags every node in these tests boots with.
 const P2P_LOOPBACK_ARGS: &[&str] = &[
     "--p2p-bind-addr",
     "127.0.0.1",
@@ -44,20 +22,15 @@ const P2P_LOOPBACK_ARGS: &[&str] = &[
     "disabled",
 ];
 
-/// A booted node: its home dir, GraphQL endpoint, identity, and live peer id.
 struct Node {
     home: std::path::PathBuf,
     graphql: String,
     agent_did: String,
     peer_id: String,
-    // Held to keep the server process alive for the test's lifetime; dropped on
-    // teardown (its Drop kills the child).
     #[allow(dead_code)]
     serve: ServeProcess,
 }
 
-/// Init + spawn a server in `home` with `GENTS_DISCOVERY_AUTO_PAIR` set per
-/// `auto_pair`, wait for readiness, and capture identity/peer details.
 async fn boot_node(
     tempdir: &Path,
     label: &str,
@@ -138,7 +111,6 @@ fn network_grant(admin: &Node, member_did: &str) -> Result<Value> {
     Ok(out)
 }
 
-/// Mint a signed v5 invite from `node` for an active `member_did` grant.
 fn mint_invite(node: &Node, member_did: &str) -> Result<String> {
     let invite = run_cli_json(
         &node.home,
@@ -156,8 +128,6 @@ fn mint_invite(node: &Node, member_did: &str) -> Result<String> {
         .ok_or_else(|| anyhow!("invite missing token: {invite}"))
 }
 
-/// Explicitly self-register `node` into `PeerRegistry` for determinism (the
-/// heartbeat does this too, but the explicit command removes timing slop).
 fn network_register(node: &Node, template: &str) -> Result<Value> {
     let out = run_cli_json(
         &node.home,
@@ -171,7 +141,6 @@ fn network_register(node: &Node, template: &str) -> Result<Value> {
     Ok(out)
 }
 
-/// Join `token` on `node`; assert success and return the parsed output.
 fn join(node: &Node, token: &str) -> Result<Value> {
     let out = run_cli_json(&node.home, &["p2p", "pairings", "join", token])?;
     let status = out.get("status").and_then(Value::as_str);
@@ -434,8 +403,6 @@ async fn grant_then_revoke_writes_active_then_tombstone() -> Result<()> {
     Ok(())
 }
 
-/// Accept the admin-issued signed invite on the joiner. v5 invites no longer
-/// mint reciprocal tokens; reverse wiring is network-derived by the reconciler.
 fn pair_via_signed_invite(joiner: &Node, token: &str) -> Result<()> {
     let joined = join(joiner, token)?;
     anyhow::ensure!(
@@ -445,11 +412,6 @@ fn pair_via_signed_invite(joiner: &Node, token: &str) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Registry / desired polling helpers (condition-polled, no sleeps)
-// ---------------------------------------------------------------------------
-
-/// Read the `source` of the `PeerPairingDesired` row for `peer_id`, if present.
 async fn desired_source(graphql: &str, peer_id: &str) -> Result<Option<String>> {
     let escaped = escape_graphql_string(peer_id);
     let response = graphql_query(
@@ -468,7 +430,6 @@ async fn desired_source(graphql: &str, peer_id: &str) -> Result<Option<String>> 
         .map(ToOwned::to_owned))
 }
 
-/// Poll until the `PeerPairingDesired` row for `peer_id` has the given `source`.
 async fn wait_for_desired_source(
     graphql: &str,
     peer_id: &str,
@@ -490,8 +451,6 @@ async fn wait_for_desired_source(
     }
 }
 
-/// Poll until there is no `PeerPairingDesired` row for `peer_id` with the given
-/// `source`.
 async fn wait_for_desired_source_gone(
     graphql: &str,
     peer_id: &str,
@@ -511,11 +470,6 @@ async fn wait_for_desired_source_gone(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Test 1 — transitive discovery: registry replicates seed -> joiner, joiner
-// auto-discovers a third peer it never invited
-// ---------------------------------------------------------------------------
 
 /// Transitive discovery + auto-pair, proven over a real signed P2P pairing plus
 /// the real discovery reconciler.
@@ -556,9 +510,6 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     network_create(&seed, "Discovery Fleet")?;
     network_grant(&seed, &node_a.agent_did)?;
 
-    // Both nodes self-register via the explicit `p2p network register` command
-    // (deterministic; the heartbeat does this too) and `p2p network list` shows
-    // each its own row.
     network_register(&seed, "conversation")?;
     network_register(&node_a, "conversation")?;
     let listed = run_cli_json(
@@ -578,19 +529,14 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
         "network list must show A's own registered row: {listed}"
     );
 
-    // A pairs with S over the discovery profile (the signed-join path under test).
     let seed_invite = mint_invite(&seed, &node_a.agent_did)?;
     pair_via_signed_invite(&node_a, &seed_invite)?;
     wait_for_pairing_applied(&node_a.graphql, &seed.peer_id, Duration::from_secs(120)).await?;
 
-    // A further member B becomes visible to A (as S forwarding B's row would
-    // deliver). A never invited or joined B.
     let peer_b = format!("12D3KooBravo{}", Uuid::new_v4().simple());
     let did_b = format!("did:key:zBravo{}", Uuid::new_v4().simple());
     upsert_named_registry_peer(&node_a.graphql, &peer_b, &did_b).await?;
 
-    // Auto-pair: A's discovery reconciler materializes a registry-owned desired
-    // row for B — purely from the (replicated) registry, with no direct invite.
     wait_for_desired_source(
         &node_a.graphql,
         &peer_b,
@@ -599,10 +545,6 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     )
     .await?;
 
-    // The materialized registry-owned row is not inert: it carries the
-    // collections expanded from B's offered `chat-requests` profile and B's
-    // advertised address, so the pairing reconciler has something to subscribe
-    // and replicate (R8: populate the row from the registry entry).
     let (collections, addresses) = desired_payload(&node_a.graphql, &peer_b)
         .await?
         .context("materialized registry-owned row for B must exist")?;
@@ -615,8 +557,6 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
         "registry-owned row for B must carry B's advertised address; saw {addresses:?}"
     );
 
-    // A's row for the seed stays operator-owned; discovery never converts or
-    // touches the operator partition.
     assert_eq!(
         desired_source(&node_a.graphql, &seed.peer_id).await?,
         Some("operator".to_string()),
@@ -627,16 +567,10 @@ async fn network_transitive_discovery_auto_pairs_unseen_peer() -> Result<()> {
     Ok(())
 }
 
-/// The address advertised for a synthetic registry peer (so the discovery
-/// reconciler can copy it into the materialized row's `replicator_addresses`).
 fn synthetic_registry_address(peer_id: &str) -> String {
     format!("/ip4/127.0.0.1/tcp/6001/p2p/{peer_id}")
 }
 
-/// Upsert a `PeerRegistry` row with explicit peer_id + DID, an advertised
-/// address, an offered `chat-requests` profile, and a fresh heartbeat. The
-/// profile + address are what the discovery reconciler materializes into the
-/// desired row's `collections` / `replicator_addresses`.
 async fn upsert_named_registry_peer(graphql: &str, peer_id: &str, agent_did: &str) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let address = synthetic_registry_address(peer_id);
@@ -662,8 +596,6 @@ async fn upsert_named_registry_peer(graphql: &str, peer_id: &str, agent_did: &st
     Ok(())
 }
 
-/// Read the `collections` + `replicator_addresses` of the `PeerPairingDesired`
-/// row for `peer_id`, if present.
 async fn desired_payload(
     graphql: &str,
     peer_id: &str,
@@ -701,14 +633,6 @@ async fn desired_payload(
     )))
 }
 
-// ---------------------------------------------------------------------------
-// Test 2 — signed-invite authorization
-// ---------------------------------------------------------------------------
-
-/// (a) a tampered-signature token is rejected; (b) a validly-signed invite whose
-/// grant targets a different DID is rejected; (c) a valid admin-signed invite
-/// for this joiner is accepted and the desired row records the issuer DID as
-/// `agent_did`/`invited_by`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn network_signed_invite_authorization() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -736,8 +660,6 @@ async fn network_signed_invite_authorization() -> Result<()> {
     network_grant(&seed, &joiner.agent_did)?;
     network_grant(&seed, &outsider.agent_did)?;
 
-    // (a) Tampered signature: mutate a base58 char in the seed's token. The CLI
-    // must error with the signature-invalid message and a non-zero exit.
     let valid_token = mint_invite(&seed, &joiner.agent_did)?;
     let tampered = tamper_token(&valid_token)?;
     let stderr = run_cli_failure_stderr(&joiner.home, &["p2p", "pairings", "join", &tampered])?;
@@ -746,7 +668,6 @@ async fn network_signed_invite_authorization() -> Result<()> {
         "tampered join should be rejected at the signature boundary, got: {stderr}"
     );
 
-    // (b) A valid admin-signed token still cannot admit the wrong local DID.
     let wrong_member_token = mint_invite(&seed, &outsider.agent_did)?;
     let stderr = run_cli_failure_stderr(
         &joiner.home,
@@ -757,8 +678,6 @@ async fn network_signed_invite_authorization() -> Result<()> {
         "wrong-member join should be rejected with a membership-grant error, got: {stderr}"
     );
 
-    // (c) The joiner has an active admin-signed grant, so the invite is accepted
-    // and the seed is recorded as the issuer.
     let bootstrap = join(&joiner, &valid_token)?;
     assert_eq!(
         bootstrap.get("agent_did").and_then(Value::as_str),
@@ -776,10 +695,6 @@ async fn network_signed_invite_authorization() -> Result<()> {
     Ok(())
 }
 
-/// Construct a token whose signature is invalid but whose structure is intact:
-/// decode the well-formed token, flip a byte in `sig`, and re-encode. This makes
-/// the join fail at *signature verification* (not at token parsing), exercising
-/// the authorization guard rather than the decoder.
 fn tamper_token(token: &str) -> Result<String> {
     use gents_protocol::pairing_token::{decode, encode};
     let mut decoded = decode(token).context("decoding valid token to tamper its signature")?;
@@ -791,20 +706,8 @@ fn tamper_token(token: &str) -> Result<String> {
     encode(&decoded).context("re-encoding tampered token")
 }
 
-// ---------------------------------------------------------------------------
-// Test 3 — cross-node delegation gated (single-node DID-boundary seam)
-// ---------------------------------------------------------------------------
-
-/// Discovery/replication is not authorization. A parent behavior with a subagent
-/// target owned by a *different* DID is refused at the dispatch-authorization
-/// seam when `subagent_allow_cross_deployment` is OFF, and admitted when it is
-/// ON. This mirrors the existing subagent dispatch harness
-/// (`cli_subagent_cancel.rs`) and the conformance `subagent_source` assertion at
-/// the same `subagent_spawn_denial` seam — a live two-node delegation is not
-/// required to prove the gate, and would conflate the gate with transport.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_cross_deployment_delegation_is_gated() -> Result<()> {
-    // Gate OFF -> dispatch refused at the cross-deployment seam.
     let refused = run_cross_deployment_dispatch(false).await?;
     assert_eq!(
         refused.lifecycle_state.as_deref(),
@@ -823,9 +726,6 @@ async fn network_cross_deployment_delegation_is_gated() -> Result<()> {
     );
     assert_eq!(result["service_id"], "subagent");
 
-    // Gate ON -> the cross-deployment seam admits the spawn; it no longer fails
-    // with the cross-deployment denial. (The child target DID is remote, so with
-    // the gate on the denial is lifted and the tool call proceeds past it.)
     let admitted = run_cross_deployment_dispatch(true).await?;
     assert_ne!(
         admitted.lifecycle_state.as_deref(),
@@ -842,10 +742,6 @@ struct ToolCallObservation {
     result: Option<String>,
 }
 
-/// Boot a node, configure the default behavior with a subagent target owned by a
-/// *remote* DID, set the cross-deployment gate per `allow`, submit a request that
-/// drives the model to emit a `spawn_subagent`, and observe the resulting tool
-/// call lifecycle.
 async fn run_cross_deployment_dispatch(allow: bool) -> Result<ToolCallObservation> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home = tempdir.path().join("parent");
@@ -928,13 +824,8 @@ async fn run_cross_deployment_dispatch(allow: bool) -> Result<ToolCallObservatio
         .to_string();
 
     let observation = if allow {
-        // Gate lifted: wait until the spawn tool call leaves the cross-deployment
-        // denial behind. It will reach a `running` bridge or a non-tool_not_allowed
-        // terminal state; either way it is no longer `failed` on the gate.
         wait_for_spawn_tool_call_past_gate(&graphql, &session_id, Duration::from_secs(30)).await?
     } else {
-        // Gate on: the spawn must terminate `failed` with the cross-deployment
-        // denial.
         wait_for_failed_spawn_tool_call(&graphql, &session_id, Duration::from_secs(30)).await?
     };
 
@@ -942,10 +833,6 @@ async fn run_cross_deployment_dispatch(allow: bool) -> Result<ToolCallObservatio
     Ok(observation)
 }
 
-/// Set the default behavior's tool selection to allow spawning, with a single
-/// subagent target owned by `target_did` (remote), and the cross-deployment gate
-/// per `allow`. Done against the embedded node before the server boots, mirroring
-/// `cli_subagent_cancel.rs::enable_default_subagents_before_server`.
 async fn configure_remote_subagent_target(
     home: &Path,
     selection_id: &str,
@@ -1043,10 +930,7 @@ async fn wait_for_spawn_tool_call_past_gate(
     loop {
         if let Some(obs) = fetch_spawn_tool_call(graphql, session_id).await? {
             match obs.lifecycle_state.as_deref() {
-                // Running bridge => the gate admitted the spawn.
                 Some("running") => return Ok(obs),
-                // A terminal state is acceptable only if it is NOT the
-                // cross-deployment denial.
                 Some("failed") => {
                     let denied = obs
                         .result
@@ -1071,13 +955,6 @@ async fn wait_for_spawn_tool_call_past_gate(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test 4 — ownership: registry-owned retraction vs. operator-owned survival
-// ---------------------------------------------------------------------------
-
-/// A registry-owned desired row is retracted when its registry entry goes
-/// stale/removed, while a manual `p2p pairings set` row for a *different* peer
-/// survives untouched. Mirrors the Lean `retraction_sound` / `ownership_safe`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1086,8 +963,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
 
     let node = boot_node(tempdir.path(), "owner", &model_name, mock.endpoint(), true).await?;
 
-    // An operator-authored pairing for a synthetic peer that has NO registry
-    // entry. Discovery must never touch this row.
     let operator_peer = "operator-only-peer";
     let operator_set = run_cli_json(
         &node.home,
@@ -1113,8 +988,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
         Some("operator".to_string())
     );
 
-    // A live registry entry for a synthetic discovered peer. With auto-pair on,
-    // discovery materializes a registry-owned desired row for it.
     let discovered_peer = "discovered-registry-peer";
     upsert_synthetic_registry_peer(&node.graphql, discovered_peer, true).await?;
     wait_for_desired_source(
@@ -1125,7 +998,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
     )
     .await?;
 
-    // Remove the registry entry: discovery must retract its registry-owned row.
     delete_registry_peer(&node.graphql, discovered_peer).await?;
     wait_for_desired_source_gone(
         &node.graphql,
@@ -1135,7 +1007,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
     )
     .await?;
 
-    // The operator-owned row for the *other* peer survives untouched throughout.
     assert_eq!(
         desired_source(&node.graphql, operator_peer).await?,
         Some("operator".to_string()),
@@ -1146,8 +1017,6 @@ async fn network_ownership_retracts_only_registry_rows() -> Result<()> {
     Ok(())
 }
 
-/// Upsert a synthetic `PeerRegistry` row with a fresh (`live=true`) or stale
-/// heartbeat, so the discovery reconciler treats it as online/offline.
 async fn upsert_synthetic_registry_peer(graphql: &str, peer_id: &str, live: bool) -> Result<()> {
     let ts = if live {
         chrono::Utc::now()

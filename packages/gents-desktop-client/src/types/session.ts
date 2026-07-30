@@ -11,11 +11,9 @@ export type { ToolDetailFieldView } from "../generated/ToolDetailFieldView.js";
 export type { ToolDetailValueView } from "../generated/ToolDetailValueView.js";
 export type { ToolResultView } from "../generated/ToolResultView.js";
 
-/** Direct runtime responses that do not pass through a bridge view struct. */
 export type { SessionForkResultView as SessionForkResult } from "../generated/SessionForkResultView.js";
 export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
 
-/** Raw runtime RunTimeline JSON remains snake_case. */
 export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
 
 export type RequestTimelineView = {

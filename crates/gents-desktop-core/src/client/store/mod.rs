@@ -114,15 +114,6 @@ pub struct TranscriptView<'a> {
     pub tool_results: Vec<&'a AgentToolResultRow>,
 }
 
-/// Aggregated recent-run bookkeeping for a task, rolled up across all
-/// triggers (Schedule + EventTrigger) that reference it.
-///
-/// The apply path owns the `Task` description while the trigger engine
-/// owns per-trigger fire bookkeeping on `Schedule` and `EventTrigger`.
-/// Operators looking at a single task need to see "how often has this
-/// task actually been fired, and what happened last time?" without
-/// having to click into every trigger individually -- this struct rolls
-/// those numbers up for the Task detail view.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TaskRecentRuns {
     pub total_fires: u64,
@@ -434,13 +425,6 @@ impl ClientStore {
             .collect()
     }
 
-    /// Return every `Task` bound to the given behavior.
-    ///
-    /// `Task` rows are not scoped by `agent_did` — they carry a single
-    /// `behavior_id` and are addressed globally by `task_id`. The
-    /// `_agent_did` parameter is kept so call sites that pass an agent scope
-    /// (today's behavior-diagnostics view, for example) stay ergonomic; the
-    /// filter is intentionally behavior-scoped only.
     pub fn tasks_for_behavior(&self, _agent_did: &str, behavior_id: &str) -> Vec<&TaskRow> {
         self.tasks
             .iter()
@@ -448,9 +432,6 @@ impl ClientStore {
             .collect()
     }
 
-    /// Return every `Schedule` whose `task_id` matches one of the provided
-    /// tasks. Useful for listing the schedules attached to a behavior
-    /// indirectly (via its tasks).
     pub fn schedules_for_tasks(&self, task_ids: &[&str]) -> Vec<&ScheduleRow> {
         if task_ids.is_empty() {
             return Vec::new();
@@ -465,10 +446,6 @@ impl ClientStore {
             .collect()
     }
 
-    /// Return every `EventTrigger` whose `task_id` matches one of the
-    /// provided tasks. Mirrors `schedules_for_tasks` so manage views can
-    /// list the triggers attached to a behavior indirectly (via its
-    /// tasks).
     pub fn event_triggers_for_tasks(&self, task_ids: &[&str]) -> Vec<&EventTriggerRow> {
         if task_ids.is_empty() {
             return Vec::new();
@@ -483,19 +460,6 @@ impl ClientStore {
             .collect()
     }
 
-    /// Roll up the trigger-engine bookkeeping for a `Task` across every
-    /// `Schedule` and `EventTrigger` that references it.
-    ///
-    /// Both trigger kinds carry their own independent `fire_count`,
-    /// `last_attempt_at`, `last_status`, and `last_error` fields. This
-    /// helper sums the fires and picks the most recent `last_attempt_at`
-    /// (lexicographic max on the ISO-8601 timestamp strings -- the
-    /// trigger engine always writes RFC3339/Z-suffixed stamps, so
-    /// lexical order matches chronological order), then surfaces the
-    /// status/error from the trigger that produced that most-recent
-    /// attempt. Used by the Task detail view to show operators a single
-    /// rolled-up "Recent Runs" summary instead of forcing them to click
-    /// into each individual trigger.
     pub fn recent_runs_for_task(&self, task_id: &str) -> TaskRecentRuns {
         let schedules: Vec<&ScheduleRow> = self
             .schedules
@@ -517,7 +481,6 @@ impl ClientStore {
                 .map(|t| t.fire_count.unwrap_or(0).max(0) as u64)
                 .sum::<u64>();
 
-        // Find the most recent attempt_at across all triggers.
         let all_attempts: Vec<&str> = schedules
             .iter()
             .filter_map(|s| s.last_attempt_at.as_deref())
@@ -525,12 +488,6 @@ impl ClientStore {
             .collect();
         let last_attempt_at = all_attempts.iter().max().map(ToString::to_string);
 
-        // Resolve status + error from the trigger whose timestamp
-        // equals the max. Ties (two triggers firing in the same second
-        // on the same task) resolve in favor of the first schedule
-        // found, then the first event trigger found -- rare in
-        // practice, and the operator still sees the aggregate
-        // fire-count.
         let (last_status, last_error) = if let Some(ref target_ts) = last_attempt_at {
             let mut pair = None;
             for s in &schedules {
@@ -777,14 +734,14 @@ impl ClientStore {
 pub type SharedClientStore = Arc<ClientStore>;
 
 fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
-    row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
+    row_agent_did.is_none_or(|row_agent_did| row_agent_did == agent_did)
 }
 
 fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did: &str) -> bool {
     sources
         .get(row_index)
         .and_then(|source| source.as_deref())
-        .map_or(true, |source_agent_did| source_agent_did == agent_did)
+        .is_none_or(|source_agent_did| source_agent_did == agent_did)
 }
 
 fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(&T) -> String) {
@@ -805,9 +762,6 @@ fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(
     }
 }
 
-/// Merge durable goals without allowing a later-created replicated twin to
-/// replace the canonical row selected by the runtime. A row with the same
-/// creation time and goal ID is treated as an update and replaces in place.
 fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>) {
     let mut indexes = target
         .iter()

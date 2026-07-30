@@ -15,7 +15,6 @@ const FILE_READ_TOOLS = new Set<string>([
   "list_files",
 ]);
 
-/** Project a code tool call into a diff/terminal view, or null if not one. */
 export function toCodeToolView(
   tool: RenderedToolCallView,
 ): CodeToolView | null {

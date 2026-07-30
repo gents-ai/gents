@@ -2,10 +2,6 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Workflow.Conformance
 
-/-!
-# Workflow JSON contracts
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

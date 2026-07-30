@@ -13,6 +13,7 @@ bs58 = "0.5"
 chrono.workspace = true
 crypto.workspace = true
 gents = { path = "../gents" }
+gents-migration = { path = "../gents-migration" }
 gents-protocol.workspace = true
 defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
 defra-p2p-adapter.workspace = true

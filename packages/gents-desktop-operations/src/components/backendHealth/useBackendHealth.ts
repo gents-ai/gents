@@ -25,8 +25,6 @@ export function useBackendHealth(
 
   const refresh = useCallback(
     async (background = false) => {
-      // Advance relative-age labels even if the bridge returns the same rows or
-      // the refresh fails and the panel keeps displaying its last-good data.
       setNow(new Date());
       if (!background) {
         setLoading(true);
@@ -46,8 +44,6 @@ export function useBackendHealth(
     [api],
   );
 
-  // Poll like the MCP panel (10 s) so statuses and relative ages stay live
-  // instead of freezing at mount; background refreshes skip the loading flip.
   useEffect(() => {
     void refresh();
     const handle = window.setInterval(() => {

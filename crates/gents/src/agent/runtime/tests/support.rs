@@ -470,7 +470,12 @@ pub(super) async fn create_agent_request_for_behavior(
 }
 
 pub(super) async fn wait_for_chat_request_count(endpoint: &MockModelEndpoint, expected: usize) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    // The full package suite runs more than a thousand tests concurrently, and
+    // a ready request may wait several seconds for executor time on a loaded
+    // host before reaching the mock HTTP endpoint. Keep the semantic shutdown
+    // deadline strict in the calling test, but give this precondition enough
+    // time to become observable.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let notified = endpoint.chat_requests_changed.notified();
         let actual = endpoint.chat_request_count();

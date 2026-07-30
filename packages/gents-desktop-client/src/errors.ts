@@ -1,9 +1,5 @@
 import type { BridgeError as GeneratedBridgeError } from "./generated/BridgeError.js";
 
-/**
- * Known fields come from Rust. `code` remains open so a newer additive bridge
- * error can still be displayed by an older client.
- */
 export type BridgeErrorPayload = Omit<GeneratedBridgeError, "code"> & {
   code: string;
 };

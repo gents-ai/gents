@@ -1,8 +1,3 @@
-//! Live suites against a real inference endpoint (all ignored by default).
-//!
-//! One binary per family: each module was a standalone test binary; the
-//! consolidation cuts link time without changing any test.
-
 mod support;
 
 #[path = "e2e_live/backend_auth_live.rs"]

@@ -7,13 +7,6 @@ use gents::Collection;
 
 use super::{DesiredStateManifest, HasUniqueId};
 
-/// Verify that `id` is a valid per-document directory handle on a POSIX
-/// filesystem. Rejects path-separator and null bytes (`/`, `\0`), the
-/// traversal specials `.` and `..`, the empty string, and ids starting with
-/// `.` (dot-prefixed entries are silently skipped by the loader, so a
-/// dot-prefixed handle would round-trip incorrectly). Allows `:`, which is
-/// legal on Unix/Linux/macOS filesystems and appears in DIDs and
-/// init-generated IDs.
 pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     if id.is_empty() {
         return Err("unique id is empty; choose a filesystem-safe id".to_string());
@@ -39,11 +32,6 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Pre-flight check: validate every handle in the manifest before touching the
-/// filesystem. Returns the first error encountered, or `Ok(())` if all handles
-/// are valid. This ensures that `prepare_root` (which may delete the old root
-/// when `force=true`) is never called on a manifest that would produce a
-/// partial write.
 fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
     fn validate_vec<T: HasUniqueId>(docs: &[T], collection_name: &str) -> Result<(), String> {
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
@@ -71,19 +59,14 @@ fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
     Ok(())
 }
 
-/// Write a `DesiredStateManifest` to `root` as a manifest root directory.
 pub(crate) fn write_manifest_root(
     root: &Path,
     manifest: &DesiredStateManifest,
     force: bool,
 ) -> Result<(), String> {
-    // Pre-flight: validate all handles before any filesystem mutation.
-    // This ensures that prepare_root (which may delete the old root when
-    // force=true) is never called when the manifest contains bad ids.
     validate_handles(manifest)?;
     prepare_root(root, force)?;
 
-    // agent-principal.json at the top level.
     let principal_value = serde_json::to_value(&manifest.agent_principal)
         .map_err(|e| format!("serializing agent_principal failed: {e}"))?;
     write_json_file(
@@ -95,7 +78,6 @@ pub(crate) fn write_manifest_root(
         &principal_value,
     )?;
 
-    // Per-doc collections, mirror of the loader.
     write_per_doc_collection(
         root,
         Collection::AgentBehavior,
@@ -169,11 +151,6 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
             root.display()
         ));
     }
-    // With force=true, still refuse to delete a directory that doesn't look
-    // like a manifest root. Blind remove_dir_all on a user-provided path is a
-    // footgun: if they typo or misremember the target, we shouldn't happily
-    // wipe their home dir. The sentinel is the presence of agent-principal.json,
-    // which is the one required top-level file in every manifest root.
     if !root.join("agent-principal.json").exists() {
         return Err(format!(
             "refusing to overwrite {}: directory is non-empty and does not \
@@ -248,12 +225,6 @@ fn spill_string_field(
     let object = body
         .as_object_mut()
         .ok_or_else(|| "expected object body for sidecar spill, got non-object".to_string())?;
-    // serde emits `Option::<String>::None` as `null` (no skip_serializing_if
-    // attribute on the struct fields), so we have to strip null explicitly.
-    // Without this, the written object.json would contain `"system_prompt": null`
-    // and the loader's round-trip would see a present-but-null key instead of a
-    // missing one. If you want to remove this step, add skip_serializing_if to
-    // every Option field on DesiredAgentBehavior / DesiredTask first.
     let raw = object.get(field).cloned();
     match raw {
         None => return Ok(()),

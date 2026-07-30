@@ -1,14 +1,6 @@
 import Proofs.Request
 import Mathlib.Data.Finset.Basic
 
-/-!
-# Session-Level Recovery Model
-
-Models client-driven retry/reissue as creation of a fresh pending request in
-the same session while leaving the failed request in session history.
--/
-
-/-- Session-level request lineage with a designated latest request. -/
 structure SessionState where
   sessionId : SessionId
   behaviorId : BehaviorId
@@ -18,7 +10,6 @@ structure SessionState where
 
 namespace SessionState
 
-/-- Extensionality for session states. -/
 @[ext] theorem ext
     {s t : SessionState}
     (h_sessionId : s.sessionId = t.sessionId)
@@ -36,17 +27,14 @@ namespace SessionState
   cases h_latest
   rfl
 
-/-- Exactly one request in the session is marked latest. -/
 def latestFlagInvariant (s : SessionState) : Prop :=
   s.latest ∈ s.requestIds ∧
     (s.ctx s.latest).isLatest = true ∧
     ∀ rid, rid ∈ s.requestIds → rid ≠ s.latest → (s.ctx rid).isLatest = false
 
-/-- Demote an old request so it remains in history but is no longer latest. -/
 def historicalContext (ctx : RequestContext) : RequestContext :=
   { ctx with isLatest := false }
 
-/-- Fresh pending request created from a failed predecessor. -/
 def reissuedContext (ctx : RequestContext) : RequestContext :=
   { state := .pending
   , origin := ctx.origin
@@ -63,7 +51,6 @@ def reissuedContext (ctx : RequestContext) : RequestContext :=
   , persistence := .uncommitted
   }
 
-/-- The latest failed request can be reissued when retry budget remains. -/
 def CanReissue (pre : SessionState) (failedId newId : RequestId) : Prop :=
   failedId = pre.latest ∧
     failedId ∈ pre.requestIds ∧
@@ -79,8 +66,6 @@ instance (pre : SessionState) (failedId newId : RequestId) :
   unfold CanReissue
   infer_instance
 
-/-- Session-level recovery creates a fresh pending request and preserves the
-    failed request in the session history. -/
 inductive Transition : SessionState → SessionState → Prop where
   | reissue_failed {pre post : SessionState} (failedId newId : RequestId) :
       CanReissue pre failedId newId →
@@ -95,12 +80,10 @@ inductive Transition : SessionState → SessionState → Prop where
           (reissuedContext (pre.ctx failedId)) →
       Transition pre post
 
-/-- Executable session-recovery actions mirroring `Transition`. -/
 inductive Action where
   | reissueFailed (failedId newId : RequestId)
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the session-recovery layer. -/
 def step? (pre : SessionState) : Action → Option SessionState
   | .reissueFailed failedId newId =>
       if _h_reissue : CanReissue pre failedId newId then
@@ -118,13 +101,11 @@ def step? (pre : SessionState) : Action → Option SessionState
       else
         none
 
-/-- A trace is a sequence of valid session recovery transitions. -/
 inductive Trace : SessionState → SessionState → Prop where
   | refl {s : SessionState} : Trace s s
   | step {s₁ s₂ s₃ : SessionState} :
       Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
-/-- Replay a finite action list through the executable session semantics. -/
 def replay? : SessionState → List Action → Option SessionState
   | s, [] => some s
   | s, action :: rest =>

@@ -47,39 +47,13 @@ impl BehaviorSlot {
     }
 }
 
-/// Decides what a slot does about repeated failures before its behavior ever
-/// started (#559).
-///
-/// The slot loop counts consecutive pre-start failures on one shared standing
-/// per slot (mirroring `RuntimeReconcile.StartupReadiness`); when the budget is
-/// spent it asks the policy to demote. The policy re-checks the startup barrier
-/// at that moment: a behavior that already started once (this worker or a
-/// sibling) is a post-start crash and keeps today's unbounded restart behavior.
-/// Behaviors spawned by post-startup generations never enter the barrier, so
-/// `try_demote` declines them and they also keep today's behavior.
 #[async_trait::async_trait]
 pub(crate) trait SlotFailurePolicy: Send + Sync {
-    /// Consecutive pre-start build failures tolerated before demotion.
     fn build_failure_budget(&self) -> u32;
-    /// Demote the behavior if it is still startup-pending: release it from the
-    /// barrier without claiming health, record the reason, surface it. Returns
-    /// whether the demotion was actually taken.
     async fn try_demote(&self, behavior_id: &str, error: &str) -> bool;
-    /// Reconcile retired this behavior's slot. A still-pending behavior must be
-    /// released as superseded so mid-startup retirement cannot orphan its
-    /// barrier entry; a recreated slot starts with a fresh budget.
     async fn on_slot_retired(&self, behavior_id: &str, recreated: bool);
 }
 
-/// Count a worker failure against the slot's build budget and demote at the
-/// budget. Returns `true` when this worker should stop (parked after a
-/// demotion) instead of taking the classic restart path.
-///
-/// The stepping mirrors `RuntimeReconcile.StartupReadiness.step`; the policy's
-/// `try_demote` re-checks the startup barrier at the demotion moment, so a
-/// behavior that started on a sibling worker (post-start crash) or that never
-/// entered the barrier (post-startup generations) declines demotion and keeps
-/// today's restart behavior.
 async fn handle_slot_failure(
     behavior_id: &str,
     error: &str,
@@ -92,13 +66,9 @@ async fn handle_slot_failure(
         return false;
     };
     enum Verdict {
-        /// Ready (post-start crash) or lock poisoned: classic restarts.
         Restart,
-        /// A sibling already spent the budget; this worker parks too.
         AlreadyDemoted,
-        /// This failure consumed the last of the budget.
         Transitioned,
-        /// Budget remains: classic restart, keep counting.
         StillPending,
     }
     let verdict = match standing.lock() {
@@ -133,9 +103,6 @@ async fn handle_slot_failure(
         park_until_retired(shutdown, state_rx).await;
         true
     } else {
-        // The barrier had already released this behavior (it started once, or
-        // never entered the barrier): not a startup demotion. Absorb to Ready
-        // so the budget machinery stays out of the way of classic restarts.
         if let Ok(mut standing) = standing.lock() {
             *standing = BuildStanding::Ready;
         }
@@ -143,9 +110,6 @@ async fn handle_slot_failure(
     }
 }
 
-/// Park a demoted worker: the behavior cannot serve, so restarting the build
-/// would only burn CPU against a spent budget. Wakes only for shutdown or
-/// slot retirement.
 async fn park_until_retired(
     shutdown: &mut watch::Receiver<bool>,
     state_rx: &mut watch::Receiver<BehaviorSlotState>,
@@ -273,9 +237,6 @@ where
     let behavior_fingerprint = format!("{behavior:?}");
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
-    // One standing per slot, shared across its executor workers: the budget
-    // is a per-behavior property, and the interleaved worker outcomes are the
-    // model's single outcome list.
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
     let handle = tokio::spawn(run_slot_workers(
         behavior,
@@ -388,9 +349,6 @@ async fn run_slot_loop<F, Fut>(
         match outcome {
             Ok(Ok(())) if *state_rx.borrow() == BehaviorSlotState::Retiring => return,
             Ok(Ok(())) => {
-                // The daemon ran (it only returns Ok after starting), so the
-                // behavior started at least once: absorb the standing so later
-                // errors are the post-start crash class, not build failures.
                 if let Ok(mut standing) = standing.lock() {
                     *standing = standing.step(u32::MAX, BuildOutcome::Started);
                 }

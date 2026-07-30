@@ -1,13 +1,6 @@
 import Proofs.Recovery.Sweeps
 import Proofs.Conformance.ContractCases
 
-/-!
-# Recovery Sweep Conformance Cases
-
-Finite witness rows emitted to Rust so every persisted startup recovery sweep
-has an explicit consumer or follow-up obligation.
--/
-
 namespace Recovery
 
 open Conformance.ContractCases
@@ -91,8 +84,7 @@ def recoverySweepCases : List RecoverySweepCase :=
       "running"
       "failed"
       "gents-837-terminalize-interrupted-composites"
-  , -- Detached under a *failed* parent is still stale (clean completion would
-    -- exempt linked children; fail is cancel-worthy).
+  ,
     recoveryCase
       terminalParentOwnedToolSweep
       "live_detached_bridge_parent_failed_to_failed"
@@ -221,13 +213,6 @@ def recoverySweepCases : List RecoverySweepCase :=
       "gents-693-conversation-recovery"
   ]
 
-/-! ## Outcome witnesses (#693)
-
-These rows fence the two defects directly. `expectedRecovered` counts
-SUCCESSES: a duplicate group whose write the store refuses reports zero, never
-the number of docs it attempted. `targetSelector` pins the addressing mode that
-makes the write possible at all. -/
-
 def outcomeCase
     (name : String)
     (docCount : Nat)
@@ -249,25 +234,19 @@ def outcomeCase
   }
 
 def recoveryOutcomeCases : List RecoveryOutcomeCase :=
-  [ -- The healthy single-doc session: one session in, one recovery reported.
+  [
     outcomeCase
       "conversation_single_doc_recovers_and_counts_one"
       1 false true 1 0 0
       "Recovery.Step.all_succeeded_reports_all"
-    -- #693 defect 1: two docs share a session_id. Addressed by _docID the write
-    -- lands, the whole group is terminalized, and the SESSION counts once.
   , outcomeCase
       "conversation_duplicate_group_recovers_canonical_and_counts_one"
       2 true true 1 0 0
       "Recovery.duplicate_group_recovers"
-    -- #693 defect 2: the store refuses the write (the pre-fix session_id-filter
-    -- upsert on a duplicate store). The sweep MUST report zero recoveries —
-    -- never `rows.len()` — and leave the docs stale for the next pass.
   , outcomeCase
       "conversation_failed_write_reports_zero_recovered"
       2 true false 0 1 2
       "Recovery.Step.all_failed_reports_zero"
-    -- Idempotence: a second pass over an already-recovered store finds nothing.
   , outcomeCase
       "conversation_second_pass_recovers_nothing"
       2 true true 0 0 0
@@ -278,16 +257,12 @@ theorem recoveryOutcomeCases_address_docs_by_docId :
     ∀ witness ∈ recoveryOutcomeCases, witness.targetSelector = "_docID" := by
   native_decide
 
-/-- The reported count never exceeds the number of sessions swept, and a failed
-    write reports zero recoveries — #693 defect 2, as a checkable row. -/
 theorem recoveryOutcomeCases_count_only_successes :
     ∀ witness ∈ recoveryOutcomeCases,
       (witness.writeSucceeds = false → witness.expectedRecovered = 0) ∧
       witness.expectedRecovered ≤ 1 := by
   native_decide
 
-/-- A failed write leaves the group stale: nothing converged, so it must be
-    retried rather than reported as done. -/
 theorem recoveryOutcomeCases_failed_write_leaves_rows_stale :
     ∀ witness ∈ recoveryOutcomeCases,
       witness.writeSucceeds = false → witness.measureAfter > 0 := by

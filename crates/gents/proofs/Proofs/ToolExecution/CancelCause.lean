@@ -1,13 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Tool Call Cancel Causes
-
-Daemon-visible vocabulary for why a tool call was cancelled. The cause is
-carried by cancellation transitions so cross-machine proofs can distinguish
-request-interruption, deadline, and explicit operator/user cancellation paths.
--/
-
 namespace ToolExecution
 
 inductive CancelCause where

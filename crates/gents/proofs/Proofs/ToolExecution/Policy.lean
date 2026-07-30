@@ -1,17 +1,7 @@
 import Proofs.Basic
 
-/-!
-# Tool Execution Policy
-
-Initial model for MCP/native tool dispatch boundaries. It deliberately models
-only the service-local facts Rust can enforce today: health/schema preflight
-and retry eligibility. Tool side effects, remote service behavior, and schema
-soundness beyond the checked subset remain external assumptions.
--/
-
 namespace ToolExecution
 
-/-- Coarse service health visible before dispatch. -/
 inductive Health where
   | healthy
   | stale
@@ -30,7 +20,6 @@ def all : List Health :=
 
 end Health
 
-/-- Result of argument/schema checks available before dispatch. -/
 inductive SchemaStatus where
   | unchecked
   | valid
@@ -49,7 +38,6 @@ def all : List SchemaStatus :=
 
 end SchemaStatus
 
-/-- Evidence needed before a tool call can be retried after dispatch. -/
 inductive IdempotencyEvidence where
   | unknown
   | idempotent
@@ -68,7 +56,6 @@ def all : List IdempotencyEvidence :=
 
 end IdempotencyEvidence
 
-/-- Tool operations that have different retry semantics. -/
 inductive ToolOperation where
   | mcpListTools
   | mcpCall
@@ -87,7 +74,6 @@ def all : List ToolOperation :=
 
 end ToolOperation
 
-/-- Failure classes at the tool boundary. -/
 inductive FailureClass where
   | approvalDenied
   | argumentInvalid
@@ -121,7 +107,6 @@ def all : List FailureClass :=
 
 end FailureClass
 
-/-- Pre-dispatch decision. -/
 inductive PreflightDecision where
   | dispatch
   | hold
@@ -142,7 +127,6 @@ def failureClass : PreflightDecision → Option FailureClass
 
 end PreflightDecision
 
-/-- Retry class emitted by the model for Rust conformance docs/tests. -/
 inductive RetryDisposition where
   | doNotRetry
   | retrySafeRead
@@ -156,11 +140,9 @@ def toDefraDB : RetryDisposition → String
   | .retrySafeRead => "retrySafeRead"
   | .retryIdempotentToolCall => "retryIdempotentToolCall"
 
-/-- Exhaustive constructor list used by the Rust conformance vocabulary. -/
 def all : List RetryDisposition :=
   [ .doNotRetry, .retrySafeRead, .retryIdempotentToolCall ]
 
-/-- Adding a retry disposition constructor must update `all`. -/
 theorem all_complete
     (disposition : RetryDisposition) :
     disposition ∈ all := by
@@ -168,8 +150,6 @@ theorem all_complete
 
 end RetryDisposition
 
-/-- Health/schema preflight. Stale services are allowed through with a longer
-timeout; unreachable services and invalid arguments are blocked locally. -/
 def preflight
     (health : Health)
     (schema : SchemaStatus) : PreflightDecision :=
@@ -180,7 +160,6 @@ def preflight
       | .invalid => .block .argumentInvalid
       | .unchecked | .valid => .dispatch
 
-/-- Generated witness row for Rust health/schema preflight conformance. -/
 structure PreflightCase where
   name : String
   health : Health
@@ -188,7 +167,6 @@ structure PreflightCase where
   decision : PreflightDecision
   deriving Repr
 
-/-- Generated witness row for Rust retry-disposition conformance. -/
 structure RetryCase where
   name : String
   operation : ToolOperation
@@ -197,9 +175,6 @@ structure RetryCase where
   disposition : RetryDisposition
   deriving Repr
 
-/-- Retry eligibility after a failed operation. Listing tools is a safe read.
-Calling tools requires explicit idempotency evidence before a transport retry.
-Native command retries are outside this model. -/
 def retryDisposition
     (operation : ToolOperation)
     (idempotency : IdempotencyEvidence)
@@ -231,7 +206,6 @@ def retryCaseName
     ++ failure.toDefraDB ++ "_"
     ++ disposition.toDefraDB
 
-/-- Exhaustive health/schema matrix evaluated from `preflight`. -/
 def preflightCases : List PreflightCase :=
   Health.all.flatMap fun health =>
     SchemaStatus.all.map fun schema =>
@@ -242,7 +216,6 @@ def preflightCases : List PreflightCase :=
       , decision := decision
       }
 
-/-- Exhaustive retry-disposition matrix evaluated from `retryDisposition`. -/
 def retryCases : List RetryCase :=
   ToolOperation.all.flatMap fun operation =>
     IdempotencyEvidence.all.flatMap fun idempotency =>

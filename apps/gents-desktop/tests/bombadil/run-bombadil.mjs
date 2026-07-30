@@ -24,8 +24,6 @@ let bombadilProcess = null;
 const vite = spawn(
   process.execPath,
   [
-    // Vite may be hoisted to the workspace root; resolve its package root
-    // through Node (its exports map hides bin/).
     resolve(
       dirname(createRequire(import.meta.url).resolve("vite/package.json")),
       "bin/vite.js",
@@ -143,9 +141,7 @@ async function resolveChromeExecutable() {
     if (existsSync(executablePath)) {
       return executablePath;
     }
-  } catch {
-    // Fall through to Bombadil's managed-browser path below.
-  }
+  } catch {}
 
   if (process.env.CI) {
     throw new Error(
@@ -184,8 +180,6 @@ function shellQuote(value) {
 
 function resolveBin(name) {
   const suffix = process.platform === "win32" ? ".cmd" : "";
-  // npm workspaces may hoist the bin shim to the workspace root; probe the
-  // app-local .bin first, then walk up.
   const candidates = [
     resolve(rootDir, "node_modules", ".bin", `${name}${suffix}`),
     resolve(rootDir, "../..", "node_modules", ".bin", `${name}${suffix}`),
@@ -361,9 +355,7 @@ async function waitForVite(process, url) {
       if (response.ok) {
         return;
       }
-    } catch {
-      // Server is not ready yet.
-    }
+    } catch {}
     await delay(200);
   }
   throw new Error(`timed out waiting for Vite at ${url}`);

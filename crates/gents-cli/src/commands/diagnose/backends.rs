@@ -172,10 +172,6 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 });
             }
         };
-        // ChatGptCodex model discovery needs the OAuthCredential document, which this probe does
-        // not load (no GraphQL/agent context here). Skip it rather than report a false failure —
-        // credential health is covered by the dedicated `checks.chatgpt_auth`, and models are
-        // listed by `codex-auth-probe` / `backend discover-models`.
         if provider_kind != BackendProviderKind::ChatGptCodex {
             match discover_backend_models(
                 &client,

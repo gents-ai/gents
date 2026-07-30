@@ -150,8 +150,6 @@ mod tests {
 
     #[test]
     fn pairings_alias_paths_do_not_warn() {
-        // `p2p pairings unpair` is a blessed alias of `rm`, not a deprecated
-        // spelling — it must parse silently.
         assert_eq!(
             deprecation_warning(&argv(&[
                 "gents", "p2p", "pairings", "unpair", "--peer", "peer-1",

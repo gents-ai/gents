@@ -288,12 +288,9 @@ describe("BehaviorConfigEditor", () => {
       />,
     );
 
-    // Document profile unavailable: the select falls back without dirt.
     expect(screen.getByTestId("behavior-profile-id")).toHaveValue("default-profile");
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
 
-    // Saving another field while the registry is incomplete must not persist
-    // the display fallback over the document's real reference.
     fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
       target: { value: "edited while the profile is registering" },
     });
@@ -304,7 +301,6 @@ describe("BehaviorConfigEditor", () => {
       ),
     );
 
-    // The profile registers later: the document selection is truth again.
     rerender(
       <BehaviorConfigEditor
         {...editorProps({

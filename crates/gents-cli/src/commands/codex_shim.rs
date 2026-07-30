@@ -85,8 +85,6 @@ pub(crate) struct CodexSidecar {
 }
 
 impl CodexSidecar {
-    /// The thread's memory mode, falling back to [`DEFAULT_MEMORY_MODE`] when the
-    /// thread has no explicit `ThreadMemoryModeSet` override.
     pub(crate) fn memory_mode_or_default(&self, thread_id: &str) -> String {
         self.memory_mode
             .get(thread_id)
@@ -178,9 +176,6 @@ impl BoundCodexShim {
     }
 }
 
-/// Which behavior the shim binds to, resolved from the override or the
-/// principal's default. The supervisor needs this to know which behavior it is
-/// waiting for while the shim is unbound (#699).
 pub(crate) async fn resolve_codex_shim_behavior_id(
     node: &EmbeddedNode,
     override_behavior_id: Option<&str>,
@@ -189,19 +184,8 @@ pub(crate) async fn resolve_codex_shim_behavior_id(
     bound_behavior::resolve_bound_behavior_id(node, override_behavior_id, agent_did).await
 }
 
-/// Why a bind attempt failed.
-///
-/// The class decides whether a later published generation may revive the shim,
-/// so it must be typed rather than sniffed out of an error string (#699):
-/// a missing behavior is something the control plane can still supply, while a
-/// taken port is not.
 pub(crate) enum CodexShimBindError {
-    /// The bound behavior (or its inference profile) does not exist yet. Writing
-    /// the document fixes it, and the next generation will carry it.
     DependencyMissing(anyhow::Error),
-    /// A host resource the control plane cannot supply: the port is taken, the
-    /// bind address was refused, or the state dir is unusable. No document
-    /// retracts this, so retrying it forever would be noise.
     HostResource(anyhow::Error),
 }
 
@@ -212,8 +196,6 @@ impl CodexShimBindError {
         }
     }
 
-    /// True when the control plane can still supply what is missing, so a later
-    /// generation is allowed to bind the shim.
     pub(crate) fn is_dependency_missing(&self) -> bool {
         matches!(self, Self::DependencyMissing(_))
     }

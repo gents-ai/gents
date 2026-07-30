@@ -1,11 +1,8 @@
 import type { ReactNode } from "react";
 
 export type FleetCopy = {
-  /** Product name used in local-runtime errors. */
   runtimeProductName?: string;
-  /** Binary name used in local-runtime recovery guidance. */
   cliBinaryName?: string;
-  /** Host-owned QR invite instructions. */
   pairingQrHint?: ReactNode;
 };
 

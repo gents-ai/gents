@@ -1,27 +1,6 @@
 import Proofs.Workflow.FanOut
 import Proofs.Workflow.CompositeInterrupt
 
-/-!
-# Workflow conformance witnesses
-
-Finite witness rows for the Rust barrier-projection fence and composite
-interrupt cleanup fence (#837).
-
-Every `legal` annotation below is *entailed by the model*, not hand-asserted:
-`workflowCasesLegalCorrect` decides that each row's `legal` equals the computable
-barrier predicate `barrierLegal` applied to that row's fields. A wrong annotation
-fails to build.
-
-`barrierLegal` is the computable mirror of the Rust
-`workflow_barrier_projection_legal`: a group is legal iff it is non-empty AND
-(synthesis is absent OR every fan-out bridge is terminal).
-
-Composite interrupt cases pin the post-cleanup invariant: after bounded
-interrupt cleanup (or terminal-parent recovery), the outer composite is not
-eligible as active and carries a consistent interrupted cancel cause when it
-was still running.
--/
-
 namespace Workflow
 namespace Conformance
 
@@ -36,20 +15,10 @@ structure BarrierCase where
   synthesisPresent : Bool
   legal : Bool
 
-/-- Computable barrier-legality predicate, definitionally aligned with the Rust
-    `workflow_barrier_projection_legal(states, synthesis_present)`:
-    `non-empty ∧ (¬synthesis_present ∨ states.all isTerminal)`.
-
-    The `states.all isTerminal` clause is exactly `WorkflowGroup.allTerminalB`'s
-    body; the terminal set is `{completed, failed, timedOut, cancelled}` via the
-    `HasTerminal ToolCallState` instance, matching
-    `WORKFLOW_TERMINAL_TOOL_STATES` on the Rust side. -/
 def barrierLegal (states : List ToolCallState) (synthesisPresent : Bool) : Bool :=
   !states.isEmpty &&
     (!synthesisPresent || states.all (fun s => decide (isTerminal s)))
 
-/-- Each witness's hand-written `legal` matches the computable predicate applied
-    to its own fields. -/
 def caseLegalCorrect (c : BarrierCase) : Bool :=
   c.legal == barrierLegal c.groupTerminalStates c.synthesisPresent
 
@@ -74,17 +43,11 @@ def workflowCases : List BarrierCase :=
     , synthesisPresent := true
     , legal := false
     }
-    -- conf-3 (a): pre-barrier branch — a non-terminal sibling is legal as long
-    -- as synthesis has NOT been spawned. Fences the Rust predicate's
-    -- `!synthesis_present` short-circuit (and the `synthesis_present := false`
-    -- serializer path).
   , { name := "running_sibling_no_synthesis"
     , groupTerminalStates := [.completed, .running, .completed]
     , synthesisPresent := false
     , legal := true
     }
-    -- conf-3 (b): all-terminal INCLUDING a `.timedOut` sibling + synthesis.
-    -- Fences the camelCase `timedOut` terminal-vocabulary string on both sides.
   , { name := "timed_out_sibling_then_synthesis"
     , groupTerminalStates := [.completed, .timedOut, .cancelled]
     , synthesisPresent := true
@@ -92,14 +55,9 @@ def workflowCases : List BarrierCase :=
     }
   ]
 
-/-- **Conformance lemma (conf-2).** Every entry of `workflowCases` carries a
-    `legal` value entailed by the computable barrier predicate. Decided by
-    `native_decide`, so a wrong `legal` annotation fails to build. -/
 theorem workflowCasesLegalCorrect :
     workflowCases.all caseLegalCorrect = true := by
   native_decide
-
-/-! ## Composite interrupt cleanup cases (#837) -/
 
 structure CompositeInterruptCase where
   name : String
@@ -111,18 +69,12 @@ structure CompositeInterruptCase where
   synthesisBridge : Option ToolCallState
   continuationOwned : Bool
   pendingChildCleanup : Bool
-  /-- Expected post-cleanup outer eligible-active flag. -/
   postOuterEligibleActive : Bool
-  /-- Expected post-cleanup outer state. -/
   postOuterState : ToolCallState
-  /-- Expected post-cleanup cancel cause (None when outer was already terminal
-      non-cancel). -/
   postOuterCancelCause : Option CancelCause
-  /-- Expected post-cleanup continuation ownership. -/
   postContinuationOwned : Bool
   deriving Repr
 
-/-- Build a pre-state from a case row. -/
 def caseToState (c : CompositeInterruptCase) : State :=
   { parentState := c.parentState
   , outerState := c.outerState
@@ -133,10 +85,6 @@ def caseToState (c : CompositeInterruptCase) : State :=
   , continuationOwned := c.continuationOwned
   , pendingChildCleanup := c.pendingChildCleanup }
 
-/-- Apply the cleanup transition appropriate to the pre-state:
-    - parent processing/interrupted → interruptCleanupPost
-    - parent otherwise terminal with running outer → recoverTerminalParentPost
-    - else identity (should not appear in witnesses). -/
 def applyCleanup (s : State) : State :=
   if s.parentState = .processing || s.parentState = .interrupted then
     interruptCleanupPost s
@@ -184,7 +132,7 @@ def compositeInterruptCases : List CompositeInterruptCase :=
       [.completed, .completed] (some .running)
   , mkInterruptCase "interrupt_during_result_persist" .resultPersist
       [.completed, .completed] (some .completed)
-  , -- Duplicate interrupt: parent already interrupted, outer already cancelled.
+  ,
     { name := "duplicate_interrupt_delivery"
     , phase := .fanOutBarrier
     , parentState := .interrupted
@@ -198,7 +146,7 @@ def compositeInterruptCases : List CompositeInterruptCase :=
     , postOuterState := .cancelled
     , postOuterCancelCause := some .interrupted
     , postContinuationOwned := false }
-  , -- Restart/live recovery: terminal parent, running outer composite.
+  ,
     { name := "recover_terminal_parent_running_outer"
     , phase := .fanOutBarrier
     , parentState := .interrupted
@@ -212,8 +160,7 @@ def compositeInterruptCases : List CompositeInterruptCase :=
     , postOuterState := .cancelled
     , postOuterCancelCause := some .interrupted
     , postContinuationOwned := false }
-  , -- Recovery when children already terminal but outer still running and the
-    -- parent is non-interrupt terminal (failed) → outer fails (not cancelled).
+  ,
     { name := "recover_terminal_children_running_outer"
     , phase := .resultPersist
     , parentState := .failed

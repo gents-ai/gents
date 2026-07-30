@@ -1,5 +1,3 @@
-//! Tauri plugin entry: `gents_desktop_bridge::init(BridgeConfig)`.
-
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
 
@@ -7,10 +5,6 @@ use crate::config::BridgeConfig;
 use crate::state::{resolve_policy, DesktopAppState};
 use crate::tauri_commands;
 
-/// Build the Gents desktop bridge plugin.
-///
-/// Invoke paths become `plugin:gents-desktop-bridge|<command>`. Hosts grant
-/// capability-scoped permission sets from `permissions/`.
 pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {

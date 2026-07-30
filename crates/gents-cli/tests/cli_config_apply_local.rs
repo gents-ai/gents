@@ -598,8 +598,6 @@ async fn config_apply_force_rebinds_concrete_manifest_to_home_identity_locally()
     Ok(())
 }
 
-/// #706 regression: pruning leaves a terminal tombstone, so reapplying the
-/// same manifest content must mint a distinct document identity and converge.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -731,9 +729,6 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
         "diff must be exact after the recreate: {settled}"
     );
 
-    // Repeat the full cycle. The second delete leaves two terminal documents
-    // with the same logical task_id; recreation must treat both as history,
-    // not as an ambiguous current row.
     fs::remove_dir_all(&task_dir).with_context(|| format!("removing {}", task_dir.display()))?;
     let pruned_again = run_cli_json(
         &home_dir,

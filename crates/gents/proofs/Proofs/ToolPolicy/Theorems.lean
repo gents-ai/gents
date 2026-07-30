@@ -1,11 +1,5 @@
 import Proofs.ToolPolicy.Meet
 
-/-!
-# Tool Policy Theorems
-
-Lower-bound safety lemmas for the product bash policy.
--/
-
 namespace ToolPolicy
 
 theorem bash_meet_mode_le (a b : BashPolicy) :

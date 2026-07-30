@@ -1,8 +1,3 @@
-//! First-run setup and resume: locate the persistent demo home, read the saved
-//! agent DID, initialize a curated agent (read-only tools, `defra_query`
-//! scoped to the agent-config preset),
-//! and seed the demo skills.
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -28,8 +23,6 @@ pub(super) fn read_agent_did(home: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// Initialize a curated demo agent in `home` and return its DID. The caller
-/// (re)creates the tool root afterwards — `--dangerously-overwrite` wipes it.
 pub(super) async fn init_agent(
     bin: &Path,
     home: &Path,
@@ -46,9 +39,6 @@ pub(super) async fn init_agent(
         agent_name.into(),
         "--tool-root".into(),
         path_arg(work),
-        // The demo agent is a learning environment: it can read (never
-        // write) its own configuration surface, so "how am I configured?"
-        // and "why doesn't X work?" are answerable in chat.
         "--enable-defra-query".into(),
         "--defra-query-collection".into(),
         "agent-config".into(),

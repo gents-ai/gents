@@ -471,9 +471,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 
             let pairing_ready = peer.is_chat_ready();
             if !pairing_ready {
-                // A saved bearer record is only a resumable pairing attempt.
-                // Do not project legacy or partially replicated documents into
-                // a usable agent until both issuer-signed readiness facts pass.
                 default_behavior_id = None;
                 agent_principal.default_behavior_id = None;
                 runtime = None;

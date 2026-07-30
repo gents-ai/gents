@@ -261,10 +261,6 @@ async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase
     }
 }
 
-/// #465 case 1: a background subagent child in claimed/processing whose
-/// deadline has passed terminalizes to `dead` on the periodic sweep, and its
-/// background bridge immediately projects the dead child to a terminal failed
-/// result (case 2), all without a daemon restart.
 async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let parent_request_id = format!("{}-parent", case.name);
@@ -348,10 +344,6 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
     );
 }
 
-/// #465 case 3: a pending (queued) spawn descendant of an already-terminal
-/// parent is interrupted on the periodic sweep. Queue rows that merely carry
-/// spawn lineage but are not referenced by a bridge (wake notifications,
-/// steering messages) must survive.
 async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let parent_request_id = format!("{}-parent", case.name);
@@ -386,9 +378,6 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
     )
     .await;
 
-    // Lineage-carrying queue row with NO bridge referencing it — the wake/
-    // steering analogue. The sweep's bridge-existence scope guard must leave
-    // it pending.
     let bystander_request_id = format!("{}-wake", case.name);
     create_linked_pending_child(
         &db.node,
@@ -399,9 +388,6 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
     )
     .await;
 
-    // Cross-deployment shape: the parent row carries a REMOTE agent_did but
-    // its replicated terminal row is visible here; the locally-owned queued
-    // child must still be released (parent is looked up by request_id alone).
     let remote_parent_request_id = format!("{}-remote-parent", case.name);
     create_remote_terminal_parent(&db.node, &remote_parent_request_id).await;
     let remote_tool_call_id = format!("{}-remote-bridge", case.name);
@@ -465,12 +451,6 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
     );
 }
 
-/// #465 case 4: the runtime-status liveness invariant. A wedged state —
-/// expired processing children, no live executors, a queued descendant of a
-/// terminal parent — must CONVERGE under the periodic reconciler: the
-/// operator-visible expired-processing measure reaches zero and stays zero
-/// across subsequent polls (Lean:
-/// `Recovery.RecoverySweep.finite_stale_rows_converge`).
 pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
     let db = test_db("recovery-465-convergence").await;
 
@@ -582,8 +562,6 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
     assert_eq!(count_expired_active_requests(&db.node).await, 0);
 }
 
-/// Mirror of the operator liveness measure (`expired_processing_count` in the
-/// CLI status endpoint): active-lifecycle requests whose deadline has passed.
 async fn count_expired_active_requests(node: &EmbeddedNode) -> usize {
     #[derive(Debug, Deserialize)]
     struct DeadlineRow {
@@ -618,8 +596,6 @@ async fn count_expired_active_requests(node: &EmbeddedNode) -> usize {
         .count()
 }
 
-/// Terminal parent row owned by a REMOTE deployment (different `agent_did`),
-/// as a replicated cross-deployment parent appears to the child's deployment.
 async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
     let escaped_request_id = escape_graphql_string(request_id);
     let mutation = format!(
@@ -651,9 +627,6 @@ async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
     );
 }
 
-/// Persist a running background spawn bridge (`AwaitMode::Background`,
-/// `CancelPolicy::Cascade`) referencing `child_request_id` — the bridge shape
-/// every subagent-liveness driver seeds.
 async fn start_running_background_bridge(
     node: Arc<EmbeddedNode>,
     parent_request_id: &str,
@@ -699,9 +672,6 @@ async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str)
     );
 }
 
-/// Create a pending child `AgentRequest` carrying spawn lineage
-/// (`caused_by_parent_request_id` / `caused_by_parent_tool_call_id`), the
-/// shape `SubagentSource` materializes for queued spawn children.
 async fn create_linked_pending_child(
     node: &EmbeddedNode,
     request_id: &str,
@@ -758,9 +728,6 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
     )
     .await;
     set_request_lifecycle_state(&db.node, &doc_id, case.pre_state.as_str()).await;
-    // The Lean request recovery predicate requires durable terminal intent.
-    // Seed the matching AgentResponse to model a restart after logical outcome
-    // persistence but before the request lifecycle edge became durable.
     let response_status = if case.terminal_state == "completed" {
         "complete"
     } else {
@@ -869,7 +836,6 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "live terminal-parent tool case {} should terminalize one tool call",
             case.name
         );
-        // Idempotent under a second live tick.
         let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
             .await
             .unwrap();
@@ -1053,8 +1019,6 @@ async fn seed_tool_parent_and_row(
             };
             seed_child_request(&node, &child_request_id, child_state).await;
             if case.name == "detached_bridge_terminal_parent_to_failed" {
-                // Cancel-worthy terminal (not clean completion): clean complete
-                // must leave linked children running (#880 / #377 policy).
                 set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
             }
             ToolCallLifecycle::new_subagent(
@@ -1414,17 +1378,11 @@ async fn fetch_inference_recovery_row(
     first_row(&node.execute(&query).await, "InferenceCall")
 }
 
-/// Drive one Lean conversation sweep case against the production recovery
-/// function: seed a stuck conversation whose parent request has the case's
-/// outcome, run the real sweep, and assert the doc reached the terminal state
-/// Lean computed.
 async fn drive_conversation_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = test_db("generated-conversation-recovery").await;
     let session_id = format!("session-{}", case.name);
     let request_id = format!("request-{}", case.name);
 
-    // The parent request's outcome is what the conversation is terminalized
-    // from: a completed request settles it `completed`, anything else `active`.
     let request_status = if case.terminal_state == "completed" {
         "completed"
     } else {
@@ -1468,14 +1426,6 @@ async fn drive_conversation_recovery_case(case: &lean_vocab_test::LeanRecoverySw
     );
 }
 
-/// #693: the outcome witnesses fence duplicate tolerance and honest counting
-/// against the real sweep.
-///
-/// `write_succeeds: false` rows are not driven against the store — they encode
-/// the *reporting* contract for a refused write (`recovered = 0`, rows left
-/// stale), which the pre-fix code violated by counting attempts. The
-/// duplicate-store rows ARE driven: they are the condition that made the write
-/// fail in the first place.
 pub(super) async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_counting() {
     let cases = lean_recovery_outcome_cases();
     assert!(!cases.is_empty(), "Lean emitted no recovery outcome cases");
@@ -1497,8 +1447,6 @@ pub(super) async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_co
             "case {} must address the canonical doc by _docID",
             case.name
         );
-        // A refused write reports zero recoveries and leaves the rows stale
-        // (#693 defect 2).
         if !case.write_succeeds {
             assert_eq!(case.expected_recovered, 0, "case {}", case.name);
             assert!(case.measure_after > 0, "case {}", case.name);
@@ -1514,9 +1462,6 @@ pub(super) async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_co
     drive_duplicate_conversation_outcome_case().await;
 }
 
-/// The duplicate-store case, end to end against the production sweep: two docs
-/// share a `session_id`, the write lands (because it is `_docID`-addressed),
-/// the SESSION counts once, and a second pass converges.
 async fn drive_duplicate_conversation_outcome_case() {
     let case = lean_recovery_outcome_cases()
         .iter()
@@ -1568,8 +1513,6 @@ async fn drive_duplicate_conversation_outcome_case() {
     assert_eq!(report.conversations_failed, case.expected_failed);
     assert_eq!(report.duplicate_conversation_sessions, 1);
 
-    // Both docs terminalized: the group stops being stale, so the sweep
-    // converges (Lean `conversation_recover_zero`).
     assert_eq!(
         conversation_status_by_doc_id(&db.node, &canonical).await,
         "completed"

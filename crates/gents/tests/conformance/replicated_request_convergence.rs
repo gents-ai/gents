@@ -1,20 +1,3 @@
-//! Conformance for replicated request-state convergence (#664), mirroring the
-//! `ReplicatedRequestConvergence.tla` model:
-//!
-//! - `SingleClaimer` (SAFETY): a non-owning peer never claims a foreign replica.
-//!   Fences the `agent_did` filter on both watcher claim seams
-//!   (`try_fetch_request`, the `pending_requests` scan reached via
-//!   `next_request`).
-//! - `TerminalConverges` (LIVENESS): once the owner terminalizes, its owner-side
-//!   re-drive re-asserts the terminal state so a lagging replica converges. The
-//!   re-drive is owner-scoped, idempotent, and bounded. Multi-node peer apply
-//!   (real P2P + late-join re-drive) lives in
-//!   `tests/e2e_lifecycle/replicated_request_convergence_p2p_e2e.rs`.
-//!
-//! Plus the recovery-drift fix: `recover_stuck_requests` keys the stale set on
-//! `lifecycle_state ∈ {claimed, processing}` (the Lean `requestRecoveryStale`
-//! predicate) rather than on `status = "processing"`.
-
 use super::*;
 
 use gents::__test_internals::{
@@ -37,10 +20,6 @@ struct ConvergenceRow {
     terminal_redrive_attempts: Option<i64>,
 }
 
-/// Create an `AgentRequest` owned by an arbitrary DID with explicit
-/// `status`/`lifecycle_state`. Unlike the shared `create_request` helper this
-/// lets a test seed a *foreign* replica (non-owning DID) and an arbitrary
-/// terminal shape, which the #664 scenarios require.
 async fn create_owned_request(
     node: &EmbeddedNode,
     request_id: &str,
@@ -192,19 +171,12 @@ struct QueueConvergenceRow {
     superseded_by_request: Option<String>,
 }
 
-/// Background-completion coalesce metadata (`is_automated_wakeup`-shaped) keyed
-/// on the session, matching what `enqueue_session_request` writes for an
-/// automated wake-up.
 fn coalesce_wakeup_metadata(session_id: &str) -> String {
     format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
     )
 }
 
-/// Seed a raw `pending`/`pending` queue request owned by `agent_did` with the
-/// given metadata and execution origin. Unlike `create_owned_request` this
-/// populates `metadata` + `execution_origin` so the coalesce/drain predicates
-/// (`queue_source_and_key_match`, `is_automated_wakeup`) actually match.
 async fn create_queue_request(
     node: &EmbeddedNode,
     request_id: &str,
@@ -292,9 +264,6 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
     first_row(&node.execute(&query).await, "AgentRequest")
 }
 
-/// Count composite document commits (`_C`) rather than field-level CRDT blocks.
-/// A multi-field GraphQL update is one logical document commit even though
-/// DefraDB stores linked field blocks underneath it.
 async fn composite_commit_count(node: &EmbeddedNode, doc_id: &str) -> usize {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let query = format!(
@@ -319,15 +288,9 @@ async fn composite_commit_count(node: &EmbeddedNode, doc_id: &str) -> usize {
         .map_or(0, Vec::len)
 }
 
-/// SAFETY `SingleClaimer`: the watcher never surfaces a foreign-DID replica as
-/// claimable — not via the doc-targeted `try_fetch_request` seam, nor via the
-/// `pending_requests` scan reached through `next_request`. Non-vacuous: an
-/// own-DID pending request IS claimable through the same seam.
 pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     let db = test_db("convergence-single-claimer").await;
 
-    // A foreign replica: owner's DID differs from the runtime's own DID, exactly
-    // the subagent-host replication shape from the #661 incident.
     let foreign_doc = create_owned_request(
         &db.node,
         "convergence-foreign-req",
@@ -340,7 +303,6 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
 
     let mut watcher = DefraWatcher::new(db.node.clone(), OWNER_DID);
 
-    // Seam 1 (doc-targeted claim): a foreign replica is never fetched.
     assert!(
         watcher
             .try_fetch_request(&foreign_doc)
@@ -350,17 +312,12 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
         "foreign replica must not be claimable via try_fetch_request"
     );
 
-    // Seam 2 (pending scan via next_request): with only the foreign replica
-    // present, the watcher must block rather than yield it. A timeout is the
-    // observable "never claims" signal.
     let scanned = tokio::time::timeout(Duration::from_millis(750), watcher.next_request()).await;
     assert!(
         scanned.is_err(),
         "watcher scan (next_request) must never yield a foreign replica, got {scanned:?}"
     );
 
-    // Non-vacuity: an OWN pending request IS claimable through the same seam, so
-    // the assertions above are not passing merely because nothing is claimable.
     let own_doc = create_owned_request(
         &db.node,
         "convergence-own-req",
@@ -378,16 +335,9 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     );
 }
 
-/// LIVENESS `TerminalConverges`: after the owner terminalizes, the owner-side
-/// re-drive re-asserts the terminal state so a lagging replica converges. Here
-/// the re-assert is the observable owner action (the delivered delta in the
-/// model). It is owner-scoped (a foreign terminal replica is never re-driven by
-/// us), targets only terminal rows (an active row is skipped), idempotent (the
-/// value is unchanged), and bounded (each row self-drops after `CAP` re-asserts).
 pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal() {
     let db = test_db("convergence-terminal-redrive").await;
 
-    // The owner reached terminal `failed` on its own request.
     create_routed_owned_request_with_times(
         &db.node,
         "convergence-owned-failed",
@@ -399,7 +349,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         CONVERGENCE_CREATED_AT,
     )
     .await;
-    // A foreign terminal replica — owner-scope: we must NOT re-drive it.
     create_routed_owned_request_with_times(
         &db.node,
         "convergence-foreign-failed",
@@ -411,7 +360,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         CONVERGENCE_CREATED_AT,
     )
     .await;
-    // An own NON-terminal (processing) request — must NOT be re-driven.
     create_owned_request(
         &db.node,
         "convergence-owned-processing",
@@ -421,8 +369,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "processing",
     )
     .await;
-    // An own terminal request with no remote requester has no replica to heal
-    // and must not consume a re-drive write.
     create_owned_request(
         &db.node,
         "convergence-owned-local-terminal",
@@ -433,7 +379,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     )
     .await;
 
-    // First pass re-asserts exactly the one owned, terminal, unconverged request.
     let first = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
         .await
         .unwrap();
@@ -447,26 +392,21 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     );
     assert!(!first.is_noop());
 
-    // Idempotent: the re-assert leaves the terminal value unchanged.
     let owned = fetch_convergence_row(&db.node, "convergence-owned-failed").await;
     assert_eq!(owned.status, "error");
     assert_eq!(owned.lifecycle_state, "failed");
     assert_eq!(owned.terminal_redrive_attempts, Some(1));
     assert!(owned.terminalized_at.is_some());
-    // The foreign replica is untouched by our re-drive.
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
     assert_eq!(foreign.status, "error");
 
-    // Bounded: the request self-terminates from the re-drive after CAP asserts.
     for _ in 1..TERMINAL_REDRIVE_CAP {
         let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
             .await
             .unwrap();
         assert_eq!(more.reasserted, 1, "each re-assert under the cap counts");
     }
-    // This invocation has no process-local budget to inherit. The cap survives
-    // a logical restart because eligibility is stored on AgentRequest.
     let exhausted = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
         .await
         .unwrap();
@@ -475,8 +415,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "re-drive must self-terminate after {TERMINAL_REDRIVE_CAP} re-asserts, got {exhausted:?}"
     );
 
-    // Owner-scope is did-keyed, not vacuous: driving as the FOREIGN owner picks
-    // up the foreign terminal replica (and only it).
     let foreign_run = RequestLifecycle::redrive_terminal_convergence(&db.node, FOREIGN_DID)
         .await
         .unwrap();
@@ -487,9 +425,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert_eq!(foreign_run.reasserted, 1);
 }
 
-/// A 64-row batch cannot starve an old request that terminalizes late. The
-/// first 64 rows exhaust their persisted cap and leave eligibility; the next
-/// tick reaches both the 65th newer request and the old, late-terminalized row.
 pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     let db = test_db("convergence-terminal-window").await;
 
@@ -537,10 +472,6 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     assert_eq!(old.terminal_redrive_attempts, Some(1));
 }
 
-/// A terminal AgentResponse is durable repair intent. If the immediate atomic
-/// request terminal mutation exhausts its retries (or the process restarts), a
-/// periodic sweep finishes the owner request exactly once and preserves the
-/// response's failure reason.
 pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() {
     let db = test_db("convergence-terminal-repair").await;
     let request_id = "convergence-terminal-repair-request";
@@ -598,9 +529,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
 
-    // A provider is allowed to return the ordinary text "interrupted". That
-    // must remain a failed outcome: only the `interrupted_at` stamp — never
-    // the human-readable error text — classifies a repair as an interrupt.
     let provider_request_id = "convergence-provider-interrupted-message";
     let provider_session_id = "convergence-provider-interrupted-session";
     create_owned_request(
@@ -647,11 +575,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     assert_eq!(provider_row.lifecycle_state, "failed");
     assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
 
-    // The interrupt finalize stamps `interrupted_at` atomically with the
-    // terminal response write, so the stamp is durable even if the earlier
-    // standalone `write_interrupted_at` exhausted its own retries. A response
-    // carrying only the stamp (with a human "interrupted" error text) must
-    // repair the owner request to interrupted.
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
     create_owned_request(
@@ -706,12 +629,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     );
 }
 
-/// Recovery-drift fix: `recover_stuck_requests` keys the stale set on
-/// `lifecycle_state ∈ {claimed, processing}` (Lean `requestRecoveryStale`), so a
-/// stuck `claimed` own-request with durable terminal response intent is
-/// recovered. This row carries `status="claimed"` (not `"processing"`), so the
-/// pre-fix `status="processing"` filter would have missed it — the concrete
-/// red-then-green witness for the drift fix.
 pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     let db = test_db("convergence-recover-claimed").await;
 
@@ -749,18 +666,12 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
     );
 }
 
-/// SAFETY (#664, coalesce supersede seam): `reconcile_coalesced_pending_request`
-/// scopes both its candidate query and its supersede mutation to the owning
-/// `agent_did`. A foreign-DID replica sharing the same `session_id` and coalesce
-/// key (the P2P subagent-host replication shape) is never superseded by the
-/// owner's reconcile, while the owner's own duplicate IS superseded (non-vacuous).
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     let db = test_db("convergence-coalesce-foreign").await;
     let session_id = "convergence-coalesce-foreign-session";
     let metadata = coalesce_wakeup_metadata(session_id);
     let key = format!("background_completion:{session_id}");
 
-    // Two OWNER coalesce-duplicate pending rows (survivor = earliest created_at).
     create_queue_request(
         &db.node,
         "convergence-coalesce-owner-survivor",
@@ -781,7 +692,6 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         "2026-03-23T00:00:01Z",
     )
     .await;
-    // A FOREIGN-DID replica in the same session with the same coalesce key.
     create_queue_request(
         &db.node,
         "convergence-coalesce-foreign",
@@ -808,14 +718,11 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         "the earliest owner row is the coalesce survivor"
     );
 
-    // Owner survivor stays pending.
     let owner_survivor =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-survivor").await;
     assert_eq!(owner_survivor.status, "pending");
     assert_eq!(owner_survivor.lifecycle_state, "pending");
 
-    // Owner duplicate IS superseded — the non-vacuity witness that reconcile
-    // supersedes owner-owned duplicates through this same seam.
     let owner_duplicate =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-duplicate").await;
     assert_eq!(owner_duplicate.status, "superseded");
@@ -825,7 +732,6 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         Some("convergence-coalesce-owner-survivor"),
     );
 
-    // The foreign replica is untouched: still pending/pending, still foreign.
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-coalesce-foreign").await;
     assert_eq!(
         foreign.agent_did, FOREIGN_DID,
@@ -843,16 +749,11 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     );
 }
 
-/// SAFETY (#664, wake-up drain seam): `drain_automated_wakeups` scopes both its
-/// pending scan and its interrupt mutation to the owning `agent_did`. A
-/// foreign-DID automated-wakeup replica sharing the session is left untouched
-/// while the owner's own wake-up is interrupted (non-vacuous).
 pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     let db = test_db("convergence-drain-foreign").await;
     let session_id = "convergence-drain-foreign-session";
     let metadata = coalesce_wakeup_metadata(session_id);
 
-    // OWNER automated-wakeup pending row.
     create_queue_request(
         &db.node,
         "convergence-drain-owner",
@@ -863,7 +764,6 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    // FOREIGN-DID automated-wakeup replica in the same session.
     create_queue_request(
         &db.node,
         "convergence-drain-foreign",
@@ -888,12 +788,10 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         "exactly the owner's own automated wake-up is drained"
     );
 
-    // Owner row is interrupted.
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
     assert_eq!(owner.status, "interrupted");
     assert_eq!(owner.lifecycle_state, "interrupted");
 
-    // Foreign replica is untouched.
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
     assert_eq!(

@@ -553,7 +553,6 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
 
-    // Write 20 docs through the embedded node directly.
     for i in 0..20usize {
         let mutation = format!(
             r#"mutation {{
@@ -572,7 +571,6 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
         );
     }
 
-    // Wait for observer debounce + safety margin.
     timeout(Duration::from_secs(5), async {
         loop {
             if core.store().snapshot().agent_principals.len() >= 20 {
@@ -599,11 +597,6 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     Ok(())
 }
 
-/// Verify that the incremental observer handles long sessions without
-/// re-fetching history-sized data. Seeds 1000 messages and then streams
-/// 100 progress updates; asserts that the final progress_seq is 100 and
-/// that `docs_fetched` is independent of the seeded message count
-/// (bounded by debounce-flush count × dirty-doc count, not history size).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incremental_observer_handles_long_session() -> Result<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -611,7 +604,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
 
-    // Seed 1000 AgentMessage rows for a single session.
     for i in 0..1_000usize {
         let mutation = format!(
             r#"mutation {{
@@ -629,7 +621,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         assert!(!resp.has_errors(), "seed message {i}: {:?}", resp.errors);
     }
 
-    // Seed the response.
     let resp = core
         .node()
         .execute(
@@ -653,10 +644,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .await;
     assert!(!resp.has_errors(), "seed response: {:?}", resp.errors);
 
-    // Wait for the seed phase to fully drain through the observer before we
-    // measure the streaming-phase fetches. Otherwise the baseline would
-    // include 1000 message fetches that are unrelated to the issue's
-    // pathology (which is "many updates to the SAME doc").
     timeout(Duration::from_millis(2000), async {
         loop {
             let snap = core.store().snapshot();
@@ -681,7 +668,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         .await
         .expect("observer running and exposing metrics");
 
-    // Stream 100 progress updates.
     for i in 1..=100usize {
         let mutation = format!(
             r#"mutation {{
@@ -695,7 +681,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         assert!(!resp.has_errors(), "update {i}: {:?}", resp.errors);
     }
 
-    // Wait for debounce + safety margin.
     timeout(Duration::from_millis(2000), async {
         loop {
             let snap = core.store().snapshot();
@@ -724,11 +709,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
         "final progress_seq should be 100"
     );
 
-    // The whole point of issue #62: streaming-phase docs_fetched is bounded
-    // by debounce-flush count, not by seeded history. We measure ONLY the
-    // streaming phase (after the seed has drained); the bound is generous
-    // headroom over OBSERVER_DEBOUNCE worst case, but the old
-    // load_full_snapshot path would have fetched >100,000 rows here.
     let after = core
         .observer_metrics()
         .await
@@ -743,10 +723,6 @@ async fn incremental_observer_handles_long_session() -> Result<()> {
     Ok(())
 }
 
-/// Verify that after setting a selected agent, writes from both agents still
-/// appear in the store (the bootstrap snapshot includes all agents; incremental
-/// updates appear per-document). Scope-isolation of drop-recovery is verified
-/// via log/metric inspection in PR review.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -754,7 +730,6 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()).await?;
 
-    // Seed two agents.
     for did in &["did:alpha", "did:beta"] {
         let mutation = format!(
             r#"mutation {{
@@ -772,10 +747,8 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         assert!(!resp.has_errors(), "seed {did}: {:?}", resp.errors);
     }
 
-    // Switch selection to alpha.
     core.set_selected_agent_did(Some("did:alpha".to_string()));
 
-    // Wait for both principals to land in the store.
     timeout(Duration::from_secs(5), async {
         loop {
             let snap = core.store().snapshot();

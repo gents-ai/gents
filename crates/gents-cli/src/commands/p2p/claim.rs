@@ -1,20 +1,3 @@
-//! Claimant side of the scan-one-QR bearer pairing flow (issue #666).
-//!
-//! `p2p pairings claim <dabear1-token>` runs on the claiming node:
-//! 1. verify the issuer's signature over the token (TOFU) and its freshness;
-//! 2. pin the token-carried signed network root locally;
-//! 3. write the local `PeerPairingDesired` row so the pairing reconciler dials
-//!    the issuer and installs the outbound push replicator (same as `join`);
-//! 4. write a self-signed `PairingBearerClaim` row and install a small
-//!    unfiltered replicator pushing it to the issuer.
-//!
-//! Everything authoritative happens on the ISSUER when the claim replicates
-//! in: its bearer-claim reconciler re-verifies both signatures, burns the
-//! nonce (single-use across devices), authors the membership grant, and — for
-//! conversation invites — records the reciprocal conversation intent so the
-//! reverse conversation edge materializes once this node's signed
-//! `PeerEndpoint` (published by the daemon's endpoint heartbeat) replicates.
-
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use gents::graphql::escape_graphql_string;
@@ -41,9 +24,6 @@ use super::pairings::{peer_pairing_exists, resolve_pairing_template, write_pairi
 pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     let token = decode_bearer(&args.token)?;
 
-    // Verify the issuer's signature over the token payload (TOFU bootstrap arm,
-    // same shape as `join`). The issuer re-verifies authoritatively at claim
-    // processing; this check keeps a tampered QR from wiring anything locally.
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for bearer claim signing")?;
     let payload = bearer_signing_payload(&token);
@@ -63,15 +43,9 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
         );
     }
 
-    // Courtesy freshness gate: a stale bearer token can never be admitted by
-    // the issuer, so fail fast here instead of wiring a doomed pairing.
     check_bearer_freshness(&token, Utc::now())
         .context("bearer invite failed the freshness check (re-mint the QR)")?;
 
-    // Defense-in-depth on the token's network root (mint already enforces
-    // both, but a claimant must not trust mint): the issuer must BE the
-    // network admin, and the root must verify under that admin DID — a
-    // tampered token must not pin a forged root locally.
     check_token_network_authority(&token)?;
     let root_valid = identity
         .verify(
@@ -93,20 +67,13 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     let addresses = vec![token.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Same local-network match gate as v5 join: a node already bound to a
-    // different network (or a different admin for the same id) must refuse the
-    // claim BEFORE any durable write — `write_agent_network` upserts and would
-    // otherwise overwrite the local root.
     let local_network = load_optional_network_record(&access)
         .await
         .context("loading local AgentNetwork before claim")?;
     check_local_network_match(local_network.as_ref(), &token)?;
 
-    // Pin the token-carried signed network root locally (TOFU context for
-    // later network-derived discovery). No membership is written here — the
-    // issuer authors it at claim time; that is the whole point of bearer mode.
     write_agent_network(&access, &token.network).await?;
 
     let existed = peer_pairing_exists(&access, &token.peer_id).await?;
@@ -122,9 +89,6 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     )
     .await?;
 
-    // Best-effort self transport info for the claim row (informational; the
-    // authoritative dialable address is the signed PeerEndpoint the daemon's
-    // endpoint heartbeat publishes).
     let (claimant_node_id, claimant_address) = local_transport_info(&graphql).await;
 
     let mut record = BearerClaimRecord {
@@ -145,11 +109,6 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
         .await
         .context("writing local PairingBearerClaim row")?;
 
-    // Push the claim to the issuer: a small unfiltered replicator for the
-    // claim collection toward the token's ticket. Requires the local daemon
-    // (the same daemon whose endpoint heartbeat makes the reverse edge
-    // possible), so fail with a pointed message rather than leaving a claim
-    // that never travels.
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(&graphql)?;
     let request = P2pReplicatorRequest {
@@ -181,8 +140,6 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort local (node id, shareable address) from the running daemon.
-/// Either may be empty when the daemon or discovery has not produced one yet.
 async fn local_transport_info(graphql: &str) -> (String, String) {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
 
@@ -214,9 +171,6 @@ async fn local_transport_info(graphql: &str) -> (String, String) {
     (node_id, address)
 }
 
-/// The bearer issuer must be the admin of the network its token carries:
-/// only admin-issued bearer invites exist (mint enforces it), so a token
-/// whose issuer is not the embedded root's admin is forged or corrupted.
 fn check_token_network_authority(token: &BearerInviteToken) -> Result<()> {
     if token.issuer_did != token.network.admin_did {
         anyhow::bail!(
@@ -228,9 +182,6 @@ fn check_token_network_authority(token: &BearerInviteToken) -> Result<()> {
     Ok(())
 }
 
-/// Mirror of v5 join's `enforce_local_network_match`: never let a claim
-/// overwrite an existing local `AgentNetwork` bound to a different network or
-/// a different admin.
 fn check_local_network_match(
     local: Option<&NetworkRecord>,
     token: &BearerInviteToken,
@@ -325,14 +276,11 @@ mod tests {
     fn claim_refuses_to_overwrite_a_different_local_network() {
         let token = bearer(network("net-b", "did:key:admin-b"), "did:key:admin-b");
 
-        // No local network: fresh node, claim may pin the root.
         assert!(check_local_network_match(None, &token).is_ok());
 
-        // Same network + admin: fine.
         let local = network("net-b", "did:key:admin-b");
         assert!(check_local_network_match(Some(&local), &token).is_ok());
 
-        // Different network id: refused before any durable write.
         let local = network("net-a", "did:key:admin-a");
         let err = check_local_network_match(Some(&local), &token)
             .unwrap_err()
@@ -342,7 +290,6 @@ mod tests {
             "unexpected: {err}"
         );
 
-        // Same id, different admin: refused.
         let local = network("net-b", "did:key:other-admin");
         let err = check_local_network_match(Some(&local), &token)
             .unwrap_err()

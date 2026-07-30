@@ -2,15 +2,6 @@ import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Boundary Runtime Witness Cases
-
-Finite executable cases for service-local decisions that sit next to external
-boundaries. These rows deliberately classify only Rust-owned policy outcomes;
-they do not claim DefraDB durability, event delivery, endpoint freshness, or
-provider/network behavior.
--/
-
 namespace Conformance.ContractCases
 
 inductive MutationResult where
@@ -278,10 +269,6 @@ def managedExecToolBoundaryCase
   , captureDrainBounded := true
   }
 
-/-- Every native tool that can launch an OS subprocess must consume the managed
-    executor boundary. Keeping this inventory in the Lean-owned contract makes
-    a raw `Command::spawn` route a conformance failure instead of an implicit
-    implementation convention. -/
 def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
   [ managedExecToolBoundaryCase "list_files" "filesystemTraversal"
   , managedExecToolBoundaryCase "glob" "filesystemTraversal"
@@ -290,12 +277,6 @@ def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
   , managedExecToolBoundaryCase "bash_unrestricted" "shellCommand"
   ]
 
-/-- `PairingReconcile.Transition.crash` abstracts away the implementation's
-    async supervisor boundary. This witness fences that refinement: shutdown
-    must be observable while a sweep is awaiting remote admin work, must drop
-    the current wait and the rest of the peer loop, and must therefore let the
-    runtime's background-task join finish without multiplying the per-RPC
-    timeout by the number of stale peers. -/
 def pairingReconcileShutdownBoundaryCases :
     List PairingReconcileShutdownBoundaryCase :=
   [ { name := "shutdown_preempts_in_flight_pairing_reconcile_sweep"
@@ -310,12 +291,20 @@ def pairingReconcileShutdownBoundaryCases :
     }
   ]
 
-/-- The single-peer `PairingReconcile` machine does not model how a runtime
-    sweep schedules several independent peers. This witness fences that
-    refinement: slow discovery/dial preparation is bounded and concurrent, so
-    one stale peer cannot head-of-line block a ready phone, while topology
-    mutations remain serialized and every peer still updates supervisor
-    accounting exactly once. -/
+def pairingReconcileSweepRetryBoundaryCases :
+    List PairingReconcileSweepRetryBoundaryCase :=
+  [ { name := "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
+    , supervisor := "pairingReconciler"
+    , workClass := "p2pReconcileSweep"
+    , boundary := "pairingReconcileSupervisorBoundary"
+    , failureScope := "topLevelSweepEnumeration"
+    , failureTerminal := false
+    , retryTrigger := "immediateFirstIntervalTick"
+    , cancellationPrioritized := true
+    , convergenceRetried := true
+    }
+  ]
+
 def pairingReconcileSweepSchedulingCases :
     List PairingReconcileSweepSchedulingCase :=
   [ { name := "stale_peer_dial_does_not_block_ready_peer"

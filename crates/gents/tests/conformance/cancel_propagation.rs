@@ -107,26 +107,20 @@ async fn drive_declarative_cancel_propagation() {
     let host = boot_agent(host_db, host_identity, "cancel-propagation-host").await;
     let coord = boot_agent(coord_db, coord_identity, "cancel-propagation-coord").await;
 
-    // 180s, not 60s: the wait returns as soon as the row lands, but under a
-    // loaded CI runner (rust-and-cli runs this beside full builds) reconcile
-    // has blown a 60s budget while the same suite passes in the quieter
-    // lean-proofs job. Flaky-by-load is still a defect; pay it in budget once.
     wait_for_replicator_installed(
         coord.db.node.as_ref(),
+        &coord_did,
         "cancel-host",
         Duration::from_secs(180),
     )
     .await;
     wait_for_replicator_installed(
         host.db.node.as_ref(),
+        &host_did,
         "cancel-coord",
         Duration::from_secs(180),
     )
     .await;
-    // A persisted PeerPairingApplied row proves the replicator was configured,
-    // not that its transport is connected yet. Fence request creation on the
-    // actual P2P connection so this conformance case does not race the first
-    // outbound replication wave under a saturated package suite.
     wait_for_connected_peer(coord.db.node.as_ref(), Duration::from_secs(60)).await;
     wait_for_connected_peer(host.db.node.as_ref(), Duration::from_secs(60)).await;
     let RunningAgent {
@@ -486,7 +480,12 @@ async fn wait_for_connected_peer(node: &EmbeddedNode, timeout: Duration) {
     }
 }
 
-async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeout: Duration) {
+async fn wait_for_replicator_installed(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    peer_id: &str,
+    timeout: Duration,
+) {
     let deadline = Instant::now() + timeout;
     let escaped_peer_id = escape_graphql_string(peer_id);
     let mut last = String::from("<none>");
@@ -518,12 +517,53 @@ async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeo
             }
         }
         if Instant::now() >= deadline {
+            let runtime = runtime_diagnostic(node, agent_did).await;
+            let p2p = p2p_diagnostic(node).await;
             panic!(
-                "timed out waiting for PeerPairingApplied({peer_id}) to install a replicator; last row={last}"
+                "timed out waiting for PeerPairingApplied({peer_id}) to install a replicator; \
+                 last row={last}; runtime={runtime}; p2p={p2p}"
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn runtime_diagnostic(node: &EmbeddedNode, agent_did: &str) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRuntime(
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                limit: 1
+            ) {{
+                process_state
+                reconcile_phase
+                active_generation
+                router_generation
+                last_reconcile_result
+                last_reconcile_error
+            }}
+        }}"#
+    );
+    let response = match tokio::time::timeout(Duration::from_secs(2), node.execute(&query)).await {
+        Ok(response) => response,
+        Err(_) => return "<timed out after 2s>".to_string(),
+    };
+    let data = response
+        .data
+        .as_ref()
+        .map(serde_json::Value::to_string)
+        .unwrap_or_else(|| "<none>".to_string());
+    format!("data={data}, errors={:?}", response.errors)
+}
+
+async fn p2p_diagnostic(node: &EmbeddedNode) -> String {
+    let Some(p2p) = node.p2p() else {
+        return "<disabled>".to_string();
+    };
+    let peers = tokio::time::timeout(Duration::from_secs(2), p2p.connected_peers()).await;
+    let replicators = tokio::time::timeout(Duration::from_secs(2), p2p.get_replicators()).await;
+    format!("connected_peers={peers:?}, replicators={replicators:?}")
 }
 
 async fn wait_for_interrupt_requested_at(

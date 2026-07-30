@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Some helpers are introduced ahead of the R4 subagent completion worker.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -9,7 +9,7 @@ use crate::session;
 use crate::watcher::AgentRequest;
 
 use super::materialize::EnqueuedAgentRequest;
-use super::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
+use super::{extract_single_doc_id, ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RequestQueueMetadata {
@@ -547,26 +547,6 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
         }
         _ => String::new(),
     }
-}
-
-fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(key))
-        .and_then(|value| {
-            value
-                .get("_docID")
-                .and_then(|doc_id| doc_id.as_str())
-                .or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                        .and_then(|doc_id| doc_id.as_str())
-                })
-                .map(ToOwned::to_owned)
-        })
 }
 
 async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<String> {

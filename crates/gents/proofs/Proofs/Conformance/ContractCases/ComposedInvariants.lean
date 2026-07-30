@@ -1,13 +1,6 @@
 import Proofs.Conformance.ContractCases.Types
 import Proofs.CrossMachineComposed.Reachability
 
-/-!
-# CrossMachineComposed Conformance Witnesses
-
-Finite rows that project the non-vacuity witnesses for C1/C1' reachable
-domains into Rust conformance tests.
--/
-
 namespace Conformance.ContractCases
 
 open ComposedState

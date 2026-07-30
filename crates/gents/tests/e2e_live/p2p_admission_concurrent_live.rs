@@ -44,9 +44,7 @@ use crate::support::{first_optional_row, test_p2p_db_with_admission, TestDb, Tes
 const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
 const DEFAULT_LIVE_MODEL: &str = "d4f";
 const LIVE_BACKEND_ID: &str = "backend-live-p2p-admission";
-/// Concurrent waves fired without awaiting peer convergence between submits.
 const CONCURRENT_WAVES: usize = 4;
-/// Collections the owner fans out under the single push worker.
 const REPLICATED: &[&str] = &["AgentRequest", "AgentResponse", "AgentMessage"];
 
 fn live_enabled() -> bool {
@@ -62,8 +60,6 @@ fn live_model() -> String {
     std::env::var("GENTS_LIVE_P2P_ADMISSION_MODEL")
         .unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
 }
-
-// --- P2P install (same shape as lifecycle admission e2e / R5) ---
 
 async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -151,8 +147,6 @@ async fn install_one_way_replicator(
         .expect("install sender → receiver replicator");
 }
 
-// --- Live d4f bind / boot ---
-
 async fn assert_endpoint_reachable(endpoint: &str) {
     let url = format!("{}/models", endpoint.trim_end_matches('/'));
     let client = reqwest::Client::builder()
@@ -172,8 +166,6 @@ async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
     let backend_id = escape_graphql_string(LIVE_BACKEND_ID);
     let endpoint = escape_graphql_string(endpoint);
     let model = escape_graphql_string(model);
-    // max_concurrent high enough that inference is not the bottleneck — we want
-    // concurrent completions to generate concurrent PushLog work under push_tasks=1.
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -235,7 +227,6 @@ async fn bind_live_backend(
     behavior.model_name = Some(model.to_string());
     behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
     behavior.enabled = true;
-    // Keep tools meta-only: we only need short completions, not tool loops.
     upsert_agent_behavior(node, &behavior)
         .await
         .expect("point behavior at live backend");
@@ -260,8 +251,6 @@ async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Resul
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     Ok(BootedAgent::new(shutdown_tx, handle, agent_did))
 }
-
-// --- Wait helpers ---
 
 fn is_terminal(state: &str) -> bool {
     matches!(
@@ -358,11 +347,6 @@ async fn wait_for_peer_request(
     }
 }
 
-// --- Teardown scope guard (#670 leak follow-up) ---
-
-/// Owns the live topology so panic / `?` early-return still tears down agent +
-/// embedded nodes instead of relying on process exit. Happy-path callers should
-/// still `await shutdown()` for orderly async stop; `Drop` is best-effort.
 struct LiveTopologyGuard {
     agent: Option<BootedAgent>,
     owner: Option<TestDb>,
@@ -420,9 +404,6 @@ impl Drop for LiveTopologyGuard {
         if self.shut_down {
             return;
         }
-        // Best-effort: BootedAgent::Drop aborts the agent task. Schedule node
-        // shutdown on the current runtime when available so iroh sockets/ports
-        // are released even on panic unwind (test process still exits soon).
         if let Some(agent) = self.agent.take() {
             drop(agent);
         }
@@ -441,18 +422,13 @@ impl Drop for LiveTopologyGuard {
     }
 }
 
-// --- The live concurrent multi-wave test ---
-
-/// Concurrent real-inference completions under a single push worker must still
-/// converge to two healthy peers. This is the load-bearing regression fence
-/// the sequential unit e2e cannot provide: bound=1 is actually contended.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
 async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored to run the concurrent multi-wave live e2e"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
@@ -461,8 +437,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     );
     assert_endpoint_reachable(&endpoint).await;
 
-    // Tight hub fan-out bound on ALL nodes so the shipping config matches the
-    // TLA PushWorkers=1 obligation on the owner that generates the push work.
     let admission = TestP2pAdmission::single_push_worker();
     let owner = test_p2p_db_with_admission("p2p-adm-live-owner", admission.clone()).await;
     let peer_a = test_p2p_db_with_admission("p2p-adm-live-peer-a", admission.clone()).await;
@@ -495,9 +469,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
     topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={agent_did}");
 
-    // Fire concurrent waves WITHOUT awaiting peer convergence between submits.
-    // Each short prompt completes against live d4f; completions generate
-    // concurrent PushLog work that must fan out to two peers under one worker.
     let wave_ids: Vec<String> = (0..CONCURRENT_WAVES)
         .map(|i| format!("p2p-adm-live-wave-{i}"))
         .collect();
@@ -513,7 +484,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
             &behavior_id,
             request_id,
             &session_ids[i],
-            // Tiny prompt: structural answer only; keep inference cheap.
             &format!("Reply with exactly one word: wave{i}"),
         )
         .await;
@@ -523,7 +493,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
         submit_start.elapsed()
     );
 
-    // Owner: every wave terminalizes (real inference ran).
     let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
         let state = wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
@@ -534,8 +503,6 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Re
         eprintln!("[p2p-admission-live] owner terminal {request_id}={state}");
     }
 
-    // Peers: every wave converges on BOTH peers despite push_tasks=1 + concurrent
-    // fan-out. Sequential unit tests cannot force this contention.
     let peer_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
         wait_for_peer_request(

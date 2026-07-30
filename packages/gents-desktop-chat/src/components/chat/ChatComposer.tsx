@@ -28,11 +28,9 @@ export type ChatComposerProps = {
   onDraftChange: (value: string) => void;
   onInterruptClick: () => void;
   onSend: (event: FormEvent) => void;
-  /** Deployment skills for the leading `/skill` selector autocomplete. */
   skills?: SkillView[];
 };
 
-/** Operator-facing turn status — never the raw state-machine enum. */
 function turnStatusLabel(turnState: string | null): string | null {
   if (!turnState || isTerminalTurnState(turnState)) {
     return null;
@@ -85,7 +83,6 @@ export function ChatComposer({
     }
   }
 
-  // Auto-grow: single line at rest, expands with content up to a cap.
   useEffect(() => {
     const input = inputRef.current;
     if (!input) {

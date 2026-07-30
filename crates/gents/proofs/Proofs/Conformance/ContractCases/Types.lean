@@ -2,10 +2,6 @@ import Proofs.Basic
 import Proofs.Scheduling
 import Proofs.RuntimeReconcile.State
 
-/-!
-# Finite Conformance Witness Types
--/
-
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
@@ -191,6 +187,18 @@ structure PairingReconcileShutdownBoundaryCase where
   shutdownJoinBounded : Bool
   deriving Repr
 
+structure PairingReconcileSweepRetryBoundaryCase where
+  name : String
+  supervisor : String
+  workClass : String
+  boundary : String
+  failureScope : String
+  failureTerminal : Bool
+  retryTrigger : String
+  cancellationPrioritized : Bool
+  convergenceRetried : Bool
+  deriving Repr
+
 structure PairingReconcileSweepSchedulingCase where
   name : String
   supervisor : String
@@ -262,27 +270,17 @@ structure RecoverySweepCase where
   deadlineAuditRef : String
   deriving DecidableEq, Repr
 
-/-- Witness for the outcome/report layer (#693): how many docs a stale session
-    carries, how many writes the store accepts, and what the sweep must
-    therefore REPORT. `targetSelector` pins the write addressing mode — a
-    `session_id` filter matches every duplicate and is refused by DefraDB, so
-    the contract demands `_docID`. -/
 structure RecoveryOutcomeCase where
   name : String
   sweepId : String
   collection : String
   rustFunction : String
-  /-- Docs sharing the session_id (>1 = the #693 duplicate store). -/
   docCount : Nat
   duplicated : Bool
-  /-- Whether the store accepts the recovery write for this group. -/
   writeSucceeds : Bool
-  /-- What the sweep must report. `recovered` counts SUCCESSES, never attempts. -/
   expectedRecovered : Nat
   expectedFailed : Nat
-  /-- Stale docs left behind (0 once recovered; unchanged when the write failed). -/
   measureAfter : Nat
-  /-- Recovery must address docs by `_docID`, never by a `session_id` filter. -/
   targetSelector : String
   theoremName : String
   deriving DecidableEq, Repr
@@ -425,7 +423,6 @@ structure CancelPropagationCase where
   noThirdPartyRows : Bool
   deriving Repr
 
-/-- Runtime witness row for an operationally-driven Background Properties theorem. -/
 structure BackgroundTheoremWitness where
   theoremName : String
   witnessKind : String
@@ -434,9 +431,6 @@ structure BackgroundTheoremWitness where
   kindFields : List (String × String)
   deriving Repr
 
-/-- Runtime witness row for CrossMachineComposed reachable-state theorem
-    domains. These rows are finite projections of proved Lean witnesses; Rust
-    consumes them without re-deriving the proof. -/
 structure ComposedInvariantWitness where
   theoremName : String
   witnessKind : String
@@ -543,37 +537,17 @@ structure SteerInterruptComposes where
   queueInterruptedRequestId : String
   deriving Repr
 
-/-- #593: after a successful BACKGROUND spawn receipt the returned
-`child_request_id` must never disappear from the parent's control plane,
-even while the child `AgentRequest` is not yet materialized (spawn
-convergence #377 materializes it asynchronously via `SubagentSource`, and a
-cross-deployment child may replicate later or never be claimed).
-
-Boundary note: `awaiting_child_materialization` is a read-side PROJECTION of
-(bridge `await_mode = background` ∧ bridge non-terminal ∧ child row absent).
-It is never persisted as a bridge `lifecycle_state` and adds no transition
-to the Background bridge state machine (`Proofs/Background/Transition.lean`);
-once the child materializes, the projection collapses back to the bridge
-lifecycle state and the happy path is unchanged. -/
 structure UnmaterializedChildVisible where
   callerRequestId : String
   bridgeToolCallId : String
   childRequestId : String
-  /-- The child `AgentRequest` row is absent in this scenario. -/
   childMaterialized : Bool
-  /-- Persisted bridge state stays `running`; the projection never mutates it. -/
   bridgeLifecycleState : String
-  /-- `list_subagents` entry status projected for the missing child. -/
   listedStatus : String
-  /-- The handle must be visible under `status="all"`. -/
   listedUnderAllFilter : Bool
-  /-- The projection is non-terminal, so the default `running` filter shows it. -/
   listedUnderRunningFilter : Bool
-  /-- `read_subagent` reports the projection instead of not-authorized. -/
   readLifecycleState : String
-  /-- Never fake a terminal outcome for an unmaterialized child. -/
   readTerminal : Bool
-  /-- `wait_subagent` explains the bridge state with a retryable payload. -/
   waitRetryable : Bool
   deriving Repr
 

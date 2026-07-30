@@ -1,7 +1,5 @@
 import Proofs.Session.Executable
 
-/-! Soundness and completeness of executable session queue actions. -/
-
 namespace SessionQueue
 
 theorem step?_sound

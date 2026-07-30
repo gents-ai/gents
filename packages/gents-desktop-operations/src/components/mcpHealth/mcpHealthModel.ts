@@ -6,17 +6,10 @@ export type VisualState =
   "healthy" | "degraded" | "evicted" | "reconnecting" | "stuck" | "unknown";
 
 export function visualState(service: MCPServiceHealthView): VisualState {
-  // Accept both the persisted vocabulary ("degraded") and the public
-  // HealthStatus name ("stale") so the panel keeps working if any older
-  // row was written before the schema/vocab alignment landed.
   const raw = (service.status ?? "").toLowerCase();
   const status = raw === "stale" ? "degraded" : raw;
   const failureCount = service.failureCount ?? 0;
   const kMax = service.kMax ?? 1;
-  // Derived "stuck" badge — failure_count >= 2K or last_seen older than 5 min.
-  // The runtime does not model `Stuck`; the panel surfaces it visually so
-  // operators have a clear "investigate now" signal without changing the
-  // K-model state machine.
   const stuck =
     (status === "evicted" || status === "reconnecting") &&
     (failureCount >= 2 * Math.max(1, kMax) ||
@@ -125,14 +118,10 @@ function formatRemaining(ms: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-/// Outcome of a one-shot operator-initiated probe. Distinct from the
-/// persisted K-state rows: it never persists and reflects a single live
-/// round-trip, so the panel renders it as its own "live probe" line.
 export type McpProbeOutcome = {
   at: string;
   status?: string;
   latencyMs?: number;
   lastError?: string | null;
-  /** Set when the probe call itself failed (bridge/transport error). */
   error?: string;
 };

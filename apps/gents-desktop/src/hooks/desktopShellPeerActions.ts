@@ -121,7 +121,6 @@ export function createDesktopShellPeerActions({
     }
   }
 
-  /** Fleet-admin: probe an address before the peer is saved (AddPeerForm). */
   async function onProbePeerAddress(serverAddress: string) {
     setError(null);
     try {

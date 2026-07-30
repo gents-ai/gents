@@ -81,14 +81,9 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     }
 }
 
-/// Process-wide P2P admin HTTP client (cheap to clone; reuses the connection
-/// pool). Avoids rebuilding a reqwest client on every CLI command and every
-/// `/metrics` scrape (#670 leak follow-up).
 pub(crate) fn p2p_http_client() -> Result<reqwest::Client> {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    // `get_or_try_init` is still unstable on our MSRV; build failure is
-    // fatal/rare (TLS backend), so panicking the first init is acceptable.
     Ok(CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()

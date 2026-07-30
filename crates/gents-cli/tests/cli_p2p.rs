@@ -215,7 +215,6 @@ async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()
 
     create_network(&home_a, "Bearer Claim Fleet")?;
 
-    // Mint an audience-unbound bearer invite: NO grant and NO intent exist yet.
     let invite = run_cli_json(
         &home_a,
         &[
@@ -239,7 +238,6 @@ async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()
         .to_string();
     assert!(token.starts_with("dabear1-"), "unexpected token: {token}");
 
-    // B claims: binds its own DID, wires its push pairing, ships the claim.
     let claim = run_cli_json(&home_b, &["p2p", "pairings", "claim", &token])?;
     assert_eq!(
         claim.get("status").and_then(Value::as_str),
@@ -251,9 +249,6 @@ async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()
         Some(agent_did_b.as_str())
     );
 
-    // The claim replicates B→A; A's bearer-claim reconciler burns the nonce,
-    // authors the admin-signed membership for B, and records the reciprocal
-    // conversation intent. Poll A until all three land.
     let escaped_b = escape_graphql_string(&agent_did_b);
     let deadline = std::time::Instant::now() + Duration::from_secs(90);
     loop {
@@ -292,9 +287,6 @@ async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // Single-use across devices: a second claimant on the same token must not
-    // be granted. (B claims again under a fresh identity would need a third
-    // node; here we assert the ledger binds the nonce to B specifically.)
     let nonce_rows = graphql_query(
         &graphql_a,
         &format!(
@@ -316,11 +308,6 @@ async fn p2p_bearer_claim_grants_membership_and_intent_end_to_end() -> Result<()
     Ok(())
 }
 
-/// Task C2 (#16): an invite token is single-use. The first join consuming its
-/// nonce succeeds and records it in the `ConsumedInviteNonce` ledger; a second
-/// join presenting the *same* token (same nonce) is rejected as a replay, even
-/// though it is still inside the freshness window. Mirrors the Lean
-/// `replay_rejected` theorem (the admit transition burns the nonce atomically).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -405,7 +392,6 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
     create_network(&home_a, "Replay Fleet")?;
     grant_member(&home_a, &agent_did_b)?;
 
-    // Mint exactly ONE invite from A for B's active membership grant.
     let invite_a = mint_network_control_invite_for(&home_a, &agent_did_b)?;
     let token_a = invite_a
         .get("token")
@@ -413,7 +399,6 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
         .ok_or_else(|| anyhow!("invite A missing token: {invite_a}"))?
         .to_string();
 
-    // First join consumes the nonce → succeeds.
     let join_one = run_cli_json(&home_b, &["p2p", "pairings", "join", &token_a])?;
     assert_eq!(
         join_one.get("status").and_then(Value::as_str),
@@ -425,8 +410,6 @@ async fn p2p_invite_is_single_use_replay_rejected() -> Result<()> {
         Some(peer_id_a)
     );
 
-    // Second join with the SAME token → rejected as a replay (nonce already
-    // consumed), despite still being inside the freshness window.
     let stderr = run_cli_failure_stderr(&home_b, &["p2p", "pairings", "join", &token_a])?;
     let lowered = stderr.to_lowercase();
     assert!(
@@ -479,9 +462,6 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
         row.get("agent_did").and_then(Value::as_str),
         Some("did:key:peer-one")
     );
-    // Scope is derived entirely from the default `conversation` template now
-    // that `--collection`/`--profile` are gone. The informational `collections`
-    // column reflects that template's set; `profiles` is no longer written.
     assert!(row
         .get("collections")
         .and_then(Value::as_array)
@@ -801,10 +781,6 @@ async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<(
         .ok_or_else(|| {
             anyhow!("Parent readiness JSON missing P2P listen address: {readiness_a}")
         })?;
-    // Pair child -> parent by writing PeerPairingDesired with `pairings set`.
-    // --peer is omitted to exercise peer-id derivation from the shareable
-    // --address. The command never mutates live P2P state; the runtime
-    // reconciler consumes the row on its sweep.
     let pair_b = run_cli_json(
         &home_b,
         &[
@@ -854,8 +830,6 @@ async fn p2p_pairings_set_writes_desired_row_for_runtime_reconcile() -> Result<(
         .is_some_and(|addresses| addresses
             .iter()
             .any(|address| address.as_str() == Some(peer_addr_a))));
-    // `--template` is the sole scope source now; the dead `profiles` column is
-    // never written (rendered `null`), so the parsed row carries no profiles.
     assert!(row
         .get("profiles")
         .and_then(Value::as_array)
@@ -1008,10 +982,6 @@ async fn p2p_invite_join_round_trips_pairing_rows() -> Result<()> {
         Some(agent_did_a.as_str())
     );
 
-    // The v5 invite seeds the narrow network-control substrate only. The
-    // full conversation data-plane flow (DataPlanePairingDesired rows and
-    // AgentRequest replication) is driven by the `gents demo` `pair`
-    // command.
     let applied_b =
         wait_for_pairing_applied(&graphql_b, peer_id_a, Duration::from_secs(90)).await?;
     assert!(

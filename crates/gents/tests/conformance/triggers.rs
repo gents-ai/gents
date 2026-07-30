@@ -72,13 +72,6 @@ use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
 
 const RUNTIME_SNAPSHOT_WAIT: Duration = Duration::from_secs(60);
 
-// -----------------------------------------------------------------------------
-// Shared DB helpers
-// -----------------------------------------------------------------------------
-
-/// Register the `WebhookEvent` source collection used by most cases. Indexed
-/// `kind` so operator-authored filters (`{ kind: { _eq: "…" } }`) pass the
-/// EventSource's limit-1 filter probe.
 async fn register_webhook_event_schema(node: &EmbeddedNode) {
     let sdl = r#"
         type WebhookEvent {
@@ -92,7 +85,6 @@ async fn register_webhook_event_schema(node: &EmbeddedNode) {
         .expect("add_schema for WebhookEvent");
 }
 
-/// Secondary source collection used by `subscription_reconciles_on_generation_bump`.
 async fn register_audit_event_schema(node: &EmbeddedNode) {
     let sdl = r#"
         type AuditEvent {
@@ -183,8 +175,6 @@ async fn update_event_trigger_source_collection(
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let escaped_new = escape_graphql_string(new_source_collection);
 
-    // Read the current `last_attempt_at` so we can restate it on the update
-    // if the runtime has already written to it (e.g., after a previous fire).
     let read_query = format!(
         r#"{{
             EventTrigger(
@@ -229,9 +219,6 @@ async fn update_event_trigger_source_collection(
     );
 }
 
-/// Insert a `WebhookEvent` document (dynamically-added collections expose
-/// `add_<Collection>` as their insertion alias on DefraDB). Returns the new
-/// `_docID`.
 async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
     write_dynamic_event(node, "WebhookEvent", external_id, kind).await
 }
@@ -394,9 +381,6 @@ async fn fetch_event_trigger_row(node: &EmbeddedNode, trigger_id: &str) -> Optio
     })
 }
 
-/// Mirrors `ProductionMaterializer::has_active_runtime_request_for_trigger`
-/// (the #605 shape: DID-scoped; expiry handling lives in the scheduling
-/// conformance mirror — callers here only assert same-agent gating).
 async fn has_active_runtime_request_for_trigger(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -433,7 +417,6 @@ async fn has_active_runtime_request_for_trigger(
         .unwrap_or(false)
 }
 
-/// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`.
 async fn supersede_active_runtime_requests_for_trigger(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -511,10 +494,6 @@ async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<(S
             )
         })
 }
-
-// -----------------------------------------------------------------------------
-// Booted-agent helpers (for engine-driven cases)
-// -----------------------------------------------------------------------------
 
 struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -607,9 +586,6 @@ where
     }
 }
 
-/// Poll for exactly `expected` AgentRequests carrying
-/// `(caused_by_trigger_id, caused_by_trigger_kind = "event")`, with a
-/// generous deadline. Fails with the current count when the deadline fires.
 async fn wait_for_request_count(
     node: &EmbeddedNode,
     trigger_id: &str,
@@ -632,10 +608,6 @@ async fn wait_for_request_count(
     }
 }
 
-/// Assert that NO AgentRequest materializes for `trigger_id` within `settle`.
-/// Used by the "does not fire" cases. This is necessarily a negative
-/// assertion with a timeout — the engine is event-driven, so we sleep long
-/// enough that if it *were* going to fire it would have done so already.
 async fn assert_no_request_within(node: &EmbeddedNode, trigger_id: &str, settle: Duration) {
     tokio::time::sleep(settle).await;
     let count = count_agent_requests_for_trigger(node, trigger_id, "event").await;
@@ -645,7 +617,6 @@ async fn assert_no_request_within(node: &EmbeddedNode, trigger_id: &str, settle:
     );
 }
 
-/// Poll the EventTrigger row until its `last_status` reaches `desired`.
 async fn wait_for_last_status(
     node: &EmbeddedNode,
     trigger_id: &str,
@@ -669,10 +640,6 @@ async fn wait_for_last_status(
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-
-// -----------------------------------------------------------------------------
-// Task 30 cases
-// -----------------------------------------------------------------------------
 
 #[path = "triggers_cases/concurrency_persistence.rs"]
 mod concurrency_persistence;

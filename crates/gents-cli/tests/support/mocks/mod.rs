@@ -9,7 +9,6 @@ pub use chat::MockChatEndpoint;
 pub use model::MockModelEndpoint;
 pub use openai::MockOpenAIEndpoint;
 
-// Re-export SSE helpers so callers that use `mocks::tool_call_sse` etc. continue to work.
 pub use fake_llm::{completion_text_sse, tool_call_sse, tool_call_sse_with_id};
 
 pub fn request_has_tool_result_message(request: &Value) -> bool {

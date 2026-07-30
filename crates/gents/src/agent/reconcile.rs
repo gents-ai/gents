@@ -215,9 +215,6 @@ where
     ) -> Result<()> {
         let mut next_slots = HashMap::new();
         let mut retired_slots = Vec::new();
-        // (behavior_id, recreated): retirement must release a never-started
-        // behavior from the startup barrier (superseded), and a recreated slot
-        // earns a fresh build budget (#559).
         let mut retired_behaviors: Vec<(String, bool)> = Vec::new();
 
         for (behavior_id, behavior) in &resolved_snapshot.behaviors {

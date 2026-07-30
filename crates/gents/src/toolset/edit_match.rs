@@ -12,14 +12,12 @@
 
 use std::fmt::Write as _;
 
-/// Ladder strategies, strictest first. Mirrors `EditMatch.Strategy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     Exact,
     TrailingWs,
     Trim,
     Unicode,
-    /// Opt-in regex mode: not a ladder rung, reported for metadata parity.
     Regex,
 }
 
@@ -35,8 +33,6 @@ impl Strategy {
     }
 }
 
-/// Convenience operations desugar onto replace before matching. Mirrors
-/// `EditMatch.insertAfter/insertBefore/deleteText`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
     Replace,
@@ -59,20 +55,13 @@ pub struct EditRequest<'a> {
     pub match_mode: MatchMode,
 }
 
-/// Diagnostics for a failed match: the closest window by similarity, used
-/// only in error text (never to apply).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosestMatch {
-    /// 1-based line of the closest window's first line.
     pub line: usize,
-    /// 0..=100.
     pub similarity_pct: u8,
-    /// First differing (pattern line, file line) pair.
     pub first_diff: Option<(String, String)>,
 }
 
-/// Preview of one occurrence for ambiguity errors: 1-based line + the line's
-/// text, truncated by the renderer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OccurrencePreview {
     pub line: usize,
@@ -85,9 +74,7 @@ pub enum EditOutcome {
         result: String,
         strategy: Strategy,
         replacements: usize,
-        /// 1-based first changed line in the result.
         first_changed_line: usize,
-        /// Numbered hunk diff for the model.
         diff: String,
     },
     NotFound {
@@ -106,9 +93,6 @@ pub enum EditOutcome {
     },
 }
 
-/// Detected line-ending flavor; matching always runs in LF space and the
-/// original flavor is restored on write. Mirrors the normalization boundary
-/// assumption in the Lean model (`Line` abstracts an LF-split line).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
     Lf,
@@ -121,7 +105,6 @@ pub struct NormalizedContent {
     pub had_bom: bool,
 }
 
-/// Strip BOM, detect dominant line ending, normalize to LF.
 pub fn normalize_content(raw: &str) -> NormalizedContent {
     let (had_bom, rest) = match raw.strip_prefix('\u{FEFF}') {
         Some(rest) => (true, rest),
@@ -141,7 +124,6 @@ pub fn normalize_content(raw: &str) -> NormalizedContent {
     }
 }
 
-/// Restore the original BOM/line-ending flavor for writing.
 pub fn restore_content(text: &str, ending: LineEnding, had_bom: bool) -> String {
     let body = match ending {
         LineEnding::Lf => text.to_string(),
@@ -154,9 +136,6 @@ pub fn restore_content(text: &str, ending: LineEnding, had_bom: bool) -> String 
     }
 }
 
-/// The single pure decision shared by dry-run and apply. Mirrors
-/// `EditMatch.decideMatched` (the #724 stale gate runs in the caller,
-/// before this, on raw bytes).
 pub fn decide(content: &str, req: &EditRequest<'_>) -> EditOutcome {
     if req.old_text.is_empty() {
         return EditOutcome::NotFound { closest: None };
@@ -176,9 +155,6 @@ pub fn decide(content: &str, req: &EditRequest<'_>) -> EditOutcome {
     }
 }
 
-/// Ladder-mode desugaring only: regex-mode operations are composed inside
-/// the replacer closure (template composition cannot express "the matched
-/// text" without corrupting user templates that end in `$`).
 fn desugar(req: &EditRequest<'_>) -> (String, String) {
     let old = req.old_text.to_string();
     match req.operation {
@@ -237,9 +213,6 @@ fn decide_regex(
             previews,
         };
     }
-    // One replacer for every operation: the user template expands with
-    // replace-mode semantics ($1, $$ for literal $), and inserts splice the
-    // ACTUAL matched text around the expansion.
     let render = |caps: &regex::Captures<'_>| -> String {
         let mut expanded = String::new();
         caps.expand(new_text, &mut expanded);
@@ -261,8 +234,6 @@ fn decide_ladder(
     replacement: &str,
     replace_all: bool,
 ) -> EditOutcome {
-    // Pass 1 — exact substring anywhere (current tool semantics, including
-    // mid-line boundaries). An exact hit is never shadowed (E1).
     let exact: Vec<usize> = content.match_indices(pattern).map(|(i, _)| i).collect();
     if !exact.is_empty() {
         if exact.len() > 1 && !replace_all {
@@ -296,10 +267,6 @@ fn decide_ladder(
     // the following line (drift must not decide newline preservation).
     let content_lines: Vec<&str> = content.split('\n').collect();
     let mut pattern_lines: Vec<&str> = pattern.split('\n').collect();
-    // Replacement handled in LINE space: "" splits to one empty line (an
-    // emptied line, matching the exact pass), and popping the consumed
-    // trailing newline pops a LINE — a newline-only replacement keeps its
-    // blank line instead of degrading to deletion.
     let mut replacement_lines: Vec<&str> = replacement.split('\n').collect();
     let mut merge_tail = false;
     if pattern_lines.len() > 1 && pattern_lines.last() == Some(&"") {
@@ -346,9 +313,6 @@ fn decide_ladder(
     }
 }
 
-/// Per-line key equality for a ladder strategy. Mirrors `EditMatch.keyAt`:
-/// coarser strategies project away more of the line, and each key refines
-/// the next (E3), so a strategy fires only when all stricter ones missed.
 fn line_matches(strategy: Strategy, file_line: &str, pattern_line: &str) -> bool {
     match strategy {
         Strategy::Exact | Strategy::Regex => file_line == pattern_line,
@@ -360,8 +324,6 @@ fn line_matches(strategy: Strategy, file_line: &str, pattern_line: &str) -> bool
     }
 }
 
-/// Map common typographic code points to ASCII (the Codex `seek_sequence`
-/// normalization set: dashes, curly quotes, exotic spaces).
 fn normalize_unicode(line: &str) -> String {
     line.chars()
         .map(|c| match c {
@@ -382,9 +344,6 @@ fn window_occurrences(
     if pattern_lines.is_empty() || pattern_lines.len() > content_lines.len() {
         return Vec::new();
     }
-    // Greedy non-overlapping selection (matching str::match_indices for the
-    // exact pass): overlapping windows would invalidate each other's line
-    // ranges during right-to-left splicing.
     let mut occurrences = Vec::new();
     let mut next_free = 0;
     for i in 0..=content_lines.len() - pattern_lines.len() {
@@ -403,9 +362,6 @@ fn window_occurrences(
     occurrences
 }
 
-/// Splice replacement lines over each matched window, re-indented to the
-/// matched site for indentation-insensitive strategies (Trim/Unicode).
-/// Mirrors `EditMatch.reindent`/`spliceAll` (right-to-left application).
 fn splice_windows(
     content_lines: &[&str],
     pattern_lines: &[&str],
@@ -423,9 +379,6 @@ fn splice_windows(
             pattern_lines.first().copied().unwrap_or(""),
         );
         let end = i + pattern_lines.len();
-        // The pattern consumed a trailing newline the replacement does not
-        // supply: join the replacement's last line with the following line,
-        // exactly as the exact-substring pass would have.
         if merge_tail && !repl_lines.is_empty() && end < lines.len() {
             let following = lines[end].clone();
             repl_lines
@@ -469,7 +422,6 @@ fn reindent_replacement(
     }
 }
 
-/// No-op honesty (E8) + diff/first-changed-line for the applied outcome.
 fn finish(original: &str, result: String, strategy: Strategy, replacements: usize) -> EditOutcome {
     if result == original {
         return EditOutcome::Noop { strategy };
@@ -490,8 +442,6 @@ fn finish(original: &str, result: String, strategy: Strategy, replacements: usiz
     }
 }
 
-/// Numbered hunk diff: common prefix/suffix elided, ±2 lines of context,
-/// old lines numbered against the original, new against the result.
 pub fn render_diff(original: &str, result: &str) -> String {
     const CONTEXT: usize = 2;
     let old: Vec<&str> = original.split('\n').collect();
@@ -531,7 +481,6 @@ pub fn render_diff(original: &str, result: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// Largest char boundary <= `index` (std's floor_char_boundary is unstable).
 fn floor_char_boundary(s: &str, mut index: usize) -> usize {
     while index > 0 && !s.is_char_boundary(index) {
         index -= 1;
@@ -548,7 +497,6 @@ fn line_at_offset(content: &str, offset: usize) -> &str {
     &content[start..end]
 }
 
-/// Levenshtein distance, two-row DP. Diagnostics only.
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -576,9 +524,6 @@ fn similarity(a: &str, b: &str) -> f64 {
     1.0 - levenshtein(a, b) as f64 / max as f64
 }
 
-/// Best window by average per-line similarity — DIAGNOSTICS ONLY. Bounded:
-/// scans at most `MAX_CLOSEST_WINDOWS` windows so a huge file cannot turn an
-/// error path into a walk.
 fn closest_match(content_lines: &[&str], pattern_lines: &[&str]) -> Option<ClosestMatch> {
     const MAX_CLOSEST_WINDOWS: usize = 20_000;
     if pattern_lines.is_empty() || content_lines.len() < pattern_lines.len() {

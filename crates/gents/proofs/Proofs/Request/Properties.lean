@@ -1,11 +1,5 @@
 import Proofs.Request.Executable
 
-/-!
-# Request Properties
-
-Local invariants of request transitions and coherent request contexts.
--/
-
 namespace RequestContext
 
 theorem terminal_implies_released_local
@@ -43,12 +37,6 @@ theorem terminal_implies_released_local
             cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent
             rfl
 
-/-- Fields that no `RequestContext.Transition` constructor rewrites.
-
-Every constructor is a pure `{ pre with ... }` update that only touches
-lifecycle/admission/clock/persistence progress fields. Identity-bearing and
-submitter-owned fields are therefore preserved uniformly. Proving them once
-avoids 11-arm `cases h_trans` copies whenever a constructor is added (#556). -/
 theorem identity_fields_preserved
     {pre post : RequestContext}
     (h_trans : Transition pre post) :
@@ -128,8 +116,6 @@ theorem claimed_coherent_cases
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
-/-- A Pending → Claimed transition is only legal while the submitter TTL is open.
-    This is the proof-side mirror of Rust checking `valid_until` before claim. -/
 theorem claim_requires_ttl_open
     {pre post : RequestContext}
     (h_trans : Transition pre post)
@@ -170,7 +156,6 @@ theorem claim_with_ttl_bounds_time
   unfold ttlOpen at h_open
   simpa [h_ttl] using h_open
 
-/-- Claim uses an explicit submitter request deadline when one is present. -/
 theorem claim_deadline_explicit
     {pre post : RequestContext}
     {t : Time}
@@ -202,7 +187,6 @@ theorem claim_deadline_explicit
   | interrupt_processing _ _ _ h_post =>
       simp [h_post] at h_claimed
 
-/-- Claim falls back to `currentTime + 1` when no submitter request deadline exists. -/
 theorem claim_deadline_default
     {pre post : RequestContext}
     (h_trans : Transition pre post)

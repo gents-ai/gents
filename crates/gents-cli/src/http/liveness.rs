@@ -246,8 +246,8 @@ mod tests {
     #[test]
     fn expired_processing_count_counts_requests_with_past_deadline() {
         let requests = vec![
-            request("req-expired", -120, -30), // claimed 2m ago, deadline 30s ago
-            request("req-fresh", -10, 60),     // claimed 10s ago, deadline 60s in future
+            request("req-expired", -120, -30),
+            request("req-fresh", -10, 60),
         ];
         let snapshot =
             compute_request_liveness_summary(now(), "did:test:local", requests, Vec::new());

@@ -1,18 +1,6 @@
 ---- MODULE SubagentCancelPropagation ----
 EXTENDS Naturals, FiniteSets, TLC
 
-(***************************************************************************)
-(* Cross-deployment subagent cascade-cancel propagation.                   *)
-(*                                                                         *)
-(* Spec design:                                                            *)
-(*   docs/superpowers/specs/2026-05-13-subagent-cancel-propagation-        *)
-(*   tla-design.md (removed from the tree; see git history)                *)
-(*                                                                         *)
-(* The local Lean bridge transition is abstracted as durable A-side        *)
-(* cancel intent. This module verifies delivery to the B-side child        *)
-(* request owner over a lossy, crash-prone request-response channel.       *)
-(***************************************************************************)
-
 CONSTANTS
   Deployment,
   ParentDeployment,
@@ -112,10 +100,6 @@ Init ==
   /\ dropCount           = 0
   /\ crashCount          = [deployment \in Deployment |-> 0]
 
-(***************************************************************************)
-(* Helpers.                                                                *)
-(***************************************************************************)
-
 AllRPCs ==
   messages
     \cup UNION { inFlight[deployment] : deployment \in Deployment }
@@ -128,10 +112,6 @@ PendingCancelFor(child) ==
   \E rpc \in inFlight[ParentDeployment] :
     /\ rpc.kind = "Cancel"
     /\ rpc.child = child
-
-(***************************************************************************)
-(* A-side durable cascade intent and retry emission.                       *)
-(***************************************************************************)
 
 InvokeBridgeCancelCascade(child) ==
   /\ child \in Child
@@ -186,10 +166,6 @@ EmitCancel(child) ==
        dropCount,
        crashCount
      >>
-
-(***************************************************************************)
-(* Cross-deployment channel interleavings.                                 *)
-(***************************************************************************)
 
 Deliver(rpc) ==
   /\ rpc \in messages
@@ -272,10 +248,6 @@ Crash(deployment) ==
        dropCount
      >>
 
-(***************************************************************************)
-(* B-side natural child terminal race.                                     *)
-(***************************************************************************)
-
 NaturalTerminalize(child, terminal) ==
   /\ child \in Child
   /\ terminal \in NaturalTerminal
@@ -297,10 +269,6 @@ NaturalTerminalize(child, terminal) ==
        dropCount,
        crashCount
      >>
-
-(***************************************************************************)
-(* B-side cancel handling and A-side ack receipt.                          *)
-(***************************************************************************)
 
 ProcessCancel(rpc) ==
   /\ rpc \in pendingInbound[ChildDeployment]
@@ -381,10 +349,6 @@ ReceiveAck(ack) ==
        crashCount
      >>
 
-(***************************************************************************)
-(* Safety invariants.                                                      *)
-(***************************************************************************)
-
 RPCIdsTracked ==
   \A rpc \in AllRPCs : rpc.id \in rpcIdsUsed
 
@@ -447,17 +411,6 @@ HandledCancelStable ==
       \/ /\ terminalSourceB[child] = "Natural"
          /\ childStateB[child] \in NaturalTerminal
 
-(***************************************************************************)
-(* State constraint for bounded liveness checking.                         *)
-(*                                                                         *)
-(* The real system has effectively unbounded RPC ids. TLC does not. This  *)
-(* constraint excludes only states where the finite id pool has been fully *)
-(* consumed before an unhandled child cancel can allocate the ack id used  *)
-(* by ProcessCancel. Once B has durably handled the cancel, the main #188  *)
-(* liveness target is satisfied even if later ack retirement runs out of   *)
-(* bounded ids.                                                            *)
-(***************************************************************************)
-
 StateBound ==
   \A child \in Child :
     ~cancelHandledB[child] => FreshIds(1)
@@ -473,10 +426,6 @@ Next ==
        NaturalTerminalize(child, terminal)
   \/ \E rpc \in inFlight[ParentDeployment] : Timeout(rpc)
   \/ \E deployment \in Deployment : Crash(deployment)
-
-(***************************************************************************)
-(* Fairness and liveness.                                                  *)
-(***************************************************************************)
 
 Fairness ==
   /\ \A child \in Child : WF_vars(EmitCancel(child))
@@ -497,17 +446,6 @@ LiveCancelInterruptsOrNaturalWins ==
     /\ childStateB[child] = "Running"
     ~> \/ childStateB[child] = "Interrupted"
        \/ terminalSourceB[child] = "Natural"
-
-(***************************************************************************)
-(* Documented but not enforced by the default TLC config.                  *)
-(*                                                                         *)
-(* Ack progress can fail in bounded-pool-exhausted states after B has      *)
-(* already durably handled the cancel but A has crashed or timed out away  *)
-(* the matching in-flight attempt. That is an RPCId-pool artifact, not the *)
-(* #188 delivery property. The enforced safety invariant remains           *)
-(* AckRequiresHandled: every ack that exists is backed by B durable         *)
-(* handling.                                                               *)
-(***************************************************************************)
 
 CancelAckProgress ==
   \A child \in Child :

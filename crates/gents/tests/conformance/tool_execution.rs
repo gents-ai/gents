@@ -1,11 +1,3 @@
-//! Bucket 3 conformance: runtime-on-Rust integration tests for
-//! ToolCallLifecycle. Exercises the real GraphQL mutations through a live
-//! EmbeddedNode and asserts persisted state matches the Lean spec.
-//!
-//! Each test spins up its own isolated EmbeddedNode via `test_db()`.
-//! `ToolCallState` is `pub(crate)` so the load-reconstruction test asserts
-//! via snapshot fields rather than the internal accessor.
-
 use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::test_db;
 use gents::tool_call_lifecycle::{CancelCause, FailureClass, ToolCallLifecycle};
@@ -15,10 +7,6 @@ use crate::lean_vocab_test::{lean_tool_preflight_case, lean_tool_retry_case};
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)
 }
-
-// ---------------------------------------------------------------------------
-// Test 1: Pending → Running → Completed persists correctly
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn lifecycle_pending_to_running_to_completed_persists_correctly() {
@@ -65,10 +53,6 @@ async fn lifecycle_pending_to_running_to_completed_persists_correctly() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Test 2: Running → Failed persists failure_class
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn lifecycle_running_to_failed_persists_failure_class() {
     let db = test_db("tc-lc-2").await;
@@ -104,10 +88,6 @@ async fn lifecycle_running_to_failed_persists_failure_class() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: Terminal irreversibility — fail() after complete() errors
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn lifecycle_terminal_irreversibility() {
     let db = test_db("tc-lc-3").await;
@@ -127,7 +107,6 @@ async fn lifecycle_terminal_irreversibility() {
     lc.start_running().await.unwrap();
     lc.complete("done").await.unwrap();
 
-    // Attempting fail() after complete must return an error.
     let err = lc
         .fail("late error", FailureClass::External)
         .await
@@ -138,10 +117,6 @@ async fn lifecycle_terminal_irreversibility() {
         "expected guard error, got: {msg}"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Test 4: Idempotent start_running — second call is a no-op, single DB row
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn lifecycle_idempotent_start_running() {
@@ -160,7 +135,6 @@ async fn lifecycle_idempotent_start_running() {
     );
 
     lc.start_running().await.unwrap();
-    // Second call should be a no-op (already Running).
     lc.start_running().await.unwrap();
 
     let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-4").await;
@@ -175,10 +149,6 @@ async fn lifecycle_idempotent_start_running() {
         "state should still be running"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Test 5: load() reconstructs persisted state
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn lifecycle_load_returns_persisted_state() {
@@ -200,14 +170,11 @@ async fn lifecycle_load_returns_persisted_state() {
         lc.fail("oops", FailureClass::Transport).await.unwrap();
     }
 
-    // Load from the live node — should reconstruct the Failed state.
     let loaded = ToolCallLifecycle::load(db.node.clone(), "test-session-5", "tool-call-5")
         .await
         .unwrap()
         .expect("row should exist after start_running + fail");
 
-    // Verify the reconstructed lifecycle reflects the failed state via snapshot.
-    // (ToolCallState is pub(crate) so we assert by querying the node directly.)
     drop(loaded);
 
     let snapshots = fetch_tool_call_snapshots_for_session(&db.node, "test-session-5").await;
@@ -366,9 +333,6 @@ async fn lifecycle_cancel_before_dispatch_persists_cancel_cause() {
     assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("interrupted"));
 }
 
-// --- Moved from tooling_slots_queue_command.rs (#446 mirror split): the
-// preflight/retry contract is ToolExecution's surface (MCP list/call retry
-// evidence + preflight gating).
 pub(super) fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
     let unreachable =
         lean_tool_preflight_case("preflight_unreachable_valid_blocks_serviceUnavailable");

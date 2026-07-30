@@ -117,9 +117,6 @@ fn launch_desktop() -> anyhow::Result<()> {
     let tauri_binary = resolve_tauri_binary()?;
     tracing::info!(path = %tauri_binary.display(), "launching tauri desktop shell");
 
-    // This check allows for a helpful error message to be shown to the user on the
-    // command line, as opposed to opening a blank Tauri window with a more generic
-    // "Connection refused" message.
     if is_debug_build(&tauri_binary) && !dev_server_reachable() {
         anyhow::bail!(
             "{} is a debug build, which loads its UI from the Vite dev server \
@@ -185,16 +182,12 @@ fn open_log_writer(path: &Path) -> anyhow::Result<std::fs::File> {
         .map_err(|error| anyhow::anyhow!("failed to open desktop log {}: {error}", path.display()))
 }
 
-/// True if `binary`'s path runs through a `debug` build directory (e.g.
-/// `target/debug/...`), the standard cargo layout for a non-release profile.
 fn is_debug_build(binary: &Path) -> bool {
     binary
         .components()
         .any(|component| component.as_os_str() == "debug")
 }
 
-/// True if something is listening on the Vite dev server port
-/// (`tauri.conf.json`'s `build.devUrl`, `http://localhost:1420`).
 fn dev_server_reachable() -> bool {
     TcpStream::connect_timeout(
         &"127.0.0.1:1420".parse().expect("valid socket address"),
@@ -267,13 +260,10 @@ fn init_tracing() {
         .with(env_filter)
         .with(
             tracing_subscriber::fmt::layer()
-                // Diagnostics go to stderr so stdout stays clean for `init --json`.
                 .with_writer(std::io::stderr)
                 .with_target(false)
                 .compact()
                 .without_time()
-                // Per-callsite log-rate ceiling: no code path may flood the
-                // host journal, however hot its failure loop (#588).
                 .with_filter(gents::log_rate::RateLimitFilter::new(
                     gents::log_rate::RateLimitConfig::default(),
                 )),

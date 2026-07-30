@@ -15,10 +15,6 @@ export type RequestTracePanelProps = {
   api?: DesktopApiAdapter;
 };
 
-/// Per-request event timeline reconstructed from persisted documents by the
-/// runtime's run_timeline machinery ("everything persisted can be projected
-/// back out"). Fetched on open/refresh — never on the poll tick: the fetch
-/// fans out into several GraphQL queries.
 export function RequestTracePanel({
   agentDid,
   rootRequestId,
@@ -28,8 +24,6 @@ export function RequestTracePanel({
   const [timeline, setTimeline] = useState<RequestTimelineView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A slow fetch (remote peer, up to 15s) must not clobber state after the
-  // panel has moved on to another request/agent.
   const generationRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -143,7 +137,6 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-/** Best-available instant per event kind; rows persist different clocks. */
 export function eventTimestamp(event: RunTimelineEventView): string | null {
   return (
     str(event.timestamp) ??
@@ -155,7 +148,6 @@ export function eventTimestamp(event: RunTimelineEventView): string | null {
   );
 }
 
-/** One honest line per event; the full payload lives in the disclosure. */
 export function eventSummary(event: RunTimelineEventView): string {
   switch (event.kind) {
     case "request":

@@ -1,10 +1,6 @@
 import Proofs.ManagedExec
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Managed Exec Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def managedExecStates : List ManagedExecState :=

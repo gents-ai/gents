@@ -1,9 +1,3 @@
-//! Typed bridge errors for the phase-3 plugin boundary.
-//!
-//! Commands expose the closed `BridgeErrorCode` taxonomy below. Legacy
-//! string-returning implementation seams are classified at the command
-//! boundary while new call sites construct codes directly.
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -56,7 +50,6 @@ impl BridgeErrorCode {
         }
     }
 
-    /// Whether the client may usefully retry without changing inputs.
     pub fn retryable(self) -> bool {
         matches!(
             self,
@@ -68,9 +61,6 @@ impl BridgeErrorCode {
         )
     }
 
-    /// Best-effort classification of today's stringly errors so phase 3 can
-    /// migrate call sites incrementally. Prefer constructing `BridgeError`
-    /// directly at new sites.
     pub fn classify_legacy_message(message: &str) -> Self {
         fn contains_pairing_word(message: &str) -> bool {
             message

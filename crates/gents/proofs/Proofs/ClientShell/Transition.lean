@@ -1,17 +1,5 @@
 import Proofs.ClientShell.Submission
 
-/-!
-# Client Shell Transition Function
-
-One-step shell state transitions and snapshot workflow advancement.
--/
-
-/-! ## Transition function -/
-
-/-- Session selection clears blockers and stale awaiting workflows. An
-    awaiting workflow for the same session remains meaningful; an
-    awaiting workflow for a different session belongs to the previous
-    view and must not gate the newly selected conversation. -/
 def workflowAfterSelectSession
     (sid : SessionId) : SubmissionWorkflow → SubmissionWorkflow
   | .blocked _        => .idle
@@ -19,11 +7,6 @@ def workflowAfterSelectSession
       if sid' = sid then .awaiting sid' req else .idle
   | w                 => w
 
-/-- The only way a snapshot may advance the workflow: an `awaiting sid
-    req` retires to `.idle` when the store carries an observation for
-    `sid` whose tip request is `req`. All other workflow states are
-    returned unchanged — snapshots do not advance `creating`,
-    `submitting`, `blocked`, or `idle`. -/
 def snapshotAdvanceWorkflow
     (w : SubmissionWorkflow) (store : LocalStore) : SubmissionWorkflow :=
   match w with
@@ -34,10 +17,6 @@ def snapshotAdvanceWorkflow
     | none     => w
   | w' => w'
 
-/-- One-step transition. `store` and `_transport` are the current
-    values at the time of the step; the shell only *reads* them to
-    validate user actions, and snapshot/transport inputs never mutate
-    `selection` (see C2, C3). -/
 def step
     (s : ShellState) (input : ShellInput)
     (store : LocalStore) (_transport : TransportHealth)
@@ -52,9 +31,6 @@ def step
           selection := { s.selection with peer := some p, agent := some a, session := none },
           workflow  := .idle }
   | .user (.selectSession sid) =>
-      -- latch unconditionally; any blocked state clears so the user
-      -- can navigate away from it; stale awaiting workflows from the
-      -- previous session also clear so they cannot gate the new view
       let cleared := workflowAfterSelectSession sid s.workflow
       { s with
           selection := { s.selection with session := some sid },

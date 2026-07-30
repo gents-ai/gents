@@ -26,12 +26,10 @@ pub mod types;
 pub use config::{
     AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, TracingConfig,
 };
-// Prefer `init_tracing(TracingConfig)` over the legacy DesktopPaths-inferred helper.
 pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_VERSION};
 pub use error::{BridgeError, BridgeErrorCode};
 pub use plugin::init;
 pub use runtime_setup::{init_tracing, install_runtime};
-// Note: logging::init_tracing() (no args) is legacy Gents-only path inference.
 pub use snapshot::projection::SnapshotGrants;
 pub use state::resolve_policy;
 

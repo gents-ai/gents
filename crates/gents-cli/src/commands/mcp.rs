@@ -30,8 +30,7 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
         anyhow::bail!("--timeout must be greater than zero");
     }
 
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let services = load_mcp_services(&access, target.service_id()).await?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
         anyhow::bail!(
@@ -43,9 +42,6 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    // The CLI has no persisted local-subnet source today; this matches the
-    // server's default health-check runtime options unless a future subnet
-    // option is added there too.
     let snapshots = probe_services(services, timeout, &local_hostname, None).await;
     let report = McpProbeReport {
         generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),

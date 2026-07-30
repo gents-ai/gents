@@ -1,20 +1,11 @@
 use super::*;
 
-/// Behavior ID that is listed as an allowed target but whose `AgentBehavior`
-/// document is never written to the DB. Simulates a behavior deleted after
-/// session start (Fix 2 / #377 orphan-on-deleted-behavior guard).
 const GHOST_BEHAVIOR_ID: &str = "r4-ghost-child";
 
-/// Set up a spawn fixture where `GHOST_BEHAVIOR_ID` is in the allowed-targets
-/// list but the corresponding `AgentBehavior` document does NOT exist in the
-/// DB. This is the scenario from Fix 2: a behavior that was present when the
-/// session started but was removed mid-session.
 async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     let db = test_db(test_name).await;
     let agent_did = format!("did:test:r4-{test_name}");
 
-    // Allow parent to spawn GHOST_BEHAVIOR_ID — but deliberately DO NOT
-    // upsert an AgentBehaviorDocument for GHOST_BEHAVIOR_ID.
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
@@ -33,7 +24,6 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     )
     .await
     .unwrap();
-    // Only the PARENT behavior is written — the ghost child is intentionally absent.
     upsert_agent_behavior(
         db.node.as_ref(),
         &AgentBehaviorDocument {
@@ -63,7 +53,7 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         db.node.clone(),
         &agent_did,
         PARENT_BEHAVIOR_ID,
-        PARENT_BEHAVIOR_ID, // source only needs to know the parent
+        PARENT_BEHAVIOR_ID,
     );
 
     let session_id = format!("{test_name}-session");
@@ -102,10 +92,6 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     }
 }
 
-/// Fix 2 (#377): When a LOCAL target's behavior no longer exists in the DB at
-/// spawn time (e.g. deleted mid-session), the spawn must be rejected cleanly
-/// with a `service_unavailable` payload instead of writing an orphan child
-/// `AgentRequest` that can never be claimed.
 #[tokio::test]
 async fn spawn_subagent_rejects_local_target_whose_behavior_was_deleted() {
     let fixture = setup_ghost_behavior_fixture("spawn_subagent_ghost_behavior").await;
@@ -147,7 +133,6 @@ async fn spawn_subagent_rejects_local_target_whose_behavior_was_deleted() {
         Some("serviceUnavailable"),
         "failure class must be serviceUnavailable"
     );
-    // Most importantly: no orphan child AgentRequest was written.
     assert!(
         child_request_for_tool(db.node.as_ref(), "internal-spawn-ghost")
             .await

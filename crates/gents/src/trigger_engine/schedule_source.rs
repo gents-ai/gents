@@ -1,9 +1,4 @@
 //! Schedule-backed `TriggerSource`.
-//!
-//! Polls the active runtime snapshot on a fixed tick for `Schedule` triggers
-//! whose `next_run_at` has elapsed and emits a `FireIntent` for the first due
-//! schedule. Subsequent due schedules are left for the next tick (one intent
-//! per tick keeps the source cooperative with the engine's fairness loop).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -21,11 +16,6 @@ use crate::document_config::{
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
-/// `TriggerSource` that drives the schedule clock.
-///
-/// Reads enabled schedules from the active runtime snapshot, ticks at
-/// `tick_every` (default: 1s), and yields a `FireIntent` whenever a schedule's
-/// `next_run_at` has passed. Honors `cancel` for graceful shutdown.
 pub(crate) struct ScheduleSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
@@ -34,7 +24,6 @@ pub(crate) struct ScheduleSource {
 }
 
 impl ScheduleSource {
-    /// Build a schedule source with the default 1s tick cadence.
     pub(crate) fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
@@ -68,23 +57,11 @@ impl TriggerSource for ScheduleSource {
             // as source exhaustion and breaks, so a premature `None` here
             // used to kill the schedule driver after the first idle tick.
             loop {
-                // Step 1: sleep one tick before scanning so the source doesn't
-                // spam-query immediately on construction. Honor the
-                // cancellation token at this tick boundary so a caller that
-                // drops or cancels the token gets a prompt `None` back
-                // instead of having to wait for the full tick to elapse.
                 tokio::select! {
                     _ = tokio::time::sleep(self.tick_every) => {}
                     _ = self.cancel.cancelled() => return None,
                 }
 
-                // Step 2: snapshot-read the active schedules. For each
-                // active schedule, if `next_run_at` is null the schedule was
-                // just created — apply-path writers (CLI, desktop) only
-                // touch apply-owned fields, so the runtime owns the first
-                // write of this runtime-owned field. Seed with `now` so the
-                // schedule fires on this same tick rather than sitting inert
-                // forever.
                 let snapshot = self.snapshot_rx.borrow().clone();
                 let now = Utc::now();
 
@@ -93,10 +70,6 @@ impl TriggerSource for ScheduleSource {
                     {
                         Ok(Some(s)) => s,
                         Ok(None) => {
-                            // Seed `next_run_at` on first-seen. Interval
-                            // schedules retain their existing immediate
-                            // first-fire behavior; cron schedules seed to
-                            // their next wall-clock match in their timezone.
                             let seeded_dt = match resolved.cadence.seed_next_run_at(now) {
                                 Ok(next) => next,
                                 Err(e) => {
@@ -159,15 +132,6 @@ impl TriggerSource for ScheduleSource {
                         continue;
                     }
 
-                    // Due. Build and return a FireIntent for this schedule.
-                    // Normalize RFC3339 output to `Z`-suffix with second
-                    // precision so the strings we write back round-trip
-                    // cleanly through DefraDB's DateTime scalar. The default
-                    // `to_rfc3339()` emits microsecond precision with a
-                    // `+00:00` offset, which DefraDB's schema validator
-                    // round-trips inconsistently across subsequent updates.
-                    // This matches the `normalize_optional_rfc3339` helper
-                    // already used elsewhere in the codebase.
                     let fired_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
                     let event_vars = serde_json::json!({
                         "fired_at": fired_at,
@@ -175,11 +139,6 @@ impl TriggerSource for ScheduleSource {
                         "trigger_kind": "schedule",
                     });
 
-                    // Precompute the advanced next_run_at using the DB-loaded
-                    // `parsed` (not `now + interval`) so schedules that got
-                    // behind still advance on a single-interval cadence. The
-                    // DB write itself happens in the `on_result` callback
-                    // below, off the engine's dispatch path.
                     let advanced_next_run_at = match resolved
                         .cadence
                         .advance_next_run_at(parsed, now)
@@ -198,11 +157,6 @@ impl TriggerSource for ScheduleSource {
                         advanced_next_run_at.to_rfc3339_opts(SecondsFormat::Secs, true);
                     let last_attempt_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
 
-                    // Values captured for the result-writeback closure. The
-                    // callback is synchronous (`FnOnce(FireResult)`), so it
-                    // spawns a background task that performs the DefraDB
-                    // mutation; the engine's dispatch loop continues without
-                    // waiting on bookkeeping I/O.
                     let node_for_callback = self.node.clone();
                     let schedule_id_for_callback = schedule_id.clone();
 
@@ -232,11 +186,6 @@ impl TriggerSource for ScheduleSource {
                                     }
                                 }
                                 FireResult::Skipped { .. } => ScheduleRuntimeUpdate {
-                                    // Skipped still advances `next_run_at` so
-                                    // a serial-gated fire doesn't hammer the
-                                    // clock every tick — the intent was that
-                                    // this tick "happened", just without
-                                    // materializing.
                                     next_run_at: Some(advanced_next_run_at_str.clone()),
                                     last_attempt_at: Some(last_attempt_at.clone()),
                                     last_status: Some("skipped".to_string()),
@@ -244,9 +193,6 @@ impl TriggerSource for ScheduleSource {
                                     fire_count_delta: None,
                                 },
                                 FireResult::Errored { error } => ScheduleRuntimeUpdate {
-                                    // Don't advance next_run_at on error so
-                                    // the next tick retries this fire; only
-                                    // record last_* bookkeeping.
                                     next_run_at: None,
                                     last_attempt_at: Some(last_attempt_at.clone()),
                                     last_status: Some("error".to_string()),
@@ -272,11 +218,6 @@ impl TriggerSource for ScheduleSource {
                         }),
                     });
                 }
-
-                // No schedule was due on this tick. Continue the outer loop
-                // (which will re-sleep or honor cancel) instead of returning
-                // `None` — `None` would tell the engine this source is dead
-                // and break it out of the dispatch loop forever.
             }
         })
     }

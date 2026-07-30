@@ -6,15 +6,6 @@ import Proofs.Recovery.Sweeps.BackgroundRestart
 import Proofs.Session.State
 import Proofs.ToolExecution.Executable
 
-/-!
-# R6 Tool Backgrounding Conformance Cases
-
-Finite witnesses for the Rust R6 implementation. These rows pin the operator
-allowlist budget, Tool-kind bridge terminal projection, restart recovery
-terminalization, and queue-source vocabulary during the Subagent→Background
-rename.
--/
-
 namespace Conformance.ContractCases
 
 def r6Case

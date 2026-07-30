@@ -36,7 +36,6 @@ export type InferenceSetupOptions = {
   onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
   /** Abort a ChatGPT sign-in whose browser was closed, so it does not hang. */
   onCancelCodexLogin?: () => Promise<unknown>;
-  /** Host adapter for the optional browser-login URL event. */
   onCodexLoginUrl?: (
     onUrl: (url: string | null) => void,
   ) => Promise<() => void>;
@@ -75,7 +74,6 @@ export function useInferenceSetup({
   const [codexAuthUrl, setCodexAuthUrl] = useState<string | null>(null);
   const [codexResult, setCodexResult] = useState<CodexLoginResult | null>(null);
 
-  // Best-effort first-run detection mirrors the CLI picker.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -91,7 +89,6 @@ export function useInferenceSetup({
             return;
           }
         } catch {
-          // Keep probing the next candidate.
         }
       }
       if (!cancelled) setDetection({ status: "none", url: "", models: [] });
@@ -107,7 +104,6 @@ export function useInferenceSetup({
   const cancelAndClose = useCallback(() => {
     if (signingIn) {
       void Promise.resolve(onCancelCodexLogin?.()).catch(() => {
-        // Best-effort for hosts without the optional cancel command.
       });
     }
     onClose();

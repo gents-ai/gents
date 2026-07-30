@@ -218,8 +218,6 @@ async fn drain_request_queue_after_interrupt(
         return;
     };
 
-    // #664: scope the drain to the interrupted request's own principal so a
-    // foreign-DID replica sharing this session is never drained locally.
     let Some(agent_did) = row
         .get("agent_did")
         .and_then(|value| value.as_str())
@@ -262,8 +260,6 @@ async fn drain_request_queue_after_interrupt(
     }
 }
 
-/// Read `interrupt_requested_at` for the given request. Returns `None` if the
-/// field is empty/unset or the request does not exist.
 pub async fn fetch_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
@@ -303,16 +299,11 @@ pub async fn fetch_interrupt_requested_at(
     Ok(value)
 }
 
-/// Signal sent from the per-request observer to the daemon when the request's
-/// `interrupt_requested_at` field flips from null to non-null.
 #[derive(Debug, Clone)]
 pub struct InterruptIntent {
-    /// RFC3339 timestamp the submitter wrote to `interrupt_requested_at`.
     pub at: DateTime<Utc>,
 }
 
-/// Interval between interrupt-field polls by the per-request observer.
-/// Short enough that "Esc feels instant" (2s), long enough to bound DB load.
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Spawn an observer task that polls `interrupt_requested_at` for a single
@@ -334,18 +325,11 @@ pub fn spawn_request_interrupt_observer(
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(OBSERVER_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // NOTE: `tokio::time::interval` fires the first tick immediately. We
-        // rely on that so the observer polls right after spawn and catches an
-        // interrupt that was latched before the daemon even saw the request —
-        // without this the first ~`OBSERVER_POLL_INTERVAL` of a request is a
-        // blind spot (short requests could finish inside that window and never
-        // observe the interrupt at all).
         loop {
             tokio::select! {
                 _ = shutdown.changed() => return,
                 _ = ticker.tick() => {}
             }
-            // Only signal once — if interrupt_tx.borrow() is already Some, exit.
             if interrupt_tx.borrow().is_some() {
                 return;
             }

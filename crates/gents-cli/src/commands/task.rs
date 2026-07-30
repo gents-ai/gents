@@ -24,12 +24,7 @@ pub(crate) async fn dispatch(command: TaskCommand) -> Result<()> {
 }
 
 pub(crate) async fn task_list(args: TaskListArgs) -> Result<()> {
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ false,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let inventory = load_task_inventory(&access, None).await?;
     let tasks = inventory.task_summaries();
     print_json(&json!({
@@ -45,12 +40,7 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
         args.task_id.as_deref(),
         args.task_id_flag.as_deref(),
     )?;
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ false,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let inventory = load_task_inventory(&access, Some(&task_id)).await?;
     let Some(task) = inventory.tasks.first() else {
         anyhow::bail!("no Task with task_id = {task_id}");

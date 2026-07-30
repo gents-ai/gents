@@ -23,7 +23,6 @@ export function OperationsApiProvider({
   );
 }
 
-/** Resolve an explicit adapter, the nearest provider, or the legacy default. */
 export function useOperationsApi(
   explicit?: DesktopApiAdapter,
 ): DesktopApiAdapter {

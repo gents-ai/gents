@@ -104,13 +104,11 @@ async fn set_tool_call_trace_fields(
 async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     let db = test_db("fork-happy-path-messages").await;
 
-    // Parent session with three user turns interleaved with assistant replies.
     let parent_session = "parent-session";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
-    // seq 1: user, seq 2: assistant, seq 3: user, seq 4: assistant, seq 5: user, seq 6: assistant
     create_agent_message(
         &db.node,
         parent_session,
@@ -166,7 +164,6 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     )
     .await;
 
-    // Fork before the 2nd user message (user-turn index 1).
     let outcome = fork(
         &db.node,
         ForkParams {
@@ -179,7 +176,6 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     .await
     .expect("fork succeeds");
 
-    // Prefix match: child has seq 1 and seq 2 (everything before seq 3, the 2nd user message).
     let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert_eq!(
         child_messages.len(),
@@ -199,11 +195,9 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     assert_eq!(child_messages[1].role, "assistant");
     assert_eq!(child_messages[1].content, "a1");
 
-    // Parent unchanged.
     let parent_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
     assert_eq!(parent_messages.len(), 6);
 
-    // Outcome counters.
     assert_eq!(outcome.copied_messages, 2);
 }
 
@@ -289,7 +283,6 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
     create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
-    // Turn 1: u @ seq 1 → a @ seq 2 → tool_call @ seq 3 → u @ seq 4 → a @ seq 5
     create_agent_message(
         &db.node,
         parent_session,
@@ -444,7 +437,6 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
         "2026-04-21T10:00:03Z",
     )
     .await;
-    // Two spills: one before u2 (created_at=10:00:02Z, should be copied), one after (10:00:04Z, should NOT).
     create_agent_tool_result(
         &db.node,
         parent_session,
@@ -464,7 +456,6 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     )
     .await;
 
-    // Fork before user-turn 1 (which is u2 at seq 2, ts=10:00:03Z). Cut_ts = 10:00:03Z.
     let outcome = fork(
         &db.node,
         ForkParams {
@@ -486,10 +477,6 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     );
     assert_eq!(child_results[0].output_text, "early");
     assert_eq!(child_results[0].session_id, outcome.session_id);
-    // Every persisted column is faithfully copied (not just output_text).
-    // The helper seeds truncated=false, truncation_metadata="", conversation_doc_id="" —
-    // assert those survive the copy so future refactors can't accidentally zero-out
-    // or mis-serialize any spill field.
     assert_eq!(child_results[0].agent_did, AGENT_DID);
     assert_eq!(child_results[0].tool_name, "read_file");
     assert_eq!(child_results[0].tool_input, "{}");
@@ -546,7 +533,6 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
     )
     .await;
 
-    // Fork before user-turn 1. Cut_ts = 10:00:03Z.
     let outcome = fork(
         &db.node,
         ForkParams {
@@ -563,7 +549,7 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
         fetch_compaction_entry_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert_eq!(child_compactions.len(), 1);
     assert_eq!(child_compactions[0].summary, "early summary");
-    assert_eq!(child_compactions[0].sequence, 1); // preserved from parent
+    assert_eq!(child_compactions[0].sequence, 1);
     assert_eq!(
         child_compactions[0].compaction_key,
         format!("{}:1", outcome.session_id)
@@ -712,7 +698,6 @@ async fn fork_rejects_source_with_non_terminal_request() {
     )
     .await;
 
-    // Create a non-terminal AgentRequest (status=pending, lifecycle_state=pending).
     create_request(
         &db.node,
         "req-pending",
@@ -786,7 +771,6 @@ async fn fork_accepts_behavior_swap_within_same_principal() {
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
-    // A second behavior owned by the same principal.
     create_agent_behavior(&db.node, "alt-behavior", AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -810,7 +794,6 @@ async fn fork_accepts_behavior_swap_within_same_principal() {
     .await
     .expect("fork with matching-principal behavior succeeds");
 
-    // Confirm the child's AgentConversation records the swapped behavior_id.
     let child_conv =
         crate::support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
             .await
@@ -883,7 +866,6 @@ async fn fork_rejects_out_of_range_user_turn() {
     )
     .await;
 
-    // Only 1 user message exists (index 0). Requesting index 5 is out of range.
     let err = fork(
         &db.node,
         ForkParams {
@@ -902,8 +884,6 @@ async fn fork_rejects_out_of_range_user_turn() {
         err
     );
 
-    // Also assert no orphan rows were created in ANY fork-touched collection:
-    // out-of-range must short-circuit before any write.
     for collection in [
         "AgentMessage",
         "AgentSession",
@@ -1089,10 +1069,6 @@ async fn fork_leaves_parent_byte_identical() {
     }
 
     let before_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
-    // Use the full-column snapshot here: fork's read-only-parent claim must hold
-    // across every AgentConversation field, not just the handful ConversationSnapshot
-    // exposes. Catches silent mutations on title, preview_text, agent_did, agent_name,
-    // created_at, updated_at if a future refactor adds parent-side writes.
     let before_conv =
         crate::support::snapshots::fetch_full_conversation_snapshot(&db.node, parent_session).await;
 
@@ -1199,8 +1175,8 @@ async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
         .expect("fork b succeeds");
 
     assert_ne!(outcome_a.session_id, outcome_b.session_id);
-    assert_eq!(outcome_a.copied_messages, 0); // cut before the 1st user message
-    assert_eq!(outcome_b.copied_messages, 2); // u1 + a1
+    assert_eq!(outcome_a.copied_messages, 0);
+    assert_eq!(outcome_b.copied_messages, 2);
 }
 
 #[tokio::test]
@@ -1263,20 +1239,10 @@ async fn fork_rejects_unknown_target_behavior() {
     );
 }
 
-/// Fork-of-fork: the spec requires that ancestry can be walked one link at a
-/// time via `forked_from_session_id`, and that each child is independent of
-/// deeper ancestors. This test covers the two-generation case:
-///   grandparent -> (fork @ turn 1) -> child -> (fork @ turn 1) -> grandchild
-/// Grandchild must:
-///   - exist as a regular session (messages, conversation present)
-///   - record `forked_from_session_id == child`, NOT `grandparent`
-///   - copy exactly the prefix of child (which itself already contains only
-///     grandparent's prefix plus child's post-fork messages)
 #[tokio::test]
 async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     let db = test_db("fork-of-fork").await;
 
-    // --- Generation 0: grandparent ---
     let grandparent_session = "grandparent";
     create_agent_session(
         &db.node,
@@ -1294,7 +1260,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     .await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
-    // seq 1: user, 2: assistant, 3: user, 4: assistant
     create_agent_message(
         &db.node,
         grandparent_session,
@@ -1332,9 +1297,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     )
     .await;
 
-    // --- Generation 1: child = fork(grandparent, user_turn=1) ---
-    // Cut is before grandparent's 2nd user message (seq 3), so child inherits
-    // seq 1 (gp_u1) and seq 2 (gp_a1).
     let child_outcome = fork(
         &db.node,
         ForkParams {
@@ -1348,7 +1310,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     .expect("child fork succeeds");
     assert_eq!(child_outcome.copied_messages, 2);
 
-    // Child extends history with its own post-fork turn.
     create_agent_message(
         &db.node,
         &child_outcome.session_id,
@@ -1368,11 +1329,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     )
     .await;
 
-    // --- Generation 2: grandchild = fork(child, user_turn=1) ---
-    // Child's user messages are: gp_u1 at seq 1, child_u2 at seq 3. So
-    // user_turn=1 cuts before child_u2 (seq 3) and grandchild copies
-    // seq 1 (gp_u1) + seq 2 (gp_a1). This matches what the grandparent fork
-    // produced — fork-of-fork is consistent.
     let grandchild_outcome = fork(
         &db.node,
         ForkParams {
@@ -1389,7 +1345,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
         "grandchild inherits child's prefix (which is grandparent's prefix)"
     );
 
-    // Provenance: grandchild's forked_from points to CHILD, not grandparent.
     let grandchild_conv = crate::support::snapshots::fetch_conversation_snapshot(
         &db.node,
         &grandchild_outcome.session_id,
@@ -1403,14 +1358,11 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     );
     assert_eq!(grandchild_conv.fork_at_user_turn, Some(1));
 
-    // Verify the copied messages match the child's prefix (content carries
-    // grandparent's labels because they were copied verbatim at generation 1).
     let grandchild_messages =
         fetch_message_snapshots_for_session(&db.node, &grandchild_outcome.session_id).await;
     assert_eq!(grandchild_messages.len(), 2);
     assert_eq!(grandchild_messages[0].content, "gp_u1");
     assert_eq!(grandchild_messages[1].content, "gp_a1");
-    // And grandchild's message_keys are remapped to its own session_id.
     assert_eq!(
         grandchild_messages[0].session_id,
         grandchild_outcome.session_id
@@ -1420,7 +1372,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
         format!("{}:1", grandchild_outcome.session_id)
     );
 
-    // Child's rows must not appear in grandchild's query, and vice-versa.
     assert!(!grandchild_messages
         .iter()
         .any(|m| m.session_id == child_outcome.session_id));

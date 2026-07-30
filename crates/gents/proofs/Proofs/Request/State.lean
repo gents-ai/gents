@@ -3,16 +3,6 @@ import Proofs.Persistence
 import Proofs.Scheduling
 import Proofs.ToolExecution.State
 
-/-!
-# Request State
-
-State vocabulary and per-request context shared by the relational and executable
-request semantics. The persisted vocabulary includes `inputRequired` for
-protocol compatibility, but the current core transition machine treats it as a
-reserved non-terminal state rather than a state Rust emits today.
--/
-
-/-- The 9 persisted states of the request lifecycle. -/
 inductive RequestState where
   | pending
   | claimed
@@ -27,7 +17,6 @@ inductive RequestState where
 
 namespace RequestState
 
-/-- String vocabulary persisted in `AgentRequest.lifecycle_state`. -/
 def toDefraDB : RequestState → String
   | .pending => "pending"
   | .claimed => "claimed"
@@ -39,7 +28,6 @@ def toDefraDB : RequestState → String
   | .dead => "dead"
   | .interrupted => "interrupted"
 
-/-- Parse the persisted `AgentRequest.lifecycle_state` vocabulary. -/
 def fromDefraDB? : String → Option RequestState
   | "pending" => some .pending
   | "claimed" => some .claimed
@@ -105,15 +93,12 @@ instance : HasTerminal RequestState where
 
 end RequestState
 
-/-- Mutable per-request context that transitions carry along. -/
 structure RequestContext where
   state        : RequestState
   origin       : ExecutionOrigin
   backend      : BackendId
   admission    : AdmissionState
-  /-- Effective runtime deadline used after claim. -/
   deadline     : Time
-  /-- Submitter-provided claim deadline. `none` falls back to the runtime default. -/
   requestDeadline : Option Time := none
   claimTime    : Time
   currentTime  : Time
@@ -123,11 +108,8 @@ structure RequestContext where
   messageSeq   : Nat
   isLatest     : Bool
   persistence  : PersistenceState
-  /-- Submitter-set interrupt timestamp; runtime-read-only. `none` means no interrupt requested. -/
   interruptRequestedAt : Option Time := none
-  /-- Submitter-set TTL deadline; runtime-read-only. `none` means no TTL set. -/
   validUntil           : Option Time := none
-  -- Subagent lineage / depth bound:
   subagentDepth                : Nat := 0
   causedByParentRequestId      : Option RequestId := none
   causedByParentToolCallId     : Option ToolExecution.ToolCallId := none
@@ -135,7 +117,6 @@ structure RequestContext where
 
 namespace RequestContext
 
-/-- Coherence relation between lifecycle state and admission state. -/
 def coherentStateAdmission : RequestState → AdmissionState → Prop
   | .pending, a => a = .released
   | .claimed, a => a = .waiting ∨ a = .acquired
@@ -150,7 +131,6 @@ def coherentStateAdmission : RequestState → AdmissionState → Prop
 instance (s : RequestState) (a : AdmissionState) : Decidable (coherentStateAdmission s a) := by
   cases s <;> unfold coherentStateAdmission <;> infer_instance
 
-/-- State/admission coherence for a concrete request context. -/
 def coherent (r : RequestContext) : Prop :=
   coherentStateAdmission r.state r.admission
 
@@ -158,19 +138,15 @@ instance (r : RequestContext) : Decidable r.coherent := by
   unfold coherent
   infer_instance
 
-/-- Whether the deadline has been exceeded. -/
 def deadlineExceeded (r : RequestContext) : Prop :=
   r.currentTime > r.deadline
 
 instance (r : RequestContext) : Decidable r.deadlineExceeded :=
   Nat.decLt r.deadline r.currentTime
 
-/-- Deadline assigned at claim time: explicit submitter deadline if present,
-    otherwise the runtime default one tick after the current time. -/
 def claimDeadline (r : RequestContext) : Time :=
   r.requestDeadline.getD (r.currentTime + 1)
 
-/-- Submitter TTL is open exactly when no TTL exists or current time is at/before it. -/
 def ttlOpen (r : RequestContext) : Prop :=
   match r.validUntil with
   | none => True
@@ -180,14 +156,12 @@ instance (r : RequestContext) : Decidable r.ttlOpen := by
   unfold ttlOpen
   cases r.validUntil <;> infer_instance
 
-/-- Whether retries are exhausted. -/
 def retriesExhausted (r : RequestContext) : Prop :=
   r.retryCount ≥ r.maxRetries
 
 instance (r : RequestContext) : Decidable r.retriesExhausted :=
   Nat.decLe r.maxRetries r.retryCount
 
-/-- Project any terminal transition into a released admission state. -/
 def releaseToTerminal (r : RequestContext) (terminal : RequestState) : RequestContext :=
   match terminal with
   | .completed => { r with state := .completed, admission := .released, persistence := .committed }
@@ -226,6 +200,5 @@ theorem releaseToTerminal_backend
     (r : RequestContext) (terminal : RequestState) :
     (releaseToTerminal r terminal).backend = r.backend := by
   cases terminal <;> simp [releaseToTerminal]
-
 
 end RequestContext

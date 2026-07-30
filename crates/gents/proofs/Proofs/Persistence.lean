@@ -1,14 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Layer 3: Persistence Lifecycle
-
-Models the committed/uncommitted boundary for agent output.
-Every piece of output (tokens, tool calls, compaction entries)
-has a persistence state independent of the request lifecycle.
--/
-
-/-- The 4 persistence states. -/
 inductive PersistenceState where
   | uncommitted
   | committing
@@ -18,14 +9,12 @@ inductive PersistenceState where
 
 namespace PersistenceState
 
-/-- String vocabulary for the persistence lifecycle contract. -/
 def toDefraDB : PersistenceState → String
   | .uncommitted => "uncommitted"
   | .committing => "committing"
   | .committed => "committed"
   | .lost => "lost"
 
-/-- Parse the persistence lifecycle contract vocabulary. -/
 def fromDefraDB? : String → Option PersistenceState
   | "uncommitted" => some .uncommitted
   | "committing" => some .committing
@@ -46,7 +35,6 @@ instance : HasTerminal PersistenceState where
     | .uncommitted => isFalse (by intro h; cases h with | inl h => exact absurd h (by decide) | inr h => exact absurd h (by decide))
     | .committing => isFalse (by intro h; cases h with | inl h => exact absurd h (by decide) | inr h => exact absurd h (by decide))
 
-/-- Failure policy determines behavior on write failure. -/
 inductive FailurePolicy where
   | failOpen
   | failClosed
@@ -54,12 +42,10 @@ inductive FailurePolicy where
 
 namespace FailurePolicy
 
-/-- String vocabulary for persistence failure-policy contracts. -/
 def toDefraDB : FailurePolicy → String
   | .failOpen => "failOpen"
   | .failClosed => "failClosed"
 
-/-- Parse the persistence failure-policy contract vocabulary. -/
 def fromDefraDB? : String → Option FailurePolicy
   | "failOpen" => some .failOpen
   | "failClosed" => some .failClosed
@@ -71,28 +57,21 @@ theorem fromDefraDB_toDefraDB (policy : FailurePolicy) :
 
 end FailurePolicy
 
-/-- Persistence transitions parameterized by failure policy. -/
 inductive Transition (policy : FailurePolicy) :
     PersistenceState → PersistenceState → Prop where
-  /-- Begin flushing buffered data. -/
   | flush :
       Transition policy .uncommitted .committing
-  /-- Write succeeds — data is durable. -/
   | write_success :
       Transition policy .committing .committed
-  /-- Write fails under FailClosed — return to uncommitted for retry. -/
   | write_fail_closed :
       policy = .failClosed →
       Transition policy .committing .uncommitted
-  /-- Write fails under FailOpen — data acknowledged lost. -/
   | write_fail_open :
       policy = .failOpen →
       Transition policy .committing .lost
-  /-- New data arrives while uncommitted — stays uncommitted. -/
   | accumulate :
       Transition policy .uncommitted .uncommitted
 
-/-- Executable persistence actions mirroring `Transition`. -/
 inductive Action where
   | flush
   | writeSuccess
@@ -100,7 +79,6 @@ inductive Action where
   | accumulate
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the persistence layer. -/
 def step? (policy : FailurePolicy) (pre : PersistenceState) : Action → Option PersistenceState
   | .flush =>
       if pre = .uncommitted then some .committing else none
@@ -117,14 +95,12 @@ def step? (policy : FailurePolicy) (pre : PersistenceState) : Action → Option 
   | .accumulate =>
       if pre = .uncommitted then some .uncommitted else none
 
-/-- A trace is a sequence of valid persistence transitions. -/
 inductive Trace (policy : FailurePolicy) :
     PersistenceState → PersistenceState → Prop where
   | refl {s : PersistenceState} : Trace policy s s
   | step {s₁ s₂ s₃ : PersistenceState} :
       Transition policy s₁ s₂ → Trace policy s₂ s₃ → Trace policy s₁ s₃
 
-/-- Replay a finite action list through the executable persistence semantics. -/
 def replay? (policy : FailurePolicy) :
     PersistenceState → List Action → Option PersistenceState
   | s, [] => some s

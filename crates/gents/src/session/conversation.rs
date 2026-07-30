@@ -8,12 +8,6 @@ pub(crate) const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 pub(crate) const CONVERSATION_TITLE_SOURCE_TASK: &str = "task";
 
-/// The mutable payload of an `AgentConversation` doc.
-///
-/// `session_id`, `agent_did`, and `requester_did` are create-only:
-/// `agent_did` is the immutable replication scope key, `requester_did` is the
-/// immutable return route, and `session_id` is the doc's identity. None appears
-/// in an update.
 struct ConversationFields<'a> {
     session_id: &'a str,
     agent_name: &'a str,
@@ -259,8 +253,6 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
-    // Addressed by the canonical doc's `_docID`, not by a `session_id` filter:
-    // a filtered update writes EVERY duplicate on an affected store (#693).
     let escaped_doc_id = escape_graphql_string(&existing.doc_id);
     let mutation = format!(
         r#"mutation {{
@@ -333,7 +325,6 @@ pub(crate) async fn update_conversation_title_with_source(
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id =
         escape_graphql_string(existing.behavior_id.as_deref().unwrap_or_default());
-    // Canonical doc only: a `session_id` filter titles every duplicate (#693).
     let escaped_doc_id = escape_graphql_string(&existing.doc_id);
 
     let mutation = format!(

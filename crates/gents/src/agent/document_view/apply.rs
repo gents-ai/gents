@@ -84,9 +84,6 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::PendingVisibility);
     }
 
-    // Skills are agent_did-scoped and composed into a behavior's prompt at
-    // resolve time; any create/update/delete must drive a snapshot reload so a
-    // running agent picks up the change without a restart.
     if let Some((loaded_doc_id, skill)) = load_skill_by_doc_id(node, doc_id).await? {
         if skill.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);
@@ -102,8 +99,6 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
     if view.has_skill_doc_id(doc_id) {
-        // Skill was deleted -- drop it so the next resolve recomputes effective
-        // skill sets without it.
         view.remove_skill_by_doc_id(doc_id);
         return Ok(ControlUpdateOutcome::Applied);
     }
@@ -146,9 +141,6 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::PendingVisibility);
     }
 
-    // Task documents are globally addressed (no `agent_did` on the schema);
-    // scheduling uses the document's `task_id` to find the hosting behavior,
-    // so any Task create/update is potentially relevant to this agent.
     if let Some((loaded_doc_id, task)) = load_task_by_doc_id(node, doc_id).await? {
         if task.task_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
@@ -164,15 +156,10 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
     if view.has_task_doc_id(doc_id) {
-        // Task was deleted -- drop it from the view so the next resolve sees
-        // the reduced set and bumps the snapshot generation accordingly.
         view.remove_task_by_doc_id(doc_id);
         return Ok(ControlUpdateOutcome::Applied);
     }
 
-    // Schedules, like tasks, are globally addressed; any Schedule create/update
-    // needs to drive a snapshot reload so the runtime's `active_schedules` can
-    // pick up the change.
     if let Some((loaded_doc_id, schedule)) = load_schedule_by_doc_id(node, doc_id).await? {
         if schedule.schedule_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
@@ -192,9 +179,6 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
 
-    // EventTriggers, like schedules and tasks, are globally addressed; any
-    // EventTrigger create/update needs to drive a snapshot reload so the
-    // runtime's `active_event_triggers` can pick up the change.
     if let Some((loaded_doc_id, trigger)) = load_event_trigger_by_doc_id(node, doc_id).await? {
         if trigger.trigger_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
@@ -214,9 +198,6 @@ pub(crate) async fn apply_control_update(
         return Ok(ControlUpdateOutcome::Applied);
     }
 
-    // OAuthCredential create/update/disable changes which credential-backed behaviors can run, so a
-    // runtime `codex-login` (or a disable) must drive a reconcile: it flips a ChatGptCodex behavior
-    // between runnable and unavailable (see snapshot availability gating).
     if let Some(credential) =
         crate::chatgpt_codex::lookup_oauth_credential_by_doc_id(node, doc_id).await?
     {

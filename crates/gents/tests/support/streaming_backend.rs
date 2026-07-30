@@ -195,8 +195,6 @@ impl MockStreamingBackend {
 
 impl Drop for MockStreamingBackend {
     fn drop(&mut self) {
-        // Wake any paused stream so in-flight SSE responses can finish, then
-        // stop the server.
         self.stop.store(true, Ordering::Relaxed);
         self.state.notify.notify_waiters();
         if let Some(shutdown) = self.shutdown.take() {
@@ -354,7 +352,6 @@ async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> 
         };
     }
 
-    // Non-streaming completion (title generation and similar).
     let completion = json!({
         "id": "chatcmpl-title",
         "object": "chat.completion",
@@ -393,10 +390,6 @@ async fn handle_fallback() -> Response {
         .into_response()
 }
 
-/// Drive one scripted SSE response. Mirrors the previous hand-rolled byte
-/// output: one `data: {chunk}` event per scripted chunk, an optional pause
-/// until `release(marker)` (or shutdown), a terminal usage event, and
-/// `data: [DONE]`.
 fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Response {
     #[derive(Clone, Copy)]
     enum Phase {

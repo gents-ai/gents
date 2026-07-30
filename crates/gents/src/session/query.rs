@@ -130,7 +130,6 @@ pub(super) async fn load_conversation_documents_ranked(
         None => Vec::new(),
     };
 
-    // Descending by rank: the canonical doc is first.
     rows.sort_by(|left, right| conversation_rank(right).cmp(&conversation_rank(left)));
     Ok(rows)
 }
@@ -150,7 +149,6 @@ fn conversation_rank(doc: &ConversationDocument) -> (String, usize, String) {
     (doc.updated_at.clone(), richness, doc.doc_id.clone())
 }
 
-/// The canonical conversation doc for a session, if any.
 pub(super) async fn load_conversation_document(
     node: &EmbeddedNode,
     session_id: &str,

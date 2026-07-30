@@ -12,12 +12,6 @@ import Proofs.Conformance.Contracts.Machines.Subagent
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.CompletionRetry.Contracts
 
-/-!
-# Conformance Machine Catalog
-
-Aggregate vocabulary and state-machine lists consumed by the JSON snapshot.
--/
-
 namespace Conformance.Contracts
 
 def vocabularies : List VocabularyContract :=

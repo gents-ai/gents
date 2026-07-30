@@ -1,4 +1,3 @@
-// Soft-cap justified: 9 init scenarios share setup; splitting would fragment the init story across binaries.
 mod support;
 use support::*;
 

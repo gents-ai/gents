@@ -6,7 +6,6 @@ import { loadTheme } from "../src/lib/theme";
 
 describe("ThemeToggle", () => {
   beforeEach(() => {
-    // Hermetic storage: the environment's localStorage is not reliable here.
     const store = new Map<string, string>();
     Object.defineProperty(window, "localStorage", {
       configurable: true,

@@ -10,9 +10,6 @@ use crate::cli::args::CodexLoginArgs;
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_agent_did, resolve_config_access};
 
-/// Inputs to a single ChatGPT/Codex OAuth login, independent of how the caller
-/// obtained the target node. Shared by the `codex-login` command and `init`'s
-/// inline first-login.
 pub(crate) struct CodexLoginOptions {
     pub(crate) provider: String,
     pub(crate) client_id: Option<String>,
@@ -20,7 +17,6 @@ pub(crate) struct CodexLoginOptions {
     pub(crate) device_auth: bool,
 }
 
-/// The persisted result of a successful login.
 pub(crate) struct CodexLoginOutcome {
     pub(crate) doc_id: String,
     pub(crate) credential: gents::chatgpt_codex::OAuthCredential,
@@ -28,7 +24,7 @@ pub(crate) struct CodexLoginOutcome {
 
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let outcome = run_codex_login(
         &access,
@@ -45,10 +41,6 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     Ok(())
 }
 
-/// Drive the ChatGPT OAuth flow and upsert the resulting `OAuthCredential`
-/// through `access`. Emits the sign-in prompt to stderr but never prints the
-/// result — the caller owns output so `init` can fold it into its single JSON
-/// object.
 pub(crate) async fn run_codex_login(
     access: &ConfigAccess,
     agent_did: &str,
@@ -80,8 +72,6 @@ pub(crate) async fn run_codex_login(
             .context("ChatGPT device-code login failed")?;
     } else {
         let server = run_login_server(server_opts).context("starting ChatGPT login server")?;
-        // Human prompt goes to stderr so stdout stays reserved for the caller's
-        // machine-readable JSON.
         eprintln!(
             "Open this URL to sign in with ChatGPT:\n{}",
             server.auth_url
@@ -94,9 +84,9 @@ pub(crate) async fn run_codex_login(
 
     let manager = AuthManager::new(
         synthetic_home,
-        /*enable_codex_api_key_env*/ false,
+        false,
         AuthCredentialsStoreMode::Ephemeral,
-        /*chatgpt_base_url*/ None,
+        None,
     )
     .await;
     let auth = manager
@@ -125,8 +115,6 @@ pub(crate) async fn run_codex_login(
     Ok(CodexLoginOutcome { doc_id, credential })
 }
 
-/// The redacted JSON view of a login result, shared by the standalone command
-/// and `init`'s folded output.
 pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
     let credential = &outcome.credential;
     json!({

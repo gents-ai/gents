@@ -14,13 +14,6 @@ use gents::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-/// Guard that cancels and joins a standalone `SubagentSource` task on drop.
-///
-/// After the spawn convergence (#377) the child `AgentRequest` is materialized
-/// by `SubagentSource`, not synchronously by the hook. Hook-driven integration
-/// tests (`r4_subagent_tools`, `r4c_*`) start one of these so that
-/// `on_tool_call("spawn_subagent")` produces a child without booting the full
-/// request daemon (which would also claim/process the child).
 pub struct SubagentSourceGuard {
     cancel: CancellationToken,
     handle: Option<tokio::task::JoinHandle<()>>,
@@ -36,10 +29,6 @@ impl Drop for SubagentSourceGuard {
     }
 }
 
-/// Spawn a standalone `SubagentSource` against `node` whose snapshot treats
-/// `child_behavior_id` as a locally runnable target owned by `agent_did`. The
-/// source materializes child `AgentRequest`s from `AgentToolCall` bridge rows;
-/// everything else (parent authorization, dedup) runs against the live node.
 pub fn spawn_subagent_source(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
@@ -55,10 +44,6 @@ pub fn spawn_subagent_source(
     )
 }
 
-/// Like [`spawn_subagent_source`] but lets the caller seed the snapshot's
-/// `paired_peer_dids` set. A bridge whose parent `agent_did` is in this set
-/// drives the trusted-paired-peer (cross-deployment receiver) branch in
-/// `SubagentSource`. Used by the #377 receiver-gate tests.
 pub fn spawn_subagent_source_with_paired_peers(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
@@ -165,11 +150,6 @@ pub fn test_behavior(
     }
 }
 
-/// Construct a test-only `AgentBehavior` that shares the provided
-/// `Arc<AgentPrincipal>`. Use this in tests that build multiple
-/// behaviors on a single snapshot — passing the same principal Arc
-/// to each call preserves the single-principal-per-snapshot
-/// invariant.
 pub fn test_behavior_for_principal(
     behavior_id: impl Into<String>,
     principal: Arc<AgentPrincipal>,

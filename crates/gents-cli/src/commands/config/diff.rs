@@ -8,8 +8,7 @@ use crate::print_json;
 use crate::{build_desired_state_live_bundle, live_manifest_from_bundle, resolve_config_access};
 
 pub(super) async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
         home: args.home.as_deref(),
@@ -31,11 +30,6 @@ pub(crate) async fn diff_bound_desired_manifest(
     bound: &super::binding::BoundDesiredManifest,
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
-    // Diff remains an observability command even when the desired state cannot
-    // currently be applied. Pairing ownership collisions are included in the
-    // structured report; apply still rejects them before opening a transaction.
-    // Other live validation (such as EventTrigger schema probes) remains an
-    // apply-time concern and must not hide the diff that helps diagnose it.
     let live_validation_errors =
         desired_state::validate::validate_peer_pairing_ownership_against_live(
             desired_manifest,

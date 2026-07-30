@@ -22,11 +22,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
-/// One row of the fleet-discovery directory: a principal's identity,
-/// available behaviors, and last-known runtime state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
-    /// Durable DefraDB identity for the `(source_did, agent_did)` partition.
     pub directory_key: String,
     pub agent_did: String,
     pub source_did: String,
@@ -45,17 +42,9 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    /// Live `AgentPrincipal` rows, as (agent_did, display_name).
     async fn load_principals(&self) -> Result<Vec<(String, String)>>;
-    /// Behavior display names for each principal, keyed by agent_did.
     async fn load_behavior_names(&self) -> Result<BTreeMap<String, Vec<String>>>;
-    /// Runtime (process_state, updated_at) for each principal, keyed by
-    /// agent_did. `updated_at` here is `AgentRuntime.updated_at` — NOT
-    /// wall-clock — so the settled check stays a pure function of source
-    /// rows.
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
-    /// Directory rows owned by `source_did`. Foreign replicated rows are
-    /// deliberately outside this projector's state partition.
     async fn list_directory_entries(
         &self,
         source_did: &str,
@@ -64,12 +53,6 @@ pub trait DirectoryStore: Send + Sync {
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()>;
 }
 
-/// Deterministic persisted identity for one source-owned directory row.
-///
-/// DefraDB supports unique indexes only on one field, so `agent_did` alone
-/// cannot identify a row: replicated homes may legitimately advertise the
-/// same agent DID. Hashing length-delimited inputs keeps the durable key
-/// unambiguous without exposing a delimiter convention to storage queries.
 pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(source_did.as_bytes());
@@ -239,9 +222,6 @@ pub async fn reconcile_directory_tick(
     Ok(outcome)
 }
 
-/// Run the directory projection reconciler until cancelled. Unlike the P2P
-/// reconcilers, this has no P2P-idle guard: the directory is useful even
-/// without P2P transport (the desktop reads it locally), so it always runs.
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
@@ -497,7 +477,6 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     updated_at: "{now}"
                 }},
                 update: {{
-                    source_did: "{source_did}",
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
@@ -535,17 +514,6 @@ fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) ->
     }
 }
 
-/// Renders a nullable `DateTime` literal for `AgentDirectoryEntry.last_seen`.
-/// Blank/whitespace-only input — the default `derive_directory_entries`
-/// produces for a principal with no `AgentRuntime` row — renders as `null`;
-/// DefraDB rejects a non-RFC3339 `""` on create AND upsert alike, and an
-/// unconditional quoted-string render used to poison the whole sweep (one
-/// never-deployed principal wedged the directory forever). Non-blank values
-/// pass through escaped and quoted unchanged: `AgentRuntime.updated_at` is a
-/// String schema-side, not guaranteed RFC3339, so this helper does not
-/// attempt to validate it — a genuinely-garbage non-blank value still fails
-/// that one row, which is acceptable and pre-existing (see the per-entry
-/// error tolerance in `reconcile_directory_tick`).
 fn graphql_nullable_datetime_literal(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -647,6 +615,23 @@ mod tests {
     }
 
     #[test]
+    fn upsert_mutation_sets_immutable_source_did_only_when_adding() {
+        let mutation = upsert_directory_entry_mutation(
+            &entry("did:key:running", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        let (add, update) = mutation
+            .split_once("update: {")
+            .expect("upsert mutation has update payload");
+
+        assert!(add.contains(r#"source_did: "did:key:home""#));
+        assert!(
+            !update.contains("source_did:"),
+            "immutable source_did must not be resent in update payload: {update}"
+        );
+    }
+
+    #[test]
     fn upsert_mutation_renders_null_for_blank_last_seen() {
         for blank in ["", "   "] {
             let mutation = upsert_directory_entry_mutation(
@@ -682,8 +667,17 @@ mod tests {
         // decodes to `None`, and `unwrap_or_default()` in
         // `list_directory_entries` maps that back to `""` — the same value
         // `derive_directory_entries` defaults to for a runtime-less principal.
-        let decoded: Option<String> = None;
-        assert_eq!(decoded.unwrap_or_default(), "");
+        let row: DirectoryRow = serde_json::from_value(serde_json::json!({
+            "directory_key": "dir-no-runtime",
+            "agent_did": "did:key:no-runtime",
+            "source_did": "did:key:home",
+            "display_name": "No Runtime",
+            "behaviors": [],
+            "runtime_state": "",
+            "last_seen": null,
+        }))
+        .expect("stored directory row with null last_seen should deserialize");
+        assert_eq!(row.last_seen.unwrap_or_default(), "");
     }
 
     #[test]

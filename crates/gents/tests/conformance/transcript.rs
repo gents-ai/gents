@@ -1,6 +1,3 @@
-//! Transcript conformance home: generated AgentMessage ordering, dedupe,
-//! pairing, drain, and parallel-results contract rows.
-
 use super::*;
 
 fn transcript_user_message(text: &str) -> Message {
@@ -468,10 +465,6 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
         distinct.name
     );
 
-    // Lean fence: Transcript.parallel_results_complete_independently — three
-    // parallel tool calls accumulate in ONE assistant turn; persisting that
-    // turn once keeps the result gate open for EVERY streamed result, and each
-    // result appends its own user row.
     let parallel = lean_transcript_case("parallel_results_share_assistant_turn");
     let (db, hook, session_id) = transcript_hook_fixture("transcript-parallel-results").await;
     assert_transcript_counts(

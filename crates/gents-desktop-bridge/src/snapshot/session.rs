@@ -116,9 +116,7 @@ pub fn build_session_snapshot_from_store_for_agent(
 ) -> Option<DesktopSessionSnapshot> {
     let conversation = store.conversations.iter().find(|row| {
         row.session_id == session_id
-            && agent_did.map_or(true, |agent_did| {
-                row.agent_did.as_deref() == Some(agent_did)
-            })
+            && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
     });
     let session_row = store
         .sessions
@@ -126,7 +124,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         .enumerate()
         .find(|(index, row)| {
             row.session_id == session_id
-                && agent_did.map_or(true, |agent_did| {
+                && agent_did.is_none_or(|agent_did| {
                     source_matches_agent(&store.session_source_agent_dids, *index, agent_did, false)
                 })
         })
@@ -140,7 +138,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         .iter()
         .filter(|row| {
             row.session_id == session_id
-                && agent_did.map_or(true, |agent_did| row.agent_did == agent_did)
+                && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
         })
         .min_by(|left, right| {
             left.created_at
@@ -275,8 +273,6 @@ pub fn build_session_snapshot_from_store_for_agent(
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
 
-    // Durable request provenance distinguishes runtime controls from genuine
-    // user messages whose text happens to match a reserved-looking prompt.
     let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
         .iter()
         .map(|request| (request.request_id.as_str(), *request))
@@ -325,7 +321,6 @@ pub fn build_session_snapshot_from_store_for_agent(
         .tool_calls
         .into_iter()
         .map(|row| {
-            // Prefer persisted cancel_cause when present; only derive when absent.
             let cancel_cause =
                 if let Some(persisted) = row.cancel_cause.as_deref().filter(|s| !s.is_empty()) {
                     Some(DerivedCancelCauseView {
@@ -338,7 +333,6 @@ pub fn build_session_snapshot_from_store_for_agent(
                         )],
                     })
                 } else {
-                    // Derive from this tool's OWN parent request, not latest_request.
                     let req_for_tool = row
                         .request_id
                         .as_deref()
@@ -473,9 +467,7 @@ fn logical_turn_index_for_request(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.map_or(true, |agent_did| {
-                request_matches_agent(row, agent_did, false)
-            })
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
     let root_id = request_turn_root_id(request);
     logical_turn_roots_for_session(store, agent_did, session_id)
@@ -513,9 +505,7 @@ fn build_pending_turn(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.map_or(true, |agent_did| {
-                request_matches_agent(row, agent_did, false)
-            })
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
 
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());

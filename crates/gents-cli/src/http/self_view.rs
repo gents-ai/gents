@@ -1,13 +1,3 @@
-//! `/self` surfacing: joins the running agent's `AgentBehavior` rows with their
-//! `InferenceBackend` (provider/endpoint) and `InferenceProfile`
-//! (`context_window`), plus an agent-scoped context-budget summary derived from
-//! persisted `CompactionEntry` rows. All of this data already exists; this is
-//! pure surfacing for the runtime HTTP status and self-awareness endpoints.
-//!
-//! `CompactionEntry` is keyed by `session_id`, so the budget is scoped to the
-//! agent by first resolving the agent's own sessions (via `AgentRequest`
-//! filtered by `agent_did`) and aggregating only those entries.
-
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
@@ -17,12 +7,8 @@ use serde_json::Value;
 
 use crate::post_graphql;
 
-/// How many of the agent's most-recent requests to scan when resolving the set
-/// of sessions to aggregate compaction over. Bounds the work for an agent with
-/// a long history while covering its active sessions.
 const RECENT_REQUEST_SCAN: usize = 200;
 
-/// One of the running agent's behaviors with its backend + profile joined in.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SelfBehavior {
     pub(crate) behavior_id: String,
@@ -36,25 +22,16 @@ pub(crate) struct SelfBehavior {
     pub(crate) context_window: Option<i64>,
 }
 
-/// Agent-scoped context-budget summary derived from `CompactionEntry`.
-///
-/// Scope is the agent's sessions discovered from its most-recent
-/// [`RECENT_REQUEST_SCAN`] requests — a recent-activity view, not an all-time
-/// total. `sessions_considered` reports how many sessions were aggregated so
-/// the figures are not mistaken for an exhaustive count.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ContextBudget {
     pub(crate) compaction_count: i64,
     pub(crate) latest_compaction_at: Option<String>,
     pub(crate) latest_original_tokens: Option<i64>,
     pub(crate) latest_compacted_tokens: Option<i64>,
-    /// Number of (recent) agent sessions aggregated for this summary.
     pub(crate) sessions_considered: i64,
-    /// The recent-request scan bound used to discover those sessions.
     pub(crate) request_scan_limit: i64,
 }
 
-/// Compact `/status.context` indicator requested by observability clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ContextIndicator {
     pub(crate) max_tokens: Option<i64>,
@@ -251,7 +228,6 @@ fn build_behaviors(
                 behavior_id,
                 display_name: behavior.display_name.unwrap_or_default(),
                 model_name: behavior.model_name.unwrap_or_default(),
-                // Older behavior rows are enabled unless explicitly disabled.
                 enabled: behavior.enabled.unwrap_or(true),
                 backend_id,
                 provider_kind: backend
@@ -281,7 +257,6 @@ fn distinct_session_ids(requests: &[RequestRow]) -> Vec<String> {
 
 fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
     let compaction_count = compactions.len() as i64;
-    // Latest by created_at (RFC3339 sorts lexically); independent of input order.
     let latest = compactions
         .iter()
         .max_by(|a, b| a.created_at.cmp(&b.created_at));
@@ -290,8 +265,6 @@ fn aggregate_compaction(compactions: Vec<CompactionRow>) -> ContextBudget {
         latest_compaction_at: latest.and_then(|entry| entry.created_at.clone()),
         latest_original_tokens: latest.and_then(|entry| entry.original_tokens),
         latest_compacted_tokens: latest.and_then(|entry| entry.compacted_tokens),
-        // Scope metadata is filled in by `load_self_view`, which knows the
-        // session set; aggregation alone leaves them zero.
         ..Default::default()
     }
 }

@@ -111,13 +111,6 @@ async fn backend_restart_cluster_recovers() {
 
 #[tokio::test]
 async fn backoff_longer_than_liveness_timeout_recovers() {
-    // #648 (re-review): the retry backoff sleep runs inside the loop generator,
-    // spanning the daemon's liveness-timeout-wrapped poll. FIX-B extends that
-    // poll's liveness budget by the pending backoff so a legitimate backoff
-    // longer than stream_liveness_timeout is not misread as a dead stream.
-    // Fence it end-to-end: liveness = 1s, backoff (scheduled ladder first step)
-    // exceeds it. Without the extension the run would fail with a spurious
-    // "stream liveness timeout"; with it, the retry recovers.
     let marker = "backoff-vs-liveness";
     let backend = MockStreamingBackend::start_with_plans(
         RETRY_MODEL,

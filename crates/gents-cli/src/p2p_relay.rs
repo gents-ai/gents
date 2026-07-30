@@ -1,16 +1,5 @@
-//! Startup diagnostics for the embedded node's iroh relay configuration.
-//!
-//! The default relay set is whatever the pinned iroh crate ships. Pre-release
-//! iroh versions point `RelayMode::Default` at n0's *canary* infrastructure,
-//! which is expected to be unstable — exactly the trigger for the relay
-//! `open_path` retry flood that self-DoS'd a host in #588. These helpers make
-//! the resolved relay set visible at startup and flag non-production
-//! endpoints loudly.
-
 use crate::cli::args::P2pRelayModeArg;
 
-/// Returns the relay URLs that `--p2p-relay-mode default` resolves to under
-/// the pinned iroh version.
 pub(crate) fn default_relay_urls() -> Vec<String> {
     iroh::RelayMode::Default
         .relay_map()
@@ -20,8 +9,6 @@ pub(crate) fn default_relay_urls() -> Vec<String> {
         .collect()
 }
 
-/// Filters `urls` down to endpoints that are not n0 production relays
-/// (canary or staging infrastructure).
 pub(crate) fn non_production_relay_urls<'a>(
     urls: impl IntoIterator<Item = &'a String>,
 ) -> Vec<String> {
@@ -34,8 +21,6 @@ pub(crate) fn non_production_relay_urls<'a>(
         .collect()
 }
 
-/// Logs the relay configuration the server will run with, and warns loudly
-/// if the default relay set includes non-production endpoints.
 pub(crate) fn log_relay_mode_diagnostics(mode: P2pRelayModeArg) {
     match mode {
         P2pRelayModeArg::Disabled => {
@@ -94,11 +79,6 @@ mod tests {
         assert!(non_production_relay_urls(&urls).is_empty());
     }
 
-    /// Tripwire: the iroh version pinned in Cargo.lock must resolve
-    /// `RelayMode::Default` to n0 *production* relays. Pre-release iroh
-    /// versions ship canary endpoints as the default relay set, which is the
-    /// #588 incident trigger. If this fails, the iroh pin regressed to a
-    /// pre-release default relay set.
     #[test]
     fn pinned_iroh_default_relay_set_is_production() {
         let relay_urls = default_relay_urls();

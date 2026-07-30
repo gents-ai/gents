@@ -21,10 +21,6 @@ use std::sync::Arc;
 use crate::config::AgentBehavior;
 use crate::identity::AgentPrincipal;
 
-/// Error returned when a behavior factory closure fails during assembly.
-///
-/// Carries the `behavior_id` so the caller can route the failure into the
-/// `unavailable_behaviors` map without losing which behavior failed.
 #[derive(Debug)]
 pub struct BehaviorBuildError {
     pub behavior_id: String,

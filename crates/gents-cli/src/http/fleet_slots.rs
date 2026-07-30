@@ -42,9 +42,7 @@ pub(crate) struct FleetBehaviorSlotUsage {
     pub(crate) enabled: bool,
     pub(crate) backend_available: bool,
     pub(crate) assigned: i64,
-    /// Shared spare capacity on this behavior's backend, not a per-behavior reservation.
     pub(crate) available: i64,
-    /// The backend max_concurrent value visible through this behavior.
     pub(crate) max: i64,
     pub(crate) queued: i64,
     pub(crate) expired_processing: i64,
@@ -98,7 +96,6 @@ impl BehaviorRow {
     }
 
     fn is_enabled(&self) -> bool {
-        // Older generated behavior rows are admission-enabled unless explicitly disabled.
         self.enabled.unwrap_or(true)
     }
 }
@@ -123,7 +120,6 @@ impl BackendRow {
     }
 
     fn is_enabled(&self) -> bool {
-        // A backend row missing the flag should not advertise admission capacity.
         self.enabled.unwrap_or(false)
     }
 

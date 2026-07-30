@@ -17,12 +17,6 @@ use crate::watcher::AgentRequest;
 
 pub type DispatcherMap = HashMap<String, mpsc::Sender<AgentRequest>>;
 
-/// Resolved view of a `Task` document ready for the trigger engine to fire.
-///
-/// Captures only the fields the engine needs to build an `AgentRequest` at
-/// fire time — behavior, prompt template, and optional output-schema
-/// reference. Other `Task` fields (descriptions, timestamps, runtime-owned
-/// status) stay in `DocumentRuntimeView`.
 #[derive(Debug, Clone)]
 pub struct ResolvedTask {
     pub task_id: String,
@@ -43,12 +37,6 @@ impl ResolvedTask {
     }
 }
 
-/// Resolved view of a `Schedule` document paired with its resolved `Task`.
-///
-/// The task is embedded so the engine can "join once, fire many" — it does
-/// not need to look the task up again at each fire time. Only schedules with
-/// a resolvable task and an enabled, runnable behavior end up here; the rest
-/// go in `unavailable_schedules`.
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
     pub schedule_id: String,
@@ -105,12 +93,6 @@ impl ScheduleCadence {
     }
 }
 
-/// How a schedule handles overlapping runs when the previous fire has not
-/// completed by the next interval.
-///
-/// * `Parallel` — launch every tick regardless of in-flight runs.
-/// * `Serial` — skip a tick if a prior run is still in flight.
-/// * `LatestOnly` — supersede the in-flight run with the newer tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConcurrencyMode {
     Parallel,
@@ -119,10 +101,6 @@ pub enum ConcurrencyMode {
 }
 
 impl ConcurrencyMode {
-    /// Parse the schedule `concurrency` string. Strict exact match on
-    /// `"parallel"`, `"serial"`, or `"latest_only"` — no case folding,
-    /// aliases, or whitespace trimming. Unknown inputs return `None` so the
-    /// caller can mark the schedule unavailable.
     pub(crate) fn parse(s: &str) -> Option<Self> {
         match s {
             "parallel" => Some(Self::Parallel),
@@ -133,11 +111,6 @@ impl ConcurrencyMode {
     }
 }
 
-/// Resolved view of an `EventTrigger` document paired with its resolved
-/// `Task`. Mirrors `ResolvedSchedule`: the task is embedded so the trigger
-/// engine can "join once, fire many" without re-looking-up the task at each
-/// fire time. Only triggers with a resolvable task and an enabled, runnable
-/// behavior end up here; the rest go in `unavailable_event_triggers`.
 #[derive(Debug, Clone)]
 pub struct ResolvedEventTrigger {
     pub trigger_id: String,
@@ -145,8 +118,6 @@ pub struct ResolvedEventTrigger {
     pub task_id: String,
     pub task: ResolvedTask,
     pub source_collection: String,
-    /// Currently always `"created"`; future PRs may add `"updated"` /
-    /// `"deleted"` support.
     pub event_kind: String,
     pub filter: Option<String>,
     #[allow(dead_code)]
@@ -215,13 +186,6 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    /// Attach the deployment principal Arc to this resolved snapshot.
-    ///
-    /// Mirrors `with_schedules` / `with_event_triggers`: the loader
-    /// (`document_view/snapshot.rs`) constructs one
-    /// `Arc<AgentPrincipal>` per snapshot and attaches it here so
-    /// `ActiveRuntimeSnapshot.principal` is uniformly `Some(...)`
-    /// across both loader and builder construction paths.
     pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
         self.principal = Some(principal);
         self
@@ -237,11 +201,6 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    /// Attach resolved schedules plus any schedule ids that failed resolution.
-    ///
-    /// Task 18 builds the schedule maps during `resolve_document_snapshot_*`
-    /// and layers them onto the snapshot via this builder so the existing
-    /// `from_parts_*` callers (tests, startup fallback) stay untouched.
     pub(crate) fn with_schedules(
         mut self,
         active_schedules: HashMap<String, ResolvedSchedule>,
@@ -252,10 +211,6 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    /// Attach resolved event triggers plus any trigger ids that failed
-    /// resolution. Mirrors `with_schedules`: active triggers are eligible to
-    /// fire, unavailable ids let callers report/diff misconfigured triggers
-    /// without keeping them runnable.
     pub(crate) fn with_event_triggers(
         mut self,
         active_event_triggers: HashMap<String, ResolvedEventTrigger>,
@@ -266,10 +221,6 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    /// Attach resolved tasks to the snapshot. Mirrors `with_schedules` /
-    /// `with_event_triggers`: active tasks are the join-target for
-    /// `ManualTriggerHandle::run_task_now`, which needs to map a caller-
-    /// supplied `task_id` to a `ResolvedTask` at fire time.
     pub(crate) fn with_tasks(mut self, tasks: HashMap<String, ResolvedTask>) -> Self {
         self.active_tasks = tasks;
         self

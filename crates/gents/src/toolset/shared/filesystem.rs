@@ -48,11 +48,6 @@ pub(crate) fn render_file_contents(
     }
 }
 
-/// Byte-cap free-form tool output using the canonical honest truncator
-/// (`crate::truncation`). Returns the (possibly truncated) text and whether
-/// truncation occurred. Only a byte ceiling is applied here (`max_lines` is
-/// unbounded) so callers keep their existing "cap by size" semantics while
-/// gaining the shared honest marker (`[Showing lines 1-N of M (B bytes total)]`).
 pub(crate) fn cap_output(text: &str, max_bytes: usize) -> (String, bool) {
     let limits = TruncationLimits {
         max_bytes,

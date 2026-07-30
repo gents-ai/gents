@@ -2,16 +2,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// Design-system conformance fence.
-//
-// 1. Token integrity: a `var(--x)` without a fallback silently invalidates
-//    its whole declaration when --x is undefined (this shipped as collapsed
-//    padding and un-monospaced IDs). Every fallback-less reference must
-//    resolve to a definition somewhere in the stylesheet set.
-// 2. Layer integrity: App.css declares the cascade-layer order. A sheet with
-//    top-level rules outside @layer outranks every layer and breaks the
-//    system; a sheet using an undeclared layer name lands in arbitrary order.
-
 const STYLES_ROOT = join(__dirname, "..", "src", "styles");
 const APP_CSS = join(__dirname, "..", "src", "App.css");
 const PACKAGES_ROOT = join(__dirname, "..", "..", "..", "packages");
@@ -80,7 +70,6 @@ describe("motion and focus", () => {
       for (const match of css.matchAll(
         /(?:transition|animation)[^:;{}]*:\s*[^;{}]*?(\d+(?:\.\d+)?m?s)\b/g,
       )) {
-        // 0.01ms is the reduced-motion kill value in base.css.
         if (match[1] === "0.01ms") continue;
         raw.push(`${relative(STYLES_ROOT, file)}: ${match[1]}`);
       }
@@ -91,7 +80,6 @@ describe("motion and focus", () => {
   it("focus outlines are never removed", () => {
     const removals: string[] = [];
     for (const [file, css] of sources) {
-      // All removal spellings: longhands, 0px, !important, any casing.
       for (const match of css.matchAll(
         /outline(?:-style|-width)?\s*:\s*(?:none|0(?:px)?)\b(?:\s*!important)?\s*[;}]/gi,
       )) {
@@ -106,11 +94,9 @@ describe("type scale", () => {
   it("every font-size declaration uses a --text-* token", () => {
     const raw: string[] = [];
     for (const [file, css] of sources) {
-      // Case-insensitive; the final declaration of a block needs no ';'.
       for (const match of css.matchAll(/font-size:\s*([^;}]+)[;}]/gi)) {
         const value = match[1].trim();
         if (!/^var\(--text-[\w-]+\)$/.test(value) && value !== "inherit") {
-          // tokens.css defines the scale itself in raw px.
           if (isTokenSheet(file)) continue;
           raw.push(`${relative(STYLES_ROOT, file)}: font-size: ${value}`);
         }
@@ -124,8 +110,6 @@ describe("type scale", () => {
     for (const [file, css] of sources) {
       for (const match of css.matchAll(/(?<![\w-])font:\s*([^;}]+)[;}]/gi)) {
         const value = match[1].trim();
-        // `font: inherit` is the only shorthand the fence allows; any other
-        // value can carry an off-scale raw size (e.g. `font: 12px/1.4 …`).
         if (value !== "inherit") {
           raw.push(`${relative(STYLES_ROOT, file)}: font: ${value}`);
         }
@@ -136,9 +120,6 @@ describe("type scale", () => {
 });
 
 describe("token ratchets", () => {
-  // These counts may only go DOWN. They hold the line on raw values the
-  // per-screen polish passes are still sweeping onto tokens — a new raw
-  // literal fails here; when you tokenize some, lower the ceiling.
   function countMatches(pattern: RegExp): number {
     let count = 0;
     for (const css of sources.values()) {
@@ -151,8 +132,6 @@ describe("token ratchets", () => {
     let count = 0;
     for (const css of sources.values()) {
       for (const match of css.matchAll(
-        // (?<![\w-]) keeps scroll-padding-* out; -start/-end covers the
-        // logical longhands so raw px can't smuggle through them.
         /(?<![\w-])(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?(?:-(?:start|end))?\s*:\s*([^;{}]+)/g,
       )) {
         count += (match[1].match(/\d+px\b/g) ?? []).length;
@@ -184,10 +163,6 @@ describe("token ratchets", () => {
   });
 
   it("bespoke box-shadows do not grow (ceiling 38)", () => {
-    // 'none' and pure --shadow-* token values are conformant, not bespoke:
-    // tokenizing shadows must lower this pressure, not preserve it.
-    // The lookahead sits before \s* — a backtrackable \s* ahead of the
-    // lookahead let "box-shadow: none" slip back into the count.
     expect(
       countMatches(/box-shadow:(?!\s*none\s*[;}]|\s*var\(--shadow-)[^;{}]+/gi),
     ).toBeLessThanOrEqual(38);

@@ -1,13 +1,5 @@
 import Proofs.StreamingResponse.Transition
 
-/-!
-# StreamingResponse Conformance Vectors
-
-Finite witness rows for Rust conformance tests. Each row pins one
-transition's expected pre/post shape and the runtime call site it
-corresponds to.
--/
-
 namespace StreamingResponse
 
 structure ResponseTransitionCase where
@@ -19,12 +11,8 @@ structure ResponseTransitionCase where
   postStatus                 : String
   preLiveTail                : String
   postLiveTail               : String
-  /-- Issue #492: reasoning-presence of the live tail before/after the step. -/
   preTailReasoning           : String := "empty"
   postTailReasoning          : String := "empty"
-  /-- Issue #492: durable reasoning-presence persisted into the materialized
-  `AgentMessage.reasoning` field before/after the step. Only a
-  `finalize_complete` materialize step copies `tailReasoning` here. -/
   preDurableReasoning        : String := "empty"
   postDurableReasoning       : String := "empty"
   preTokenCount              : Nat
@@ -157,8 +145,6 @@ def finalizeCompleteClearsAndMaterializes : ResponseTransitionCase :=
   , postStatus := "complete"
   , preLiveTail := "nonEmpty"
   , postLiveTail := "empty"
-  -- issue #492: reasoning present in the live tail is durably copied into
-  -- the materialized message while the live tail still clears to empty.
   , preTailReasoning := "nonEmpty"
   , postTailReasoning := "nonEmpty"
   , preDurableReasoning := "empty"
@@ -309,8 +295,6 @@ def daemonInterruptTerminalizesResponseAndRequest : ResponseInterruptFlowCase :=
   , postResponseStatus := "error"
   , preInferenceCallState := "running"
   , postInferenceCallState := "cancelled"
-  -- Human-readable: this text surfaces verbatim in timeline projections.
-  -- `interruptedAtRequired` is the machine marker request repair classifies on.
   , responseErrorReason := "interrupted"
   , interruptedAtRequired := true
   , completedAtRequired := true

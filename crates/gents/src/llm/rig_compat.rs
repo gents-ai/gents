@@ -1,17 +1,9 @@
-//! Converters between Gents-native [`crate::llm`] types and rig's, used only at
-//! the provider/parsing boundary (Layer A). Deleted once Layer A is owned.
-//!
-//! These are free functions rather than `From` impls: rig's types are foreign,
-//! so `impl From<Native> for RigType` would violate the orphan rule.
-
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::tool::ToolDefinition;
 use super::ToolChoice;
 
-/// Convert a native [`ToolDefinition`] into rig's, for the outgoing completion
-/// request's tool list.
 pub(crate) fn to_rig_tool_definition(def: &ToolDefinition) -> rig::completion::ToolDefinition {
     rig::completion::ToolDefinition {
         name: def.name.clone(),
@@ -20,7 +12,6 @@ pub(crate) fn to_rig_tool_definition(def: &ToolDefinition) -> rig::completion::T
     }
 }
 
-/// Convert a native [`ToolChoice`] into rig's, for the outgoing completion request.
 pub(crate) fn to_rig_tool_choice(choice: &ToolChoice) -> rig::message::ToolChoice {
     match choice {
         ToolChoice::Auto => rig::message::ToolChoice::Auto,
@@ -120,19 +111,6 @@ fn provider_messages(
     }
 }
 
-// ===== Message family (Layer B seam) =====
-//
-// Outbound (`to_rig_*`): native history → rig `CompletionRequest` messages at
-// `loop_stream::build_request`, plus rig `PromptError` payloads and the rig
-// stream items the loop yields (decision D3 keeps the consumer contract).
-// Inbound (`from_rig_*`): rig streamed content → native at the accumulate/
-// persist seam (`AssistantTurnAccumulator`, `StreamProcessor`).
-//
-// Content lists are non-empty by convention (the sanitizer drops empty
-// messages; the accumulator returns `None` instead of empty turns). The
-// `OneOrMany` constructions fall back to a single empty text block rather
-// than panic so a convention violation degrades to a harmless empty message.
-
 use super::message;
 
 pub(crate) fn to_rig_messages(messages: &[message::Message]) -> Vec<rig::completion::Message> {
@@ -209,10 +187,6 @@ pub(crate) fn to_rig_tool_call(call: &message::ToolCall) -> rig::completion::mes
         call_id: call.call_id.clone(),
         function: rig::completion::message::ToolFunction {
             name: call.function.name.clone(),
-            // Egress half of the #589/#590 argument-shape boundary: the
-            // durable transcript is permissive, so already-persisted poison
-            // (a non-object `arguments` Value) is normalized here at request
-            // build — a jammed session self-heals on its next turn.
             arguments: super::tool::normalize_tool_call_arguments(
                 "egress",
                 &call.function.name,
@@ -259,8 +233,6 @@ pub(crate) fn to_rig_tool_result_content(
 pub(crate) fn to_rig_reasoning(
     reasoning: &message::Reasoning,
 ) -> rig::completion::message::Reasoning {
-    // rig's `Reasoning` is #[non_exhaustive]; construct via `new` and assign
-    // the public fields.
     let mut rig_reasoning = rig::completion::message::Reasoning::new("");
     rig_reasoning.id = reasoning.id.clone();
     rig_reasoning.content = reasoning
@@ -393,13 +365,6 @@ pub(crate) fn from_rig_tool_call(call: &rig::completion::message::ToolCall) -> m
         call_id: call.call_id.clone(),
         function: message::ToolFunction {
             name: call.function.name.clone(),
-            // Ingest half of the #589/#590 argument-shape boundary: a wire
-            // payload the provider parser could not shape into an object (a
-            // raw corrupt string, `[]`, a scalar) is normalized before it can
-            // be accumulated into durable history. Dispatch reads the RAW rig
-            // value separately (`loop_stream`), so an unsalvageable payload
-            // still fails `parse_tool_args` and terminalizes
-            // `failed(ArgumentInvalid)` with the model notified.
             arguments: super::tool::normalize_tool_call_arguments(
                 "ingest",
                 &call.function.name,
@@ -516,9 +481,6 @@ fn from_rig_image(image: &rig::completion::message::Image) -> message::Image {
     }
 }
 
-/// Inbound full-message conversion (used by in-crate tests that capture wire
-/// requests, and by any future consume-side seam that receives whole rig
-/// messages).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn from_rig_message(msg: &rig::completion::Message) -> message::Message {
     match msg {

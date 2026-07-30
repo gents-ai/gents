@@ -34,8 +34,6 @@ use crate::lifecycle::{
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
 use crate::trigger_engine::{MaterializerHandle, TriggerKind};
 
-/// Concrete `MaterializerHandle` wired to DefraDB + the lifecycle state
-/// machine.
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -49,11 +47,6 @@ impl ProductionMaterializer {
         Self { node, snapshot_rx }
     }
 
-    /// Resolve the `AgentBehavior` for the materialized task against the
-    /// current active snapshot. Returns an error if the behavior is not
-    /// loaded (e.g. unavailable at the time of fire) so the caller can surface
-    /// a deterministic `materialize:` failure instead of silently dropping the
-    /// fire.
     fn resolve_behavior(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
         let snapshot = self.snapshot_rx.borrow().clone();
         let behavior = snapshot.behavior(&task.behavior_id).ok_or_else(|| {
@@ -89,20 +82,8 @@ pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> Ex
     }
 }
 
-/// Grace added to a persisted claim `deadline` before the serial gate treats
-/// a claimed/processing row as terminal-in-effect. The owning loop can finish
-/// an attempt started just inside the deadline and still be writing the
-/// terminal state moments after it; the margin keeps that window from
-/// double-firing while still unblocking hours-wedged orphans within a tick
-/// or two.
 const EXPIRED_CLAIM_GRACE_SECS: i64 = 60;
 
-/// Whether one fetched active-state row actually gates a serial fire at
-/// `now`. Pending rows always gate (they are claimable and will run).
-/// Claimed/processing rows gate unless their persisted claim `deadline` plus
-/// grace has passed — the owning runtime enforces the same deadline
-/// in-memory, so a row past it is a wedged orphan, not an in-flight run.
-/// Missing or unparseable deadlines gate (conservative).
 fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::Utc>) -> bool {
     let state = row
         .get("lifecycle_state")
@@ -145,10 +126,6 @@ impl MaterializerHandle for ProductionMaterializer {
             });
         }
 
-        // Resolve behavior synchronously against the current snapshot so any
-        // lookup error surfaces before we start allocating owned state for the
-        // async body. The pending enqueue helper consumes owned strings after
-        // the await boundary, so clone anything we need here.
         let resolved = self.resolve_behavior(task);
         let node = self.node.clone();
         let task_id = task.task_id.clone();
@@ -157,11 +134,6 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_id = trigger_id.map(str::to_owned);
         let trigger_kind_str = trigger_kind.as_str().to_owned();
 
-        // `Manual` fires are operator-initiated (e.g. CLI/API), so they map
-        // to `ExecutionOrigin::Interactive` per the spec. Schedule and Event
-        // fires keep `Scheduled`. Keep the mapping local to the trait impl so
-        // callers (who already decided the `TriggerKind`) don't need to know
-        // the lifecycle-layer vocabulary.
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
         Box::pin(async move {
@@ -269,16 +241,6 @@ impl MaterializerHandle for ProductionMaterializer {
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
             let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-            // Single bulk update against the active runtime tuple match,
-            // scoped to this agent's own requests (#605): without the DID
-            // filter a LatestOnly fire would locally rewrite OTHER agents'
-            // replicated requests. Expired claims are deliberately included —
-            // superseding this agent's own wedged orphan is desirable.
-            // DefraDB returns the list of updated documents in the mutation
-            // response so we can count how many requests were transitioned;
-            // the engine's `LatestOnly` path treats this count as
-            // observational (logged, not gated on). Failure reason left blank;
-            // the engine layer does not have a structured reason to attach.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentRequest(

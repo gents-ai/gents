@@ -127,9 +127,7 @@ export function ToolServiceConfigEditor({
     try {
       await onDeleteToolServiceConfig({ serviceId: toolService.serviceId, agentDid });
       onDeleted();
-    } catch {
-      // Surfaced by the shell error banner; the editor stays put.
-    }
+    } catch {}
   }
   const [serviceId, setServiceId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -160,7 +158,6 @@ export function ToolServiceConfigEditor({
     setTestResult(null);
     setTestError(null);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [toolService?.serviceId]);
 
   const mcpPortValid = isOptionalInt(mcpPort, { min: 1, max: 65535 });
@@ -422,7 +419,6 @@ export function ToolServiceConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function toolServiceFormValues(toolService: ToolServiceRegistryView | null) {
   return {
     serviceId: toolService?.serviceId ?? "",

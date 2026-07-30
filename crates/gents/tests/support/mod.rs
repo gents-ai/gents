@@ -29,36 +29,15 @@ pub const DEADLINE_SECS: u64 = 300;
 
 pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
-    /// Monotonic process-identity counter. Bumped by
-    /// [`TestDb::simulate_process_crash`]; starts at 0 for a fresh process.
     pub process_generation: u64,
     tempdir: TempDir,
 }
 
 impl TestDb {
-    /// Honest crash/restart boundary for embedded-node harnesses.
-    ///
-    /// Mirrors the production restart seam (and defra-node's own restart tests):
-    /// shutdown the live process, exclusively drop it so store locks release,
-    /// reopen the same durable data path, and advance `process_generation`.
-    /// Durable documents remain; process-local workers, registries, and
-    /// subscriptions do not (they are not owned by `TestDb` and therefore
-    /// cannot survive this boundary).
-    ///
-    /// Fails if outstanding `Arc` clones prevent exclusive drop of the old
-    /// node — that would leave the crash non-falsifiable.
-    ///
-    /// Implementation notes (soundness):
-    /// - Fully safe Rust: `mem::replace` with a short-lived ephemeral node so
-    ///   `self.node` is never left uninitialized under cancel/panic.
-    /// - Process identity is `process_generation`, not pointer inequality
-    ///   (allocator reuse would flake a pointer check).
     pub async fn simulate_process_crash(&mut self) -> anyhow::Result<()> {
         let data_path = self.tempdir.path().to_path_buf();
         let before = self.process_generation;
 
-        // Require exclusive ownership *before* shutdown so a shared handle is
-        // still usable if we bail (callers can still query/tear down cleanly).
         let strong = Arc::strong_count(&self.node);
         if strong != 1 {
             anyhow::bail!(
@@ -69,10 +48,6 @@ impl TestDb {
 
         self.node.shutdown().await;
 
-        // Ephemeral stand-in keeps `self.node` defined across the exclusive
-        // drop + durable reopen. Dropped as soon as reopen succeeds.
-        // (Option<Arc<_>> + accessor would also work, but `pub node: Arc<_>` is
-        // part of the test harness surface used by ~1700 call sites.)
         let stand_in = Arc::new(
             EmbeddedNode::builder()
                 .build()
@@ -81,13 +56,9 @@ impl TestDb {
         );
         let old = std::mem::replace(&mut self.node, stand_in);
 
-        // strong_count was 1 before replace; `old` is now the unique owner.
         match Arc::try_unwrap(old) {
             Ok(owned) => drop(owned),
             Err(shared) => {
-                // Another clone appeared between the check and replace (or the
-                // count check was racy with external clones). Restore the
-                // shut-down handle so Drop is well-defined, then fail loudly.
                 let count = Arc::strong_count(&shared);
                 self.node = shared;
                 anyhow::bail!(
@@ -98,8 +69,6 @@ impl TestDb {
             }
         }
 
-        // Durable path is free. Reopen once; on failure leave the ephemeral
-        // stand-in in place (defined, empty) and surface the error.
         let reopened = EmbeddedNode::builder()
             .data_path(&data_path)
             .build()
@@ -110,12 +79,8 @@ impl TestDb {
                     data_path.display()
                 )
             })?;
-        // Install the durable handle before schema ensure so a schema error
-        // still leaves `self.node` pointing at the reopened store (not the
-        // empty stand-in).
         self.node = Arc::new(reopened);
 
-        // Schemas already exist on the durable path; ensure is idempotent.
         ensure_runtime_schemas(&self.node)
             .await
             .map_err(|e| anyhow::anyhow!("simulate_process_crash: ensure schemas: {e}"))?;
@@ -176,10 +141,6 @@ type AgentConversation @branchable {
 }
 "#;
 
-/// A store whose `AgentConversation` collection lacks the unique `session_id`
-/// index, so duplicate rows can be seeded (#693). Registering the legacy SDL
-/// first makes `ensure_runtime_schemas`' own `add_schema` a no-op for that
-/// collection (it swallows "already exists"), exactly as on an upgraded host.
 pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
@@ -192,12 +153,19 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
             .await
             .expect("embedded node"),
     );
-    node.add_schema(AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID)
-        .await
-        .expect("legacy AgentConversation schema");
-    ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
+    for schema in gents_protocol::schemas::RUNTIME_ALL
+        .iter()
+        .chain(gents_protocol::schemas::ALL.iter())
+    {
+        let fixture_schema = if *schema == gents_protocol::schemas::AGENT_CONVERSATION {
+            AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID
+        } else {
+            *schema
+        };
+        node.add_schema(fixture_schema)
+            .await
+            .expect("duplicate-tolerant fixture schema");
+    }
     TestDb {
         node,
         process_generation: 0,
@@ -255,9 +223,6 @@ pub async fn create_conversation_row(
         "create_AgentConversation failed: {:?}",
         resp.errors
     );
-    // DefraDB returns either a single object or an array of rows depending on
-    // the mutation shape; accept both.
-    // DefraDB reports a `create_` mutation under the `add_` alias.
     let payload = resp
         .data
         .as_ref()
@@ -276,7 +241,6 @@ pub async fn create_conversation_row(
         .to_string()
 }
 
-/// The `status` of one conversation doc, addressed by `_docID`.
 pub async fn conversation_status_by_doc_id(node: &EmbeddedNode, doc_id: &str) -> String {
     let query = format!(
         r#"{{
@@ -297,8 +261,6 @@ pub async fn conversation_status_by_doc_id(node: &EmbeddedNode, doc_id: &str) ->
         .to_string()
 }
 
-/// P2P admission overrides for multi-node tests that exercise hub backpressure
-/// bounds (#630). Defaults match `p2p::sync::DEFAULT_*`.
 #[derive(Debug, Clone)]
 pub struct TestP2pAdmission {
     pub max_concurrent_push_tasks: usize,
@@ -321,7 +283,6 @@ impl Default for TestP2pAdmission {
 }
 
 impl TestP2pAdmission {
-    /// Tight fan-out semaphore used by the #630 one-worker hub shape.
     pub fn single_push_worker() -> Self {
         Self {
             max_concurrent_push_tasks: 1,
@@ -430,11 +391,6 @@ pub async fn create_request(
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
 }
 
-/// Create an `AgentRequest` row that chains from a previous request via
-/// `retry_parent_request` / `retry_root_request`. Used to simulate what the
-/// `resend_request` helper produces without pulling that crate in as a
-/// dev-dep. The new row is created in `pending` state with the caller-supplied
-/// `content` and `created_at`.
 pub async fn create_retry_request(
     node: &EmbeddedNode,
     request_id: &str,

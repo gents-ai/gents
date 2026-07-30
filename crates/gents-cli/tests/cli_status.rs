@@ -140,8 +140,6 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         .pointer("/p2p/p2p_shareable_address")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty()));
-    // Admission knobs must be visible on status so hub operators can confirm
-    // what bounds the process actually started with (#630 / #637).
     assert_eq!(
         output
             .pointer("/p2p_admission/max_pending_dags")
@@ -351,9 +349,6 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Seed an AgentRequest that is currently "processing" with a deadline well in the past.
-    // Fixed timestamps avoid wall-clock dependencies; the deadline is years before any
-    // realistic test execution time so expired_processing_count is reliably positive.
     let stuck_request_id = format!("stuck-req-{}", Uuid::new_v4().simple());
     let stuck_session_id = format!("stuck-session-{}", Uuid::new_v4().simple());
     let stuck_tool_call_key = format!("stuck-tc-{}", Uuid::new_v4().simple());

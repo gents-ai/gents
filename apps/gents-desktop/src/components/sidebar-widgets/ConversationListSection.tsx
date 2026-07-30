@@ -66,8 +66,6 @@ export function ConversationListSection({
       await onRenameConversationTitle(sessionId, title);
       setRenamingSessionId(null);
     } catch {
-      // The shell owns the error banner. Keep the draft open so a transient
-      // backend failure never destroys the operator's proposed title.
     } finally {
       setSavingRename(false);
     }

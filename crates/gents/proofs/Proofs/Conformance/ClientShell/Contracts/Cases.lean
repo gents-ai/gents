@@ -1,9 +1,5 @@
 import Proofs.Conformance.ClientShell.Contracts.Types
 
-/-!
-# ClientShell Executable Contract Cases
--/
-
 namespace Conformance.ClientShellContracts
 
 def contractPeer : PeerId := 40
@@ -324,8 +320,6 @@ def clientShellCases : List ClientShellContractCase :=
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
-  -- Case groups: snapshot selection/workflow, request observation, session
-  -- switching, transport no-op, submit gates, and terminal follow-up allowance.
   [ let input := ShellInput.snapshot storeNewCompleted
     let post := step awaitingNew input emptyStore .healthy ctxReady
     clientShellCaseFromStep

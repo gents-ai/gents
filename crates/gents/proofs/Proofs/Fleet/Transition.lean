@@ -2,7 +2,6 @@ import Proofs.Fleet.State
 
 namespace FleetState
 
-/-- Fleet transitions coupling a single execution with aggregate scheduler state. -/
 inductive Transition : FleetState → FleetState → Prop where
   | materialize_scheduled {pre post : FleetState} (wid : Nat) (bid : BackendId) :
       wid ∉ pre.activeIds →
@@ -57,7 +56,6 @@ inductive Transition : FleetState → FleetState → Prop where
         Function.update pre.scheduler.running bid (pre.scheduler.running bid - 1) →
       Transition pre post
 
-/-- A trace is a sequence of fleet transitions. -/
 inductive Trace : FleetState → FleetState → Prop where
   | refl {s : FleetState} : Trace s s
   | step {s₁ s₂ s₃ : FleetState} :

@@ -364,7 +364,7 @@ fn structured_tool_not_allowed_is_non_retryable() {
     );
     assert_eq!(analysis.validation_errors[0].code, "tool_not_allowed");
     assert_eq!(analysis.validation_errors[0].path, "/service_id");
-    assert_eq!(analysis.validation_errors[0].retryable, false);
+    assert!(!analysis.validation_errors[0].retryable);
     let error = analysis.tool_error.as_ref().expect("tool error");
     assert_eq!(error.failure_class, ToolFailureClass::ServiceUnavailable);
     assert_eq!(error.service_id.as_deref(), Some("observability-mcp"));

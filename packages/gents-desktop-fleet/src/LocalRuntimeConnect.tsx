@@ -12,12 +12,6 @@ export type LocalRuntimeConnectProps = {
   onConnect: (label?: string | null) => Promise<unknown>;
 };
 
-/**
- * Opt-in local-runtime administration surface.
- *
- * Hosts must grant `runtime-admin` before rendering it. The base fleet
- * dashboard deliberately accepts it as a slot and never invokes this action.
- */
 export function LocalRuntimeConnect({
   bootstrap,
   busy,

@@ -65,9 +65,6 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
             continue;
         }
         let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        // Tauri IPC carries serde integers as JavaScript numbers. ts-rs maps
-        // Rust's 64-bit integer types to bigint by default, which describes the
-        // Rust value range rather than the JSON wire representation.
         let normalized = replace_typescript_identifier(&source, "bigint", "number")
             .lines()
             .map(|line| {
@@ -176,7 +173,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         };
     }
 
-    // Requests are independent inputs, so each command request is a root.
     export_types!(
         DesktopInitRequest,
         PeerAddRequest,
@@ -218,7 +214,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         CodexLoginRequest,
     );
 
-    // Response/view roots export their nested dependencies transitively.
     export_types!(
         BridgeErrorCode,
         BridgeError,
@@ -392,7 +387,6 @@ fn committed_bindings_match_regeneration() {
 #[ignore = "run explicitly to regenerate packages/gents-desktop-client/src/generated/"]
 fn write_bindings() {
     let dir = bindings_dir();
-    // Clear prior exports so renames don't leave stale files.
     if dir.exists() {
         for entry in std::fs::read_dir(&dir).expect("read bindings") {
             let entry = entry.expect("entry");

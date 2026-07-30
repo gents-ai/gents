@@ -210,10 +210,6 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
     first_optional_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
 }
 
-/// Raw-string view of `AgentRequest` latch fields used by property tests. Unlike
-/// [`RequestSnapshot`], this preserves the exact `interrupt_requested_at` and
-/// `valid_until` string values so tests can assert the Lean S7/S8 invariants
-/// (no transition rewrites these fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshotRaw {
     pub status: String,
@@ -284,10 +280,6 @@ pub async fn fetch_conversation_snapshot(
     first_optional_row::<ConversationSnapshot>(&resp, "AgentConversation")
 }
 
-/// Full-column snapshot of an `AgentConversation` row. Use in fork-invariant tests
-/// that claim the parent is byte-identical before and after a fork — the narrower
-/// `ConversationSnapshot` omits `title`, `preview_text`, `agent_did`, `agent_name`,
-/// `created_at`, and `updated_at`, which would hide silent mutations on those fields.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct FullConversationSnapshot {
     pub session_id: String,

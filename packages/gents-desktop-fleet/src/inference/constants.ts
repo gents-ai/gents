@@ -1,4 +1,3 @@
-// The same defaults the CLI init picker resolves onto.
 export const OPENAI_ENDPOINT = "https://api.openai.com/v1";
 export const OPENAI_DEFAULT_MODEL = "gpt-5.4-mini";
 export const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434/v1";
@@ -9,11 +8,9 @@ export const LOCAL_PROBE_URLS = [
 export const CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex";
 export const CODEX_DEFAULT_MODEL = "gpt-5.5";
 
-// Runtime-canonical provider kinds (see gents::backend_provider).
 export const PROVIDER_OPENAI = "openai";
 export const PROVIDER_CODEX = "ChatGptCodex";
 
-// Wire API per OpenAI-compatible target (gents::openai_wire).
 export const WIRE_RESPONSES = "responses";
 export const WIRE_CHAT_COMPLETIONS = "chat_completions";
 

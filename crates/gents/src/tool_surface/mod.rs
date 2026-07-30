@@ -58,19 +58,12 @@ pub struct ToolSurface {
     pub(super) self_config: SelfConfigToolConfig,
 }
 
-/// Resolved self-configuration surface for one behavior (#654): whether the
-/// tool family is on, which categories are advertised, the behavior identity
-/// anchor, and the opt-in guardrails.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelfConfigToolConfig {
     pub enabled: bool,
-    /// The behavior this surface was resolved for — "my config" root.
     pub behavior_id: String,
-    /// Effective categories (sorted), from the policy meet.
     pub categories: std::collections::BTreeSet<String>,
-    /// Refuse patches that would strip the agent's own reconfigure ability.
     pub no_lockout: bool,
-    /// `get_my_config` accepts a patch preview.
     pub dry_run: bool,
 }
 
@@ -83,10 +76,6 @@ impl ToolSurface {
         self.include_meta_tools
     }
 
-    /// Whether the behavior's effective policy permits progressive-disclosure
-    /// skills (the `load_skill` tool). Resolved from the `skills` capability of
-    /// the effective surface, so an operator ceiling that denies skills is
-    /// honored — the capability is governed, not assumed-on.
     pub fn includes_skills(&self) -> bool {
         self.enable_skills
     }
@@ -100,8 +89,6 @@ impl ToolSurface {
         &self.subagent_tools
     }
 
-    /// Returns the statically-allowed spawn targets when spawn is enabled,
-    /// or an empty slice when spawn is disabled.
     pub(crate) fn subagent_targets(&self) -> &[SubagentTarget] {
         if self.subagent_tools.spawn_enabled {
             &self.subagent_tools.targets
@@ -123,15 +110,6 @@ impl ToolSurface {
         &self.orchestration_tools
     }
 
-    /// Drop subagent targets that cannot resolve.
-    ///
-    /// Local-DID targets (whose `agent_did` equals the agent's own DID) are
-    /// retain-filtered against the active local behavior set, since a missing
-    /// local behavior means the target genuinely cannot resolve. Remote-DID
-    /// targets are retained ONLY when `subagent_allow_cross_deployment` is true;
-    /// when the flag is false (the default), remote-DID targets are dropped
-    /// upstream in `resolve_with_available_subagent_targets` before this method
-    /// is called, so this pass sees none of them.
     pub(crate) fn retain_subagent_targets(
         &mut self,
         own_agent_did: &str,
@@ -177,8 +155,6 @@ impl ToolSurface {
             &self.self_config,
         ));
         for decl in &self.write_tools {
-            // Use the single source-of-truth gate on the declaration itself;
-            // see `WriteToolDecl::is_well_formed`.
             if decl.is_well_formed() {
                 names.push(decl.tool_name.clone());
             }
@@ -239,13 +215,6 @@ impl ToolSurface {
             runtime.agent_did.clone(),
             &self.self_config,
         ));
-        // Apply-time validation rejects write_tools names that collide with the
-        // built-in surface or sibling cli_tool_names, but runtime-discovered
-        // tools (e.g. MCP) and code-injected custom tools are not visible to
-        // that static check. Guard the registration here so a colliding write
-        // tool is dropped (with a warning) rather than registered as a second
-        // `ToolDyn` under a name an earlier tool already advertises — which the
-        // name-keyed dispatch maps would otherwise resolve last-write-wins.
         let mut registered_names: HashSet<String> = tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
             let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
@@ -300,17 +269,11 @@ impl std::fmt::Debug for ToolSurface {
             .field("defra_query_scope", &self.defra_query_scope)
             .field("write_tools", &self.write_tools)
             .field("enable_skills", &self.enable_skills)
-            // Part of the slot fingerprint: a self-config gate/category change
-            // must retire and respawn the behavior slot at reconcile.
             .field("self_config", &self.self_config)
             .finish()
     }
 }
 
-/// Resolves `(name, description)` pairs for the agent's spawnable subagent
-/// targets. The description comes directly from the configured
-/// [`SubagentTarget`] -- there is no DB lookup, so this works identically for
-/// local and remote (cross-node) targets and never blocks runtime startup.
 pub(crate) fn resolve_subagent_target_descriptions(
     tool_surface: &ToolSurface,
 ) -> Vec<(String, String)> {

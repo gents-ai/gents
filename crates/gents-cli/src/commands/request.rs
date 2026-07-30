@@ -1134,8 +1134,6 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 }
 
 async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<Value> {
-    // request_id is expected to be unique; keep DESC+limit defensive for older
-    // data and consistent with `request show`.
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1311,8 +1309,6 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         None,
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
-            // Preserve sampling overrides + metadata from the original row.
-            // Dropping these would silently change model behavior on retry.
             temperature: stale.temperature,
             top_p: stale.top_p,
             top_k: stale.top_k,

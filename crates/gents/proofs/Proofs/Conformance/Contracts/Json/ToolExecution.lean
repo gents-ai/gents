@@ -4,13 +4,6 @@ import Proofs.ToolExecution
 import Proofs.MCPHealth.Executable
 import Proofs.BackendHealth.Executable
 
-/-!
-# Tool Execution JSON
-
-Serializers for native filesystem, managed-exec, ToolExecution, and MCP health
-contract rows.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

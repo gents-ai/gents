@@ -341,14 +341,12 @@ fn prune_deletes_unreferenced_orphan_backend() {
 
 #[test]
 fn prune_blocks_backend_referenced_by_behavior() {
-    // Both live-only; the behavior references the backend.
     let desired = empty_manifest("did:test:test");
     let mut live = empty_manifest("did:test:test");
     live.inference_backends.push(backend("k1"));
     live.agent_behaviors.push(behavior_with("b1", Some("k1")));
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
-    // The referrer (behavior) is deletable; the referenced backend is NOT.
     assert!(deletes_contain(
         &deletes,
         gents::Collection::AgentBehavior,
@@ -390,7 +388,6 @@ fn prune_blocks_task_referenced_by_schedule_and_trigger() {
         .push(sample_event_trigger_for("e1", "t1"));
 
     let deletes = super::prune::prune_safe_deletes(&desired, &live);
-    // schedule + trigger reference the task; task must be protected.
     assert!(deletes_contain(&deletes, gents::Collection::Schedule, "s1"));
     assert!(deletes_contain(
         &deletes,
@@ -421,7 +418,6 @@ fn diff_manifests_prune_records_deletes_in_collection_diff() {
         report.collections.inference_backends.delete,
         vec!["k-orphan".to_string()]
     );
-    // Pruned doc moves out of live_only.
     assert!(report.collections.inference_backends.live_only.is_empty());
 }
 
@@ -807,8 +803,6 @@ mod load_manifest_root {
     use std::fs;
     use tempfile::tempdir;
 
-    /// Write a minimal but fully valid manifest root: one principal with a
-    /// `default_behavior_id` pointing to the single behavior in `agent-behaviors/default/`.
     fn write_minimal_root(root: &std::path::Path) {
         fs::write(
             root.join("agent-principal.json"),
@@ -894,7 +888,6 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        // Overwrite the default behavior with one that references a sidecar.
         let behavior_dir = tmp.path().join("agent-behaviors").join("default");
         fs::write(
             behavior_dir.join("object.json"),
@@ -930,7 +923,6 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        // Overwrite the default behavior to reference a missing sidecar file.
         let behavior_dir = tmp.path().join("agent-behaviors").join("default");
         fs::write(
             behavior_dir.join("object.json"),
@@ -956,14 +948,11 @@ mod load_manifest_root {
         );
     }
 
-    // Ported from PR #68 (EventTrigger): adapted from flat-file format to the
-    // per-doc layout introduced by PR #67.
     #[test]
     fn loads_event_trigger_from_per_doc_dir() {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        // Add a task so the event trigger's task_id reference is valid.
         let task_dir = tmp.path().join("tasks").join("summarize-inbox");
         fs::create_dir_all(&task_dir).unwrap();
         fs::write(
@@ -979,7 +968,6 @@ mod load_manifest_root {
         )
         .unwrap();
 
-        // Add an event trigger in the per-doc directory layout.
         let trigger_dir = tmp.path().join("event_triggers").join("new-customer-greet");
         fs::create_dir_all(&trigger_dir).unwrap();
         fs::write(
@@ -1175,17 +1163,13 @@ mod load_manifest_root {
         assert!(written.get("updated_at").is_none());
     }
 
-    // Ported from PR #68: deprecated capability fields on DesiredInferenceBackend
-    // must be ignored by serde (deny_unknown_fields is NOT set on that struct).
     #[test]
     fn deprecated_backend_capability_fields_are_ignored() {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        // Write an inference-backend per-doc dir with deprecated capability fields.
         let backend_dir = tmp.path().join("inference-backends").join("local");
         fs::create_dir_all(&backend_dir).unwrap();
-        // Write with deprecated capability fields; serde must ignore them.
         fs::write(
             backend_dir.join("object.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -1474,8 +1458,6 @@ fn validate_rejects_non_positive_stream_liveness_timeout() {
     );
 }
 
-// ── subagent_targets structural validation ──────────────────────────────────
-
 #[test]
 fn validate_rejects_empty_string_in_subagent_targets() {
     let mut manifest = manifest_with_default_behavior();
@@ -1577,15 +1559,12 @@ fn validate_rejects_duplicate_subagent_target_name() {
     );
 }
 
-// ── cross-deployment delegation flag (deferred, default-OFF) #377 ────────────
-
 #[test]
 fn validate_rejects_remote_did_target_when_cross_deployment_off() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");
     sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
-    // Flag defaults to false: cross-deployment is OFF.
     sel.subagent_allow_cross_deployment = false;
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "remote-researcher",
@@ -1637,7 +1616,6 @@ fn validate_accepts_local_did_target_when_cross_deployment_off() {
     sel.agent_did = "did:test:test".to_string();
     sel.subagent_spawn_enabled = true;
     sel.subagent_allow_cross_deployment = false;
-    // Same DID as the selection -> local target, allowed even with flag off.
     sel.subagent_targets = vec![gents::subagent_target_entry(
         "local-researcher",
         "did:test:test",
@@ -1655,13 +1633,6 @@ fn validate_accepts_local_did_target_when_cross_deployment_off() {
     );
 }
 
-// ── write_tools deserializer canonical-convergence (no false drift) ──────────
-
-/// The no-false-drift guarantee depends on `deserialize_write_tools_storage`
-/// canonicalizing BOTH the manifest object-list shape AND the live `[String]`
-/// shape (which may differ in key ordering / omitted optionals) to the SAME
-/// `Vec<String>`. Drive both shapes through `DesiredToolSelection` (where the
-/// custom deserializer is wired) and assert they converge byte-for-byte.
 #[test]
 fn write_tools_deserializer_converges_object_and_string_shapes() {
     fn deser_write_tools(write_tools: serde_json::Value) -> Vec<String> {
@@ -1680,7 +1651,6 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
         parsed.write_tools
     }
 
-    // Manifest authoring shape: a list of WriteToolDecl objects.
     let object_list = deser_write_tools(json!([
         {
             "tool_name": "request_action",
@@ -1689,8 +1659,6 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
         }
     ]));
 
-    // Live `[String]` shape: the SAME decl, written as a JSON string with a
-    // DIFFERENT key ordering and the optional `description` omitted.
     let string_list = deser_write_tools(json!([
         "{\"collection\":\"ActionRequest\",\"fields\":[{\"required\":true,\"name\":\"drift_sig\"}],\"tool_name\":\"request_action\"}"
     ]));
@@ -1701,10 +1669,6 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
     );
 }
 
-// ── write_tools structural validation (parity w/ subagent_targets) ───────────
-
-/// Encode a `WriteToolDecl` into the `[String]` storage form the manifest
-/// carries (one canonical-JSON string per decl).
 fn write_tool_storage_entry(decl: &gents::WriteToolDecl) -> String {
     serde_json::to_string(decl).expect("WriteToolDecl serializes to JSON")
 }
@@ -2349,7 +2313,6 @@ fn export_bundle_round_trip_preserves_tasks_and_schedules() {
     let round_tripped = manifest_from_export_bundle(bundle.as_bundle())
         .expect("manifest should parse back from bundle");
 
-    // `manifest_from_export_bundle` normalizes (sorts by id).
     let task_ids: Vec<_> = round_tripped
         .tasks
         .iter()
@@ -2424,13 +2387,11 @@ fn hydrate_sidecar_rejects_parent_component_in_rel_path() {
     use super::load::hydrate_sidecar;
     use tempfile::tempdir;
 
-    // Create a sibling file OUTSIDE the doc directory.
     let tmp = tempdir().unwrap();
     let json_dir = tmp.path().join("doc-dir");
     fs::create_dir_all(&json_dir).unwrap();
     fs::write(tmp.path().join("sibling.md"), "secret contents").unwrap();
 
-    // ./../sibling.md has a ParentDir component in the relative part.
     let mut value = Some("./../sibling.md".to_string());
     let err = hydrate_sidecar(&mut value, &json_dir).unwrap_err();
     assert!(err.contains("escapes document directory"), "got: {err}");
@@ -2446,7 +2407,6 @@ fn hydrate_sidecar_rejects_nested_parent_component() {
     fs::create_dir_all(&json_dir).unwrap();
     fs::write(tmp.path().join("outside.md"), "not yours").unwrap();
 
-    // ./inner/../../outside.md resolves outside the doc dir.
     let mut value = Some("./inner/../../outside.md".to_string());
     let err = hydrate_sidecar(&mut value, &json_dir).unwrap_err();
     assert!(err.contains("escapes document directory"), "got: {err}");
@@ -2772,7 +2732,6 @@ pub(super) mod write_manifest_root {
             err.contains("does not contain agent-principal.json"),
             "got: {err}"
         );
-        // File was not deleted.
         assert!(tmp.path().join("random.txt").exists());
     }
 
@@ -2786,11 +2745,8 @@ pub(super) mod write_manifest_root {
 
     #[test]
     fn preflight_unsafe_id_does_not_delete_existing_root() {
-        // Regression: if force=true and the manifest contains an unsafe id,
-        // the old root must be left intact (pre-flight runs before prepare_root).
         let tmp = tempdir().unwrap();
 
-        // Set up a pre-existing valid manifest root.
         fs::write(
             tmp.path().join("agent-principal.json"),
             b"{\"agent_did\":\"did:key:old\",\"enabled\":true}",
@@ -2800,10 +2756,7 @@ pub(super) mod write_manifest_root {
         fs::create_dir_all(&old_behavior_dir).unwrap();
         fs::write(old_behavior_dir.join("object.json"), b"{}").unwrap();
 
-        // Build a manifest where the second behavior has an unsafe id.
         let mut bad_manifest = minimal_manifest();
-        // First behavior (inherited from minimal_manifest) is fine.
-        // Add a second behavior with a path-traversal id.
         bad_manifest.agent_behaviors.push(DesiredAgentBehavior {
             behavior_id: "bad/id".to_string(),
             agent_did: "did:key:example".to_string(),
@@ -2826,8 +2779,6 @@ pub(super) mod write_manifest_root {
         let err = write_manifest_root(tmp.path(), &bad_manifest, true).unwrap_err();
         assert!(err.contains("filesystem-unsafe"), "got: {err}");
 
-        // The old root must still be intact: pre-flight must have run before
-        // prepare_root deleted anything.
         assert!(
             tmp.path().join("agent-principal.json").exists(),
             "old agent-principal.json was deleted before pre-flight finished"
@@ -2841,8 +2792,6 @@ pub(super) mod write_manifest_root {
     #[test]
     fn force_removes_stray_files_from_previous_export() {
         let tmp = tempdir().unwrap();
-        // Simulate a previous export: agent-principal.json present (sentinel) plus a
-        // stale behavior directory from a prior run.
         fs::write(
             tmp.path().join("agent-principal.json"),
             b"{\"agent_did\":\"did:key:stale\",\"enabled\":false}",
@@ -2858,11 +2807,8 @@ pub(super) mod write_manifest_root {
 
         write_manifest_root(tmp.path(), &minimal_manifest(), true).unwrap();
 
-        // Leftover is gone.
         assert!(!tmp.path().join("leftover.txt").exists());
-        // Old behavior dir is gone.
         assert!(!tmp.path().join("agent-behaviors/old-name").exists());
-        // New content is present.
         assert!(tmp
             .path()
             .join("agent-behaviors/default/object.json")

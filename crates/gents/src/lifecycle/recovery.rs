@@ -8,11 +8,6 @@ use super::*;
 
 impl RequestLifecycle {
     pub async fn recover_all(node: &EmbeddedNode, agent_did: &str) -> Result<RecoveryReport> {
-        // Load-bearing order: first make every stale response terminal (and
-        // manufacture missing response documents), then treat those terminal
-        // responses as durable request-repair intent. Do not collapse this
-        // sequence back into a struct literal whose field order is easy to
-        // reorder during refactoring.
         let responses_recovered = recover_stuck_responses(node, agent_did).await?
             + recover_missing_response_documents(node, agent_did).await?;
         let requests_recovered = Self::repair_terminal_requests(node, agent_did)
@@ -198,12 +193,6 @@ impl RequestLifecycle {
         })
     }
 
-    /// Finish request terminalization from a durable terminal `AgentResponse`.
-    ///
-    /// This is safe on the live 5s tick: an actively executing request has no
-    /// terminal response and is skipped. A terminal response paired with an
-    /// owned `claimed`/`processing` request is a durable repair obligation, so
-    /// restart or bounded immediate-write exhaustion cannot cause re-execution.
     pub async fn repair_terminal_requests(
         node: &EmbeddedNode,
         agent_did: &str,
@@ -554,14 +543,10 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
     Ok(recovered)
 }
 
-/// Outcome of one conversation-recovery pass.
 #[derive(Debug, Default)]
 struct ConversationRecoveryOutcome {
-    /// Sessions whose canonical doc (and any duplicates) were terminalized.
     recovered: usize,
-    /// Sessions whose write failed — still stuck, retried on the next pass.
     failed: usize,
-    /// Sessions carrying more than one doc.
     duplicate_sessions: usize,
 }
 
@@ -628,8 +613,6 @@ async fn recover_stuck_conversations(
         .cloned()
         .unwrap_or_default();
 
-    // Group by session: a session holding more than one doc is the #693
-    // duplicate condition.
     let mut sessions: BTreeMap<String, Vec<StuckConversationRow>> = BTreeMap::new();
     for row in &rows {
         let parsed = StuckConversationRow::from_row(row);
@@ -674,8 +657,6 @@ async fn recover_stuck_conversations(
             _ => "active",
         };
 
-        // Every doc in the group is terminalized, so the group stops being stale
-        // and the next pass converges (Lean: `conversation_recover_zero`).
         let mut session_failed = false;
         for doc in &docs {
             if let Err(error) =
@@ -717,7 +698,6 @@ async fn recover_stuck_conversations(
     Ok(outcome)
 }
 
-/// One stuck `AgentConversation` row.
 #[derive(Debug, Clone, Default)]
 struct StuckConversationRow {
     doc_id: String,
@@ -767,9 +747,6 @@ impl StuckConversationRow {
     }
 }
 
-/// Write one conversation doc by `_docID`, carrying the canonical document's
-/// content so duplicates converge onto it. Never addresses `session_id`: that
-/// filter matches every duplicate and DefraDB refuses the write (#693).
 async fn update_conversation_status_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,

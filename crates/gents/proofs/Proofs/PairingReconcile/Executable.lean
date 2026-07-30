@@ -1,16 +1,9 @@
 import Proofs.PairingReconcile.Transition
 
-/-!
-# Pairing Reconcile Executable Contract
-
-Small executable vocabulary consumed by the Rust conformance bridge.
--/
-
 namespace PairingReconcile
 
 def domainName : String := "PairingReconcile"
 
-/-- Coarse phase vocabulary for contract extraction. -/
 inductive PairingPhase where
   | idle
   | diverged
@@ -39,7 +32,6 @@ theorem fromContract_toContract (phase : PairingPhase) :
 
 end PairingPhase
 
-/-- Stringly-typed transition kinds emitted by the supervisor. -/
 inductive TransitionKind where
   | operatorWrite
   | operatorDelete
@@ -86,7 +78,6 @@ theorem fromString_toString (k : TransitionKind) :
 
 end TransitionKind
 
-/-- Executable coarse transition relation for conformance extraction. -/
 def step? : PairingPhase → TransitionKind → Option PairingPhase
   | .idle, .operatorWrite => some .diverged
   | .converged, .operatorWrite => some .diverged

@@ -81,7 +81,7 @@ async fn interrupt_request_returns_already_interrupted_for_second_call() {
     )
     .await
     .expect("second");
-    assert!(second.accepted); // idempotent re-interrupt is still accepted
+    assert!(second.accepted);
     assert!(second.already_interrupted);
 }
 
@@ -93,7 +93,7 @@ async fn interrupt_request_rejects_non_user_cancelled_cause() {
         &DesktopInterruptRequest {
             request_id: "req_solo".into(),
             agent_did: None,
-            cause: "deadline".into(), // not operator-authentic
+            cause: "deadline".into(),
             cascade: false,
             expected_preview_signature: None,
         },
@@ -190,7 +190,7 @@ async fn interrupt_request_cascade_returns_stale_preview_when_signature_drifts()
             agent_did: Some("did:test:operator".into()),
             cause: "userCancelled".into(),
             cascade: true,
-            expected_preview_signature: Some("00".repeat(32)), // wrong sig
+            expected_preview_signature: Some("00".repeat(32)),
         },
     )
     .await

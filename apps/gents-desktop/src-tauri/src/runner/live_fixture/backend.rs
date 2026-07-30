@@ -93,9 +93,6 @@ pub(crate) struct LiveSubagentBackendOverride {
 }
 
 impl AgentBackendConfig {
-    /// Resolve a subagent-specific override. Returns `Ok(None)` when no
-    /// subagent endpoint is configured (the fixture should fall back to the
-    /// primary backend in that case).
     pub(crate) fn resolve_subagent(
         override_config: Option<&LiveSubagentBackendOverride>,
         primary: &AgentBackendConfig,

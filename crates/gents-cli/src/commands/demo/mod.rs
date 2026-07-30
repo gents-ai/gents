@@ -1,17 +1,3 @@
-//! `gents demo` — an interactive, self-contained fleet demo that ships in
-//! the binary. It boots a single curated local agent (read-only tools + demo
-//! skills) backed by a real model (interactive first-run backend picker,
-//! persisted), and drops into an interactive `demo>` shell: `chat` with the
-//! agent, `pair` a 2nd node (worker), `delegate` cross-node subagent work,
-//! `desktop` to open the paired desktop client, and `reconfigure` the backend.
-//!
-//! The command is split into focused modules:
-//! - [`backend`] — resolve/persist the inference backend (no mock, ever)
-//! - [`setup`] — persistent home, curated `init`, demo skills
-//! - [`fleet`] — node lifecycle plus `pair`/`delegate`/`desktop`
-//! - [`shell`] — the interactive `demo>` REPL, chat, and `reconfigure`
-//! - [`util`] — shared subprocess/prompt plumbing (one async stdin reader)
-
 mod backend;
 mod fleet;
 mod setup;
@@ -40,11 +26,8 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     let work = home.join("work");
     let backend_file = home.join("demo-backend.json");
 
-    // One owned stdin reader drives the picker, the shell, and reconfigure.
     let mut reader = BufReader::new(tokio::io::stdin()).lines();
 
-    // First run sets up; later runs resume the saved agent. The backend args are
-    // persisted so a resumed session (and a paired node B) reuse the same backend.
     let (agent_did, first_run, backend) = match read_agent_did(&home) {
         Some(did) => {
             println!("Resuming your demo agent ({}).", short(&did));
@@ -63,8 +46,6 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
         }
     };
 
-    // The tool root must exist when the server boots; `init --dangerously-overwrite`
-    // wipes the home, so (re)create it here for both first-run and resume.
     std::fs::create_dir_all(&work)
         .with_context(|| format!("creating demo tool root {}", work.display()))?;
 

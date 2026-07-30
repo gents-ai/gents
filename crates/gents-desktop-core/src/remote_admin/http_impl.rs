@@ -1,5 +1,3 @@
-//! HTTP transport implementation for `RemoteP2pAdmin`.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,16 +20,10 @@ pub const ACTOR_SIGNATURE_VERSION_HEADER: &str = "x-defra-actor-signature-versio
 pub const ACTOR_SIGNATURE_VERSION: &str = "p2p-admin-v1";
 
 pub struct HttpRemoteP2pAdmin {
-    /// `http://host:port/api/v0`, used to compose `/p2p/*` URLs.
     api_base: String,
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    /// Local node used to resolve collection name ↔ id. Collection ids are
-    /// content-addressed from the schema, so the id for a given name is identical
-    /// on the local and remote nodes (the schema is replicated). The remote P2P
-    /// subscription set is tracked in id-space (`list_p2p_collections` returns
-    /// ids), so the reconcile diff must resolve desired names to ids here.
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
@@ -47,8 +39,6 @@ impl HttpRemoteP2pAdmin {
         Self::new_inner(graphql_url, Some(actor))
     }
 
-    /// Attach a local node used to resolve collection name ↔ id for the reconcile
-    /// diff. See [`HttpRemoteP2pAdmin::local_resolver`].
     pub fn with_local_resolver(mut self, node: Arc<EmbeddedNode>) -> Self {
         self.local_resolver = Some(node);
         self
@@ -136,13 +126,10 @@ struct AddReplicatorBody<'a> {
     collections: &'a [String],
     #[serde(rename = "Addresses")]
     addresses: &'a [String],
-    /// Per-collection equality predicates (defradb.rs #1033 filtered
-    /// replication). Empty map = whole-collection (unfiltered) replication.
     #[serde(rename = "Filters", skip_serializing_if = "BTreeMap::is_empty")]
     filters: BTreeMap<String, HttpReplicationFilter>,
 }
 
-/// Mirrors defradb's `ReplicationFilter` HTTP wire shape (`{Field, Value}`).
 #[derive(Debug, Serialize)]
 struct HttpReplicationFilter {
     #[serde(rename = "Field")]
@@ -307,10 +294,6 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     }
 
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // Resolve against the local schema: collection ids are content-addressed,
-        // so the id for `name` is identical on the remote node whose subscription
-        // set we are reconciling. Without a local resolver we cannot map to the
-        // id-space the remote tracks, so we defer (Ok(None)) rather than churn.
         let Some(node) = self.local_resolver.as_ref() else {
             return Ok(None);
         };

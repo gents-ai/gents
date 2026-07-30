@@ -10,11 +10,11 @@ use gents::config::{
 };
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_config_bootstrap_schemas, load_agent_behavior,
-    load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, upsert_inference_profile,
-    wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    AgentBehaviorDocument, AgentIdentity, InferenceProfile, KeyIdentity, ToolSelectionDocument,
+    default_tool_selection_id_for_behavior, load_agent_behavior, load_agent_principal,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    upsert_agent_principal, upsert_inference_profile, wide_open_tool_selection_document,
+    wide_open_tool_selection_id_for_agent, AgentBehaviorDocument, AgentIdentity, InferenceProfile,
+    KeyIdentity, ToolSelectionDocument,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -69,9 +69,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     if matches!(tool_package, ToolPackageArg::Yolo) {
         eprintln!("{YOLO_WARNING}");
     }
-    // First-run ergonomics: when nothing names a backend and we have a
-    // terminal, ask instead of silently defaulting to a local llama-server
-    // that may not be running. No-op under pipes/CI/--identity-only.
     crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
     if args.dangerously_overwrite {
         dangerously_overwrite_home(&home_dir)?;
@@ -157,12 +154,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node for init")?,
     );
-    ensure_config_bootstrap_schemas(node_arc.as_ref()).await?;
-    // Single sanctioned migration entry point: run the FULL set BEFORE the first
-    // load_agent_behavior call below. On an upgraded DB (e.g. created before
-    // #377, or before the conversation scope key), bootstrap schema-adds silently
-    // skip patching existing collections; without the full migration set,
-    // re-running init against such a DB crashes with "unknown field" errors.
     gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
     let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
         unreachable!("node_arc had exactly one strong reference at this point")
@@ -195,9 +186,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         false
     };
 
-    // Config is fully persisted; the inline ChatGPT login is best-effort and
-    // never fails init (a declined or failed login just leaves the next_steps
-    // guidance in place).
     let codex_login =
         maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
 
@@ -240,11 +228,6 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     Ok(())
 }
 
-/// Offer to complete ChatGPT sign-in inline when `init` just seeded a
-/// chatgpt-codex backend interactively and no credential exists yet. Returns
-/// Existing credentials count as authenticated without producing a fresh login
-/// result. Non-codex backends, non-terminal sessions, declined prompts, and
-/// failed logins remain unauthenticated here; none of those are init failures.
 enum InlineCodexLoginState {
     Unauthenticated,
     ExistingCredential,
@@ -599,10 +582,6 @@ async fn initialize_runtime_home(
     );
     write_tool_selection_document(access, &tool_selection).await?;
 
-    // Seed the canonical per-principal `wide-open` preset (design §3.2): a
-    // permissive ToolSelection an operator can point any behavior at to restore
-    // today's permissive surface under the unified policy. Reproduces the
-    // legacy-permissive value-set and is stamped at the current policy version.
     let wide_open_preset_id = wide_open_tool_selection_id_for_agent(agent_did);
     let wide_open_preset = wide_open_tool_selection_document(agent_did);
     write_tool_selection_document(access, &wide_open_preset).await?;
@@ -700,7 +679,6 @@ fn tool_selection_for_package(
         enable_defra_query: Some(enable_defra_query),
         defra_query_collections: Some(defra_query_collections),
         write_tools: None,
-        // Self-config (#654) is opt-in only: no init package seeds it.
         enable_self_config: None,
         self_config_categories: None,
         self_config_no_lockout: None,
@@ -763,8 +741,6 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_bash: true,
             bash_mode: "ReadOnly",
             enable_meta_tools: true,
-            // defra_query is opt-in (#592); the introspection package is the
-            // only one that turns it on by default.
             enable_defra_query: false,
         },
         ToolPackageArg::Write => ToolPackageProfile {
@@ -776,8 +752,6 @@ fn tool_package_profile(tool_package: ToolPackageArg) -> ToolPackageProfile {
             enable_meta_tools: true,
             enable_defra_query: false,
         },
-        // Yolo's tool surface IS the write surface; only the execution policy
-        // (default_command_execution_policy_for_init) differs.
         ToolPackageArg::Yolo => ToolPackageProfile {
             display_name: "Unrestricted Write Tools (YOLO)",
             ..tool_package_profile(ToolPackageArg::Write)
@@ -899,9 +873,6 @@ fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
 
 fn init_next_steps(summary: &InitSummary, codex_logged_in: bool) -> Vec<String> {
     let mut steps = Vec::new();
-    // The chatgpt-codex backend authenticates with an OAuthCredential, not an
-    // API key: sign in first or the first chat turn has no token. When the
-    // inline login already ran, this step is done.
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
         steps.push("gents codex-login".to_string());
     }
@@ -1315,7 +1286,6 @@ mod tests {
             Some(vec!["bash_unrestricted".to_string()])
         );
 
-        // --write keeps containment on macOS; --yolo never does.
         assert_eq!(
             default_command_execution_policy_for_init(ToolPackageArg::Write).as_deref(),
             if cfg!(target_os = "macos") {

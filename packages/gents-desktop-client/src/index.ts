@@ -31,5 +31,4 @@ export * from "./commandDenial.js";
 export * from "./events.js";
 export * from "./types.js";
 
-/** Documented narrow layout breakpoint (px). Packages use this constant. */
 export const NARROW_BREAKPOINT_PX = 760;

@@ -25,7 +25,7 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     let now = Utc::now();
     let age_cutoff = age_cutoff(args.age_gt.as_deref(), now)?;
     let (access, _home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let tool_calls = load_background_tool_calls(&access, &args, age_cutoff).await?;
     let liveness = match &access {
         ConfigAccess::Graphql(graphql) => {
@@ -115,9 +115,6 @@ fn build_output_rows(
         .map(|row| row.tool_call_id.as_str())
         .collect::<BTreeSet<_>>();
     let mut native_by_tool_name: BTreeMap<&str, Vec<NativeExecutorView>> = BTreeMap::new();
-    // Native executor liveness currently identifies the executable/tool, not
-    // the specific AgentToolCall that spawned it. Treat these as tool-name
-    // matches only.
     for executor in &liveness.active_native_executors {
         if let Some(tool_name) = executor.tool_name.as_deref() {
             native_by_tool_name

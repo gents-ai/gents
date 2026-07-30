@@ -4,13 +4,6 @@ mod lean_vocab_test;
 use crate::types::{SubagentEdgeView, SubagentNodeView, SubagentTreeView};
 use lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeploymentCase};
 
-/// Build a UI-shaped `SubagentTreeView` from a Lean R5 cross-deployment case.
-///
-/// The desktop panel renders this exact shape — the runtime `/subagents/tree`
-/// handler emits it, and `SubagentLineageView` consumes it. Synthesizing it
-/// here from the Lean witness lets us assert that every UI-renderable
-/// invariant the contract describes (deployment split, bridge metadata,
-/// caused-by lineage) survives the trip into the operator surface.
 fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> SubagentTreeView {
     SubagentTreeView {
         partial_errors: Vec::new(),
@@ -153,11 +146,6 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
             );
         }
 
-        // Round-trip through serde camelCase to confirm the panel receives the
-        // same shape the bridge serializes. The runtime handler emits this
-        // shape; the bridge re-serializes it for the React panel; the React
-        // panel reads camelCase. A field rename here would break the whole
-        // chain at once.
         let payload = serde_json::to_string(&view).expect("serialize subagent tree");
         assert!(payload.contains("\"rootRequestId\""), "{}", case.name);
         assert!(

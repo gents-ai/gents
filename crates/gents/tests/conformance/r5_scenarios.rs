@@ -24,9 +24,6 @@ async fn run_scenario(filename: &str) -> Vec<Observation> {
 
 async fn run_crash_scenario(filename: &str) -> Vec<Observation> {
     let history = run_scenario(filename).await;
-    // Crash fixtures must cross a real process boundary; these checks fail if
-    // Crash is deleted or restored as a no-op while the fixture still claims
-    // a crash (false-green regression from the pre-fix harness).
     invariants::assert_crash_boundary(&history);
     history
 }
@@ -40,9 +37,6 @@ async fn r5_happy_path() {
 async fn r5_b_crash_mid_execution() {
     let history = run_crash_scenario("b_crash_mid_execution.json").await;
     let last = history.last().expect("non-empty history");
-    // Cross-deployment background subagent: B crashes mid-execution, recovery
-    // preserves the durable processing child, then a terminal failure projects
-    // onto A's bridge exactly once (not R6 native-tool interrupt-on-restart).
     let bridge = last
         .a_bridge_rows
         .iter()
@@ -60,7 +54,6 @@ async fn r5_b_crash_mid_execution() {
         last.b_process_generation >= 1,
         "B must have crossed at least one process crash boundary"
     );
-    // Projection side effects are durable and unique.
     assert_eq!(
         last.subagent_notifications.len(),
         1,
@@ -72,9 +65,6 @@ async fn r5_b_crash_mid_execution() {
 async fn r5_a_crash_mid_wait() {
     let history = run_crash_scenario("a_crash_mid_wait.json").await;
     let last = history.last().expect("non-empty history");
-    // A crashes while waiting on a background child; child terminals that
-    // land while A is down (and after a second crash window) must each
-    // project exactly once onto the durable parent bridge.
     let before = last
         .a_bridge_rows
         .iter()
@@ -97,7 +87,6 @@ async fn r5_a_crash_mid_wait() {
         2,
         "each completed background child projects one notification"
     );
-    // Wakeups coalesce per parent session; two parent requests ⇒ two sessions.
     assert_eq!(
         last.background_wakeup_keys.len(),
         2,

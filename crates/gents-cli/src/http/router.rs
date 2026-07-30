@@ -25,9 +25,6 @@ use crate::shared::P2pAdmissionState;
 use gents::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
-/// Hard budget for the multi-hop P2P self-fetch on the scrape path. Must stay
-/// well under Prometheus's typical 10s scrape_timeout so inference/backend
-/// metrics still return during hub saturation (#630 review on #670).
 const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
 
 #[derive(Clone)]
@@ -37,18 +34,9 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) agent_did: String,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
-    /// The in-process runtime's measured backend health (#640) — the serve
-    /// command shares the same handle the prober writes, so the metrics
-    /// endpoint reports measurement, not the stored document constant.
-    /// `None` when the HTTP surface runs without an in-process runtime.
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
-    /// P2P admission knobs resolved at serve start (`None` when P2P disabled).
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
-    /// Last successful live P2P snapshot for non-blocking `/metrics` scrapes.
-    /// Shared across clones of this state.
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
-    /// Shared HTTP client for P2P self-status fetches on the scrape path
-    /// (reuses connection pool; do not rebuild per scrape — #670).
     pub(crate) p2p_http_client: reqwest::Client,
     /// The Codex shim's live binding. Shared because the shim may bind after the
     /// HTTP surface is already serving (#699). `None` when the host does not run
@@ -69,8 +57,6 @@ pub(crate) fn runtime_contract_router(
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
-    // Prefer the process-wide P2P client so CLI admin paths and /metrics share
-    // one pool. Fall back to a one-off builder only if OnceLock init fails.
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
@@ -128,8 +114,6 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
         Some(map) => map.snapshot().await,
         None => Default::default(),
     };
-    // Never block the whole scrape on multi-hop P2P self-HTTP. Prefer a short
-    // budget + last-known counts so inference/backend metrics still ship.
     let p2p_metrics = load_p2p_metrics_for_scrape(&state).await;
     match render_prometheus_metrics(
         &state.graphql,
@@ -149,8 +133,6 @@ async fn metrics_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 }
 
-/// Refresh live P2P state under a hard budget; on timeout/error hold the last
-/// successful snapshot (or admission-only bootstrap) and mark `stale`.
 async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnapshot {
     let cached = state
         .p2p_metrics_cache
@@ -174,14 +156,12 @@ async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnap
         }
         Ok(Err(_)) | Err(_) => {
             if let Some(mut snap) = cached {
-                // Hold last-known live state; refresh admission from the
-                // serve-start snapshot so knobs stay accurate even when stale.
                 snap.admission = state.p2p_admission.clone();
                 snap.enabled = state.p2p_admission.is_some() || snap.enabled;
                 snap.stale = true;
                 snap
             } else {
-                p2p_metrics_admission_only(state, /*stale=*/ true)
+                p2p_metrics_admission_only(state, true)
             }
         }
     }
@@ -236,8 +216,6 @@ fn p2p_metrics_from_status(
         .and_then(Value::as_u64)
         .map(|n| n as usize)
         .unwrap_or(0);
-    // Prefer serve-start admission over anything embedded in the HTTP status
-    // payload so knobs stay authoritative even if runtime.json is stale.
     let admission = admission.cloned().or_else(|| {
         p2p.get("p2p_admission")
             .cloned()
@@ -311,8 +289,6 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
         }),
     };
 
-    // Best-effort surfacing of the agent's own behaviors (with backend/profile
-    // joined) and a context-budget summary. Failures here must not fail /status.
     if body.get("error").is_none() {
         if let Ok((behaviors, context_budget, context)) =
             load_self_view(&state.graphql, &state.agent_did).await
@@ -358,8 +334,6 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
         };
 
     match load_self_view(&state.graphql, &state.agent_did).await {
-        // `/self` already returns the full `context_budget`; the compact context
-        // indicator (third tuple element, surfaced on `/status`) is redundant here.
         Ok((behaviors, context_budget, _context_indicator)) => {
             let body = render_self_payload(
                 &state,

@@ -1,38 +1,9 @@
 import Proofs.PromptAssembly.Executable
 
-/-!
-# PromptAssembly Properties (issue #448)
-
-The provider-input narrowing theorems, in the labeling of the design:
-
-- **T1 `sanitize_sound`** — under `UniqueCallIds` (call ids are uuids — the
-  system invariant), `sanitize` always produces active-block-valid provider
-  history.
-- **T2 `sanitize_fixpoint`** — `sanitize` is the identity on already-valid
-  history (with non-empty announcements, which `sanitize` itself always
-  outputs).
-- **T3 `sanitize_idempotent`** — T1 ∘ T2.
-- **T4 `sanitize_split_stable`** — a suffix of a unique transcript inherits
-  uniqueness, so T1 applies to pair-blind compaction windows.
-- **T5 `threaded_turn_fixpoint`** — the owned loop's threaded turn shape
-  (one assistant tool-call row followed by one result row per announced
-  call — the syntactic `ResultBlock` shape, bridged to validity by
-  `ResultBlock.activeBlockValid`) is a fixpoint of `sanitize`.
-
-The provider-valid shape is stricter than "some earlier call exists":
-ordinary conversation or a new assistant turn closes the active tool-call
-block. A late result for an older call is stale and must be dropped before
-unpaired assistant calls are filtered.
--/
-
 namespace PromptAssembly
 
 open Transcript (MessageRow MessageKind MessageRole)
 
-/-- Every assistant tool-call row announces at least one call. The Rust side
-only constructs tool-call messages from non-empty call lists; the
-`.assistantToolCalls ∅` row is a modeling artifact excluded here. `sanitize`
-re-establishes this unconditionally (`nonempty_filterCallsBy`). -/
 def NonemptyAnnouncements : List MessageRow → Prop
   | [] => True
   | row :: rest =>
@@ -59,8 +30,6 @@ theorem nonemptyAnnouncements_cons_other (row : MessageRow)
   | toolResult callId key => simp only [NonemptyAnnouncements, hk]
   | ordinary => simp only [NonemptyAnnouncements, hk]
 
-/-! ## Basic sanitizer-preservation lemmas -/
-
 theorem callsIn_dropOrphanedFrom (l : List MessageRow) :
     ∀ pending, callsIn (dropOrphanedFrom pending l) = callsIn l := by
   induction l with
@@ -83,8 +52,6 @@ theorem callsIn_dropOrphanedFrom (l : List MessageRow) :
         callsIn_cons_ordinary row _ hk, callsIn_cons_ordinary row rest hk,
         ih ∅]
 
-/-- Surviving tool results resolve either the active pending block or calls
-announced later in the scanned suffix. -/
 theorem resolvedIn_dropOrphanedFrom_subset (l : List MessageRow) :
     ∀ pending, resolvedIn (dropOrphanedFrom pending l) ⊆ pending ∪ callsIn l := by
   induction l with
@@ -122,10 +89,6 @@ theorem resolvedIn_dropOrphanedFrom_subset (l : List MessageRow) :
       exact Finset.mem_union_right _
         ((Finset.mem_union.mp ((ih ∅) hc)).elim (by intro h; simp at h) id)
 
-/-! ## dropUnpairedCalls lemmas -/
-
-/-- Call-filtering always outputs non-empty announcements (the empty-set
-branch drops the row). -/
 theorem nonempty_filterCallsBy (resolved : Finset ToolExecution.ToolCallId)
     (l : List MessageRow) :
     NonemptyAnnouncements (filterCallsBy resolved l) := by
@@ -193,8 +156,6 @@ theorem erase_inter_insert_eq (pending R : Finset ToolExecution.ToolCallId)
   · subst hEq
     simp
   · simp [Finset.mem_erase, hEq, eq_comm]
-
-/-! ## T1 + T4: soundness and split-stability -/
 
 theorem activeBlockValid_filterOrphanedFrom (l : List MessageRow) :
     ∀ pending,
@@ -285,10 +246,6 @@ theorem activeBlockValid_filterOrphanedFrom (l : List MessageRow) :
         activeBlockValidFrom_cons_ordinary row _ ∅ hk]
       exact ⟨rfl, ih ∅ huniq' (Finset.disjoint_empty_left _)⟩
 
-/-- **T1 (soundness).** Under unique call ids, `sanitize` always produces
-provider-valid history — for ANY input list, including the recent window of
-a pair-blind compaction split (T4) and arbitrarily corrupt loaded
-transcripts. -/
 theorem sanitize_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
     ProviderValid (sanitize msgs) := by
   unfold sanitize dropUnpairedCalls dropOrphanedResults
@@ -296,16 +253,10 @@ theorem sanitize_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
   simpa using
     activeBlockValid_filterOrphanedFrom msgs ∅ huniq (Finset.disjoint_empty_left _)
 
-/-- **T4 (split-stability).** Any suffix window — in particular the recent
-window of `split_messages_for_summary`, which is token-budgeted and
-pair-blind — sanitizes to provider-valid history. A direct corollary of T1
-plus uniqueness inheritance. -/
 theorem sanitize_split_stable {old recent : List MessageRow}
     (huniq : UniqueCallIds (old ++ recent)) :
     ProviderValid (sanitize recent) :=
   sanitize_sound (UniqueCallIds.of_append_right huniq)
-
-/-! ## T2 + T3: fixpoint and idempotence -/
 
 theorem dropOrphanedFrom_eq_self (l : List MessageRow) :
     ∀ pending, ActiveBlockValidFrom pending l → dropOrphanedFrom pending l = l := by
@@ -396,19 +347,6 @@ theorem filterCallsBy_eq_self (l : List MessageRow) :
       rw [filterCallsBy_cons_ordinary row rest R hk,
         ih R ∅ h.2 hne' hres']
 
-/-- **T2 (fixpoint / preservation).** `sanitize` is the identity on
-provider-valid history with non-empty announcements: nothing valid is ever
-dropped or reordered.
-
-The guarantee is exactly as wide as `ProviderValid`, and the active-block
-predicate is deliberately NARROWER than "paired somewhere": a result that
-is paired but arrives after its block closed (`[call A, ordinary,
-result A]`) is not provider-valid and IS dropped, together with its
-now-unpaired call — see the second pinned counterexample at the bottom of
-this file. That encodes the strict provider contract (Anthropic and OpenAI
-reject results that do not immediately close the announcing turn); lenient
-backends would have accepted the wider shape, and narrowing to the strict
-contract is the chosen tradeoff. -/
 theorem sanitize_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
     (hne : NonemptyAnnouncements msgs) : sanitize msgs = msgs := by
   unfold sanitize dropUnpairedCalls dropOrphanedResults
@@ -416,29 +354,15 @@ theorem sanitize_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
   exact filterCallsBy_eq_self msgs (resolvedIn msgs) ∅ hvalid.activeBlockValid
     hne (Finset.Subset.refl _)
 
-/-- `sanitize` always outputs non-empty announcements (the filter's
-empty-set branch drops the row), so T2 applies to its own output. -/
 theorem nonemptyAnnouncements_sanitize (msgs : List MessageRow) :
     NonemptyAnnouncements (sanitize msgs) :=
   nonempty_filterCallsBy _ _
 
-/-- **T3 (idempotence).** One pass through the boundary is enough. -/
 theorem sanitize_idempotent {msgs : List MessageRow}
     (huniq : UniqueCallIds msgs) :
     sanitize (sanitize msgs) = sanitize msgs :=
   sanitize_fixpoint (sanitize_sound huniq) (nonemptyAnnouncements_sanitize msgs)
 
-/-! ## T5: the owned loop's threaded turn is a fixpoint -/
-
-/-- The syntactic shape of the result block the owned loop threads after an
-assistant turn announcing `S`: one tool-result row per executed call, each
-closing a distinct pending id, jointly draining `S`. Defined WITHOUT
-reference to the validity predicate — this is what `loop_stream.rs` emits
-(every call gets exactly one result; even a vetoed call threads the
-rejection reason as its result). The bridge lemmas below connect this shape
-to provider validity; T5 must take the shape, not validity itself, as its
-hypothesis — otherwise the theorem assumes its conclusion and a loop change
-that stops draining `S` would make it vacuous. -/
 inductive ResultBlock : Finset ToolExecution.ToolCallId → List MessageRow → Prop
   | nil : ResultBlock ∅ []
   | cons {S : Finset ToolExecution.ToolCallId} {row : MessageRow}
@@ -448,7 +372,6 @@ inductive ResultBlock : Finset ToolExecution.ToolCallId → List MessageRow → 
       (hrest : ResultBlock (S.erase callId) rest) :
       ResultBlock S (row :: rest)
 
-/-- Bridge: the loop's threaded shape is an active result block. -/
 theorem ResultBlock.activeBlockValid {S : Finset ToolExecution.ToolCallId}
     {l : List MessageRow} (h : ResultBlock S l) : ActiveBlockValidFrom S l := by
   induction h with
@@ -457,8 +380,6 @@ theorem ResultBlock.activeBlockValid {S : Finset ToolExecution.ToolCallId}
     rw [activeBlockValidFrom_cons_result _ _ _ callId key hk]
     exact ⟨hmem, ih⟩
 
-/-- Bridge: a result block contains no assistant rows, so announcements are
-trivially non-empty. -/
 theorem ResultBlock.nonemptyAnnouncements {S : Finset ToolExecution.ToolCallId}
     {l : List MessageRow} (h : ResultBlock S l) : NonemptyAnnouncements l := by
   induction h with
@@ -468,12 +389,6 @@ theorem ResultBlock.nonemptyAnnouncements {S : Finset ToolExecution.ToolCallId}
       (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)]
     exact ih
 
-/-- **T5 (loop-threading validity).** The canonical turn the owned loop
-threads — one assistant tool-call row, then one result row per announced
-call (`ResultBlock`, the loop's syntactic emission shape) — is
-provider-valid and a fixpoint of `sanitize`. Formal justification for the
-`run_loop_stream` entry chokepoint sanitizing ONLY the loaded history: the
-loop's own in-flight messages need no repair. -/
 theorem threaded_turn_fixpoint {row : MessageRow}
     {S : Finset ToolExecution.ToolCallId} {results : List MessageRow}
     (hrow : row.kind = .assistantToolCalls S) (hne : S ≠ ∅)
@@ -487,12 +402,6 @@ theorem threaded_turn_fixpoint {row : MessageRow}
   rw [nonemptyAnnouncements_cons_assistant row results S hrow]
   exact ⟨hne, hresults.nonemptyAnnouncements⟩
 
-/-! ## Assembly order -/
-
-/-- The assembled request, fully unfolded: preamble first, then skill
-reminders, then the optional summary reminder, then the conversation, then
-the new prompt. Any reordering of `prompt.rs` / `daemon/request.rs` /
-`loop_stream.rs` layer composition breaks this `rfl`. -/
 theorem assemble_spec (skillCount summaryCount conversationLen : Nat) :
     assemble skillCount summaryCount conversationLen =
       Slot.preamble ::
@@ -509,28 +418,6 @@ theorem assemble_last (skillCount summaryCount conversationLen : Nat) :
     (assemble skillCount summaryCount conversationLen).getLast? =
       some Slot.prompt := by
   rw [assemble_spec, ← List.cons_append, List.getLast?_concat]
-
-/-! ## Counterexamples, repaired
-
-Pinned as executable evaluations so a semantics change here is a
-Lean-breaking change. Each has a Rust mirror so the fence holds on both
-sides of the conformance boundary.
-
-1. **Composition order.** `[result A, call A]` (a result PRECEDING its
-   call — backfill ordering or a P2P-merged transcript) must sanitize to
-   the empty list: the result is orphaned, and with it gone the call is
-   unpaired. The swapped composition (unpaired-drop first) kept the call —
-   a live Rust bug found while sketching T1. Rust mirrors:
-   `compaction/tests.rs::sanitize_repairs_result_preceding_its_call`,
-   conformance `t1_composition_order_result_before_call_sanitizes_to_empty`.
-
-2. **Ordinary conversation closes the block.** `[call A, ordinary,
-   result A]`: under the active-block contract the late result is stale,
-   so it is dropped and the call is then unpaired; only the ordinary row
-   survives. Rust mirrors:
-   `compaction/tests.rs::sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call`,
-   conformance `t1_result_after_conversation_resumes_sanitizes_to_plain_history`.
--/
 
 example :
     sanitize

@@ -46,7 +46,7 @@ struct PeerPairingAppliedRow {
 
 pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let rows = graphql_rows(&access, "PeerPairingDesired", pairings_list_query())
         .await
         .context("loading PeerPairingDesired rows")?;
@@ -76,12 +76,6 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
 
 pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let agent_did = required_trimmed(&args.agent_did, "--did")?;
-    // `--template` is the sole source of the pairing's collection scope: the
-    // reconciler derives collections + delivery + the agent_did filter from the
-    // template id alone (see `p2p_reconcile::load_desired`, which never reads the
-    // row's `collections`/`profiles`). We resolve the template's collection set
-    // here only as informational data on the row; the template id is
-    // authoritative.
     let template = resolve_pairing_template(&args.template)?;
     let collections = template_collections(&template);
     let addresses = expand_nonempty_values(&args.addresses, "--address")?;
@@ -89,7 +83,7 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let doc_id = write_pairing_desired(
         &access,
         &peer_id,
@@ -128,8 +122,6 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the pairing peer id: explicit `--peer`, else derived from the first
-/// shareable `--address` (ticket or multiaddr).
 fn resolve_set_peer_id(peer: Option<&str>, addresses: &[String]) -> Result<String> {
     if let Some(peer) = peer.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(peer.to_string());
@@ -148,7 +140,7 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
     let peer_id = required_trimmed(&args.peer_id, "--peer")?;
     let mutation = delete_pairing_mutation(&peer_id);
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let response = access
         .execute(&mutation)
         .await
@@ -167,9 +159,6 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
     Ok(())
 }
 
-/// Validate `--template` against the built-in scope-template catalog, returning
-/// the normalized id. An unknown template is a hard error (with the catalog
-/// listed) rather than a silent fallback, since the operator named it explicitly.
 pub(super) fn resolve_pairing_template(template: &str) -> Result<String> {
     use gents::agent::p2p_reconcile::templates::{
         builtin_templates, resolve_template, APP_COLLECTIONS_TEMPLATE,
@@ -325,11 +314,6 @@ pub(super) fn upsert_pairing_mutation(
     )
 }
 
-/// Resolve the collection set a scope template covers, as owned strings for the
-/// informational `collections` column on the desired row. The reconciler
-/// independently derives collections from `template`, so this is purely
-/// informational; the template id is authoritative. `template` is assumed
-/// already validated by `resolve_pairing_template`.
 fn template_collections(template: &str) -> Vec<String> {
     use gents::agent::p2p_reconcile::resolve_template;
     resolve_template(template)
@@ -419,9 +403,6 @@ fn annotate_pairing_health(
     let connected_set = connected_peer_id_set(connected);
 
     for row in &mut desired {
-        // Exact peer-id equality after normalizing live peer rows. Some
-        // runtimes report bare peer ids, while others report address-shaped
-        // values ending in `/p2p/<peer-id>`.
         row.connected = connected_set.contains(&row.peer_id);
         let (applied_collections, applied_replicators) = applied_by_peer
             .get(row.peer_id.as_str())
@@ -432,13 +413,6 @@ fn annotate_pairing_health(
                 .replicator_addresses
                 .iter()
                 .all(|address| applied_replicators.contains(address));
-        // Push-delivery templates (the default `conversation`) deliberately
-        // subscribe to NOTHING — the filtered replicator is the only channel —
-        // so `applied.collections` is legitimately empty. Reporting subscription
-        // health off the collection set would falsely mark every healthy Push
-        // pairing unhealthy. For Push, key the "subscribed" health off the
-        // replicator being applied (REPLICATING) instead; only Replicate
-        // templates carry the strict `desired ⊆ applied` collections check.
         row.subscribed = if is_push_template(row.template.as_deref()) {
             row.replicating
         } else {
@@ -663,8 +637,6 @@ mod tests {
         assert!(
             mutation.contains(r#"replicator_addresses: ["/ip4/127.0.0.1/tcp/4001/p2p/peer\"one"]"#)
         );
-        // `--template` is the sole scope source; the dead `profiles` column is
-        // always written `null` (never `[]`).
         assert!(mutation.contains(r#"profiles: null"#));
         assert!(!mutation.contains(r#"profiles: ["#));
         assert!(mutation.contains(r#"template: "conversation""#));
@@ -708,7 +680,6 @@ mod tests {
         // types as JsonArray and corrupts the nillable array column).
         assert!(mutation.contains("replicator_addresses: null"));
         assert!(!mutation.contains("replicator_addresses: ["));
-        // No `[]` literal anywhere in the mutation.
         assert!(!mutation.contains("[]"));
     }
 
@@ -759,9 +730,6 @@ mod tests {
 
     #[test]
     fn push_template_health_keys_off_replicating_not_subscribed_collections() {
-        // A healthy `conversation` (Push) pairing: it deliberately subscribes to
-        // NOTHING (applied.collections empty), but its replicator IS applied.
-        // It must report healthy (subscribed = true), not a false `no`.
         let desired = vec![desired_row(
             "peer-a",
             "conversation",
@@ -790,7 +758,6 @@ mod tests {
             &["AgentRequest"],
             &["/ip4/1/tcp/4001"],
         )];
-        // No applied replicator → not replicating → not healthy.
         let applied = vec![applied("peer-a", &[], &[])];
 
         let annotated = annotate_pairing_health(desired, &applied, &[]);
@@ -801,15 +768,12 @@ mod tests {
 
     #[test]
     fn replicate_template_health_still_requires_collection_set() {
-        // `agent-config` is Replicate delivery: the strict `desired ⊆ applied`
-        // collections check still governs subscribed health.
         let desired = vec![desired_row(
             "peer-a",
             "agent-config",
             &["AgentBehavior", "ToolSelection"],
             &[],
         )];
-        // Only one of the two desired collections is applied → unhealthy.
         let partial = vec![applied("peer-a", &["AgentBehavior"], &[])];
         let annotated = annotate_pairing_health(desired.clone(), &partial, &[]);
         assert!(
@@ -817,7 +781,6 @@ mod tests {
             "Replicate pairing missing a collection must report unhealthy"
         );
 
-        // Full collection set applied → healthy.
         let full = vec![applied("peer-a", &["AgentBehavior", "ToolSelection"], &[])];
         let annotated = annotate_pairing_health(desired, &full, &[]);
         assert!(
@@ -828,8 +791,6 @@ mod tests {
 
     #[test]
     fn connected_health_uses_exact_peer_id_match_not_substring() {
-        // Peer id "abc" must NOT report connected against a connected set that
-        // contains only "abcd" (substring of which "abc" is a prefix).
         let desired = vec![desired_row("abc", "conversation", &["AgentRequest"], &[])];
         let connected = vec!["abcd".to_string()];
 
@@ -913,9 +874,7 @@ mod tests {
             resolve_pairing_template(" agent-config ").unwrap(),
             "agent-config"
         );
-        // Empty falls back to the default.
         assert_eq!(resolve_pairing_template("").unwrap(), "conversation");
-        // Unknown is a hard error that lists the catalog.
         let error = resolve_pairing_template("nope").unwrap_err().to_string();
         assert!(error.contains("unknown scope template"));
         assert!(error.contains("conversation"));

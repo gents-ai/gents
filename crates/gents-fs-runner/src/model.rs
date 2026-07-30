@@ -1,9 +1,5 @@
 use serde::Serialize;
 
-/// Name-based skip list, reported verbatim to the model as the
-/// `default_ignored` metadata field. It is not the full account of what a
-/// walk skipped: traversals also honor in-tree `.gitignore` files (see
-/// `GitignoreStack`), and that filtering is not itemized in the metadata.
 pub(crate) const DEFAULT_IGNORED_NAMES: &[&str] = &[
     ".cache",
     ".direnv",
@@ -37,8 +33,6 @@ pub(crate) struct Collected<T> {
     pub(crate) walk: WalkStats,
 }
 
-/// What a traversal actually did, reported back to the model so an expensive
-/// or budget-stopped walk is never indistinguishable from a cheap miss (#729).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct WalkStats {
     pub(crate) entries_visited: usize,

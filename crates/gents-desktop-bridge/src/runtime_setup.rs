@@ -1,5 +1,3 @@
-//! Process-global helpers the host must call — the plugin does not own these.
-
 use std::sync::OnceLock;
 
 use crate::config::TracingConfig;
@@ -20,8 +18,6 @@ pub fn install_runtime() {
     tauri::async_runtime::set(runtime.handle().clone());
 }
 
-/// Initialize tracing with an explicit log path. Hosts with their own
-/// subscriber should skip this entirely.
 pub fn init_tracing(config: TracingConfig) {
     logging::init_tracing_with_config(config);
 }

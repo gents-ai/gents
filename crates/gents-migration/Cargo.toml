@@ -1,0 +1,25 @@
+[package]
+name = "gents-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lens-first schema migration engine for Gents (DefraDB version DAG)"
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+defra-node.workspace = true
+gents-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+hex = "0.4"
+
+[dev-dependencies]
+gents-lens-fixture-add-label = { path = "../gents-lenses/fixture_add_label", default-features = false }
+tempfile = "3"
+tokio = { workspace = true, features = ["full", "test-util"] }

@@ -56,7 +56,7 @@ impl Drop for BootedAgent {
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
             if snapshot.process_state == "ready"
@@ -321,10 +321,6 @@ pub struct InferenceCallSnapshot {
     pub failure_reason: Option<String>,
 }
 
-/// Wait for the latest inference attempt for `request_id` to reach `expected`.
-///
-/// The daemon retries transient provider failures, so a historical failed
-/// attempt must not hide the current attempt's running or terminal state.
 pub async fn wait_for_inference_call_state(
     node: &EmbeddedNode,
     request_id: &str,

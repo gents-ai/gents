@@ -12,7 +12,6 @@ export type BackendDisplayState =
 
 export type InferenceCallSummary = InferenceCallSummaryView;
 
-/** Generated wire model with a narrowed display-state convenience field. */
 export type BackendHealth = Omit<BackendHealthView, "displayState"> & {
   displayState: BackendDisplayState;
 };

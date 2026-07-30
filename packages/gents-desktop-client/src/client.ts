@@ -15,7 +15,7 @@ import type {
 
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
-export const PACKAGE_VERSION = "0.9.0";
+export const PACKAGE_VERSION = "0.10.0";
 export const MINIMUM_BRIDGE_CONTRACT_VERSION = "0.5";
 
 export function assertCompatibleBridgeContract(
@@ -44,13 +44,8 @@ export function assertCompatibleBridgeContract(
   }
 }
 
-/**
- * Typed command surface over an injected transport.
- * Commands mirror the bridge plugin (desktop_* names; transport adds plugin: prefix).
- */
 export type DesktopClient = {
   transport: DesktopTransport;
-  /** Full command API bound to this client's transport. */
   api: DesktopApiAdapter;
   invoke<T>(command: string, args?: unknown): Promise<T>;
   clientStart(): Promise<DesktopClientSnapshot>;

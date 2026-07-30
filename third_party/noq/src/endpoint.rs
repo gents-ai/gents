@@ -32,7 +32,7 @@ use proto::{
     self as proto, ClientConfig, ConnectError, ConnectionError, ConnectionHandle, DatagramEvent,
     EndpointEvent, FourTuple, NetworkChangeHint, ServerConfig,
 };
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 #[cfg(all(
     not(wasm_browser),
     any(feature = "runtime-tokio", feature = "runtime-smol"),
@@ -492,18 +492,14 @@ impl Future for EndpointDriver {
 
 impl Drop for EndpointDriver {
     fn drop(&mut self) {
-        // Recover from a poisoned mutex rather than panicking in Drop. A prior
-        // panic in poll (e.g. active_connections underflow) poisons this lock; a
-        // second panic here would abort the whole process (n0-computer/noq#723,
-        // gents#634). Clearing the poison so subsequent Drop impls on the
-        // same Arc (EndpointRef) also see a clean lock.
+        // A panic in the driver poisons this mutex. Panicking again from Drop
+        // during unwinding aborts the entire process (n0-computer/noq#723).
         let mut endpoint = self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         endpoint.driver_lost = true;
         self.0.shared.incoming.notify_waiters();
         // Drop all outgoing channels, signaling the termination of the endpoint to the associated
         // connections.
         endpoint.recv_state.connections.senders.clear();
-        endpoint.recv_state.connections.draining_reported.clear();
         endpoint.recv_state.connections.active_connections = 0;
     }
 }
@@ -651,44 +647,12 @@ impl State {
             };
 
             if event.is_draining() {
-                // Per-connection edge-trigger (n0-computer/noq#743 / gents#634).
-                // A global zero-guard alone is not enough: a duplicate Draining for
-                // one connection while others are still active would still
-                // decrement the shared counter and can notify all_draining early.
-                //
-                // Also reject Draining for handles already removed from `senders`
-                // (post-Drained). Combined with retaining `draining_reported`
-                // until `insert` reuses the handle, the bad order
-                // Draining → Drained → stale Draining cannot undercount again.
-                if !self.recv_state.connections.senders.contains_key(&ch) {
-                    tracing::warn!(
-                        ?ch,
-                        "ignoring Draining endpoint event for unknown or already-removed connection"
-                    );
-                } else if !self.recv_state.connections.note_draining(ch) {
-                    tracing::warn!(
-                        ?ch,
-                        "ignoring duplicate Draining endpoint event for connection"
-                    );
-                } else if self.recv_state.connections.active_connections == 0 {
-                    // First report for this handle but counter already zero
-                    // (insert/decrement asymmetry). Never underflow.
-                    tracing::warn!(
-                        ?ch,
-                        "Draining event with active_connections == 0 (accounting imbalance)"
-                    );
-                } else {
-                    self.recv_state.connections.active_connections -= 1;
-                    if self.recv_state.connections.active_connections == 0 {
-                        shared.all_draining.notify_waiters();
-                    }
+                self.recv_state.connections.active_connections -= 1;
+                if self.recv_state.connections.active_connections == 0 {
+                    shared.all_draining.notify_waiters();
                 }
             } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
-                // Do not clear draining_reported here. A late/stale Draining after
-                // Drained must still be recognized as already-accounted (or as
-                // unknown via the senders check above). The marker is cleared when
-                // ConnectionSet::insert reuses the handle for a new connection.
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
                 }
@@ -795,14 +759,6 @@ struct ConnectionSet {
     /// This counter is updated when new connections are added ([`ConnectionSet::insert`]) and when
     /// a connection informs us about entering the draining state ([`State::handle_events`]).
     active_connections: u64,
-    /// Handles that have already reported `Draining` (active_connections already
-    /// decremented for them). Dedups duplicate Draining endpoint events so one
-    /// connection cannot undercount the global counter (n0-computer/noq#743).
-    ///
-    /// Retained after `Drained` removes the sender so a late Draining for the
-    /// same handle is not treated as first-time. Cleared only on
-    /// [`ConnectionSet::insert`] when the handle is reused.
-    draining_reported: FxHashSet<ConnectionHandle>,
 }
 
 impl ConnectionSet {
@@ -822,16 +778,8 @@ impl ConnectionSet {
             .unwrap();
         }
         self.senders.insert(handle, send);
-        self.draining_reported.remove(&handle);
         self.active_connections += 1;
         Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
-    }
-
-    /// Record that `handle` entered draining. Returns `true` on the first report
-    /// for this handle (caller should decrement `active_connections`), `false`
-    /// if a Draining event was already accounted for.
-    fn note_draining(&mut self, handle: ConnectionHandle) -> bool {
-        self.draining_reported.insert(handle)
     }
 
     fn is_empty(&self) -> bool {
@@ -936,14 +884,9 @@ impl Drop for EndpointRef {
             return;
         }
 
-        // Same poison-recovery as EndpointDriver::drop: if the driver panicked
-        // while holding this lock, unwrapping here during unwind aborts the
-        // process (n0-computer/noq#723, gents#634).
-        let endpoint = &mut *self
-            .0
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        // Keep the last endpoint reference safe for the same poisoned-driver
+        // unwind path as EndpointDriver::drop (n0-computer/noq#723).
+        let endpoint = &mut *self.0.state.lock().unwrap_or_else(PoisonError::into_inner);
         // If the driver is about to be on its own, ensure it can shut down if the last
         // connection is gone.
         if let Some(task) = endpoint.driver.take() {
@@ -985,7 +928,6 @@ impl RecvState {
                 sender,
                 close: None,
                 active_connections: 0,
-                draining_reported: FxHashSet::default(),
             },
             incoming: VecDeque::new(),
             recv_buf: recv_buf.into(),

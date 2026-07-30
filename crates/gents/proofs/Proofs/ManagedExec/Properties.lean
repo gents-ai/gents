@@ -1,9 +1,5 @@
 import Proofs.ManagedExec.Executable
 
-/-!
-# Managed Exec Liveness Properties
--/
-
 namespace ManagedExecContext
 
 def maxKillSignalSteps : Nat := 1

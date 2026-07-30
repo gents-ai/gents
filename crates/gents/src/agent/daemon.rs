@@ -23,10 +23,6 @@ use crate::runtime_trace::{
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
-/// Drive a request to its durable terminal `failed` state. The reason is part
-/// of the same guarded mutation as the lifecycle edge; bounded immediate retry
-/// handles transient storage failures, and a terminal response remains the
-/// durable live/startup repair intent after exhaustion.
 async fn finalize_request_failure(
     lifecycle: &mut RequestLifecycle,
     reason: &str,
@@ -44,14 +40,8 @@ async fn finalize_request_failure(
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
-    /// Admission-wrapped completion model the owned loop (#400) drives directly.
     model: Arc<M>,
-    /// System preamble for the behavior; combined with per-request sampling into
-    /// a `LoopConfig` at inference time.
     preamble: String,
-    /// Unwrapped tool surface for the owned completion loop (issue #400). Shared
-    /// across requests; the loop applies its own deadline/cancellation envelope,
-    /// so these are NOT wrapped in `RuntimeManagedTool`.
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     stream_writer: DefraStreamWriter,
@@ -62,8 +52,6 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
-    /// Tool names the behavior policy holds in `awaitingApproval` until an
-    /// operator writes an AgentToolApproval verdict.
     approval_required_tools: Arc<Vec<String>>,
     startup_barrier: Arc<StartupBarrier>,
     startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
@@ -97,7 +85,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             behavior.agent_did(),
             Duration::from_millis(behavior.stream_batch_ms),
         );
-        // Compaction summarizes via a tool-free, single-completion owned loop.
         let mut compaction_config =
             crate::completion_factory::loop_config(behavior.as_ref(), preamble.clone(), 0);
         compaction_config.max_turns = 0;
@@ -128,7 +115,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
-    /// Set the approval-required tool names from the resolved tool surface.
     pub(super) fn with_approval_required_tools(mut self, tools: Vec<String>) -> Self {
         self.approval_required_tools = Arc::new(tools);
         self
@@ -415,7 +401,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     cancellation_source = "mid_flight",
                     "request interrupted mid-flight"
                 );
-                // Do NOT call lifecycle.complete() or fail() — transition_to_interrupted already ran.
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 record_current_request_outcome("failed_after_response");

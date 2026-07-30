@@ -7,8 +7,6 @@ use gents::{
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
 
-/// Normalize an explicit `--codex-shim-behavior-id` override: trim whitespace and
-/// treat empty as unset.
 fn explicit_override(override_behavior_id: Option<&str>) -> Option<String> {
     override_behavior_id
         .map(str::trim)
@@ -74,9 +72,6 @@ pub(super) async fn load_bound_inference_profile_id(
     Ok(profile_id)
 }
 
-/// Resolve the exact context window the runtime derives for a behavior. This
-/// mirrors `gents::agent::load_document_agent`: invalid or absent profile
-/// values fall back to the runtime default.
 pub(super) async fn load_bound_context_window(
     node: &EmbeddedNode,
     behavior_id: &str,
@@ -175,8 +170,6 @@ mod tests {
 
     #[test]
     fn explicit_override_treats_empty_as_unset() {
-        // Empty / whitespace-only override is unset, so resolution falls through
-        // to the principal's default_behavior_id (or the synthesized fallback).
         assert_eq!(explicit_override(Some("")), None);
         assert_eq!(explicit_override(Some("   ")), None);
         assert_eq!(explicit_override(None), None);
@@ -184,8 +177,6 @@ mod tests {
 
     #[test]
     fn synthesized_fallback_matches_did_default() {
-        // When no override and no loadable principal default, resolution falls
-        // back to this synthesized form.
         assert_eq!(
             default_behavior_id_for_agent("did:key:zABC"),
             "did:key:zABC:default"

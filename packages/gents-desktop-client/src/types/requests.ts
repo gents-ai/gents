@@ -30,11 +30,6 @@ import type { ToolServiceDeleteRequest as GeneratedToolServiceDeleteRequest } fr
 import type { ToolServiceSaveRequest as GeneratedToolServiceSaveRequest } from "../generated/ToolServiceSaveRequest.js";
 import type { ToolServiceTestRequest as GeneratedToolServiceTestRequest } from "../generated/ToolServiceTestRequest.js";
 
-/**
- * Rust Option<T> is serialized as T | null, while serde also accepts an
- * omitted field for request inputs. Derive the ergonomic input form from the
- * generated wire contract so fields cannot drift.
- */
 type RequestInput<T> = {
   [K in keyof T as null extends T[K] ? never : K]: T[K];
 } & {

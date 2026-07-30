@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use anyhow::anyhow;
+use events::Bus;
 
 use super::*;
 use crate::agent::p2p_reconcile::{RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator};
@@ -354,6 +355,11 @@ struct MockStore {
     applied: Mutex<PairingApplied>,
     saved: Mutex<Vec<PairingApplied>>,
     deleted: Mutex<usize>,
+    list_peer_ids_failures: Mutex<usize>,
+    list_peer_ids_calls: Mutex<usize>,
+    list_peer_ids_retry_started: Option<Arc<tokio::sync::Notify>>,
+    list_peer_ids_retry_release: Option<Arc<tokio::sync::Notify>>,
+    save_applied_completed: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Default for MockStore {
@@ -363,6 +369,11 @@ impl Default for MockStore {
             applied: Mutex::new(PairingApplied::default()),
             saved: Mutex::new(Vec::new()),
             deleted: Mutex::new(0),
+            list_peer_ids_failures: Mutex::new(0),
+            list_peer_ids_calls: Mutex::new(0),
+            list_peer_ids_retry_started: None,
+            list_peer_ids_retry_release: None,
+            save_applied_completed: None,
         }
     }
 }
@@ -393,6 +404,9 @@ impl PairingStateStore for MockStore {
     async fn save_applied(&self, _peer_id: &str, applied: &PairingApplied) -> Result<()> {
         *self.applied.lock().unwrap() = applied.clone();
         self.saved.lock().unwrap().push(applied.clone());
+        if let Some(completed) = &self.save_applied_completed {
+            completed.notify_one();
+        }
         Ok(())
     }
 
@@ -403,6 +417,25 @@ impl PairingStateStore for MockStore {
     }
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
+        *self.list_peer_ids_calls.lock().unwrap() += 1;
+        let should_fail = {
+            let mut failures = self.list_peer_ids_failures.lock().unwrap();
+            if *failures == 0 {
+                false
+            } else {
+                *failures -= 1;
+                true
+            }
+        };
+        if should_fail {
+            anyhow::bail!("transient list_peer_ids failure");
+        }
+        if let Some(started) = &self.list_peer_ids_retry_started {
+            started.notify_one();
+        }
+        if let Some(release) = &self.list_peer_ids_retry_release {
+            release.notified().await;
+        }
         Ok(set(&["peer-a"]))
     }
 }
@@ -686,7 +719,7 @@ async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
     let cancel = CancellationToken::new();
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::new();
-    let sweep = sweep_pairings_until_cancelled(
+    let sweep = sweep_pairings_logged_until_cancelled(
         &admin,
         &store,
         &mut replay_connections,
@@ -703,9 +736,82 @@ async fn cancellation_preempts_in_flight_pairing_sweep_admin_wait() {
     cancel.cancel();
     let completed = tokio::time::timeout(Duration::from_millis(100), &mut sweep)
         .await
-        .expect("cancellation must preempt the in-flight admin wait")
-        .expect("cancelled sweep result");
+        .expect("cancellation must preempt the in-flight admin wait");
     assert!(!completed, "cancelled sweep must skip its remaining peers");
+}
+
+#[tokio::test(start_paused = true)]
+async fn pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cleanly() {
+    let retry_started = Arc::new(tokio::sync::Notify::new());
+    let retry_release = Arc::new(tokio::sync::Notify::new());
+    let convergence_completed = Arc::new(tokio::sync::Notify::new());
+    let store = MockStore {
+        desired: Mutex::new(Ok(Some(PairingDesired {
+            collections: set(&["AgentRequest"]),
+            ..Default::default()
+        }))),
+        list_peer_ids_failures: Mutex::new(1),
+        list_peer_ids_retry_started: Some(retry_started.clone()),
+        list_peer_ids_retry_release: Some(retry_release.clone()),
+        save_applied_completed: Some(convergence_completed.clone()),
+        ..Default::default()
+    };
+    let admin = MockAdmin::default();
+    let event_bus = events::ChannelBus::new();
+    let subscription = event_bus.subscribe(&[EventName::Update]);
+    let cancel = CancellationToken::new();
+    let reconciler = run_pairing_reconciler_loop(&admin, &store, subscription, &cancel);
+    tokio::pin!(reconciler);
+    let retry_fence_time = tokio::time::Instant::now();
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            _ = retry_started.notified() => {}
+            result = &mut reconciler => {
+                panic!("initial enumeration failure terminated reconciler before retry: {result:?}")
+            }
+        }
+    })
+    .await
+    .expect("immediate first interval tick must start the retry");
+    assert_eq!(
+        tokio::time::Instant::now(),
+        retry_fence_time,
+        "startup retry must consume the already-ready first tick without advancing time"
+    );
+    assert_eq!(
+        *store.list_peer_ids_calls.lock().unwrap(),
+        2,
+        "the interval's immediately-ready first tick must start the retry"
+    );
+    assert!(
+        admin.emitted.lock().unwrap().is_empty(),
+        "the failed initial sweep and gated retry must emit no operation"
+    );
+
+    let converged = convergence_completed.notified();
+    tokio::pin!(converged);
+    retry_release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            _ = &mut converged => {}
+            result = &mut reconciler => {
+                panic!("reconciler terminated before retry convergence: {result:?}")
+            }
+        }
+    })
+    .await
+    .expect("healthy immediate-tick retry must converge");
+    assert_eq!(*store.list_peer_ids_calls.lock().unwrap(), 2);
+    assert_eq!(
+        *admin.emitted.lock().unwrap(),
+        vec![DiffOp::InstallCollection("AgentRequest".to_string())]
+    );
+
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
+        .await
+        .expect("cancellation must stop the reconciler");
 }
 
 #[tokio::test]
@@ -1882,13 +1988,14 @@ async fn add_replicator_records_filters_at_seam() {
         .await
         .expect("add_replicator empty filters");
 
-    let calls = admin.recorded_filters.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(
-        calls[0].1.is_empty(),
-        "empty filters should record as empty"
-    );
-    drop(calls);
+    {
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].1.is_empty(),
+            "empty filters should record as empty"
+        );
+    }
 
     // Non-empty filters are faithfully recorded.
     let mut filters = PairingFilters::default();

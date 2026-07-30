@@ -6,9 +6,3 @@ import Proofs.Recovery.Sweeps.SubagentLiveness
 import Proofs.Recovery.Sweeps.Conversation
 import Proofs.Recovery.Sweeps.BackgroundRestart
 import Proofs.Recovery.Sweeps.Registry
-
-/-!
-# Registered Recovery Sweeps
-
-Barrel module for concrete recovery sweep contracts (startup and periodic).
--/

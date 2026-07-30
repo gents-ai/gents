@@ -188,18 +188,10 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    /// Mark a modeled active runtime request as interrupted.
-    /// Writes `lifecycle_state="interrupted"` and `status="interrupted"` and
-    /// sets the in-memory state only when the persisted row is updated or was
-    /// already interrupted. Reserved `inputRequired` rows are parseable
-    /// persisted vocabulary, but they are not modeled interruptible runtime
-    /// states.
     pub async fn transition_to_interrupted(&mut self) -> Result<()> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
-        // Keep the status guard as a defensive check for replicated rows whose
-        // status/lifecycle_state fields are temporarily divergent.
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
@@ -358,10 +350,6 @@ impl RequestLifecycle {
         self.fail().await
     }
 
-    /// Transition a request status/lifecycle pair through a modeled terminal
-    /// edge. `from_lifecycle_states` is part of the transition precondition:
-    /// callers must pass only Lean-modeled source states for the requested
-    /// transition, not the broader persisted nonterminal vocabulary.
     pub(super) async fn transition_request_status(
         &self,
         from_status: &str,

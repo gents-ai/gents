@@ -15,8 +15,6 @@ use super::store::{ClientStore, SharedClientStore};
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
 const FETCH_RETRY_LIMIT: u32 = 3;
 
-// ===================== Metrics =====================
-
 #[derive(Debug, Default)]
 pub struct ObserverMetrics {
     pub events_received: AtomicU64,
@@ -54,8 +52,6 @@ impl ObserverMetrics {
         }
     }
 }
-
-// ===================== ObservedStore =====================
 
 pub struct ObservedStore {
     snapshot: RwLock<SharedClientStore>,
@@ -128,8 +124,6 @@ impl ObservedStore {
     }
 }
 
-// ===================== ObserverHandle =====================
-
 pub struct ObserverHandle {
     stop_tx: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
@@ -147,18 +141,6 @@ impl ObserverHandle {
     }
 }
 
-// ===================== spawn_observer_with_selection =====================
-
-/// Spawn the debounced burst-coalescing observer.
-///
-/// * Events are accumulated into a `(collection, doc_id)` dirty set for
-///   `OBSERVER_DEBOUNCE` (150 ms).
-/// * After each debounce window, only the dirty rows are re-fetched via
-///   `fetch_doc_patch`.
-/// * On dropped events, a scoped reload is performed (agent-scoped if a
-///   selection is active, full-snapshot otherwise).
-/// * Failed fetches are retried up to `FETCH_RETRY_LIMIT` times before being
-///   dropped.
 pub fn spawn_observer_with_selection(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
@@ -173,13 +155,10 @@ pub fn spawn_observer_with_selection(
 
     let task = tokio::spawn(async move {
         let mut subscription = subscription;
-        // dirty: collection_name -> set of doc_ids awaiting a fetch
         let mut dirty: HashMap<&'static str, HashSet<String>> = HashMap::new();
-        // retry counter: (collection_name_string, doc_id) -> attempt count
         let mut redundant_fetches_pending: HashMap<(String, String), u32> = HashMap::new();
 
         loop {
-            // ---- Phase 1: wait for first event of a burst (or shutdown) ----
             let next = tokio::select! {
                 changed = stop_rx.changed() => match changed {
                     Ok(()) if *stop_rx.borrow() => {
@@ -212,10 +191,8 @@ pub fn spawn_observer_with_selection(
                 .await;
             }
 
-            // ---- Phase 2: debounce window ----
             tokio::time::sleep(OBSERVER_DEBOUNCE).await;
 
-            // Drain any messages that arrived during the sleep.
             while let Ok(msg) = subscription.try_recv() {
                 metrics_for_task
                     .events_received
@@ -234,7 +211,6 @@ pub fn spawn_observer_with_selection(
                 }
             }
 
-            // ---- Phase 3: drop-recovery check ----
             let dropped = subscription.check_and_reset_dropped();
             if dropped > 0 {
                 tracing::warn!(
@@ -270,7 +246,6 @@ pub fn spawn_observer_with_selection(
                 continue;
             }
 
-            // ---- Phase 4: flush dirty set ----
             if dirty.is_empty() {
                 continue;
             }
@@ -278,8 +253,6 @@ pub fn spawn_observer_with_selection(
                 .debounce_flushes
                 .fetch_add(1, Ordering::Relaxed);
 
-            // Swap dirty out so failures can re-queue into a fresh dirty for
-            // the next debounce round.
             let mut flushed: HashMap<&'static str, HashSet<String>> = HashMap::new();
             std::mem::swap(&mut flushed, &mut dirty);
 
@@ -292,7 +265,6 @@ pub fn spawn_observer_with_selection(
                         metrics_for_task
                             .docs_fetched
                             .fetch_add(row_count as u64, Ordering::Relaxed);
-                        // Clear retry counters for successfully fetched docs.
                         for id in &doc_ids {
                             redundant_fetches_pending
                                 .remove(&(collection_name.to_string(), id.clone()));
@@ -320,7 +292,6 @@ pub fn spawn_observer_with_selection(
                                 );
                                 redundant_fetches_pending.remove(&key);
                             } else {
-                                // Re-queue for next debounce round.
                                 dirty.entry(collection_name).or_default().insert(id.clone());
                             }
                         }
@@ -337,13 +308,6 @@ pub fn spawn_observer_with_selection(
     }
 }
 
-// ===================== accumulate_dirty =====================
-
-/// Resolve the `collection_id` to a static name and record the `doc_id` in
-/// the dirty set. Increments `local_write_redundant_fetches` for non-relay
-/// events (writes from this node that we are about to re-fetch — they're
-/// "redundant" because we already wrote them, but we fetch anyway so the
-/// store reflects the committed state).
 async fn accumulate_dirty(
     dirty: &mut HashMap<&'static str, HashSet<String>>,
     resolver: &CollectionResolver,
@@ -375,8 +339,6 @@ async fn accumulate_dirty(
     }
 }
 
-// ===================== Tests =====================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +353,6 @@ mod tests {
             .await
             .expect("schemas");
         let (store, _rx) = ObservedStore::new(crate::client::store::ClientStore::default());
-        // Load from a non-existent path → empty peer directory (no I/O error on missing file).
         let peer_dir = Arc::new(AsyncRwLock::new(
             crate::client::peer_directory::PeerDirectory::load(
                 "/tmp/gents-observe-test-peers-nonexistent.json",
@@ -444,7 +405,6 @@ mod tests {
     async fn coalesces_burst_into_one_fetch_per_doc() {
         let (node, store, handle) = build_observer_fixture().await;
 
-        // Create a single AgentResponse and update it 50 times in quick succession.
         let create = r#"mutation {
             create_AgentResponse(input: {
                 response_key: "req-1",
@@ -473,13 +433,9 @@ mod tests {
             assert!(!resp.has_errors(), "{:?}", resp.errors);
         }
 
-        // Wait for debounce + a buffer.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let metrics_after = handle.metrics_snapshot();
 
-        // Burst of 50 events should produce far fewer fetches than 50 (debounce
-        // coalesces). One flush is the optimistic case; we accept up to 5 to
-        // tolerate scheduler jitter.
         let fetches = metrics_after.docs_fetched - metrics_before.docs_fetched;
         let flushes = metrics_after.debounce_flushes - metrics_before.debounce_flushes;
         assert!(fetches <= 5, "expected <=5 fetches, got {fetches}");
@@ -488,7 +444,6 @@ mod tests {
             "expected 1..=5 flushes, got {flushes}"
         );
 
-        // Final state must reflect the last write.
         let snap = store.snapshot();
         let response = snap
             .responses
@@ -504,7 +459,6 @@ mod tests {
     async fn multi_collection_burst_fans_out_correctly() {
         let (node, store, handle) = build_observer_fixture().await;
 
-        // Seed the response.
         let create_resp = r#"mutation {
             create_AgentResponse(input: {
                 response_key: "req-1",
@@ -524,8 +478,6 @@ mod tests {
         let resp = node.execute(create_resp).await;
         assert!(!resp.has_errors(), "{:?}", resp.errors);
 
-        // Fire updates to the response AND create new messages on each iteration —
-        // both collections must be observed and reflected in the store.
         for i in 1..=5 {
             let update_resp = format!(
                 r#"mutation {{ update_AgentResponse(filter: {{ response_key: {{ _eq: "req-1" }} }}, input: {{ progress_seq: {i} }}) {{ _docID }} }}"#
@@ -550,7 +502,6 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let snap = store.snapshot();
 
-        // Response should reflect the last progress_seq update (5).
         assert_eq!(
             snap.responses
                 .iter()
@@ -560,7 +511,6 @@ mod tests {
             "expected progress_seq=5 in responses"
         );
 
-        // All 5 messages must appear.
         for i in 1..=5 {
             let key = format!("sess-1:{i}");
             assert!(
@@ -575,7 +525,6 @@ mod tests {
     #[tokio::test]
     async fn dropped_events_with_no_selection_falls_back_to_full() {
         let (node, store, handle) = build_observer_fixture().await;
-        // Seed a principal; assert the observer picks it up via normal event path.
         seed_principal(node.as_ref(), "did:zero").await;
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         let snap = store.snapshot();
@@ -592,7 +541,6 @@ mod tests {
     async fn delete_event_leaves_stale_row() {
         let (node, store, handle) = build_observer_fixture().await;
 
-        // Seed a message and let the observer pick it up.
         seed_message(node.as_ref(), "sess-1", 1, "before-delete").await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         assert!(
@@ -604,7 +552,6 @@ mod tests {
             "expected message in store before delete"
         );
 
-        // Delete it. fetch_doc_patch will return zero rows for the now-gone doc.
         node.execute(
             r#"mutation { delete_AgentMessage(filter: { message_key: { _eq: "sess-1:1" } }) { _docID } }"#,
         )
@@ -626,16 +573,11 @@ mod tests {
     async fn fetch_failures_increment_on_unknown_collection() {
         let (node, _store, handle) = build_observer_fixture().await;
 
-        // Verify that fetch_doc_patch returns an error for unknown collections
-        // (the observer's fetch_failures counter path). The counter itself
-        // stays at zero here because no events were routed to an unknown
-        // collection — that would require a RecordingNode test double.
         let result =
             crate::client::query::fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"])
                 .await;
         assert!(result.is_err(), "expected error for unknown collection");
 
-        // No events for unknown collections were dispatched, so counter is 0.
         let snap = handle.metrics_snapshot();
         assert_eq!(snap.fetch_failures, 0);
         handle.shutdown().await;
@@ -645,7 +587,6 @@ mod tests {
     async fn local_write_increments_redundant_fetch_counter() {
         let (node, _store, handle) = build_observer_fixture().await;
 
-        // A local mutation produces an EventName::Update with is_relay=false.
         seed_message(node.as_ref(), "sess-2", 1, "local").await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 

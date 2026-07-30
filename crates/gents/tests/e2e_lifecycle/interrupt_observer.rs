@@ -1,16 +1,3 @@
-//! Integration tests for the per-request interrupt observer
-//! (`spawn_request_interrupt_observer`).
-//!
-//! These exercise the observer's externally-observable behaviors: detecting a
-//! non-null `interrupt_requested_at` field, exiting on shutdown, surviving a
-//! malformed timestamp (logging + continuing to poll), and exiting cleanly on
-//! `JoinHandle::abort()`.
-//!
-//! Two paths are intentionally not covered here:
-//!   - DB query error (would require test-side DefraDB fault injection).
-//!   - Pure unit testing without a node — the observer operates on a live
-//!     node, so an integration test is the cheapest accurate coverage.
-
 use std::time::Duration;
 
 use gents::interrupt::{spawn_request_interrupt_observer, InterruptIntent};
@@ -35,11 +22,8 @@ async fn observer_sends_intent_when_field_becomes_non_null() {
         shutdown_rx,
     );
 
-    // Nothing should have fired yet.
     assert!(interrupt_rx.borrow().is_none());
 
-    // Write the interrupt field; observer should pick it up within ~3s
-    // (2s tick + jitter).
     let at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &at).await;
 
@@ -55,13 +39,11 @@ async fn observer_sends_intent_when_field_becomes_non_null() {
     }
 
     let intent = interrupt_rx.borrow().clone().unwrap();
-    // The timestamp should round-trip to what we wrote.
     let expected = chrono::DateTime::parse_from_rfc3339(&at)
         .unwrap()
         .with_timezone(&chrono::Utc);
     assert_eq!(intent.at, expected);
 
-    // Observer should self-exit after signaling (latch).
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(
         observer.is_finished(),
@@ -104,9 +86,6 @@ async fn observer_exits_on_shutdown_signal() {
 
 #[tokio::test]
 async fn observer_survives_malformed_interrupt_timestamp() {
-    // Write a bogus non-RFC3339 string into interrupt_requested_at.
-    // The observer should log a warn, continue polling, and eventually
-    // pick up a subsequent valid timestamp.
     let db = test_db("observer-malformed").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -122,10 +101,8 @@ async fn observer_survives_malformed_interrupt_timestamp() {
         shutdown_rx,
     );
 
-    // Bogus timestamp.
     set_interrupt_requested_at(&db.node, &doc_id, "not-a-timestamp").await;
 
-    // Wait briefly; observer should still be running and have NOT signaled.
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(
         !observer.is_finished(),
@@ -136,7 +113,6 @@ async fn observer_survives_malformed_interrupt_timestamp() {
         "observer must not signal on parse error"
     );
 
-    // Now write a valid timestamp — observer should pick it up.
     let at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &at).await;
 
@@ -169,7 +145,6 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    // Set the interrupt field BEFORE spawning the observer.
     let at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &at).await;
 
@@ -183,9 +158,6 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
         shutdown_rx,
     );
 
-    // First-poll should catch it fast (under 1s, well under the 2s tick
-    // interval). This would fail under the old code because the observer
-    // skipped the immediate first tick and waited a full interval.
     let deadline = start + Duration::from_secs(1);
     loop {
         if interrupt_rx.borrow().is_some() {
@@ -218,7 +190,6 @@ async fn observer_exits_on_abort() {
     );
 
     observer.abort();
-    // Wait for the handle to report finished.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         if observer.is_finished() {

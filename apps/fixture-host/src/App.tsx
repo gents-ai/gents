@@ -30,10 +30,6 @@ function domainCmd(name: string) {
   return `plugin:${DOMAIN}|${name}`;
 }
 
-/**
- * Independent downstream shell showing that the package surfaces compose with
- * a co-resident file-backed domain plugin and without runtime-admin.
- */
 export function App() {
   const bridge = useMemo(() => createDesktopClient(), []);
   const store = useMemo(() => createDesktopStore(bridge), [bridge]);

@@ -9,8 +9,6 @@ use gents::{
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
 
-// These tests never execute inference; they pre-mark the backend healthy so
-// startup can resolve an active behavior without standing up an HTTP fake.
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
 fn test_identity(name: &str) -> KeyIdentity {

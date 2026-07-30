@@ -1,11 +1,3 @@
-//! BackendHealth conformance home: pins the shape of the generated
-//! backend-prober transition cases (#640). The transition behavior itself is
-//! witnessed by the ledger-registered `backend_health::tests` consumer driving
-//! `step_backend` over every generated row; this fence keeps the emitted case
-//! set honest from the conformance binary: the machine is total, demotion is
-//! probe-failure-driven at the K threshold only, one success always promotes,
-//! and the routing veto fires exactly on `unhealthy`.
-
 use super::*;
 
 pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {

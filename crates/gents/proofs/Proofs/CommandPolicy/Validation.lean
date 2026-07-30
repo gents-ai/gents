@@ -1,30 +1,13 @@
 import Proofs.CommandPolicy.Types
 
-/-!
-# Command Policy Validation
-
-Executable validation model for argv prefix filters, read-only command
-allowlisting, read-only command-family argv filters, and disabled-network
-behavior. The raw `command` remains argv[0] for prefix checks; read-only and
-network command-name gates use `CommandRequest.lookupCommand`, matching Rust's
-`Path::file_name` normalization in `executable_name_lookup_key`.
-
-The command-family filters prove only local argv policy. They do not claim
-external binary read-only semantics or host/kernel sandbox enforcement.
--/
-
 namespace CommandPolicy
 
-/-- Candidate prefix → argv → whether the candidate matches the beginning of
-    argv. The empty candidate case is mathematically true but unreachable for
-    configured Rust prefixes because `parse_argv_prefix` rejects empties. -/
 def matchesPrefix : List String → List String → Bool
   | [], _ => true
   | _ :: _, [] => false
   | p :: ps, a :: rest =>
       if p = a then matchesPrefix ps rest else false
 
-/-- First configured argv prefix that matches `argv`, preserving Rust's list order. -/
 def firstMatchingPrefix (argv : List String) : List (List String) → Option (List String)
   | [] => none
   | candidate :: rest =>
@@ -33,8 +16,6 @@ def firstMatchingPrefix (argv : List String) : List (List String) → Option (Li
       else
         firstMatchingPrefix argv rest
 
-/-- Read-only command allowlist check over the basename-normalized lookup
-    command. -/
 def commandAllowlisted (command : String) (allowlist : List String) : Bool :=
   allowlist.any (fun allowed => decide (allowed = command))
 
@@ -170,9 +151,6 @@ def validateCurlArgs (args : List String) : Decision :=
       else
         .deny (.readOnlyUrlRequired "curl")
 
-/-- Matches Rust decisions for exact and attached git global-option forms.
-    The `startsWith` branches also cover bare `-C`/`-c`, which are already
-    denied by the exact list above. -/
 def gitGlobalOptionDenied (arg : String) : Bool :=
   stringIn arg
       [ "-C"
@@ -295,7 +273,6 @@ def validateReadOnlyArgs (request : CommandRequest) : Decision :=
   | "sudo" => validateSudoArgs request.args
   | _ => .allow
 
-/-- Validator used when the effective mode is `read_only`. -/
 def validateReadOnlyCommand
     (allowlist : List String)
     (allowedPrefixMatched : Bool)
@@ -305,8 +282,6 @@ def validateReadOnlyCommand
   else
     .deny (.readOnlyCommandNotAllowlisted request.lookupCommand)
 
-/-- Read-only commands that cannot be allowed when network is disabled without
-    a sandbox-level network denial. -/
 def readOnlyNetworkDenied (request : CommandRequest) : Bool :=
   if request.lookupCommand = "curl" then
     true
@@ -318,8 +293,6 @@ def readOnlyNetworkDenied (request : CommandRequest) : Bool :=
   else
     false
 
-/-- Network-mode gate. `workspace_write` can enforce disabled networking through
-    its sandbox; `unrestricted` cannot, so it fails closed. -/
 def validateNetworkMode
     (mode : ExecutionMode)
     (networkMode : NetworkMode)
@@ -337,9 +310,6 @@ def validateNetworkMode
           else
             .allow
 
-/-- Validation once argv prefix checks have passed. `allowedPrefixMatched`
-    lets read-only mode treat an operator-configured prefix as an explicit
-    diagnostic command authorization alongside the built-in allowlist. -/
 def validateAfterPrefixes
     (policy : Policy)
     (allowedPrefixMatched : Bool)
@@ -356,8 +326,6 @@ def validateAfterPrefixes
       | .workspaceWrite => .allow
       | .unrestricted => .allow
 
-/-- Policy validation order: forbidden prefixes, allowed-prefix list, network
-    gate, and finally the read-only allowlist or matched operator prefix. -/
 def validatePolicy (policy : Policy) (request : CommandRequest) : Decision :=
   match firstMatchingPrefix request.argv policy.forbiddenArgvPrefixes with
   | some matched => .deny (.forbiddenPrefix matched)

@@ -42,9 +42,6 @@ use serde_json::Value;
 
 use crate::support::{test_db, AGENT_DID, AGENT_NAME};
 
-/// Fetch the full row shape the helper writes so tests can inspect lineage,
-/// execution origin, lifecycle state, and the rendered content without
-/// reconstructing the filter in every case.
 async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
@@ -74,9 +71,6 @@ async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) 
         .expect("exactly one AgentRequest for the given doc_id")
 }
 
-/// Count how many `AgentRequest` rows carry the manual lineage tuple (null
-/// trigger id, `"manual"` trigger kind). Used by the parallel-concurrency
-/// case to confirm a second row really did land.
 async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
@@ -97,15 +91,6 @@ async fn count_manual_agent_requests(node: &gents::defra_node::EmbeddedNode) -> 
         .unwrap_or(0)
 }
 
-// -----------------------------------------------------------------------------
-// Case 1: lineage tuple + pending lifecycle
-// -----------------------------------------------------------------------------
-
-/// A successful `write_manual_agent_request` call lands a pending
-/// `AgentRequest` with the full manual lineage tuple. The helper is the
-/// shared entry point for both the CLI (`config task run`) and desktop "Run
-/// Now"; asserting the persistence shape here locks down the contract both
-/// consumers inherit.
 #[tokio::test]
 async fn manual_run_materializes_agent_request_with_lineage() {
     let db = test_db("manual-run-lineage").await;
@@ -124,7 +109,6 @@ async fn manual_run_materializes_agent_request_with_lineage() {
 
     let row = fetch_manual_row(db.node.as_ref(), &doc_id).await;
 
-    // Lineage tuple: trigger_id is null, trigger_kind is "manual".
     assert!(
         row["caused_by_trigger_id"].is_null(),
         "caused_by_trigger_id must be null for manual runs; got {:?}",
@@ -135,15 +119,11 @@ async fn manual_run_materializes_agent_request_with_lineage() {
         Some("manual"),
         "caused_by_trigger_kind must be \"manual\""
     );
-    // Execution origin: interactive (manual runs land on the
-    // human-driven execution path).
     assert_eq!(
         row["execution_origin"].as_str(),
         Some("interactive"),
         "execution_origin must be \"interactive\" for manual runs"
     );
-    // Lifecycle + status: pending. The CLI path writes pending rather than
-    // claimed so the agent's normal intake loop picks the row up.
     assert_eq!(
         row["lifecycle_state"].as_str(),
         Some("pending"),
@@ -161,14 +141,6 @@ async fn manual_run_materializes_agent_request_with_lineage() {
     );
 }
 
-// -----------------------------------------------------------------------------
-// Case 2: args.* template scope
-// -----------------------------------------------------------------------------
-
-/// `args.*` template variables in the task's `prompt_template` substitute at
-/// helper time against the caller-supplied `args` JSON. Pins the
-/// manual-specific half of the trigger engine's template scope contract
-/// (`event.*`, `doc.*`, `args.*`) for the out-of-engine helper path.
 #[tokio::test]
 async fn manual_run_renders_args_scope() {
     let db = test_db("manual-run-args-scope").await;
@@ -192,26 +164,10 @@ async fn manual_run_renders_args_scope() {
     );
 }
 
-// -----------------------------------------------------------------------------
-// Case 5: Parallel concurrency — manual runs do NOT queue behind each other
-// -----------------------------------------------------------------------------
-
-/// Manual runs are `Parallel` concurrency by construction (see
-/// `ManualTriggerHandle::run_task_now`, which sets `ConcurrencyMode::Parallel`
-/// on every manual `FireIntent`, and the shared helper, which does not
-/// consult the in-flight gate). An operator pressing "Run Now" while a
-/// previous manual run is still in-flight must therefore get a *second*
-/// `AgentRequest` materialized — not a skip.
-///
-/// We seed an in-flight manual row directly via the helper (its
-/// freshly-materialized row is the "in-flight" in-question), then call the
-/// helper a second time and assert two rows now carry the manual lineage.
 #[tokio::test]
 async fn manual_run_bypasses_serial_in_flight_check() {
     let db = test_db("manual-run-parallel").await;
 
-    // First manual run — still pending after this call, so it counts as
-    // in-flight from the concurrency gate's perspective.
     let first = write_manual_agent_request(
         db.node.as_ref(),
         AGENT_DID,
@@ -228,7 +184,6 @@ async fn manual_run_bypasses_serial_in_flight_check() {
         "sanity: one manual AgentRequest after the first call"
     );
 
-    // Second manual run — must NOT be gated by the first being in-flight.
     let second = write_manual_agent_request(
         db.node.as_ref(),
         AGENT_DID,
@@ -249,8 +204,6 @@ async fn manual_run_bypasses_serial_in_flight_check() {
         "Parallel concurrency: two back-to-back manual runs must yield two AgentRequest rows"
     );
 
-    // Both rows must individually carry the manual lineage tuple — i.e.
-    // Parallel fan-out does not corrupt the lineage on either side.
     for (label, doc_id) in [("first", &first), ("second", &second)] {
         let row = fetch_manual_row(db.node.as_ref(), doc_id).await;
         assert!(

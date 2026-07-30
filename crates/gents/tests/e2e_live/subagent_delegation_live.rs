@@ -4,8 +4,8 @@
 //! delegates work to a subagent behavior via `spawn_subagent`, the subagent
 //! runs (live model), and the result flows back to the orchestrator.
 //!
-//! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
-//! unless `GENTS_LIVE_SUBAGENT=1`). To run locally:
+//! Normal test runs skip these because they are `#[ignore]`-gated. Explicit
+//! runs fail unless `GENTS_LIVE_SUBAGENT=1`. To run locally:
 //!
 //! ```bash
 //! GENTS_LIVE_SUBAGENT=1 \
@@ -105,10 +105,10 @@ fn backgrounding_live_model() -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_local_subagent_delegation() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live local subagent delegation");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live local subagent delegation"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
@@ -119,16 +119,12 @@ async fn live_local_subagent_delegation() -> Result<()> {
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
 
-    // Ensure the principal + default (orchestrator) behavior documents exist.
-    // This also creates the default inference profile we reuse for both behaviors.
     ensure_agent_principal(db.node.as_ref(), &agent_did)
         .await
         .expect("ensure principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
     upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
 
-    // Orchestrator behavior: system prompt instructs delegation to the
-    // researcher subagent (foreground is fine locally).
     configure_behavior(
         db.node.as_ref(),
         &orchestrator_behavior_id,
@@ -140,7 +136,6 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Subagent behavior (same DID => local target).
     configure_behavior(
         db.node.as_ref(),
         RESEARCHER_BEHAVIOR_ID,
@@ -152,8 +147,6 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Enable subagent spawning on the orchestrator behavior, targeting the
-    // researcher. Foreground enabled (local), background also enabled.
     authorize_subagents(
         db.node.as_ref(),
         &agent_did,
@@ -164,10 +157,8 @@ async fn live_local_subagent_delegation() -> Result<()> {
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
         }],
-        /* spawn */ true,
-        /* background */ true,
-        // Local (same-DID) target: cross-deployment stays off (default).
-        /* allow_cross_deployment */
+        true,
+        true,
         false,
     )
     .await;
@@ -186,12 +177,10 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Wait for the orchestrator request to reach a terminal state.
     let parent_terminal =
         wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
     eprintln!("[live-local] orchestrator parent terminal state = {parent_terminal}");
 
-    // A child AgentRequest must exist with subagent lineage to the parent.
     let child = match wait_for_child_of_parent(
         db.node.as_ref(),
         request_id,
@@ -225,7 +214,6 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child must run the researcher behavior the model delegated to"
     );
 
-    // Child must reach a terminal/completed state.
     let child_terminal = wait_for_request_terminal(
         db.node.as_ref(),
         &child.request_id,
@@ -238,7 +226,6 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child subagent request must complete; got {child_terminal}"
     );
 
-    // Child must produce a non-empty assistant response.
     let child_answer =
         wait_for_assistant_answer(db.node.as_ref(), &child.request_id, Duration::from_secs(30))
             .await;
@@ -248,15 +235,12 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child subagent must produce a non-empty assistant response"
     );
 
-    // Soft check: ideally the answer mentions Paris. Don't hard-fail on model wording.
     if child_answer.to_lowercase().contains("paris") {
         eprintln!("[live-local] SOFT-OK: child answer contains 'Paris'");
     } else {
         eprintln!("[live-local] SOFT-WARN: child answer did not contain 'Paris': {child_answer:?}");
     }
 
-    // The orchestrator should have terminalized (any terminal is acceptable; we
-    // care most about the delegation structure + child completion above).
     assert!(
         is_terminal(&parent_terminal),
         "orchestrator request must reach a terminal state; got {parent_terminal}"
@@ -886,16 +870,15 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_cross_node_subagent_delegation() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live cross-node subagent delegation"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
     assert_endpoint_reachable(&endpoint).await;
 
-    // Two REAL P2P-enabled nodes, two distinct DIDs.
     let db_a = test_p2p_db("subagent-live-a").await;
     let db_b = test_p2p_db("subagent-live-b").await;
     let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-live-a"));
@@ -904,7 +887,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let did_b = identity_b.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&did_a);
 
-    // --- Node B: host the researcher behavior owned by DID-B. ---
     ensure_agent_principal(db_b.node.as_ref(), &did_b)
         .await
         .expect("ensure principal B");
@@ -922,7 +904,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // --- Node A: host the orchestrator owned by DID-A. ---
     ensure_agent_principal(db_a.node.as_ref(), &did_a)
         .await
         .expect("ensure principal A");
@@ -939,10 +920,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // The named (agent_did, behavior_id) target is owned by DID-B: a REMOTE
-    // delegation target. A authors only the targeted bridge; B resolves no
-    // friendly name and materializes the child locally from the resolved args,
-    // so we do NOT mirror B's AgentBehavior onto A.
     authorize_subagents(
         db_a.node.as_ref(),
         &did_a,
@@ -953,12 +930,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
         }],
-        /* spawn */ true,
-        /* background */ true,
-        // Cross-deployment subagent delegation is deferred/flag-gated by default
-        // pending ACP (#377). This cross-node test exercises the substrate behind
-        // the opt-in flag; the REMOTE (DID-B) target requires it set true.
-        /* allow_cross_deployment */
+        true,
+        true,
         true,
     )
     .await;
@@ -966,11 +939,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let addr_a = wait_for_listen_addr(db_a.node.as_ref()).await;
     let addr_b = wait_for_listen_addr(db_b.node.as_ref()).await;
 
-    // Pairing rows exist on BOTH nodes BEFORE the agents boot. The running
-    // pairing reconcilers perform the actual installation: A's coordinator leg
-    // carries only bridges targeted to B; B's host leg carries routed B-owned
-    // child requests back to A. The rows carry the peer's real listen address,
-    // never `[]`.
     write_pairing(
         db_a.node.as_ref(),
         "peer-b",
@@ -988,8 +956,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Boot full agents on both nodes. B owns DID-B: its daemon + SubagentSource
-    // claim and run the replicated child request against the live model.
     let agent_b = boot_document_agent(&db_b, identity_b).await?;
     let agent_a = boot_document_agent(&db_a, identity_a).await?;
     wait_for_replicator_installed(db_a.node.as_ref(), "peer-b", Duration::from_secs(120)).await;
@@ -1007,7 +973,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
-    // Find the bridge tool call created on A (the spawn_subagent AgentToolCall).
     let bridge =
         match wait_for_subagent_bridge(db_a.node.as_ref(), session_id, Duration::from_secs(120))
             .await
@@ -1035,7 +1000,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         .clone()
         .expect("bridge must carry a child_request_id");
 
-    // The child AgentRequest must be materialized on B and run there.
     let child_on_b = wait_for_request_on_node(
         db_b.node.as_ref(),
         &child_request_id,
@@ -1061,7 +1025,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     );
     assert_eq!(child_on_b.behavior_id, RESEARCHER_BEHAVIOR_ID);
 
-    // B runs the child to completion with a non-empty live response.
     let child_terminal_b = wait_for_request_terminal(
         db_b.node.as_ref(),
         &child_request_id,
@@ -1092,8 +1055,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         );
     }
 
-    // The terminal child must replicate back to A and A must observe completion
-    // (the BackgroundCompletionObserver projects it onto the parent bridge).
     let child_terminal_a = wait_for_request_terminal(
         db_a.node.as_ref(),
         &child_request_id,
@@ -1106,8 +1067,6 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         "terminal child must replicate back to A; got {child_terminal_a}"
     );
 
-    // The parent orchestrator request on A should terminalize (background
-    // completion projection + a final orchestrator turn).
     let parent_terminal_a =
         wait_for_request_terminal(db_a.node.as_ref(), request_id, Duration::from_secs(150)).await;
     eprintln!("[live-cross] orchestrator parent terminal on A = {parent_terminal_a}");
@@ -1118,15 +1077,10 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     agent_a.shutdown().await;
     agent_b.shutdown().await;
-    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// System prompts
-// ---------------------------------------------------------------------------
 
 const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You have a research subagent \
 available named `researcher`. For ANY research or factual lookup the user asks for, you \
@@ -1140,10 +1094,6 @@ user asks for, you MUST delegate it by calling the `spawn_subagent` tool with na
 \"researcher\", await_mode exactly \"background\", and a `prompt` describing the question. The \
 subagent runs on a different node, so you MUST use await_mode=\"background\" (foreground is rejected). Do \
 not answer factual questions yourself; always delegate them.";
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
 
 async fn assert_endpoint_reachable(endpoint: &str) {
     let url = format!("{}/models", endpoint.trim_end_matches('/'));
@@ -1314,7 +1264,6 @@ fn assert_standard_backgrounding_tool_surfaces(
     }
 }
 
-/// Upsert the live inference backend document (OpenAI-compatible vLLM).
 async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
     let escaped_backend_id = escape_graphql_string(LIVE_BACKEND_ID);
     let escaped_endpoint = escape_graphql_string(endpoint);
@@ -1359,8 +1308,6 @@ async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
     );
 }
 
-/// Upsert an `AgentBehavior` document backed by the live backend, with an
-/// optional `description` (surfaced to the orchestrator's subagent preamble).
 async fn configure_behavior(
     node: &EmbeddedNode,
     behavior_id: &str,
@@ -1404,8 +1351,6 @@ async fn configure_behavior(
         .expect("upsert behavior");
 }
 
-/// Upsert a ToolSelectionDocument enabling subagent spawning and link it to
-/// `behavior_id`.
 async fn authorize_subagents(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -1429,8 +1374,6 @@ async fn authorize_subagents(
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             subagent_allow_cross_deployment: Some(allow_cross_deployment),
-            // Keep the orchestrator's toolset focused on delegation so the live
-            // model reliably reaches for spawn_subagent rather than defra_query.
             enable_meta_tools: Some(false),
             enable_defra_query: Some(false),
             ..Default::default()
@@ -1522,7 +1465,6 @@ async fn link_tool_selection(node: &EmbeddedNode, behavior_id: &str, selection_i
 struct ChildRow {
     request_id: String,
     behavior_id: String,
-    /// Deserialized for Debug-trace output on failures; not read directly.
     #[allow(dead_code)]
     agent_did: String,
     lifecycle_state: Option<String>,
@@ -1614,8 +1556,6 @@ async fn wait_for_child_of_parent(
     }
 }
 
-/// Read the assistant answer for `request_id`: prefer the AgentResponse content,
-/// fall back to the latest assistant AgentMessage on the request's session.
 async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
@@ -1640,7 +1580,6 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
             }
         }
     }
-    // Fall back to the latest assistant message on the session.
     let session_id = match row.and_then(|r| r.session_id) {
         Some(s) if !s.is_empty() => s,
         _ => return String::new(),
@@ -1665,7 +1604,6 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
         .unwrap_or_default()
 }
 
-/// Dump tool calls + messages for a session to stderr (debugging delegation).
 async fn dump_session_diagnostics(node: &EmbeddedNode, session_id: &str) {
     let escaped = escape_graphql_string(session_id);
     let tc_query = format!(
@@ -1728,10 +1666,6 @@ async fn wait_for_assistant_answer(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Cross-node helpers (Test 2)
-// ---------------------------------------------------------------------------
-
 async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -1791,7 +1725,6 @@ async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeo
     }
 }
 
-/// Write a `PeerPairingDesired` doc so the local node trusts `peer_did`.
 async fn write_pairing(
     node: &EmbeddedNode,
     peer_id: &str,

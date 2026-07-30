@@ -1,7 +1,5 @@
 import Proofs.StreamingResponse.Properties.Lifecycle
 
-/-! Live-tail clearing and recovery-asymmetry properties for streaming responses. -/
-
 namespace StreamingResponse
 
 theorem normal_finalize_clears_liveTail
@@ -51,11 +49,6 @@ theorem normal_finalize_clears_liveTail
     | inl h => rw [h] at h_pre_streaming; cases h_pre_streaming
     | inr h => rw [h] at h_pre_streaming; cases h_pre_streaming
 
-/-- The recovery path preserves liveTail when the recovery errorReason is
-freshly introduced by the transition. The hypothesis `h_pre_no_recovery`
-encodes the runtime well-formedness invariant that a streaming response
-cannot already carry the recovery error reason — only `recoverInterrupted`
-introduces it. -/
 theorem recovery_path_preserves_liveTail
     {pre post : ResponseContext}
     (h : Transition pre post)
@@ -93,18 +86,6 @@ theorem recovery_path_preserves_liveTail
     rw [h_post] at h_reason
     exact absurd h_reason h_pre_no_recovery
 
-/-- Issue #492 durable-reasoning persistence, co-held with the #64
-live-tail clear. On a `finalizeComplete` materialize step, BOTH invariants
-hold simultaneously:
-
-* the live `liveTail` STILL clears to `.empty` (issue #64 contract), and
-* the reasoning present in the live tail (`pre.tailReasoning`) is durably
-  copied into `post.durableReasoning` — the formal model of writing the
-  reasoning into the materialized `AgentMessage.reasoning` field.
-
-This is the load-bearing proof for PR #492: the durable copy is a NEW,
-separate persistence captured AT materialize time (`durableReasoning :=
-pre.tailReasoning`), NOT a relaxation of the tail-clear. -/
 theorem finalize_persists_durable_reasoning_and_clears_tail
     {pre post : ResponseContext} {seq : Transcript.Sequence}
     (_h : Transition pre post)
@@ -117,10 +98,6 @@ theorem finalize_persists_durable_reasoning_and_clears_tail
   rw [h_finalize]
   exact ⟨rfl, rfl⟩
 
-/-- The reachable form: any `finalizeComplete` step both clears the live
-tail to `.empty` and persists the durable reasoning copy. Stated directly
-over the `Transition.finalizeComplete` constructor so the contract is tied
-to the actual transition relation, not just a record shape. -/
 theorem finalizeComplete_copies_reasoning_then_clears
     {pre post : ResponseContext}
     (h_streaming : pre.status = .streaming)
@@ -166,18 +143,6 @@ theorem completed_liveTail_is_empty_one_step
   · exact completed_carries_materialized_handle h h_completed
       (Or.inl h_pre_streaming)
 
-/-- Audit-visible #64 corollary: any transition into a `.completed`
-post-state leaves the live tail empty, given the pre-state is
-well-formed (either fresh-streaming, or already-completed with the
-post-finalize invariants preserved).
-
-This composes `completed_liveTail_is_empty_one_step` with
-`terminal_irreversibility`. Once a response reaches `.completed`, the
-only legal subsequent transition is `observeIdempotentFinalize`
-(which preserves the state), so the empty-liveTail / materialized-handle
-property holds along any well-formed trace — making this corollary the
-practical Trace-equivalent of the #64 sentinel without needing a
-`TraceCoherent` predicate. -/
 theorem completed_state_has_empty_liveTail
     {pre post : ResponseContext}
     (h : Transition pre post)
@@ -209,9 +174,6 @@ theorem completed_state_has_empty_liveTail
       rw [h_post] at h_completed; simp at h_completed
       rw [h_streaming] at h_completed; cases h_completed
     | setInterruptedAt _ _ h_post =>
-      -- post.liveTail = pre.liveTail; post.status = pre.status; we
-      -- conclude empty from h_pre_wellformed (the inr branch, since
-      -- post.status = .completed forces pre.status = .completed).
       rw [h_post]
       rw [h_post] at h_completed
       simp at h_completed
@@ -236,10 +198,6 @@ theorem completed_state_has_empty_liveTail
   · exact completed_carries_materialized_handle h h_completed
       (h_pre_wellformed.imp id (fun h => ⟨h.1, h.2.2⟩))
 
-/-- Helper: any trace starting from a terminal state is a no-op trace
-(every step is `observeIdempotentFinalize` or its parity, and produces
-`post = pre`). Used to lift one-step terminal-irreversibility / idempotent
-no-op into a Trace-level statement. -/
 private theorem trace_from_terminal_is_noop
     {pre post : ResponseContext}
     (h_trace : Trace pre post)
@@ -252,23 +210,6 @@ private theorem trace_from_terminal_is_noop
     have h_s₂_term : isTerminal s₂.status := h_noop ▸ h_pre_term
     exact (ih h_s₂_term).trans h_noop
 
-/-- Audit-visible recovery-asymmetry corollary: along any trace from a
-recovery-state pre, `liveTail` is stable.
-
-Mirrors `completed_state_has_empty_liveTail`'s role (the Trace-level
-corollary for the #64 sentinel). Composes the single-step
-`recovery_path_preserves_liveTail` with `terminal_irreversibility`:
-a `pre.status = .error` is terminal, so by `idempotent_finalize_is_noop`,
-every transition in the trace produces `post = pre`, and `liveTail`
-is preserved along the entire trace.
-
-We require `pre.status = .error` explicitly. The natural state of a
-context with `errorReason = some .daemonRestartRecovery` IS `.error`
-(set by `Transition.recoverInterrupted`), but proving this from
-`errorReason` alone would require a global trace-well-formedness
-invariant; adding the explicit terminal hypothesis is the cleaner
-shape and matches how `completed_state_has_empty_liveTail` requires
-its `pre.status = .completed` disjunct. -/
 theorem recovery_state_liveTail_stable
     {pre post : ResponseContext}
     (h_trace : Trace pre post)

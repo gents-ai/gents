@@ -46,7 +46,6 @@ fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
 }
 
 pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    // Legacy entry: discover defaults, full grants (tests / pre-policy callers).
     let agent_home = gents_desktop_core::local_runtime::default_agent_home()
         .map_err(|error| error.to_string())?;
     let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
@@ -147,8 +146,6 @@ mod session;
 pub use session::build_session_snapshot_from_store;
 pub use session::build_session_snapshot_from_store_for_agent;
 
-/// Snapshot builder seam: always projects by `grants` so lifecycle returns,
-/// mutation refreshes, and nested pairing/removal responses stay consistent.
 pub async fn build_client_snapshot_with_grants(
     core: Option<&Arc<ClientCore>>,
     policy: Option<&ResolvedBridgePolicy>,

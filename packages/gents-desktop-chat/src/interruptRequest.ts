@@ -22,7 +22,7 @@ export type DesktopPreviewInterruptCascadeArgs = {
 export type DesktopInterruptRequestArgs = {
   requestId: string;
   agentDid?: string | null;
-  cause: "userCancelled"; // operator-authentic only
+  cause: "userCancelled";
   cascade: boolean;
   expectedPreviewSignature?: string;
 };

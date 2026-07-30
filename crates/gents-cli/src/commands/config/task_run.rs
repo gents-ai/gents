@@ -1,19 +1,3 @@
-//! `config task run --task-id <id> --args <JSON>` — fire a configured Task
-//! once against a running agent.
-//!
-//! This path intentionally duplicates the mutation shape produced by
-//! `gents::write_manual_agent_request` instead of calling it: that
-//! helper takes `&EmbeddedNode`, and the CLI generally runs against a remote
-//! agent over GraphQL-over-HTTP via [`ConfigAccess::Graphql`]. Both paths
-//! produce the same `(caused_by_trigger_id = null,
-//! caused_by_trigger_kind = "manual")` lineage tuple and the same
-//! `execution_origin = "interactive"`, so observers can treat them as one
-//! origin.
-//!
-//! When running against a local embedded node via [`ConfigAccess::Local`],
-//! the same mutation runs through the node's GraphQL layer — there is no
-//! reason to branch.
-
 use anyhow::{anyhow, Result};
 use gents::graphql::escape_graphql_string;
 use gents::template::{render_template, task_node_ctx, TemplateScope};
@@ -27,10 +11,6 @@ use crate::request_helpers::{
 };
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
 
-/// Must match `lifecycle::DEFAULT_REQUEST_MAX_RETRIES` and the value written by
-/// `write_manual_agent_request`. Kept inline here so the CLI mutation is a
-/// self-contained record of the shape — the gents constant is not
-/// re-exported.
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
 pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
@@ -76,24 +56,14 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let task_id =
         resolve_task_id_for("run", args.task_id.as_deref(), args.task_id_flag.as_deref())?;
 
-    // 1. Parse --args as a JSON object.
     let args_value: Value =
         serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
     if !args_value.is_object() {
         anyhow::bail!("--args must be a JSON object (got: {args_value})");
     }
 
-    // 2. Resolve GraphQL / local access the same way every other config
-    //    subcommand does. Ensures local schemas if we fell back to an
-    //    embedded node.
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ true,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // 3. Fetch the Task doc.
     let task_query = format!(
         r#"query {{
             Task(filter: {{ task_id: {{ _eq: "{id}" }} }}, limit: 1) {{
@@ -131,7 +101,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         anyhow::bail!("Task {} is disabled; cannot run", task_id);
     }
 
-    // 4. Fetch the AgentBehavior to get agent_did and confirm it's enabled.
     let behavior_query = format!(
         r#"query {{
             AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{
@@ -168,8 +137,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         anyhow::bail!("AgentBehavior {} is disabled", behavior_id);
     }
 
-    // 5. Render the prompt template. Matches the `TemplateScope` shape used
-    //    by `write_manual_agent_request`.
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) = task_node_ctx(&agent_did, &behavior_id, &now);
     let scope = TemplateScope {
@@ -186,8 +153,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let content = render_template(&prompt_template, &scope)
         .map_err(|e| anyhow!("render manual template for task {}: {e}", task_id))?;
 
-    // 6. Issue the same create_AgentRequest mutation as
-    //    `write_manual_agent_request`: same field set, same lineage.
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let (content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(None, &content);
@@ -206,13 +171,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             anyhow::bail!("create manual AgentRequest failed: {errs:?}");
         }
     }
-    // The mutation succeeded (no `errors` array). `create_AgentRequest` may
-    // return the `_docID` inline, or it may omit it entirely — mirroring the
-    // quirk documented in `gents::lifecycle::manual`. When inline
-    // extraction yields nothing, fall back to a follow-up query filtered by
-    // the just-written `request_id`. The row exists either way; treating the
-    // missing-inline shape as a hard failure would make the operator retry
-    // and double-fire the task.
     let doc_id = match extract_doc_id(&response) {
         Some(doc_id) => doc_id,
         None => lookup_doc_id_by_request_id(&access, &request_id)
@@ -270,8 +228,6 @@ struct CreateManualRequestInput<'a> {
 }
 
 fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> String {
-    // `caused_by_trigger_id` is intentionally omitted so it stays null in the
-    // persisted document — manual runs have no trigger id to reference.
     let metadata_field = input
         .metadata
         .map(str::trim)
@@ -317,10 +273,6 @@ fn build_create_manual_request_mutation(input: CreateManualRequestInput<'_>) -> 
     )
 }
 
-/// Fallback for when `create_AgentRequest` succeeded (no `errors` array) but
-/// the response did not echo the `_docID` inline. The row exists; fetch it
-/// by `request_id` so we can report a stable `request_doc_id` without
-/// resorting to a retry that would double-fire the task.
 async fn lookup_doc_id_by_request_id(
     access: &ConfigAccess,
     request_id: &str,
@@ -349,13 +301,6 @@ async fn lookup_doc_id_by_request_id(
         .map(|s| s.to_string()))
 }
 
-/// Pull the `_docID` out of a create-AgentRequest response.
-///
-/// DefraDB accepts both `create_<Type>` and `add_<Type>` mutation forms, and
-/// returns the result under whichever *response* field name it chose — which
-/// can differ from the requested alias. In practice `create_AgentRequest`
-/// shows up in the response as `add_AgentRequest`. On top of that, the value
-/// may be a single object or an array. Handle every shape.
 fn extract_doc_id(response: &Value) -> Option<String> {
     let data = response.get("data")?;
     let candidates = [
@@ -440,10 +385,6 @@ mod tests {
 
     #[test]
     fn extract_doc_id_returns_none_when_response_omits_doc_id_entirely() {
-        // Pins the quirk: a `create_AgentRequest` mutation can succeed (no
-        // `errors` array) while its inline payload carries no `_docID`.
-        // The caller must treat this as "fall back to a request_id lookup",
-        // not as "mutation failed"; a retry would double-fire the task.
         let object_without_doc_id = serde_json::json!({
             "data": { "create_AgentRequest": {} }
         });
@@ -460,8 +401,6 @@ mod tests {
 
     #[test]
     fn extract_doc_id_handles_add_alias_response() {
-        // DefraDB returns `add_AgentRequest` when we ask for
-        // `create_AgentRequest` — both shapes need to work.
         let add_object = serde_json::json!({
             "data": { "add_AgentRequest": { "_docID": "doc-3" } }
         });

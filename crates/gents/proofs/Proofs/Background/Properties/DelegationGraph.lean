@@ -1,15 +1,5 @@
 import Proofs.Background.State
 
-/-!
-# Arbitrary Subagent Delegation Graphs
-
-The bridge proofs cover one parent/child pair. This module lifts the load-
-bearing depth and cascade facts to an arbitrary delegation graph: every
-delegation edge strictly increases `subagentDepth`, so paths are acyclic and
-bounded by `maxSubagentDepth`; cascade paths inherit the same bound and can be
-covered edge-by-edge by the single-bridge cascade theorem.
--/
-
 namespace Subagent
 namespace DelegationGraph
 

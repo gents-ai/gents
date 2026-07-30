@@ -1,8 +1,6 @@
 import Proofs.ApplyReconcile.Collections
 import Proofs.Conformance.ContractTypes
 
-/-! Shared witness row types and collection projections for apply/reconcile contract cases. -/
-
 namespace ApplyReconcile.ContractCases
 
 open Conformance.Contracts

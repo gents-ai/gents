@@ -108,20 +108,15 @@ test.describe("desktop config workspace advanced flows", () => {
     await openConfig(page);
     await openConfigTab(page, "toolSelections");
 
-    // Read-only policy facts render from the loaded selection; the write-tools
-    // row decodes the WriteToolDecl JSON (friendly name, not a raw blob).
     await expect(page.getByTestId("tool-policy-version")).toHaveText("tool-policy/v1");
     await expect(page.getByTestId("tool-write-tools")).toContainText("upsert_note");
     await expect(page.getByTestId("tool-write-tools")).not.toContainText("tool_name");
 
-    // Edit the read-scope allowlist and save.
     await page
       .getByTestId("tool-defra-query-collections")
       .fill("AgentRequest\nAgentResponse\nAgentSession");
     await saveConfig(page, "tool-selection-save");
 
-    // Round-trip: navigate away and back — the edit persisted in the snapshot,
-    // and preserve-on-absent kept the display-only facts across the save.
     await openConfigTab(page, "behavior");
     await openConfigTab(page, "toolSelections");
     await expect(page.getByTestId("tool-defra-query-collections")).toHaveValue(

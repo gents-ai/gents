@@ -1,6 +1,3 @@
-// Soft-cap justified: single builder type with a linear fluent API; splitting
-// by concern (tool config, behavior config, identity) would create artificial
-// seams in a pattern that is intentionally read top-to-bottom.
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -164,10 +161,6 @@ impl GentsBuilder {
             );
         }
 
-        // Async-resolve every behavior into a sync factory closure that
-        // accepts `Arc<AgentPrincipal>`. The actual `Arc::new(AgentPrincipal
-        // { ... })` is constructed exactly once inside
-        // `assemble_principal_and_behaviors` below.
         let mut behavior_factories: Vec<
             Box<
                 dyn FnOnce(
@@ -465,15 +458,6 @@ impl PendingAgentBehavior {
         }
     }
 
-    /// Async phase: resolve the backend and validate it. Returns a sync
-    /// factory closure that accepts `Arc<AgentPrincipal>` and produces
-    /// the fully-built `AgentBehavior`.
-    ///
-    /// This split lets `GentsBuilder::build` collect all factory
-    /// closures before calling `assemble_principal_and_behaviors`, so
-    /// that the single `Arc::new(AgentPrincipal { ... })` lives
-    /// exclusively in the helper (the load-bearing site fenced by the
-    /// loader-dedup proptest).
     async fn into_factory(
         self,
         node: &EmbeddedNode,

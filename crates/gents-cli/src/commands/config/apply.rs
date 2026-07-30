@@ -13,8 +13,7 @@ use crate::{
 };
 
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
         home: args.home.as_deref(),
@@ -101,10 +100,6 @@ pub(crate) async fn apply_bound_desired_manifest(
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
-    // Report remaining drift as a plain diff. A prune pass may delete a
-    // referrer and make another live-only dependency safe to prune on a later
-    // invocation; that later-safe doc should remain visible as live_only
-    // instead of turning this already-applied pass into a failed convergence.
     let remaining = desired_state::diff_manifests(
         root,
         access.mode(),

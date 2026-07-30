@@ -1,4 +1,3 @@
-// Soft-cap justified: 5 server startup scenarios share setup (port allocation, runtime state, degraded-mode wiring); splitting would duplicate ~40 lines per file.
 mod support;
 use support::*;
 
@@ -267,9 +266,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(true)
     );
 
-    // Seed an AgentRequest (so the agent's session resolves), an AgentSession
-    // and AgentMessage for /sessions, plus a CompactionEntry so the
-    // agent-scoped context budget has something to aggregate.
     for mutation in [
         format!(
             r#"mutation {{ create_AgentSession(input: {{ session_id: "self-budget-session", agent_name: "{}", behavior_id: "{}", started: "2026-06-02T09:59:00Z", status: "active" }}) {{ _docID }} }}"#,
@@ -287,7 +283,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .context("seeding self-view fixtures")?;
     }
 
-    // /status carries the behavior join plus context budget/indicator.
     let status_response = client
         .get(format!("http://127.0.0.1:{port}/status"))
         .send()
@@ -309,9 +304,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     assert!(
         behaviors.iter().any(|behavior| {
             behavior.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
-                // `/status` serializes behaviors as `SelfBehavior`, whose joined
-                // backend URL field is `endpoint` (not `backend_endpoint`, which
-                // is the field name in the separate `/behavior` detail view).
                 && behavior
                     .get("endpoint")
                     .and_then(Value::as_str)
@@ -385,7 +377,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         Some(1)
     );
 
-    // /fleet reshapes per-agent_did runtime + request counts.
     let fleet_response = client
         .get(format!("http://127.0.0.1:{port}/fleet"))
         .send()
@@ -407,8 +398,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /fleet to list this agent in ready state: {fleet}"
     );
 
-    // /mcp/pool joins registered MCP services with this agent's persisted
-    // health state, including the last observed tool count.
     let escaped_agent_did = escape_graphql_string(&agent_did);
     for mutation in [
         r#"mutation {
@@ -489,8 +478,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
 
-    // /mcp is opt-in: this server was started without --enable-mcp, so the
-    // endpoint must not be mounted.
     let mcp_off = client
         .get(format!("http://127.0.0.1:{port}/mcp"))
         .send()
@@ -1286,11 +1273,6 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     Ok(())
 }
 
-/// Proves the `gents query` command can reconstruct a full agent trace
-/// (AgentRequest + AgentResponse + AgentMessage + AgentToolCall, stitched by
-/// request_id / session_id) purely from structured query output — i.e. it can
-/// retire Amygdala's hand-rolled GraphQL client / escaping / polling /
-/// AgentMessage.content parsing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn query_command_reconstructs_a_trace() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1319,7 +1301,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Seed a linked trace (same request_id + session_id across collections).
     let mutations = [
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", status: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
@@ -1334,7 +1315,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
             .context("seeding trace")?;
     }
 
-    // Reconstruct each collection via `gents query`.
     let request = run_cli_json(
         &home_dir,
         &[
@@ -1391,7 +1371,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     );
     let tc = &tool_calls["results"][0];
     assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
-    // args/result are first-class JSON-string columns — no content reconstruction.
     let tc_args: Value = serde_json::from_str(tc["args"].as_str().unwrap())
         .context("tool call args parse as JSON")?;
     assert_eq!(tc_args["collection"].as_str(), Some("AgentRequest"));
@@ -1438,14 +1417,12 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let msg_row = &messages["results"][0];
     assert_eq!(msg_row["role"].as_str(), Some("assistant"));
 
-    // Trace stitches across all four collections, entirely from structured output.
     assert_eq!(
         req_row["session_id"].as_str(),
         msg_row["session_id"].as_str()
     );
     assert_eq!(tc["request_id"].as_str(), resp_row["request_id"].as_str());
 
-    // Secret guard holds on the CLI surface too.
     let denied = run_cli_failure_stderr(
         &home_dir,
         &[
@@ -1463,7 +1440,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         "expected secret guard to fire: {denied}"
     );
 
-    // Invalid field → agent-usable diagnostic with suggestions + inventory (#592).
     let diagnostic = run_cli_failure_stderr(
         &home_dir,
         &[
@@ -1486,7 +1462,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         "field inventory missing: {diagnostic}"
     );
 
-    // Discovery mode: fields ["*"] returns the field inventory, secrets excluded.
     let inventory = run_cli_json(
         &home_dir,
         &[
@@ -1515,10 +1490,6 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     Ok(())
 }
 
-/// Proves the `/mcp` endpoint serves `defra_query` to an external MCP client,
-/// reconstructing trace data structurally (so an external consumer like
-/// Amygdala can retire its hand-rolled stack) and still enforcing the secret
-/// guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     use rmcp::model::CallToolRequestParams;
@@ -1547,12 +1518,10 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
 
-    // MCP is opt-in; the endpoint only mounts with --enable-mcp.
     let mut serve = spawn_server_with_env(&home_dir, port, &["--enable-mcp"], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Seed a linked request + tool call.
     for mutation in [
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", status: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
@@ -1564,13 +1533,11 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             .context("seeding mcp trace")?;
     }
 
-    // Connect an MCP client to the mounted /mcp endpoint.
     let config =
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"));
     let transport = rmcp::transport::StreamableHttpClientTransport::from_config(config);
     let mcp = ().serve(transport).await.context("MCP client handshake with /mcp")?;
 
-    // The server advertises the defra_query tool.
     let tools = mcp.peer().list_tools(None).await.context("list_tools")?;
     assert!(
         tools
@@ -1585,7 +1552,6 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             .collect::<Vec<_>>()
     );
 
-    // Reconstruct the tool call structurally via the MCP tool.
     let args = serde_json::json!({
         "collection": "AgentToolCall",
         "fields": ["request_id", "tool_name", "args", "result", "status"],
@@ -1610,7 +1576,6 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
     assert_eq!(tc["request_id"].as_str(), Some("mcp-req"));
 
-    // Secret guard holds over MCP too.
     let denied_args =
         serde_json::json!({ "collection": "InferenceBackend", "fields": ["api_key"] });
     let denied_params = CallToolRequestParams::new("defra_query")

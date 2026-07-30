@@ -3,18 +3,6 @@ import Proofs.CrossMachineComposed.ToolTermination
 namespace ComposedState
 namespace ReachabilityWitness
 
-/-!
-## Non-vacuity witnesses for reachable composed tool states
-
-These small witnesses pin the abstract composed dynamics that are external to
-`RequestContext.Transition` itself:
-
-* `slot_acquire` supplies the fleet/scheduler admission grant needed before
-  `begin_inference`.
-* `clock_advance` moves the request clock and tool clocks in lockstep, making
-  `deadlineExceeded` reachable without breaking `Coherent`.
--/
-
 def startupCtx : ProcessState.StartupContext :=
   { hasStuckRequests := false, activeRequestCount := 0 }
 
@@ -212,8 +200,6 @@ theorem trace_withExpiredRunningTool : Trace initial withExpiredRunningTool :=
         (Trace.step step_withRunningTool
           (Trace.step step_withExpiredRunningTool Trace.refl))))))
 
-/-- C1' has a concrete reachable domain: a pending linked tool can coexist with
-    an exceeded parent deadline. -/
 theorem c1_prime_reachable_domain_nonempty :
     ∃ pre toolPre,
       Trace initial pre ∧
@@ -229,8 +215,6 @@ theorem c1_prime_reachable_domain_nonempty :
   · simp [RequestContext.deadlineExceeded, withExpiredPendingTool, expiredPendingTime,
       withPendingTool, processing, acquired, claimed, ready, initial]
 
-/-- C1 has a concrete reachable domain: a running linked tool can coexist with
-    an exceeded parent deadline. -/
 theorem c1_reachable_domain_nonempty :
     ∃ pre toolPre,
       Trace initial pre ∧
@@ -246,9 +230,6 @@ theorem c1_reachable_domain_nonempty :
   · simp [RequestContext.deadlineExceeded, withExpiredRunningTool, expiredRunningTime,
       withRunningTool, withPendingTool, processing, acquired, claimed, ready, initial]
 
-/-- B4 has a concrete reachable domain: a detached bridged tool can be spawned
-    from a processing request, and the resulting reachable state is globally
-    well-formed while the detached tool satisfies `Persistent`. -/
 theorem detached_reachable_domain_nonempty :
     ∃ pre toolPre,
       Trace initial pre ∧
@@ -263,8 +244,6 @@ theorem detached_reachable_domain_nonempty :
   · simp [IsDetached, detachedTool, pendingTool]
   · simp [Persistent, detachedTool, pendingTool, withDetachedTool, processing]
 
-/-- C2 reachable domain: latch a direct interrupt on a processing request that
-    still carries a live pending tool, then drive `interrupt_processing`. -/
 def interruptLatched : ComposedState :=
   { withPendingTool with
     request :=
@@ -297,8 +276,6 @@ theorem trace_interruptedWithTool : Trace initial interruptedWithTool :=
         (Trace.step step_interruptLatched
           (Trace.step step_interrupted Trace.refl))))))
 
-/-- C2 has a concrete reachable domain: an interrupted parent request can still
-    carry a live (cancellable) pending tool. -/
 theorem c2_reachable_domain_nonempty :
     ∃ pre toolPre,
       Trace initial pre ∧
@@ -313,9 +290,6 @@ theorem c2_reachable_domain_nonempty :
   · simp [IsDetached, pendingTool]
   · exact Or.inl rfl
 
-/-- C2 running arm: latch a direct interrupt on a processing request that still
-    carries a live *running* tool, then drive `interrupt_processing`. Mirrors the
-    pending chain but reaches `.interrupted` while the tool is running. -/
 def interruptLatchedRunning : ComposedState :=
   { withRunningTool with
     request :=
@@ -353,8 +327,6 @@ theorem trace_interruptedWithRunningTool : Trace initial interruptedWithRunningT
           (Trace.step step_interruptLatchedRunning
             (Trace.step step_interruptedRunning Trace.refl)))))))
 
-/-- C2 running arm has a concrete reachable domain: an interrupted parent request
-    can still carry a live *running* tool. -/
 theorem c2_running_reachable_domain_nonempty :
     ∃ pre toolPre,
       Trace initial pre ∧

@@ -1,10 +1,4 @@
 //! Subagent-backed `TriggerSource`.
-//!
-//! Observes `AgentToolCall` rows with a non-empty `child_request_id` and
-//! materializes the linked child `AgentRequest`. The child is created before
-//! the intent reaches `TriggerEngine`; the returned `FireIntent` carries the
-//! pre-materialized request id so dispatch records a `Fired` result without
-//! creating a second request.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -45,8 +39,6 @@ pub struct SubagentSource {
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     processed_tool_calls: HashSet<String>,
-    /// Periodic scan over running bridge rows. This closes the event-drop gap
-    /// for child materialization without bypassing the normal source path.
     rescan_tick: tokio::time::Interval,
 }
 
@@ -88,9 +80,6 @@ struct ToolCallDocIdRow {
 }
 
 impl ToolCallRow {
-    /// Resolve the bridge `cancel_policy`, defaulting to `Cascade` to match
-    /// `recovery::cancel_policy` (an absent/unknown policy is treated as the
-    /// cascade default everywhere else).
     fn cancel_policy(&self) -> CancelPolicy {
         self.cancel_policy
             .as_deref()
@@ -114,15 +103,6 @@ struct ParentTerminalRow {
     lifecycle_state: Option<String>,
 }
 
-/// True when the parent request reached a CANCEL-WORTHY terminal state — the
-/// states for which the live cascade (`transition/bridge.rs`) and recovery
-/// cascade (`recovery.rs`) drive a Cascade child to `.interrupted`.
-///
-/// This is `recovery::request_is_terminal` MINUS clean `completed`: a parent that
-/// completed NORMALLY does not cascade-cancel its tools anywhere else, so a
-/// background/detached child whose parent simply finished must be allowed to keep
-/// running. We treat `error | superseded | dead | interrupted` (status) and
-/// `failed | superseded | dead | interrupted` (lifecycle_state) as cancel-worthy.
 fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
     matches!(
         row.status.as_deref(),
@@ -133,16 +113,10 @@ fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
     )
 }
 
-/// Bridge args persisted by the spawn hook. After the named-target redesign
-/// (#377) these carry both the model-facing `name` and the RESOLVED target
-/// `(agent_did, behavior_id)`, so the claiming node never needs to re-resolve
-/// the friendly name. The `target`/`target_behavior_id` aliases keep older
-/// fixtures that wrote a bare behavior id under `behavior_id` working.
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
     #[serde(default)]
     name: Option<String>,
-    /// Resolved owning DID of the target behavior. Absent on legacy fixtures.
     #[serde(default)]
     agent_did: Option<String>,
     #[serde(alias = "target", alias = "target_behavior_id")]
@@ -151,15 +125,11 @@ struct SpawnArgs {
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
-    /// Parent depth copied into the targeted bridge so a remote host can
-    /// enforce the recursion bound without receiving the parent request.
     #[serde(default)]
     parent_subagent_depth: Option<u32>,
 }
 
 impl SpawnArgs {
-    /// Model-facing target name for authorization/error reporting. Falls back to
-    /// the behavior id for legacy fixtures that omit a name.
     fn target_name(&self) -> &str {
         self.name
             .as_deref()
@@ -206,9 +176,6 @@ impl SubagentSource {
         }
     }
 
-    /// Override the periodic rescan cadence. Exposed for integration tests
-    /// that need to drive the live rescan path without waiting for the
-    /// production interval.
     #[doc(hidden)]
     pub fn with_rescan_interval(mut self, interval: Duration) -> Self {
         self.rescan_tick = subagent_source_rescan_tick(interval);
@@ -590,12 +557,6 @@ impl SubagentSource {
                 );
                 return Ok(None);
             }
-            // The trusted-paired-peer branch is a CROSS-DEPLOYMENT spawn (the
-            // parent DID is a paired peer, not this node). It bypasses
-            // `subagent_spawn_denial`, so it must gate on the TARGET behavior's
-            // `subagent_allow_cross_deployment` flag directly (#377). With the
-            // flag off (default) we refuse to materialize the cross-deployment
-            // child. The behavior id is the target behavior on THIS node.
             let allow_cross_deployment = match load_behavior_allow_cross_deployment(
                 &self.node,
                 &spawn_args.behavior_id,
@@ -700,12 +661,6 @@ impl SubagentSource {
             return Ok(None);
         }
 
-        // DID-anchored single-creator gate (audit Finding 2). On the non-trusted
-        // path a node may ONLY materialize a child addressed to its OWN DID.
-        // `request_id` is `@index` (not unique), so without this anchor two peers
-        // that both replicate the bridge could each create the same child. The
-        // trusted-paired-peer path is the explicit, vetted cross-deployment
-        // exception and keeps taking local ownership below.
         if !trusted_paired_peer {
             let local_did = snapshot.local_did.trim();
             let target_owner_did = resolved_target_did
@@ -745,16 +700,10 @@ impl SubagentSource {
         let parent_depth = spawn_args
             .parent_subagent_depth
             .or(row_parent_depth)
-            // Legacy same-node parent rows may omit the root depth; preserve
-            // the former `unwrap_or(0)` interpretation. A remote bridge with
-            // no parent row must carry the depth explicitly.
             .or_else(|| parent.as_ref().map(|_| 0))
             .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
-        // The trusted-paired-peer claiming path takes local ownership; otherwise
-        // the child is owned by the RESOLVED target DID (which the single-creator
-        // gate above has already confirmed equals our local DID).
         let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
             snapshot.local_did.clone()
         } else {
@@ -808,8 +757,6 @@ impl SubagentSource {
         // cleanly-completed parent never cascade-cancels its tools anywhere else.
         let bridge_cancel_policy = row.cancel_policy();
         if bridge_cancel_policy != CancelPolicy::Cascade {
-            // Detached/background-detached: the child is intentionally decoupled
-            // from parent lifetime and must survive parent completion/cancel.
             tracing::debug!(
                 child_request_id = %request_id,
                 parent_request_id = %parent_request_id,
@@ -817,12 +764,6 @@ impl SubagentSource {
                 "subagent source: detached child, skipping orphan cancel re-check (child outlives parent)",
             );
         } else {
-            // A bridge that itself reached `.cancelled` is a genuine cancel signal
-            // (the live cascade cancels the bridge then drives the child). Other
-            // non-running bridge states (e.g. `completed`/`failed`) are NOT cancel
-            // signals on their own. A vanished bridge is treated as cancel-worthy
-            // so a truly orphaned child is reclaimed rather than left running
-            // uncancellable.
             let bridge_cancelled = match self.load_tool_call(doc_id).await {
                 Ok(Some(latest)) => {
                     latest.lifecycle_state.as_deref() == Some(ToolCallState::Cancelled.as_str())
@@ -837,7 +778,6 @@ impl SubagentSource {
                     false
                 }
             };
-            // Parent interrupt latch — the exact signal the live cascade fires on.
             let parent_interrupted = if parent.is_some() {
                 match crate::interrupt::fetch_interrupt_requested_at(&self.node, &parent_request_id)
                     .await
@@ -853,17 +793,8 @@ impl SubagentSource {
                     }
                 }
             } else {
-                // #683: the remote parent request is intentionally absent. Its
-                // targeted bridge is the cancellation channel and was re-read
-                // immediately above.
                 false
             };
-            // The parent may have reached a CANCEL-WORTHY terminal state
-            // (error/superseded/dead/interrupted — NOT clean `completed`) in the
-            // materialize window without setting the interrupt latch. Recovery's
-            // cascade treats these as Failed/Cancelled and interrupts the Cascade
-            // child; mirror that here. A vanished parent row is treated as
-            // cancel-worthy so the orphan is reclaimed.
             let parent_cancel_worthy_terminal = if parent.is_some() {
                 match self.load_parent_terminal(&parent_request_id).await {
                     Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),

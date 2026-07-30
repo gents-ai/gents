@@ -2,14 +2,6 @@ use super::*;
 
 use gents::startup_readiness::{BuildOutcome, BuildStanding};
 
-/// Fence for the bounded startup-readiness barrier (#559).
-///
-/// Drives the real `BuildStanding` — the same state machine the slot loop
-/// steps — through every vector the Lean model emits. The barrier used to hang
-/// forever on a behavior that was snapshot-runnable but persistently failed to
-/// build its client; these vectors pin that a spent budget (or a retirement)
-/// releases the barrier without ever claiming health, and that nothing anywhere
-/// requires a process restart.
 pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
     let cases = lean_startup_readiness_cases();
     assert_eq!(
@@ -56,8 +48,6 @@ pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
             case.witness
         );
 
-        // `blocks_ready` is the liveness claim: only a pending standing may
-        // hold the barrier, and every released standing lets Ready fire.
         assert_eq!(
             !standing.released(),
             case.blocks_ready,
@@ -65,8 +55,6 @@ pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
             case.witness
         );
 
-        // Health soundness: `ready` requires a genuine start
-        // (RuntimeReconcile.StartupReadiness.ready_requires_a_start).
         if observed == "ready" {
             assert!(
                 case.outcomes.iter().any(|outcome| outcome == "started"),
@@ -75,8 +63,6 @@ pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
             );
         }
 
-        // Absorption: further outcomes never move a released standing
-        // (released_absorbing), so a demotion can never flap back.
         if standing.released() {
             let after = standing
                 .step(budget, BuildOutcome::Failed)

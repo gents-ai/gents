@@ -2,10 +2,6 @@ import Proofs.RuntimeReconcile
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Runtime
 
-/-!
-# Runtime Reconcile Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

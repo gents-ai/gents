@@ -28,10 +28,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::network_token::{MembershipRecord, NetworkRecord};
 
-/// Versioned pairing-invite envelope.  CBOR-encoded, bs58-encoded, prefixed.
-///
-/// Current version: v5.  The `grant` and `network` records were added in v5;
-/// v4 and earlier tokens are rejected on decode with a re-issue hint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteToken {
     pub v: u8,
@@ -45,23 +41,16 @@ pub struct InviteToken {
     pub nonce: String,
     pub network_id: String,
     pub issued_at: String,
-    /// Scope template id (e.g. `"conversation"`) selected by the invite issuer.
-    /// Added in v3; the `join` command writes this as the desired row's template
-    /// and (since v4) is the sole source of the pairing's collection scope.
     pub template: String,
-    /// Admin-signed active grant for the intended joiner.
     pub grant: MembershipRecord,
-    /// Admin-signed network root record for the grant.
     pub network: NetworkRecord,
     /// Ed25519 (or other) signature over `signing_payload(self)`.
     /// Empty when computing the payload itself (circular-dependency break).
     pub sig: Vec<u8>,
 }
 
-/// Prefix for all encoded invite tokens.
 pub const TOKEN_PREFIX: &str = "dapair1-";
 
-/// Encode a token as `TOKEN_PREFIX` + base58(CBOR(token)).
 pub fn encode(token: &InviteToken) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(token, &mut bytes).context("encoding pairing invite token")?;
@@ -71,11 +60,6 @@ pub fn encode(token: &InviteToken) -> Result<String> {
     ))
 }
 
-/// Decode a `TOKEN_PREFIX`-prefixed invite token string.
-///
-/// Returns an error (mentioning "re-issue with a newer gents") for any
-/// token whose `v` field is not `5`.  Older tokens are rejected so the issuer
-/// must re-mint with a current `gents` binary.
 pub fn decode(raw: &str) -> Result<InviteToken> {
     let encoded = raw
         .trim()
@@ -125,9 +109,6 @@ pub fn check_freshness(token: &InviteToken, now: DateTime<Utc>, max_age: Duratio
     check_issued_at_freshness(&token.issued_at, now, max_age)
 }
 
-/// Freshness check over a bare `issued_at` string, shared by the DID-bound
-/// invite ([`check_freshness`]) and the bearer invite
-/// (`bearer_token::check_bearer_freshness`).
 pub fn check_issued_at_freshness(
     raw_issued_at: &str,
     now: DateTime<Utc>,

@@ -20,12 +20,6 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 
-/-!
-# Conformance Snapshot Assembly
-
-Top-level JSON snapshot emitted for Rust conformance tests.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
@@ -96,6 +90,10 @@ def snapshotJson : String :=
       ++ jsonArray
         (pairingReconcileShutdownBoundaryCases.map
           pairingReconcileShutdownBoundaryCaseJson) ++ ","
+    ++ "\"pairing_reconcile_sweep_retry_boundary_cases\":"
+      ++ jsonArray
+        (pairingReconcileSweepRetryBoundaryCases.map
+          pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
     ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
       ++ jsonArray
         (pairingReconcileSweepSchedulingCases.map

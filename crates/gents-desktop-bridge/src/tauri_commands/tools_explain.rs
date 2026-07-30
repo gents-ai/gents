@@ -8,10 +8,6 @@ use tauri::State;
 
 use crate::state::{current_core, require_agent_home, DesktopAppState};
 
-/// Resolved per-behavior tool surface, computed by the runtime's own
-/// explain machinery — never re-derived outside it. Local agents only: a
-/// remote agent's ceiling lives in its host's init config, which this
-/// desktop cannot read.
 #[tauri::command]
 pub async fn desktop_tool_surface_explain(
     agent_did: String,
@@ -113,8 +109,6 @@ pub async fn desktop_tool_surface_explain(
     }))
 }
 
-/// Desktop mirror of the CLI's init-config ceiling resolution; the desktop
-/// stores `tool_ceiling` as a free string in the agent home's init.json.
 fn resolve_desktop_tool_ceiling(
     agent_home: &std::path::Path,
 ) -> Result<(ToolCeiling, &'static str), BridgeError> {

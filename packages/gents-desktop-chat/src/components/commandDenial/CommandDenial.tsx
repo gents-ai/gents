@@ -1,17 +1,6 @@
 import type { CommandDenialView } from "@source-inc/gents-desktop-client";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 
-/**
- * Inline render for a command-policy denial inside the transcript's
- * .tool-group. Mirrors the panel-286 prototype at
- * docs/ui-prototypes/panel-286-command-denial.html — same class names,
- * same amber treatment, distinct from the red tool-failure path.
- *
- * Mounted by Transcript.tsx::ToolGroups when parseCommandDenial returns
- * non-null on a tool's result text. The component renders the entire
- * <details className="tool-item tool-item-denied"> shell so the
- * surrounding ToolGroups loop just delegates wholesale per item.
- */
 export function CommandDenialToolItem({
   tool,
   denial,

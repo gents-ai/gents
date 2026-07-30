@@ -1,11 +1,5 @@
 import Proofs.ToolPolicy.Types
 
-/-!
-# Tool Policy Meets
-
-Concrete meet operations and permission denotations for each atom.
--/
-
 namespace ToolPolicy
 
 def FileCap.rank : FileCap → Nat
@@ -170,7 +164,6 @@ structure CmdReq where
   wantsNetwork : Bool
   wantsWrite : Bool
 
-/-- Prop-level prefix relation for argv gates. -/
 def prefixOf (needle haystack : List String) : Prop :=
   ∃ suffix, haystack = needle ++ suffix
 

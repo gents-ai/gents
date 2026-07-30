@@ -1,12 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 
-/-!
-# Scheduling JSON
-
-Serializers for inference and fleet slot-accounting witness rows.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

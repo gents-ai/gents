@@ -4,58 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 cd "$REPO_ROOT"
-# =============================================================================
-# rename-to-gents.sh — Executable rename tool for the defra-agent → Gents
-# hard cutover (source-inc/defra-agent#822, epic #811).
-#
-# Modes (all repository modes require a slice):
-#   audit SLICE          — report paths and contents deterministically (read-only)
-#   apply-moves SLICE    — perform only the reviewable git-mv phase
-#   apply-content SLICE  — perform only scripted content substitutions
-#   apply SLICE          — perform both mechanical phases
-#   guard SLICE          — reject stale path/content tokens outside the allowlist
-#   self-test            — exercise slices and scanner edge cases in fixtures
-#
-# Slices are core, desktop, release, docs, and all. The all slice always runs
-# the four owned slices in that order. This lets #823–#826 use the same locked
-# map without a later issue mechanically rewriting an earlier issue's files.
-#
-# Usage:
-#   scripts/rename-to-gents.sh audit core
-#   scripts/rename-to-gents.sh apply-moves desktop
-#   scripts/rename-to-gents.sh apply-content release
-#   scripts/rename-to-gents.sh guard all
-#
-# Design:
-#   - Audit mode is read-only and prints affected-file + occurrence summaries.
-#   - Apply mode performs only the selected slice's git mv and substitutions.
-#   - Re-running apply is safe (no-op on already-renamed files).
-#   - Scans both paths and contents.
-#   - Explicitly scans old product tokens, both GitHub org coordinates,
-#     SSH/HTTPS repository forms, and com.sourcenetwork / org.sourcenetwork.
-#   - Preserves DefraDB/defradb.rs and domain-level agent vocabulary.
-#
-# Three-part review commit structure (documented for reviewers):
-#   1. git mv only (directory/crate renames)
-#   2. Scripted content substitutions (this script's apply mode)
-#   3. Hand fixes, generated-file/lockfile regeneration, formatting
-#
-# Guard allowlist — old product names may remain only in:
-#   - docs/gents-cutover.md
-#   - scripts/rename-to-gents.sh (this file)
-#   - narrowly justified machine-required references recorded in the guard
-#
-# Protected apply paths are a separate concept. docs/gents.md and generated
-# Apple internals are never edited by this script. Cargo.lock is regenerated
-# from the slice-correct manifests instead of being text-substituted. All three
-# remain visible to their slice/final guards until their owners resolve them.
-# =============================================================================
-# ---------------------------------------------------------------------------
-# Locked rename map (from #811 section "Locked naming contract")
-# ---------------------------------------------------------------------------
 
-# Core path renames (#823). The product-branded Lean file is handled after the
-# runtime root moves so its source exists at the new root.
 declare -a CORE_MV=(
   "crates/defra-agent:crates/gents"
   "crates/defra-agent-cli:crates/gents-cli"
@@ -69,38 +18,29 @@ CORE_LEAN_OLD_BEFORE="crates/defra-agent/proofs/Proofs/Conformance/DefraAgent.le
 CORE_LEAN_OLD_AFTER="crates/gents/proofs/Proofs/Conformance/DefraAgent.lean"
 CORE_LEAN_NEW="crates/gents/proofs/Proofs/Conformance/Gents.lean"
 
-# Desktop path renames (#824). Generated Apple internals beneath the app root
-# move with their parent but are deliberately excluded from content edits.
 declare -a DESKTOP_MV=(
   "crates/defra-agent-desktop:crates/gents-desktop"
   "crates/defra-agent-desktop-core:crates/gents-desktop-core"
   "apps/desktop-tauri:apps/gents-desktop"
 )
 
-# Release path renames (#825).
 declare -a RELEASE_MV=(
   "scripts/enable-defra-agent-runner-session.sh:scripts/enable-gents-runner-session.sh"
 )
 
 declare -a SLICE_ORDER=(core desktop release docs)
 
-# Content substitutions — applied in order from most specific to most general.
-# Each entry is "old|new". Order matters: longer/more-specific patterns first.
 declare -a CONTENT_SUBS=(
-  # Exact identity/platform identifiers. Do not add broad com.sourcenetwork or
-  # org.sourcenetwork substitutions: unknown identifiers require a hand fix.
   "defra-agent.identity|com.source-inc.gents.identity"
   "com.sourcenetwork.defra-agent-desktop|com.source-inc.gents"
   "__APPLE_TEAM_ID__.org.sourcenetwork.defra-agent|__APPLE_TEAM_ID__.com.source-inc.gents"
   "org.sourcenetwork.defra-agent|com.source-inc.gents.cli"
-  # Repository coordinates — both org forms
   "git@github.com:sourcenetwork/defra-agent|git@github.com:source-inc/gents"
   "git@github.com:source-inc/defra-agent|git@github.com:source-inc/gents"
   "github.com/sourcenetwork/defra-agent|github.com/source-inc/gents"
   "github.com/source-inc/defra-agent|github.com/source-inc/gents"
   "sourcenetwork/defra-agent|source-inc/gents"
   "source-inc/defra-agent|source-inc/gents"
-  # Product crate prefix (most specific first)
   "defra-agent-desktop-core|gents-desktop-core"
   "defra-agent-desktop|gents-desktop"
   "defra-agent-lean-contract|gents-lean-contract"
@@ -111,29 +51,15 @@ declare -a CONTENT_SUBS=(
   "defra-native-fs-runner|gents-fs-runner"
   "defra_native_fs_runner|gents_fs_runner"
   "defra_agent_fs_runner|gents_fs_runner"
-  # Also handle the defra_agent::fs_runner path form if it exists
   "defra_agent_fs|gents_fs"
-  # Runtime crate/path/import (Rust module form)
   "defra_agent|gents"
-  # Environment variable prefix
   "DEFRA_AGENT|GENTS"
-  # Default home directory (literal dot, not regex)
   ".defra-agent|.gents"
-  # Display/product name (proper case)
   "Defra Agent|Gents"
   "DefraAgent|Gents"
-  # CLI executable / product name (kebab-case) — catch-all, run last
   "defra-agent|gents"
-  # NOTE: did:defra-agent:* is NOT mechanically substituted.
-  # Per #811: string-only fixtures → did:test:*; real crypto → did:key.
-  # This is a hand-fix item for #823, not a scripted substitution.
-  # The guard still scans for did:defra-agent as a stale token.
 )
 
-# #823 must update direct consumers of renamed core crates even where those
-# consumers are owned by desktop or release. Keep this list exact: it must not
-# rewrite desktop branding, release artifacts, or documentation ahead of their
-# slices. Remaining semantic/selector fixes belong in the hand-fix commit.
 declare -a CORE_CONSUMER_SUBS=(
   'defra-agent = { path = "../defra-agent" }|gents = { path = "../gents" }'
   'defra-agent = { path = "../../../crates/defra-agent" }|gents = { path = "../../../crates/gents" }'
@@ -153,10 +79,6 @@ declare -a CORE_CONSUMER_SUBS=(
   "crates/defra-agent/proofs|crates/gents/proofs"
 )
 
-# #824 has the same narrow cross-slice obligation for consumers of the renamed
-# desktop paths and packages. Keep both the substitutions and file list exact:
-# release artifact/signing names and general documentation remain owned by
-# #825/#826 even when they contain broader old-product tokens.
 declare -a DESKTOP_CONSUMER_SUBS=(
   "apps/desktop-tauri|apps/gents-desktop"
   "crates/defra-agent-desktop-core|crates/gents-desktop-core"
@@ -179,10 +101,6 @@ declare -a DESKTOP_CONSUMER_FILES=(
   "crates/gents/proofs/Proofs/Conformance/CoverageLedger.lean"
 )
 
-# Root workspace files are shared across slices, so they cannot receive the
-# catch-all substitution map. These exact entries keep every intermediate
-# workspace valid: #823 rewrites only core members/dependencies, then #824
-# rewrites only desktop members/dependencies.
 declare -a CORE_WORKSPACE_SUBS=(
   '"crates/defra-agent"|"crates/gents"'
   '"crates/defra-agent-cli"|"crates/gents-cli"'
@@ -206,9 +124,6 @@ declare -a DESKTOP_WORKSPACE_SUBS=(
   "defra-agent-desktop-core =|gents-desktop-core ="
 )
 
-# Cargo.lock is never rewritten mechanically. These exact old entries let a
-# slice guard verify that `cargo generate-lockfile`/Cargo regeneration happened
-# without mistaking still-deferred desktop packages for stale core packages.
 declare -a CORE_LOCK_SUBS=(
   'name = "defra-agent"|name = "gents"'
   'name = "defra-agent-cli"|name = "gents-cli"'
@@ -230,7 +145,6 @@ declare -a DESKTOP_LOCK_SUBS=(
   '"defra-agent-desktop-core",|"gents-desktop-core",'
 )
 
-# Stale tokens for the guard scan (from #811 section 1)
 declare -a STALE_TOKENS=(
   "agent-daemon"
   "agent_daemon"
@@ -257,8 +171,6 @@ declare -a STALE_TOKENS=(
   "org.sourcenetwork"
   "com.sourcenetwork.defra-agent-desktop"
   "org.sourcenetwork.defra-agent"
-  # Product-owned shorthand which cannot be covered by a broad bare-`defra`
-  # rule without corrupting legitimate DefraDB vocabulary.
   "did:defra:"
   "defra_exec"
   "defra_fs"
@@ -287,9 +199,6 @@ declare -a STALE_TOKENS=(
   "defra-owned"
   "defra-reasoning"
   "defra-user"
-  # Additional product-owned internal/test/invoked-tooling shorthand found by
-  # the frozen-tree preflight. Keep these exact so DefraDB-derived names remain
-  # outside the product rename.
   "stream_defra_turn"
   "start_defra_turn"
   "steer_defra_turn"
@@ -333,23 +242,12 @@ declare -a STALE_TOKENS=(
   "schemas.gents.ai"
 )
 
-# Guard allowlist — files where old names are permitted to remain. In
-# particular, docs/gents.md and generated Apple files are NOT allowlisted.
 declare -a ALLOWLIST=(
   "docs/gents-cutover.md"
   "scripts/rename-to-gents.sh"
 )
 
-# Domain vocabulary to preserve (NOT substituted)
-# These are explicitly listed for clarity; the script does not touch them.
-# - defradb / defradb.rs
-# - defra-core, defra-node, defra-p2p-adapter (upstream DefraDB crates)
-# - agent_did, AgentRequest, AgentResponse, AgentToolCall (domain nouns)
-# - agent-tool-call-lifecycle-v1-to-v2-lens (lens name = domain vocabulary)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 DID_SENTINEL="__GENTS_PRESERVE_PRODUCT_DID__"
 
@@ -395,8 +293,6 @@ path_slice() {
       apps/gents-desktop | apps/gents-desktop/*)
       PATH_SLICE=desktop
       ;;
-    # Markdown remains documentation even when it lives beside invoked scripts.
-    # #826 owns those active docs; the release slice must not rewrite them early.
     scripts/*.md)
       PATH_SLICE=docs
       ;;
@@ -658,7 +554,6 @@ apply_content_for_slice() {
   done < <(git ls-files -z)
   echo "$slice content substitutions applied to $count tracked files"
 
-  # Core's exact consumer seam is deliberately narrower than CONTENT_SUBS.
   if [[ "$slice" == "core" ]]; then
     local consumer_count=0
     while IFS= read -r -d '' file; do
@@ -890,10 +785,6 @@ scan_slice_contracts() {
       scan_desktop_consumer_contracts
       ;;
     all)
-      # The final guard must retain the stricter shared-file and consumer
-      # contracts owned by the incremental core and desktop slices. A plain
-      # all-tree token scan is not equivalent: some exact legacy selectors,
-      # such as `app: "desktop-tauri"`, do not contain a broad stale token.
       scan_slice_contracts core
       scan_slice_contracts desktop
       ;;
@@ -1230,8 +1121,6 @@ self_test() (
   cp -R "$fixture_base" "$fixture_sequential"
   cp -R "$fixture_base" "$fixture_all"
 
-  # A core run moves only core paths and applies only exact dependency/import
-  # substitutions to desktop/release consumers. Branding remains untouched.
   cd "$fixture_slice"
   owner_checksum=$(cksum docs/gents.md)
   apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
@@ -1254,8 +1143,6 @@ self_test() (
     return 1
   fi
   [[ "$lock_checksum" == "$(cksum Cargo.lock)" ]]
-  # Package selectors are an explicit #823 hand fix, not an unsafe catch-all
-  # rewrite in shared release-owned files.
   grep -Fq 'cargo test -p gents-protocol -p defra-agent' .github/workflows/ci.yml
   second_checksum=$(cksum crates/defra-agent-desktop/branding.txt)
   [[ "$first_checksum" == "$second_checksum" ]]
@@ -1269,8 +1156,6 @@ self_test() (
   fi
   grep -Fq 'did:defra-agent' <<<"$guard_output"
 
-  # The desktop slice owns only the exact external consumer seam. It updates
-  # build/test paths while leaving release artifact names for the release slice.
   apply_for_slice desktop >/dev/null
   [[ -d apps/gents-desktop && ! -e apps/desktop-tauri ]]
   grep -Fq 'cargo test -p gents-desktop-tauri' .github/workflows/ci.yml
@@ -1293,7 +1178,6 @@ self_test() (
   grep -Fq 'adapter docs retain defra-agent until the docs slice' \
     scripts/adapter-interop/README.md
 
-  # Explicit slice execution and `apply all` must materialize the same tree.
   cd "$fixture_sequential"
   owner_checksum=$(cksum docs/gents.md)
   apple_checksum=$(cksum <apps/desktop-tauri/src-tauri/gen/apple/project.yml)
@@ -1320,14 +1204,10 @@ self_test() (
   grep -Fq '"crates/gents-desktop"' Cargo.toml
   grep -Fq 'gents-desktop-core = { path = "crates/gents-desktop-core" }' Cargo.toml
 
-  # A second all run is a byte-for-byte no-op.
   idempotent_tree=$(git write-tree)
   apply_for_slice all >/dev/null
   [[ "$idempotent_tree" == "$(git write-tree)" ]]
 
-  # The final all-tree guard must run the exact core and desktop contracts,
-  # not just the broad stale-token list. Temporarily use an unrelated token so
-  # these assertions fail if `scan_slice_contracts all` stops delegating.
   printf '\n"crates/defra-agent"\n' >>Cargo.toml
   printf '\napp: "desktop-tauri"\n' \
     >>crates/gents/tests/support/conformance_consumers.rs
@@ -1341,8 +1221,6 @@ self_test() (
   grep -Fq 'desktop consumer' <<<"$guard_output"
   STALE_TOKENS=("${original_stale_tokens[@]}")
 
-  # Protected owner/generated files are still final-guard violations: apply
-  # protection is intentionally not a stale-token allowlist.
   if guard_output=$(run_guard all 2>&1); then
     echo "global guard unexpectedly accepted protected stale files" >&2
     return 1
@@ -1350,8 +1228,6 @@ self_test() (
   grep -Fq 'docs/gents.md' <<<"$guard_output"
   grep -Fq 'apps/gents-desktop/src-tauri/gen/apple/project.yml' <<<"$guard_output"
 
-  # Exercise the real tracked-path and symlink-target scanner. The embedded
-  # newline ensures this fails if tracked paths are ever read line-by-line.
   fixture_repo="$test_dir/path-fixture"
   fixture_path=$'nested/defra-native-fs-runner\nfixture'
   mkdir -p "$fixture_repo/nested"
@@ -1366,8 +1242,6 @@ self_test() (
   [[ "$SCAN_VIOLATIONS" -eq 1 ]]
   [[ "$SCAN_TOTAL" -eq 2 ]]
 
-  # A narrow product-message token catches legacy Gents branding without
-  # treating legitimate DefraDB/upstream crate vocabulary as stale.
   fixture_repo="$test_dir/product-message-fixture"
   mkdir -p "$fixture_repo"
   git -C "$fixture_repo" init -q

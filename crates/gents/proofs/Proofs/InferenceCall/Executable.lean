@@ -1,15 +1,7 @@
 import Proofs.InferenceCall.Transition
 
-/-!
-# Executable Inference Call Semantics
-
-Executable actions, step function, replay, and equivalence with the relational
-transition model for a single persisted `InferenceCall` row.
--/
-
 namespace InferenceCall
 
-/-- Executable inference-call actions mirroring `Transition`. -/
 inductive Action where
   | start
   | complete
@@ -17,7 +9,6 @@ inductive Action where
   | cancel
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the inference-call layer. -/
 def step? (pre : InferenceCall) : Action → Option InferenceCall
   | .start =>
       if pre.state = .queued then
@@ -40,7 +31,6 @@ def step? (pre : InferenceCall) : Action → Option InferenceCall
       else
         none
 
-/-- Replay a finite action list through the executable call semantics. -/
 def replay? : InferenceCall → List Action → Option InferenceCall
   | s, [] => some s
   | s, action :: rest =>

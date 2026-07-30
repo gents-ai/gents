@@ -5,8 +5,6 @@ import Proofs.Recovery.Sweeps.Inference
 import Proofs.Recovery.Sweeps.SubagentLiveness
 import Proofs.Recovery.Sweeps.Conversation
 
-/-! Registry and persisted-collection coverage theorem for recovery sweeps. -/
-
 namespace Recovery
 
 def registeredRecoverySweeps : List RecoverySweep :=

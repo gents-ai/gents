@@ -92,8 +92,6 @@ test.describe("desktop visual baselines", () => {
       snapshotName: "bridge-error.png",
     });
 
-    // Light theme LAST: the toggle persists to localStorage, so an earlier
-    // capture would silently repaint every following "dark" baseline.
     await gotoHarness(page);
     await page.getByTestId("theme-toggle").click();
     await expect(page.locator('html[data-theme="light"]')).toHaveCount(1);

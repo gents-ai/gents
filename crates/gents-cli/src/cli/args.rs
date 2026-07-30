@@ -1,6 +1,3 @@
-// Soft-cap justified: clap type definitions are a tightly-coupled unit.
-// Splitting by subcommand would fragment the command tree declaration.
-
 use std::net::IpAddr;
 use std::path::PathBuf;
 

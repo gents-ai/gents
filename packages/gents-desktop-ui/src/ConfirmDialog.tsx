@@ -1,8 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
-/// In-app confirmation dialog. Native `window.confirm`/`alert` are dead in
-/// the packaged app (wry's WKWebView has no JS-dialog delegate and resolves
-/// confirm() to false without showing anything) — always use this instead.
 export type ConfirmDialogProps = {
   open: boolean;
   title: string;
@@ -31,8 +28,6 @@ export function ConfirmDialog({
     if (open) cancelRef.current?.focus();
   }, [open]);
 
-  // ESC handler — document-level while open, so it works no matter where
-  // focus has landed (same pattern as CascadeCancelDialog).
   useEffect(() => {
     if (!open) return;
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -44,8 +39,6 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
-  // Tab trap: aria-modal promises inertness, so keep focus cycling inside
-  // the dialog instead of escaping into the (visually hidden) page.
   function onDialogKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Tab" || !dialogRef.current) return;
     const focusables = Array.from(

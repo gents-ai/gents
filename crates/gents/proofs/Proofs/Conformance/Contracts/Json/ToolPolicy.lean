@@ -1,12 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.ToolPolicy.Cases
 
-/-!
-# Tool Policy JSON
-
-Serializer for unified tool-policy composition witnesses.
--/
-
 namespace Conformance.Contracts
 
 open ToolPolicy.ContractCases

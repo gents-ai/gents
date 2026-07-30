@@ -1,14 +1,6 @@
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.Boundaries
 
-/-!
-# Conformance Coverage Ledger
-
-Every domain emitted by `Proofs.Conformance.Contracts` must have a Rust
-consumer or an explicitly accepted boundary/follow-up. Rust checks this ledger
-against the generated JSON so new Lean contracts cannot remain advisory-only.
--/
-
 namespace Conformance.Contracts
 
 inductive Surface where
@@ -50,9 +42,6 @@ structure CoverageEntry where
   surfaces : List Surface := []
   deriving Repr
 
--- Consumer strings are registered Rust/TypeScript test pointers. The Rust
--- registry in `tests/support/conformance_consumers.rs` resolves each pointer
--- against the named source file and test, so stale consumer names fail tests.
 def consumerCoverage
     (category domain consumer : String) : CoverageEntry :=
   { category := category
@@ -575,16 +564,11 @@ def caseCoverage : List CoverageEntry :=
       "BackendHealthAdmissionCases"
       "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case")
       "backend-health" [Surface.operatorUi]
-  -- #640: the scheduled prober's transition machine (Proofs/BackendHealth) —
-  -- the Rust consumer drives step_backend over the full K ∈ {1,2,3} domain
-  -- including the blocksRouting projection the admission merge consumes.
   , tagged (consumerCoverage
       "backend_health_cases"
       "BackendHealthTransitionCases"
       "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
       "backend-health" [Surface.runtimeInternal]
-  -- #640: the /metrics overlay — measured state drives the probe-status
-  -- sample value (1 iff healthy, 0 otherwise) and last_probe freshness.
   , tagged (consumerCoverage
       "backend_health_cases"
       "BackendHealthTransitionCases"
@@ -609,6 +593,11 @@ def caseCoverage : List CoverageEntry :=
       "pairing_reconcile_cases"
       "PairingReconcileShutdownBoundaryCases"
       "conformance::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pairing_reconcile_cases"
+      "PairingReconcileSweepRetryBoundaryCases"
+      "conformance::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pairing_reconcile_cases"
@@ -900,7 +889,6 @@ def caseCoverage : List CoverageEntry :=
       "EventDeliveryConvergenceTraces"
       "conformance::event_delivery_convergence_traces_match_runtime_or_deviation")
       "event-delivery" [Surface.runtimeInternal]
-  -- Closed by #253: the Rust consumer drives the full K=1 and K>=2 domain.
   , tagged (consumerCoverage
       "mcp_health_cases"
       "MCPHealthCases"
@@ -911,8 +899,6 @@ def caseCoverage : List CoverageEntry :=
       "MCPHealthCases"
       "cli_mcp_probe::mcp_probe_json_reports_health_snapshot_for_registry_service")
       "mcp-health" [Surface.operatorCli]
-  -- Closed by #278: the desktop bridge view consumes the same Lean transitions
-  -- and asserts the K-model bookkeeping survives row -> view projection.
   , tagged (consumerCoverage
       "mcp_health_cases"
       "MCPHealthCases"

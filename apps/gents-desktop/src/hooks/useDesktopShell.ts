@@ -324,9 +324,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
         document.visibilityState === "visible" &&
         foregroundRepairEnabledRef.current
       ) {
-        void foregroundRepairRef.current().catch(() => {
-          // The peer action renders the actionable error in the shell.
-        });
+        void foregroundRepairRef.current().catch(() => {});
       }
     }
 

@@ -49,9 +49,6 @@ const EXTERNAL_ID: &str = "wh-1";
 const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
 
 async fn register_webhook_event_schema(node: &EmbeddedNode) {
-    // The EventSource introspects the source collection's fields to
-    // hydrate `doc.*`. `kind` is indexed so the operator-authored filter
-    // (`{ kind: { _eq: "signup" } }`) passes DefraDB's limit-1 probe.
     let sdl = r#"
         type WebhookEvent {
             external_id: String
@@ -130,7 +127,6 @@ async fn wait_for_runtime_snapshot<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    // Generous deadline: the control watcher debounce is 5s plus settle.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
@@ -247,9 +243,6 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
 async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
     let escaped_external_id = escape_graphql_string(external_id);
     let escaped_kind = escape_graphql_string(kind);
-    // Dynamically-added collections on DefraDB expose `add_<Collection>` as
-    // their insertion mutation alias (rather than `create_<Collection>`),
-    // returning an array of rows with `_docID`.
     let mutation = format!(
         r#"mutation {{
             add_WebhookEvent(input: {{
@@ -288,18 +281,10 @@ async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str)
         .unwrap_or_else(|| panic!("WebhookEvent mutation returned no _docID: {field}"))
 }
 
-/// End-to-end: a `WebhookEvent` document write drives a full fire through
-/// the EventSource -> TriggerEngine -> Materializer pipeline, landing
-/// exactly one `AgentRequest` with the rendered prompt and matching trigger
-/// lineage, and writing the expected runtime bookkeeping back to the
-/// EventTrigger document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let db = test_db("event-trigger-e2e").await;
 
-    // Step 1: register the source collection's schema BEFORE anything else.
-    // The CLI apply path and the EventSource introspection both expect the
-    // source collection to already exist on the node.
     register_webhook_event_schema(db.node.as_ref()).await;
 
     let identity = Arc::new(test_identity("event-trigger-e2e"));
@@ -328,8 +313,6 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    // Wait for startup reconcile to settle — this is the baseline snapshot
-    // generation that our post-insert reconcile must exceed.
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -344,9 +327,6 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         startup.last_reconcile_error
     );
 
-    // Step 2: seed one Task + one EventTrigger. The trigger filters on
-    // `kind == "signup"` and renders `doc.external_id` into the prompt so we
-    // can assert both the filter probe AND the template render end-to-end.
     create_task(
         db.node.as_ref(),
         TASK_ID,
@@ -364,10 +344,6 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    // Step 3: wait for the control watcher to debounce + reload, bumping
-    // `active_generation` and marking the reconcile as "applied". This is
-    // the signal that the EventTrigger is now resolved into the active
-    // snapshot and the EventSource has subscribed to `WebhookEvent`.
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -381,14 +357,8 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         reconciled.last_reconcile_error
     );
 
-    // Step 4: write a matching `WebhookEvent`. This is the "real event"
-    // that drives the pipeline end-to-end.
     let source_doc_id = write_webhook_event(db.node.as_ref(), EXTERNAL_ID, "signup").await;
 
-    // Step 5: poll for the AgentRequest row carrying the trigger lineage.
-    // 10s is generous — the full pipeline is a subscribe->probe->hydrate->
-    // render->materialize chain on top of the event bus, but each step is
-    // sub-second under a local embedded node.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let requests = loop {
         let rows = query_agent_requests_for_trigger(db.node.as_ref(), TRIGGER_ID).await;
@@ -434,10 +404,6 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         "request_id must be populated: {request:?}"
     );
 
-    // Step 6: poll the EventTrigger doc's runtime-owned fields until the
-    // `on_result` writeback lands. The callback spawns a background task
-    // after the fire, so the writeback is strictly post-materialize and
-    // may trail the AgentRequest row by a handful of milliseconds.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let fired = loop {
         let row = fetch_event_trigger(db.node.as_ref(), TRIGGER_ID).await;
@@ -464,7 +430,6 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         fired.last_error.as_deref().unwrap_or("").is_empty(),
         "last_error must be cleared on a successful fire: {fired:?}"
     );
-    // Apply-owned fields must not be clobbered by the runtime writeback.
     assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
     assert_eq!(fired.source_collection.as_deref(), Some("WebhookEvent"));
     assert_eq!(fired.event_kind.as_deref(), Some("created"));

@@ -1,11 +1,3 @@
-//! Single-node live e2e for `fan_out_and_synthesize` (issue #378, cut 1).
-//!
-//! Normal test runs skip this (`#[ignore]` + env gate). When explicitly run
-//! with `GENTS_LIVE_WORKFLOW=1`, it boots one document-driven agent,
-//! configures an orchestrator plus researcher/synthesizer subagent behaviors,
-//! drives one workflow tool call, and asserts the durable barrier projection
-//! over `AgentToolCall.workflow_group_id` / `workflow_role`.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,10 +54,10 @@ struct WorkflowToolCallRow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_WORKFLOW=1 and pass --ignored"]
 async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_WORKFLOW != 1; skipping workflow orchestration e2e");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_WORKFLOW=1 and pass --ignored to run the workflow orchestration e2e"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
@@ -192,10 +184,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         .filter(|row| row.workflow_role.as_deref() == Some("synthesis"))
         .collect::<Vec<_>>();
 
-    // The barrier-completeness property is N-agnostic: assert the D6 width bound
-    // (1..=maxBackgroundedPerParent = 8), not the exact count the prompt asks
-    // for, so a model that emits 2 or 4 tasks does not masquerade as a barrier
-    // violation. The structural barrier checks below hold for whatever N ran.
     assert!(
         (1..=8).contains(&fan_out.len()),
         "expected 1..=8 fan_out_child bridges (D6 width bound) in group {group_id}; got {} ({workflow_rows:?})",
@@ -246,15 +234,9 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         assert_eq!(child.caused_by_trigger_kind.as_deref(), Some("subagent"));
     }
 
-    // ---- The actual DATA the workflow produced (not just the structure) ------
-    // Show how the model authored the workflow: the single orchestration tool
-    // call carries the fan-out task prompts + synthesis target/prompt as args.
     let authored = fetch_tool_call_args(db.node.as_ref(), &group_id).await;
     eprintln!("[workflow-live] orchestrator authored fan_out_and_synthesize args:\n{authored}");
 
-    // Every fan-out child must have returned a SUBSTANTIVE report (not a
-    // one-liner) — this task forces real per-city research the synthesizer must
-    // actually consume. Keep each report to verify it reaches the synthesizer.
     let mut fan_out_reports = Vec::new();
     for (i, row) in fan_out.iter().enumerate() {
         let crid = row.child_request_id.as_deref().expect("fan-out child id");
@@ -271,17 +253,11 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         fan_out_reports.push(report);
     }
 
-    // EXACTLY what the synthesis coordinator received as input — the runtime
-    // builds this programmatically (synthesis_prompt + the JSON of every fan-out
-    // outcome). Inspecting it verifies the inter-stage data flow is clean.
     let synthesis_input = fetch_tool_call_args(db.node.as_ref(), &synthesis[0].tool_call_id).await;
     eprintln!(
         "[workflow-live] ══ SYNTHESIS COORDINATOR INPUT (what the runtime fed it) ══\n{synthesis_input}\n"
     );
 
-    // DATA-FLOW FENCE: the synthesis prompt must actually carry every
-    // researcher's report. Compare on alphanumeric-only text so JSON escaping
-    // (\n, \") and whitespace differences don't cause false negatives.
     let alnum = |s: &str| {
         s.chars()
             .filter(|c| c.is_alphanumeric())
@@ -295,8 +271,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     );
     for (i, report) in fan_out_reports.iter().enumerate() {
         let r = alnum(report);
-        // A distinctive 80-char run from the middle of the report must appear
-        // verbatim (modulo escaping) in what the synthesizer was handed.
         let chars: Vec<char> = r.chars().collect();
         let start = chars.len() / 4;
         let chunk: String = chars[start..(start + 80).min(chars.len())].iter().collect();
@@ -305,8 +279,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
             "synthesis input must contain researcher #{i}'s report content; missing chunk: {chunk:?}"
         );
     }
-    // Polish verification: the trimmed payload carries no lineage UUID, and the
-    // text-only render leaks no chain-of-thought / message envelope.
     assert!(
         !synthesis_input.contains("child_request_id"),
         "synthesis payload must be trimmed (no lineage UUIDs)"
@@ -317,7 +289,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         "synthesis input must carry clean report text, not message envelopes or reasoning traces"
     );
 
-    // The synthesis child must have produced a substantive synthesized analysis.
     let synthesis_crid = synthesis[0]
         .child_request_id
         .as_deref()
@@ -332,10 +303,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         "synthesis child ({synthesis_crid}) must return a substantive analysis, got {} chars",
         report.trim().chars().count()
     );
-    // The commonalities task CANNOT be answered without reading the three
-    // reports, so a faithful synthesis names the cities it drew from. Require at
-    // least two of three to surface (robust to model wording); soft-signal the
-    // shared-theme framing.
     let lowered = report.to_lowercase();
     let cities = ["paris", "berlin", "rome"]
         .iter()
@@ -360,8 +327,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
         "[workflow-live] SYNTHESIS read the reports: references {cities}/3 cities; shared-theme framing present={themes}"
     );
 
-    // The synthesized analysis must flow back as the orchestrator's final answer
-    // (D5: synthesis returns to the orchestrator continuation).
     let final_answer = answer_text(&fetch_answer(db.node.as_ref(), request_id).await);
     eprintln!("[workflow-live] ══ ORCHESTRATOR FINAL ANSWER ══\n{final_answer}\n");
     assert!(
@@ -373,9 +338,6 @@ async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
     Ok(())
 }
 
-/// Extract the assistant's answer text from a persisted native message JSON
-/// (`{"role":"assistant","content":[{"text":"..."}, {reasoning}]}`); fall back to
-/// the raw string if it is not in that shape.
 fn answer_text(raw: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
         return raw.to_string();
@@ -473,8 +435,6 @@ async fn fetch_request_lineage(node: &EmbeddedNode, request_id: &str) -> Option<
     first_optional_row::<ChildLineageRow>(&resp, "AgentRequest")
 }
 
-/// Fetch the assistant answer for a request: prefer the `AgentResponse` content,
-/// fall back to the latest assistant `AgentMessage` on the request's session.
 async fn fetch_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let request = escape_graphql_string(request_id);
     let query = format!(
@@ -520,8 +480,6 @@ async fn fetch_answer(node: &EmbeddedNode, request_id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Fetch the raw `args` the model emitted for the orchestration tool call — the
-/// runtime-authored "workflow" (fan-out task prompts + synthesis target/prompt).
 async fn fetch_tool_call_args(node: &EmbeddedNode, tool_call_id: &str) -> String {
     let tcid = escape_graphql_string(tool_call_id);
     let query = format!(

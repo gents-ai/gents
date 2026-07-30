@@ -2,7 +2,6 @@ use super::*;
 
 #[test]
 fn tool_call_transitions_match_lean_contract() {
-    // Spec-relational legal transitions
     assert_lean_transition_is_legal("ToolCall", "pending", "running");
     assert_lean_transition_is_legal("ToolCall", "pending", "failed");
     assert_lean_transition_is_legal("ToolCall", "pending", "cancelled");
@@ -11,39 +10,22 @@ fn tool_call_transitions_match_lean_contract() {
     assert_lean_transition_is_legal("ToolCall", "running", "timedOut");
     assert_lean_transition_is_legal("ToolCall", "running", "cancelled");
 
-    // Approval gate: hold, evidence write (state-preserving), approve, deny,
-    // cancel-while-held, timeout-while-held.
     assert_lean_transition_is_legal("ToolCall", "pending", "awaitingApproval");
     assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "awaitingApproval");
     assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "running");
     assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "failed");
     assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "cancelled");
     assert_lean_transition_is_legal("ToolCall", "awaitingApproval", "timedOut");
-    // A held call is only reachable from pending and never completes directly.
     assert_lean_transition_is_illegal("ToolCall", "running", "awaitingApproval");
     assert_lean_transition_is_illegal("ToolCall", "completed", "awaitingApproval");
     assert_lean_transition_is_illegal("ToolCall", "awaitingApproval", "completed");
     assert_lean_transition_is_illegal("ToolCall", "awaitingApproval", "pending");
 
-    // T1 — terminal irreversibility
     assert_lean_transition_is_illegal("ToolCall", "completed", "running");
     assert_lean_transition_is_illegal("ToolCall", "failed", "running");
     assert_lean_transition_is_illegal("ToolCall", "timedOut", "running");
     assert_lean_transition_is_illegal("ToolCall", "cancelled", "running");
 }
-
-// ---------------------------------------------------------------------------
-// R2 Bucket 2 — Lean transition matrix conformance for the subagent extensions.
-//
-// These tests assert that the Lean-emitted contract (consumed via
-// `lean_state_machine_contract`) carries the new vocabularies (`AwaitMode`,
-// `CancelPolicy`, `ChildTerminal`) and the new named transitions on the
-// `ToolCall` machine that R2 introduced (mode flips, detach split, bridge_*
-// edges, native-only `complete_native`/`fail_native` rows). Drift between
-// Lean's model and Rust's runtime — for example, a vocabulary value added on
-// only one side, or a Lean-only edge that Rust silently allows — is caught
-// here rather than at PR review.
-// ---------------------------------------------------------------------------
 
 #[test]
 pub(super) fn lean_emits_await_mode_vocabulary() {
@@ -87,8 +69,6 @@ pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
 
     let machine = lean_state_machine_contract("ChildTerminal");
 
-    // Vocabulary check: Lean's source-side vocabulary must match Rust's
-    // ChildTerminal::ALL_KIND.
     let mut lean_vocab = machine.states.clone();
     lean_vocab.sort();
     let mut rust_vocab: Vec<String> = ChildTerminal::ALL_KIND
@@ -101,14 +81,6 @@ pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
         "ChildTerminal vocabulary divergence between Lean and Rust"
     );
 
-    // Projection check: each named_transition's `from`/`to` must agree with
-    // Lean's B2 projection rule (Subagent.lean): .interrupted -> .cancelled,
-    // every other terminal -> .failed. Rust's `ChildTerminal::projected_state`
-    // is verified to follow this rule by the Bucket 1 unit tests in
-    // `tool_call_lifecycle.rs`; here we lock in that the *Lean* contract
-    // emits exactly that table. (We can't call `projected_state` from this
-    // integration test because its return type `ToolCallState` is
-    // `pub(crate)` to gents.)
     for t in &machine.named_transitions {
         let expected = match t.from.as_str() {
             "interrupted" => "cancelled",
@@ -121,8 +93,6 @@ pub(super) fn lean_emits_child_terminal_vocabulary_and_projections() {
             t.from, t.to, expected
         );
     }
-    // Also assert every ChildTerminal variant has a corresponding row, so a
-    // future Lean refactor that drops one is caught here.
     let mut sources_in_named: Vec<String> = machine
         .named_transitions
         .iter()

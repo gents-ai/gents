@@ -1,10 +1,4 @@
-//! BLAKE3 signature helpers and emit-floor state for the operations
-//! snapshot watcher. See design spec lines 696-727 (previewSignature) and
-//! 765-790 (emit floor).
-
 use std::time::{Duration, Instant};
-
-// --- Preview signature -------------------------------------------------
 
 #[derive(Debug, Clone, Default)]
 pub struct PreviewSignatureInput {
@@ -58,14 +52,6 @@ pub fn compute_preview_signature(input: &PreviewSignatureInput) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-// --- Liveness signature ------------------------------------------------
-//
-// Staged for the operations-rail liveness banner (operator-surfaces spec;
-// landed with #310/#311) but not yet wired into the watcher — the emit-floor
-// wiring is expected alongside the stream-liveness work (#437). Tested below;
-// allow(dead_code) rather than deletion so the staged surface and its tests
-// stay reviewable.
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct LivenessSignatureInput {
@@ -88,23 +74,17 @@ pub struct LivenessSignatureRequest {
 pub struct LivenessSignatureToolCall {
     pub tool_call_id: String,
     pub lifecycle_state: Option<String>,
-    /// Included even though the design spec's listed field set (line 775)
-    /// omits it: stuck-tool diagnostics depend on this transition, so a
-    /// running tool crossing its deadline must invalidate the signature or
-    /// the rail/banner would stay stale until some other change.
     pub deadline_expired: bool,
 }
 
 #[allow(dead_code)]
 pub fn compute_liveness_signature(input: &LivenessSignatureInput) -> String {
     let mut hasher = blake3::Hasher::new();
-    // Header: scalar fields.
     hasher.update(&input.expired_processing_count.to_le_bytes());
     hasher.update(&[0x1F]);
     hasher.update(&[input.active_native_executors_available as u8]);
     hasher.update(&[0x1E]);
 
-    // Requests, sorted by request_id.
     let mut requests: Vec<&LivenessSignatureRequest> = input.requests.iter().collect();
     requests.sort_by(|a, b| a.request_id.cmp(&b.request_id));
     for (idx, row) in requests.iter().enumerate() {
@@ -119,7 +99,6 @@ pub fn compute_liveness_signature(input: &LivenessSignatureInput) -> String {
     }
     hasher.update(&[0x1E]);
 
-    // Tool calls, sorted by tool_call_id.
     let mut tool_calls: Vec<&LivenessSignatureToolCall> = input.tool_calls.iter().collect();
     tool_calls.sort_by(|a, b| a.tool_call_id.cmp(&b.tool_call_id));
     for (idx, row) in tool_calls.iter().enumerate() {
@@ -136,8 +115,6 @@ pub fn compute_liveness_signature(input: &LivenessSignatureInput) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-// --- Emit floor --------------------------------------------------------
-
 #[allow(dead_code)]
 pub const EMIT_FLOOR_MIN_INTERVAL: Duration = Duration::from_millis(250);
 #[allow(dead_code)]
@@ -146,12 +123,8 @@ pub const EMIT_FLOOR_MAX_COALESCE: Duration = Duration::from_secs(2);
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitDecision {
-    /// Emit the new signature now.
     EmitNow,
-    /// No structural change vs. the last observed/emitted signature; do not emit.
     NoChange,
-    /// Structural change detected, but we must wait until `at` to emit (250ms floor).
-    /// The watcher should arm a timer for `at` and re-call `observe` then.
     Defer { at: Instant },
 }
 
@@ -169,27 +142,17 @@ impl LivenessEmitFloor {
         Self::default()
     }
 
-    /// Observe the latest signature at the wall-clock instant `now`.
-    /// The watcher is expected to call this both on probe ticks and on
-    /// any signal it has that the signature may have changed.
     pub fn observe(&mut self, signature: &str, now: Instant) -> EmitDecision {
-        // Same signature as last emit: nothing to do; clear any pending change.
         if self.last_emitted_signature.as_deref() == Some(signature) {
             self.pending_change_first_seen_at = None;
             return EmitDecision::NoChange;
         }
 
-        // Track when we first observed this changed signature so we can
-        // honour the 2-second coalescing ceiling.
         let first_seen = *self.pending_change_first_seen_at.get_or_insert(now);
 
-        // Inter-emit floor: 250ms minimum.
         if let Some(last) = self.last_emit_at {
             let since_last = now.saturating_duration_since(last);
             if since_last < EMIT_FLOOR_MIN_INTERVAL {
-                // 2s coalescing ceiling — defensive backstop. Under normal use
-                // the 250ms floor below fires first because we anchor to
-                // last_emit, not last-observed.
                 if now.saturating_duration_since(first_seen) >= EMIT_FLOOR_MAX_COALESCE {
                     self.commit_emit(signature, now);
                     return EmitDecision::EmitNow;
@@ -304,8 +267,6 @@ mod tests {
 
     #[test]
     fn liveness_signature_is_stable_when_only_progress_age_drifts() {
-        // The signature spec does NOT include lastProgressAgeMs — drift on age
-        // alone must not invalidate the signature.
         let base = LivenessSignatureInput {
             expired_processing_count: 0,
             active_native_executors_available: true,
@@ -328,8 +289,6 @@ mod tests {
 
     #[test]
     fn liveness_signature_changes_when_tool_call_deadline_expires() {
-        // Crossing a tool's deadline must change the signature even when
-        // nothing else moves — stuck-tool diagnostics depend on this.
         let base = LivenessSignatureInput {
             expired_processing_count: 0,
             active_native_executors_available: true,
@@ -394,9 +353,6 @@ mod tests {
 
     #[test]
     fn emit_floor_emits_after_sustained_pending_period() {
-        // After a Defer at t=50ms, if the watcher comes back at t=2100ms
-        // (long past both the 250ms floor and the 2s ceiling) the call must
-        // emit, never silently drop the pending change.
         let mut floor = LivenessEmitFloor::new();
         let now = t0();
         let _ = floor.observe("sig-a", now);
@@ -420,8 +376,6 @@ mod tests {
         let _ = floor.observe("sig-c", now + Duration::from_millis(200));
         let final_decision = floor.observe("sig-d", now + Duration::from_millis(260));
         assert_eq!(final_decision, EmitDecision::EmitNow);
-        // After emit, the most recent signature ("sig-d") should be what's
-        // recorded as last_emitted; observing it again should NoChange.
         assert_eq!(
             floor.observe("sig-d", now + Duration::from_millis(600)),
             EmitDecision::NoChange

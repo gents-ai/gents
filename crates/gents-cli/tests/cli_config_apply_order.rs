@@ -21,8 +21,6 @@ fn config_apply_order_from_source() -> Vec<Collection> {
         .collect()
 }
 
-/// Anchors the centralized `CONFIG_APPLY_ORDER` table to the closed collection
-/// set without carrying a second hardcoded ordered array in this test.
 #[test]
 fn apply_desired_state_changes_order_contains_each_collection_once() {
     let found = config_apply_order_from_source();
@@ -33,10 +31,6 @@ fn apply_desired_state_changes_order_contains_each_collection_once() {
     assert_eq!(found.len(), Collection::ALL.len());
 }
 
-/// Guards the retry-safety comment on `CONFIG_APPLY_ORDER`: every split point is
-/// a durable prefix whose already-written referrers are at ranks no greater
-/// than any later dependency-writing rank. This directly invokes
-/// `Collection::apply_order()`, so rank drift in the Rust enum surfaces here.
 #[test]
 fn apply_desired_state_changes_order_has_retry_safe_prefixes() {
     let order = config_apply_order_from_source();

@@ -6,12 +6,6 @@ import Proofs.InferenceCall
 import Proofs.Scheduling
 import Mathlib.Data.Fintype.Card
 
-/-!
-# Decidable Finite-State Checks
-
-Finite enumeration and simple coherence checks over the ideal state space.
--/
-
 open RequestState ProcessState PersistenceState StorageObservation InferenceCallState ExecutionOrigin AdmissionState
 
 instance : Fintype RequestState :=
@@ -51,9 +45,6 @@ instance : Fintype AdmissionState :=
     [.released, .waiting, .acquired, .executing]
     (fun s => by cases s <;> simp)
 
-/-- Current-product non-terminal request states have at least one distinct
-    successor state. Reserved vocabulary such as `inputRequired` is intentionally
-    excluded because the Rust product does not emit it today. -/
 def activeCoreRequestState : RequestState → Prop
   | .pending => True
   | .claimed => True
@@ -149,13 +140,6 @@ theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
         | inr h =>
           subst h
           cases a <;> simp [RequestContext.coherentStateAdmission]
-
-/-!
-The following `#eval`s print finite-state cardinalities as build-time sanity
-output. They help reviewers notice accidental vocabulary/product-size drift,
-but the proof obligations in this module are the theorems above, not these
-diagnostic counts themselves.
--/
 
 #eval Fintype.card RequestState
 #eval Fintype.card ProcessState

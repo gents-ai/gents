@@ -100,11 +100,6 @@ export function BackendHealthPanel({
   now: providedNow,
   api,
 }: {
-  /**
-   * When provided, the panel renders these rows without calling the
-   * Tauri bridge. Used by the component test harness to drive each
-   * Lean witness state without a real backend.
-   */
   initialBackends?: BackendHealth[];
   now?: Date;
   api?: DesktopApiAdapter;

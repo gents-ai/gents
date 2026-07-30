@@ -36,7 +36,6 @@
 
   .fleet-agent-cell {
     display: grid;
-    /* auto, not a fixed dot-width: the status column carries a text label. */
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--space-5);
     align-items: center;
@@ -243,9 +242,6 @@
     stroke-linejoin: round;
   }
 
-  /* The actions column stays pinned while the table scrolls horizontally at
-     narrow widths, so chat/config/repair are always visible — the wrap's
-     overflow:auto remains the reachability mechanism for the other columns. */
   .fleet-actions-header,
   .fleet-actions-cell {
     position: sticky;
@@ -253,11 +249,8 @@
     z-index: 1;
   }
 
-  /* Pinned cells must be opaque: the translucent surfaces are layered over
-     the page background so scrolled data columns can't ghost through. */
   .fleet-actions-header {
     width: 128px;
-    /* 0.88 black over the black page bg composites to the page bg exactly. */
     background: var(--color-bg);
   }
 

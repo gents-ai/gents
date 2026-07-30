@@ -1,9 +1,3 @@
-//! `p2p templates` subcommands: list.
-//!
-//! The handler reads directly from the static catalog in
-//! `gents::agent::p2p_reconcile::templates` — no node or GraphQL
-//! connection required.
-
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
@@ -14,10 +8,6 @@ use serde_json::json;
 use crate::cli::args::P2pTemplatesListArgs;
 use crate::cli::output_format::OutputFormat;
 use crate::print_json;
-
-// ---------------------------------------------------------------------------
-// Row type
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct TemplateRow {
@@ -54,10 +44,6 @@ fn template_rows() -> Vec<TemplateRow> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// p2p templates list
-// ---------------------------------------------------------------------------
-
 pub(super) async fn p2p_templates_list(args: P2pTemplatesListArgs) -> Result<()> {
     let rows = template_rows();
 
@@ -73,10 +59,6 @@ pub(super) async fn p2p_templates_list(args: P2pTemplatesListArgs) -> Result<()>
         _ => unreachable!("ensure_supported restricts p2p templates list output formats"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Table rendering
-// ---------------------------------------------------------------------------
 
 fn print_templates_table(rows: &[TemplateRow]) -> Result<()> {
     let headers = [
@@ -126,17 +108,11 @@ fn print_table_row<const N: usize>(
     writeln!(writer, "{line}").context("writing p2p templates table row")
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::args::Cli;
     use clap::Parser;
-
-    // ---- parse tests ----
 
     #[test]
     fn p2p_templates_list_json_parses() {
@@ -170,8 +146,6 @@ mod tests {
         }
     }
 
-    // ---- render tests ----
-
     #[test]
     fn template_rows_matches_builtin_catalog() {
         let rows = template_rows();
@@ -197,9 +171,6 @@ mod tests {
         let rows = template_rows();
         let row = rows.iter().find(|r| r.id == "conversation").unwrap();
         assert_eq!(row.delivery, "push");
-        // #875 moved the conversation plane to explicit per-collection rules
-        // (transcript filtered by requester, readiness by claimant) and added
-        // BearerPairingReady to the replicated conversation collections.
         assert_eq!(row.scope, "per-collection");
         assert_eq!(row.collections.split(',').count(), 9);
     }

@@ -1,4 +1,3 @@
-// Soft-cap justified: two bundle-building functions share a GraphQL query pattern; splitting would duplicate query logic.
 use std::collections::BTreeSet;
 
 use anyhow::Result;
@@ -179,12 +178,6 @@ pub(crate) async fn build_config_export_bundle(
         ),
     )
     .await?;
-    // Task, Schedule, and EventTrigger rows are fetched globally (none of
-    // these collections is keyed by agent_did), then filtered client-side
-    // down to just the rows reachable from this agent's behaviors. Without
-    // this scope, a multi-agent node would leak every other agent's
-    // Task/Schedule/EventTrigger docs into this export and produce false
-    // drift in `config diff`.
     filter_tasks_and_schedules_by_agent_reachability(
         &behavior_rows,
         &mut task_rows,
@@ -459,11 +452,6 @@ pub(crate) async fn build_desired_state_live_bundle(
         ),
     )
     .await?;
-    // Filter the globally-fetched Task/Schedule/EventTrigger rows down to
-    // just the ones reachable from this agent's behaviors. On a multi-agent
-    // node, without this scoping, `config diff` would see every other
-    // agent's docs as drift and try to "reconcile" them into the current
-    // agent's manifest.
     filter_tasks_and_schedules_by_agent_reachability(
         &behavior_rows,
         &mut task_rows,
@@ -597,19 +585,6 @@ async fn load_manifest_owned_peer_pairings(
     Ok(rows)
 }
 
-/// Scope globally-fetched `Task`, `Schedule`, and `EventTrigger` rows to
-/// just those reachable from the given agent's behaviors.
-///
-/// `Task.behavior_id` must be one of the agent's `AgentBehavior.behavior_id`
-/// values; schedules and event triggers are kept only if their `task_id` is
-/// in the set of reachable tasks. On a multi-agent node, failing to filter
-/// here would (a) leak other agents' Task/Schedule/EventTrigger docs into
-/// `config export`, and (b) make `config diff` surface other agents' docs as
-/// drift against the current agent's manifest.
-///
-/// Rows with a missing or non-string key field (`behavior_id` on Task,
-/// `task_id` on Schedule/EventTrigger) are dropped: they aren't reachable
-/// from any agent's behavior set, so they can't belong to this agent either.
 pub(crate) fn filter_tasks_and_schedules_by_agent_reachability(
     behavior_rows: &[Value],
     task_rows: &mut Vec<Value>,
@@ -724,9 +699,6 @@ pub(crate) fn sanitize_import_document(
             }
         }
         "Task" => {
-            // Task has no runtime-owned fields today. Strip timestamps so they
-            // are left untouched by apply on update (created_at is immutable,
-            // updated_at is owned by the writer).
             for field in ["created_at", "updated_at"] {
                 object.remove(field);
             }
@@ -736,10 +708,6 @@ pub(crate) fn sanitize_import_document(
             }
         }
         "Schedule" => {
-            // Strip BOTH runtime-owned fields (never written by apply) and
-            // apply-owned timestamps. Critically, runtime-owned fields are
-            // NOT re-inserted as Null on update — that would clobber live
-            // scheduler state. Only timestamps are nulled for update.
             for field in [
                 "next_run_at",
                 "last_attempt_at",
@@ -757,12 +725,6 @@ pub(crate) fn sanitize_import_document(
             }
         }
         "EventTrigger" => {
-            // Strip BOTH runtime-owned fields (never written by apply) and
-            // apply-owned timestamps. Runtime-owned fields
-            // (last_attempt_at, last_fired_source_doc_id, last_status,
-            // last_error, fire_count) are owned by the trigger engine — if
-            // we re-inserted them as Null on update, apply would clobber
-            // live trigger state. Only timestamps are nulled for update.
             for field in [
                 "last_attempt_at",
                 "last_fired_source_doc_id",
@@ -803,8 +765,6 @@ pub(crate) fn sanitize_import_document(
                 object.insert("updated_at".to_string(), Value::Null);
             }
         }
-        // AgentBehavior, ToolSelection, Skill, AgentPrincipal: no per-collection
-        // field surgery — they fall through to the universal empty-array strip.
         _ => {}
     }
 
@@ -889,8 +849,6 @@ mod tests {
 
     #[test]
     fn empty_list_is_cleared_on_update_but_omitted_on_create() {
-        // CREATE: empty list is omitted (DefraDB rejects a literal `[]`; a new
-        // row reads back empty).
         let created = sanitize_import_document(
             "Skill",
             &json!({ "skill_id": "s", "tool_refs": [], "agent_did": "did:p" }),
@@ -902,9 +860,6 @@ mod tests {
             "create omits empty list"
         );
 
-        // UPDATE: empty list is written as `null` so a prior non-empty value is
-        // actually cleared (omitting it would leave the stale list — apply could
-        // never converge after removing the last entry).
         let updated = sanitize_import_document(
             "AgentBehavior",
             &json!({ "behavior_id": "b", "skill_refs": [], "skill_excludes": [] }),
@@ -917,9 +872,6 @@ mod tests {
 
     #[test]
     fn required_non_null_list_fields_are_never_nulled() {
-        // peer_pairing_desired.collections / replicator_addresses are `[String!]!`
-        // — nulling them would be rejected, so even on update they are omitted
-        // (left unchanged) rather than cleared.
         let updated = sanitize_import_document(
             "PeerPairingDesired",
             &json!({ "id": "p", "collections": [], "replicator_addresses": [] }),
@@ -930,22 +882,6 @@ mod tests {
         assert!(updated.get("replicator_addresses").is_none());
     }
 
-    /// Regression for Finding 3 (multi-agent scoping): when two agents
-    /// live on the same node, `config export` / `config diff` must only
-    /// surface Task/Schedule docs reachable from the SELECTED agent's
-    /// behaviors. Before the fix, Task and Schedule were fetched globally
-    /// and handed back unfiltered, leaking cross-agent documents.
-    ///
-    /// Scenario:
-    /// - Agent A owns behavior `general-a` and `code-a`.
-    /// - Agent B owns behavior `general-b`.
-    /// - Tasks: `task-a1` (behavior=general-a), `task-a2` (behavior=code-a),
-    ///   `task-b1` (behavior=general-b), `task-orphan` (behavior=nonexistent).
-    /// - Schedules: one per task plus `sched-dangling` (task_id=missing).
-    ///
-    /// Filtering with Agent A's behaviors must retain tasks a1/a2 and
-    /// their matching schedules, and drop every B task/schedule plus the
-    /// orphan/dangling rows.
     #[test]
     fn filter_retains_only_rows_reachable_from_selected_agent_behaviors() {
         let behaviors_a = vec![
@@ -957,7 +893,6 @@ mod tests {
             json!({ "task_id": "task-a2", "behavior_id": "code-a" }),
             json!({ "task_id": "task-b1", "behavior_id": "general-b" }),
             json!({ "task_id": "task-orphan", "behavior_id": "nonexistent" }),
-            // Missing behavior_id — can't be reachable from any agent.
             json!({ "task_id": "task-missing-behavior" }),
         ];
         let mut schedules = vec![
@@ -965,7 +900,6 @@ mod tests {
             json!({ "schedule_id": "sched-a2", "task_id": "task-a2" }),
             json!({ "schedule_id": "sched-b1", "task_id": "task-b1" }),
             json!({ "schedule_id": "sched-dangling", "task_id": "task-missing" }),
-            // Missing task_id — can't be reachable.
             json!({ "schedule_id": "sched-missing-task" }),
         ];
         let mut event_triggers = vec![
@@ -973,7 +907,6 @@ mod tests {
             json!({ "trigger_id": "trig-a2", "task_id": "task-a2" }),
             json!({ "trigger_id": "trig-b1", "task_id": "task-b1" }),
             json!({ "trigger_id": "trig-dangling", "task_id": "task-missing" }),
-            // Missing task_id — can't be reachable.
             json!({ "trigger_id": "trig-missing-task" }),
         ];
 
@@ -1015,10 +948,6 @@ mod tests {
         );
     }
 
-    /// Inverse angle on the same bug: filtering with the OTHER agent's
-    /// behaviors must return a disjoint set. Running both branches of
-    /// this test in one file proves exports really are agent-scoped, not
-    /// just "arbitrarily pruned."
     #[test]
     fn filter_is_disjoint_across_agents_on_same_node() {
         let mut tasks_for_a = vec![
@@ -1087,10 +1016,6 @@ mod tests {
         assert_eq!(b_trigger_ids, vec!["trig-b1"]);
     }
 
-    /// An empty behavior set — e.g. because `AgentBehavior` has no rows
-    /// yet for this agent — must drop every Task and Schedule, not "fail
-    /// open" by returning everything. Otherwise an agent that hasn't
-    /// finished onboarding would still import other agents' tasks.
     #[test]
     fn filter_with_no_behaviors_drops_all_tasks_and_schedules() {
         let behaviors: Vec<Value> = Vec::new();

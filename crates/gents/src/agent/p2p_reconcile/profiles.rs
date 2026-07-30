@@ -134,12 +134,6 @@ const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
 
 const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
 
-/// The bootstrap discovery profile: the `PeerRegistry` service-discovery
-/// collection plus the agent config collections a joiner needs to actually run
-/// what it discovers. Pairing with a seed on this profile replicates the
-/// registry, so a node that joins one member sees every member that member knows
-/// (transitive discovery). See
-/// `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
 const DISCOVERY_COLLECTIONS: &[&str] = &[
     "PeerRegistry",
     "AgentPrincipal",

@@ -8,15 +8,6 @@ import type {
   BackendHealth,
 } from "@source-inc/gents-desktop-client";
 
-/**
- * One row per Lean BackendHealthAdmissionCase
- * (`crates/gents/proofs/Proofs/Conformance/ContractCases/BoundaryRuntime.lean:214`).
- * The Rust-side consumer test
- * (`backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case`)
- * drives the same inputs through `derive_display_state`; this enumeration
- * checks the JS `deriveDisplayState` agrees and that each bucket renders a
- * distinct label / data-state attribute in the panel.
- */
 type WitnessCase = {
   name: string;
   enabled: boolean;
@@ -110,12 +101,8 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
     const backends = LEAN_WITNESSES.map(makeBackend);
     render(<BackendHealthPanel initialBackends={backends} now={NOW} />);
 
-    // Fleet summary chip count matches the variety of buckets present.
-    // `disabled` is the only non-`available` case where `enabled=false`,
-    // so the summary surfaces every distinct state plus one neutral
-    // "N registered" chip.
     const distinctStates = new Set(backends.map((b) => b.displayState));
-    const expectedChipCount = distinctStates.size + 1; // +1 for "N registered"
+    const expectedChipCount = distinctStates.size + 1;
     const chips = screen
       .getAllByText(
         /registered|available|unhealthy|stale|rate-limited|circuit-open|unknown|disabled/,
@@ -123,7 +110,6 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
       .filter((el) => el.className.includes("backend-health__summary-chip"));
     expect(chips.length).toBe(expectedChipCount);
 
-    // Every backend renders a row with the right data-state and label.
     for (const w of LEAN_WITNESSES) {
       const row = screen
         .getByText(`${w.expectedDisplayState} fixture`)
@@ -138,9 +124,6 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
       expect(stateLabel.getAttribute("data-state")).toBe(w.expectedDisplayState);
     }
 
-    // The seven buckets must be pairwise distinct in the DOM. If any two
-    // collapse to the same data-state we'd lose operator-visible
-    // information that the Lean witnesses model.
     const renderedStates = LEAN_WITNESSES.map((w) => w.expectedDisplayState);
     expect(new Set(renderedStates).size).toBe(renderedStates.length);
   });

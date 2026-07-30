@@ -122,9 +122,6 @@ fn build_tui_cli(args: &CodexArgs) -> CodexTuiCli {
     cli.dangerously_bypass_approvals_and_sandbox = true;
     cli.no_alt_screen = args.no_alt_screen;
     cli.prompt = args.prompt.clone();
-    // GENTS persists provider reasoning as raw reasoning text. Stock Codex
-    // already has the correct presentation gate; enable it for the embedded
-    // GENTS TUI without relabeling raw text as a reasoning summary on the wire.
     cli.config_overrides
         .raw_overrides
         .push("show_raw_agent_reasoning=true".to_string());
@@ -148,9 +145,6 @@ async fn probe_shim(endpoint: &RemoteAppServerEndpoint) -> Result<()> {
     }
 }
 
-/// Host:port to TCP-probe before launching the TUI, when the endpoint names
-/// one explicitly. Endpoints without a probeable authority (unix sockets,
-/// portless URLs) skip the probe and let the TUI surface connect errors.
 #[cfg(feature = "codex-tui")]
 fn probe_authority(endpoint: &RemoteAppServerEndpoint) -> Option<String> {
     let RemoteAppServerEndpoint::WebSocket { websocket_url, .. } = endpoint else {

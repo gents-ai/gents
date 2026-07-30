@@ -69,8 +69,6 @@ pub(crate) async fn load_document_runtime_view(
         );
     }
 
-    // OAuth credentials are best-effort: a node predating the OAuthCredential collection simply
-    // yields none (credential-backed backends then resolve as unavailable until codex-login runs).
     match crate::chatgpt_codex::list_oauth_credentials(node, agent_did).await {
         Ok(credentials) => {
             for credential in credentials {
@@ -104,8 +102,6 @@ pub(crate) async fn load_document_runtime_view(
         );
     }
 
-    // Skills are best-effort: a node that predates the Skill collection simply
-    // yields no skills (composition then adds nothing to the prompt).
     match list_skill_records(node, agent_did).await {
         Ok(records) => {
             for (doc_id, skill) in records {

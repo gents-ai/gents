@@ -1,8 +1,3 @@
-//! Holds strip bridge commands: list held tool calls, write the approval
-//! decision. The row itself stays `awaitingApproval` after a resolve — the
-//! owning runtime's verdict watcher (not running here) drives the
-//! Lean-fenced approve/deny edge; the bridge only writes the document.
-
 use crate::tauri_commands::operations::{
     list_tool_call_holds_for_core, resolve_tool_call_hold_for_core,
 };
@@ -58,7 +53,6 @@ async fn list_holds_returns_seeded_awaiting_approval_row() {
     assert_eq!(held[0].tool_name.as_deref(), Some("bash_unrestricted"));
     assert_eq!(held[0].request_id.as_deref(), Some("req_holds"));
 
-    // Other agents see nothing.
     let other = list_tool_call_holds_for_core(
         core.clone(),
         DesktopListHoldsRequest {

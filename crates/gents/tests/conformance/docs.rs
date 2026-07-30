@@ -1,16 +1,7 @@
-//! Docs conformance: the grounding documents' checkable claims are
-//! invariants, and invariants get fenced.
-//!
-//! CLAUDE.md and README.md describe the present tree. Prose can't be proven,
-//! but paths, links, and architectural claims can — so the checkable subset
-//! fails CI instead of rotting silently. When one of these tests fails, fix
-//! the tree or fix the document; both are real outcomes.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn repo_root() -> PathBuf {
-    // crates/gents -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -22,9 +13,6 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-/// Backticked tokens in the grounding docs that look like repo paths must
-/// exist in the tree (path rot is the most common failure mode of a
-/// grounding document).
 #[test]
 fn grounding_doc_paths_resolve() {
     let root = repo_root();
@@ -33,9 +21,6 @@ fn grounding_doc_paths_resolve() {
     for doc in ["CLAUDE.md", "README.md"] {
         let text = read(&root.join(doc));
         for token in text.split('`').skip(1).step_by(2) {
-            // A repo path: contains a slash, no spaces, and starts with a
-            // known top-level directory. Module paths (a::b) and commands
-            // are skipped.
             let looks_like_path = token.contains('/')
                 && !token.contains(' ')
                 && !token.contains('*')
@@ -57,7 +42,6 @@ fn grounding_doc_paths_resolve() {
     );
 }
 
-/// Relative markdown links in README.md and docs/ must resolve.
 #[test]
 fn markdown_links_resolve() {
     let root = repo_root();
@@ -74,7 +58,6 @@ fn markdown_links_resolve() {
     for doc in docs {
         let text = read(&doc);
         let base = doc.parent().unwrap_or(&root);
-        // Hand-rolled `](target)` extraction — not worth a regex dependency.
         let mut rest = text.as_str();
         while let Some(start) = rest.find("](") {
             rest = &rest[start + 2..];
@@ -104,7 +87,6 @@ fn markdown_links_resolve() {
     );
 }
 
-/// CLAUDE.md claims the proofs hold zero `sorry`s. Fence it.
 #[test]
 fn proofs_contain_no_sorrys() {
     let root = repo_root();
@@ -129,7 +111,6 @@ fn visit_lean(dir: &Path, offenders: &mut Vec<String>) {
         } else if path.extension().is_some_and(|ext| ext == "lean") {
             let text = read(&path);
             for (number, line) in text.lines().enumerate() {
-                // Word-boundary match; skip comment mentions.
                 let code = line.split("--").next().unwrap_or("");
                 if code
                     .split(|c: char| !c.is_alphanumeric())
@@ -142,30 +123,17 @@ fn visit_lean(dir: &Path, offenders: &mut Vec<String>) {
     }
 }
 
-/// CLAUDE.md claims rig's type vocabulary crosses into the runtime through
-/// ONE seam (`llm::rig_compat`). Fence the claim: rig message/tool/hook
-/// vocabulary may appear only in the converter module, the named seam files
-/// (which consume rig stream items per decision D3), and test code that
-/// feeds the seam.
 #[test]
 fn rig_vocabulary_confined_to_the_seam() {
     let root = repo_root();
     let allowed: BTreeSet<&str> = [
-        // The seam itself.
         "crates/gents/src/llm/rig_compat.rs",
-        // This fence (the marker strings below would self-match).
         "crates/gents/tests/conformance/docs.rs",
-        // Stream consumers: yield/accept rig items by design (D3).
         "crates/gents/src/agent/loop_stream.rs",
         "crates/gents/src/agent/stream_processor.rs",
-        // Tests that construct rig items to feed the seam, and the golden
-        // byte-compat suite (rig is a dev-dependency there until Layer A).
         "crates/gents/src/agent/loop_stream/tests.rs",
         "crates/gents/src/agent/stream_processor/tests.rs",
         "crates/gents/src/compaction/tests.rs",
-        // Constructs a rig `Message` to drive the real OpenAI request-body
-        // conversion and assert the default additional_params (reasoning effort /
-        // enable_thinking) serialize correctly — feeds the seam like the tests above.
         "crates/gents/src/completion_factory/tests.rs",
         "crates/gents-protocol/src/message.rs",
     ]
@@ -176,8 +144,6 @@ fn rig_vocabulary_confined_to_the_seam() {
         "rig::completion::message::",
         "rig::completion::Message",
         "rig::one_or_many",
-        // The owned tool-trait surface (Tool/ToolDyn/ToolError); rig's
-        // ToolSetError remains legitimate Layer-A error vocabulary.
         "rig::tool::ToolDyn",
         "rig::tool::ToolError",
         "rig::tool::Tool ",
@@ -241,7 +207,6 @@ fn visit_rust(
             }
             let text = read(&path);
             for (number, line) in text.lines().enumerate() {
-                // Doc comments may mention rig history; only flag code.
                 let trimmed = line.trim_start();
                 if trimmed.starts_with("//") {
                     continue;
