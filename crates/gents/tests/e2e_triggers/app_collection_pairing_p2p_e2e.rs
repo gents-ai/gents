@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use gents::agent::p2p_reconcile::templates::NETWORK_CONTROL_COLLECTIONS;
 use gents::agent::p2p_reconcile::{GraphqlNetworkStore, NetworkStore};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -418,6 +419,27 @@ async fn fetch_pairing_applied(
     Some((collections, addresses))
 }
 
+async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
+    let Some(p2p) = node.p2p() else {
+        return Vec::new();
+    };
+    let Ok(ids) = p2p.get_collections().await else {
+        return Vec::new();
+    };
+    let Ok(names) = node.list_collections() else {
+        return Vec::new();
+    };
+    names
+        .into_iter()
+        .filter(|name| {
+            node.get_collection(name)
+                .ok()
+                .flatten()
+                .is_some_and(|definition| ids.contains(&definition.collection_id))
+        })
+        .collect()
+}
+
 async fn wait_for_app_collections_pairing_applied(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -428,9 +450,13 @@ async fn wait_for_app_collections_pairing_applied(
     let mut last = String::from("<none>");
     loop {
         if let Some((collections, addresses)) = fetch_pairing_applied(node, peer_id).await {
-            last = format!("collections={collections:?} addresses={addresses:?}");
+            let subscribed = fetch_subscribed_collection_names(node).await;
+            last = format!(
+                "applied_collections={collections:?} addresses={addresses:?} \
+                 subscribed={subscribed:?}"
+            );
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
-            let has_col = collections.iter().any(|c| c == expected_collection);
+            let has_col = subscribed.iter().any(|c| c == expected_collection);
             if has_addr && has_col {
                 return;
             }
@@ -454,11 +480,20 @@ async fn wait_for_control_pairing_applied(
     let mut last = String::from("<none>");
     loop {
         if let Some((collections, addresses)) = fetch_pairing_applied(node, peer_id).await {
-            last = format!("collections={collections:?} addresses={addresses:?}");
+            let subscribed = fetch_subscribed_collection_names(node).await;
+            last = format!(
+                "applied_collections={collections:?} addresses={addresses:?} \
+                 subscribed={subscribed:?}"
+            );
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
-            let has_control = collections.iter().any(|c| c == "AgentNetwork");
+            let has_control = NETWORK_CONTROL_COLLECTIONS
+                .iter()
+                .all(|expected| subscribed.iter().any(|actual| actual == expected));
             if has_addr && has_control {
-                return collections;
+                return NETWORK_CONTROL_COLLECTIONS
+                    .iter()
+                    .map(|collection| (*collection).to_string())
+                    .collect();
             }
         }
         if Instant::now() >= deadline {
@@ -816,23 +851,21 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
-    // Control collections still present after app-collections merge.
-    let (applied_a, _) = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
-        .await
-        .expect("applied on A");
+    // Control subscriptions still present after app-collections merge. The
+    // per-peer applied row is an ownership ledger, not the transport's global
+    // subscription inventory, so assert against the actual P2P state.
+    let subscribed_a = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
     for col in &control_a {
         assert!(
-            applied_a.contains(col),
-            "control collection {col} missing after app-collections merge: {applied_a:?}"
+            subscribed_a.contains(col),
+            "control collection {col} missing after app-collections merge: {subscribed_a:?}"
         );
     }
-    let (applied_b, _) = fetch_pairing_applied(db_b.node.as_ref(), &peer_a)
-        .await
-        .expect("applied on B");
+    let subscribed_b = fetch_subscribed_collection_names(db_b.node.as_ref()).await;
     for col in &control_b {
         assert!(
-            applied_b.contains(col),
-            "control collection {col} missing after app-collections merge: {applied_b:?}"
+            subscribed_b.contains(col),
+            "control collection {col} missing after app-collections merge: {subscribed_b:?}"
         );
     }
 
@@ -903,8 +936,12 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         .await
         .expect("post2 applied");
     assert_eq!(post, post2, "pairing applied should be stable (idempotent)");
+    let post_subscribed = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
     for col in &control_a {
-        assert!(post2.0.contains(col), "control still present: {post2:?}");
+        assert!(
+            post_subscribed.contains(col),
+            "control subscription still present: {post_subscribed:?}"
+        );
     }
 
     let _ = shutdown_a_tx.send(true);

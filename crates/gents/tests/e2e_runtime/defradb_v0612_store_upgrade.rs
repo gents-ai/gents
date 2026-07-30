@@ -1,7 +1,7 @@
 //! Populated v0.6.12 store upgrade coverage for the pinned DefraDB release.
 //!
 //! Store-format open still succeeds. The gents lens-first engine rejects the
-//! pre-baseline multi-version lineage with [`gents_migration::Error::UnknownLineage`]
+//! pre-baseline lineage with [`gents_migration::Error::UnknownLineage`]
 //! (or ForeignVersion) — no legacy field-presence migrations remain.
 
 use std::fs;
@@ -47,9 +47,24 @@ async fn populated_v0612_store_opens_but_rejects_pre_baseline_lineage() -> Resul
             .context("open populated v0.6.12 store with the current DefraDB pin")?,
     );
 
-    let err = gents::migration::ensure_all_runtime_migrations(node.clone())
-        .await
-        .expect_err("pre-baseline multi-version DAGs must hard-fail (no legacy support)");
+    let result = gents::migration::ensure_all_runtime_migrations(node.clone()).await;
+    if result.is_ok() {
+        let versions = node
+            .get_all_collection_versions()
+            .await
+            .context("inspect unexpectedly accepted pre-baseline lineage")?;
+        let observed = versions
+            .iter()
+            .filter(|version| !version.is_placeholder && !version.name.is_empty())
+            .map(|version| format!("{}={}", version.name, version.version_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "pre-baseline lineage must hard-fail (no legacy support); \
+             observed versions: [{observed}]"
+        );
+    }
+    let err = result.expect_err("checked successful result above");
     let msg = format!("{err:#}");
     ensure!(
         msg.contains("unknown lineage")

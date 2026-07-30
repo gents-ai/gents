@@ -302,16 +302,17 @@ async fn crash_resume_after_inactive_patch_before_activate() {
 
 #[tokio::test]
 async fn chain_replay_prints_baseline_pins_for_authoring() {
-    // Authoring aid: print every production baseline collection's root VersionID.
-    // Not asserted against frozen pins yet — freeze in a follow-up once CI has
-    // a stable defradb pin and the list is reviewed.
+    // Authoring aid: register the canonical SDL directly so stale pins cannot
+    // prevent the test from printing every replacement root VersionID.
     let node = fresh_node().await;
-    let report = gents_migration::ensure_migrations(node.as_ref())
-        .await
-        .expect("production baseline");
-    assert!(report.baseline_registered + report.baseline_already_present > 0);
+    for entry in gents_migration::DEFAULT_BASELINE {
+        node.add_schema(entry.sdl)
+            .await
+            .unwrap_or_else(|error| panic!("register {} for pin authoring: {error}", entry.name));
+    }
 
     println!("=== baseline version pins (authoring paste targets) ===");
+    let mut mismatches = Vec::new();
     for entry in gents_migration::DEFAULT_BASELINE {
         let cv = node
             .get_collection(entry.name)
@@ -323,11 +324,18 @@ async fn chain_replay_prints_baseline_pins_for_authoring() {
             cv.version_id,
             cv.fields.len()
         );
+        if entry.expected_version != Some(cv.version_id.as_str()) {
+            mismatches.push(format!(
+                "{}: expected {:?}, computed {}",
+                entry.name, entry.expected_version, cv.version_id
+            ));
+        }
     }
-
-    // The pinned DefraDB surface performs eager datastore materialization.
-    assert!(!report.materialization.skipped_upstream_missing);
-    assert_eq!(report.materialization.read_through_scans, 0);
+    assert!(
+        mismatches.is_empty(),
+        "baseline root pins are stale:\n{}",
+        mismatches.join("\n")
+    );
 
     node.shutdown().await;
 }

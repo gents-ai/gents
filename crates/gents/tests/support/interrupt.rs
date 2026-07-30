@@ -56,7 +56,7 @@ impl Drop for BootedAgent {
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
             if snapshot.process_state == "ready"

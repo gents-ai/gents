@@ -217,11 +217,11 @@ impl DynamicRegistry {
 // ---------------------------------------------------------------------------
 
 macro_rules! baseline_entry {
-    ($name:expr, $sdl:expr) => {
+    ($name:expr, $sdl:expr, $version:literal) => {
         BaselineCollection {
             name: $name,
             sdl: $sdl,
-            expected_version: None,
+            expected_version: Some($version),
             expected_state: CollectionExpectation::dag_only(),
         }
     };
@@ -232,155 +232,198 @@ macro_rules! baseline_entry {
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
-        gents_protocol::schemas::INFERENCE_BACKEND
+        gents_protocol::schemas::INFERENCE_BACKEND,
+        "bafyreifljyf2sr7czygvf6y6cy2rlsg2c2brmzegx5wpedpqnf6hn745ju"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_PRINCIPAL_NAME,
-        gents_protocol::schemas::AGENT_PRINCIPAL
+        gents_protocol::schemas::AGENT_PRINCIPAL,
+        "bafyreiar2j7qsshchz3dsm4olsgql2z2gfjsvfwgu2kr5cnmer64yto63i"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_BEHAVIOR_NAME,
-        gents_protocol::schemas::AGENT_BEHAVIOR
+        gents_protocol::schemas::AGENT_BEHAVIOR,
+        "bafyreie27gfobswc4wntubqfg4ki3laofglss3mam53uqrru6shtjlutwu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RUNTIME_NAME,
-        gents_protocol::schemas::AGENT_RUNTIME
+        gents_protocol::schemas::AGENT_RUNTIME,
+        "bafyreig2kkghd2y4fwjjzomtsp753nby752xon7rx4jt3efl4xflhm6wgy"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
+        gents_protocol::schemas::AGENT_DIRECTORY_ENTRY,
+        "bafyreidvqhhvvodkcn5eus7qams2fzsivj4t56x2ztihxybyxxtvth3k5a"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MEMORY_NAME,
-        gents_protocol::schemas::AGENT_MEMORY
+        gents_protocol::schemas::AGENT_MEMORY,
+        "bafyreidqrnco3ylgzeucb6vu2dhhkviklq23nwpn4npqblkm64bntdbbli"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SELECTION_NAME,
-        gents_protocol::schemas::TOOL_SELECTION
+        gents_protocol::schemas::TOOL_SELECTION,
+        "bafyreib2unocpob7tf55zrqzelcsop4ecvhm6jlyjlisi7osxsevlxaeuy"
     ),
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
-        gents_protocol::schemas::SKILL
+        gents_protocol::schemas::SKILL,
+        "bafyreib6grod5kwezldwy74gt5425ewoymiyyjvmygtfzhq25zwngwsrly"
     ),
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
-        gents_protocol::schemas::OAUTH_CREDENTIAL
+        gents_protocol::schemas::OAUTH_CREDENTIAL,
+        "bafyreiab3wqm3em2cepvj22l733ziz4azytl3gc7zozcm5e2s7nuehkx6u"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        gents_protocol::schemas::INFERENCE_PROFILE
+        gents_protocol::schemas::INFERENCE_PROFILE,
+        "bafyreibhnljm6hqgbiyct7fq53vpfagmn2q2pe2apykujttk6tghwtqb5e"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
-        gents_protocol::schemas::INFERENCE_CALL
+        gents_protocol::schemas::INFERENCE_CALL,
+        "bafyreiba6ptexjit4udtq2xfcxyre4ph2zezyexn5vg2nycnzaefpexaju"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_CONVERSATION_NAME,
-        gents_protocol::schemas::AGENT_CONVERSATION
+        gents_protocol::schemas::AGENT_CONVERSATION,
+        "bafyreide7lgaj6zensfdbrhhafhpj3yxedj3luuhmnttt23qoma7isnnoa"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
-        gents_protocol::schemas::AGENT_REQUEST
+        gents_protocol::schemas::AGENT_REQUEST,
+        "bafyreiee2kapqft4xy73z2eyavwcgr2cwvz5now65dhq7inpuwaet6vteq"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
-        gents_protocol::schemas::AGENT_RESPONSE
+        gents_protocol::schemas::AGENT_RESPONSE,
+        "bafyreihihn632s6qtxj62hgcjgc2l2qy5ebim3ehmwbtbejc7ey7ux4qzi"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
-        gents_protocol::schemas::AGENT_TOOL_RESULT
+        gents_protocol::schemas::AGENT_TOOL_RESULT,
+        "bafyreibyv44zzio5tdatrh2bxp35i6jrdli5zpszxdtysovqnd5smesxku"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
-        gents_protocol::schemas::AGENT_SESSION
+        gents_protocol::schemas::AGENT_SESSION,
+        "bafyreih3e34ribdzce6ajpiuwjehx6tu3loeldugxj6y3ce35yv7tdzwi4"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
-        gents_protocol::schemas::GOAL
+        gents_protocol::schemas::GOAL,
+        "bafyreig5hlyzlujmegnnlww6tjt6krquzuq2ltgh2pjqwwzxzjbognuguu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
-        gents_protocol::schemas::AGENT_MESSAGE
+        gents_protocol::schemas::AGENT_MESSAGE,
+        "bafyreiemjtuletwxi5p2jvgplanfyzne6pu7a3knkn4n4dbx6kmgxytfre"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
-        gents_protocol::schemas::AGENT_TOOL_CALL
+        gents_protocol::schemas::AGENT_TOOL_CALL,
+        "bafyreifgbfkl6ticsz3bhgpt2blojeexb7hmu7vybtmanglcnbem2kubsq"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,
-        gents_protocol::schemas::AGENT_TOOL_APPROVAL
+        gents_protocol::schemas::AGENT_TOOL_APPROVAL,
+        "bafyreic6razxeyhpi4re5nshdxtih63in7ostxn2uoqdoet2k7yl4a54cm"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
-        gents_protocol::schemas::COMPACTION_ENTRY
+        gents_protocol::schemas::COMPACTION_ENTRY,
+        "bafyreiczxjv6ah2blpjdz7jxtwzue4rvjzwkefuds4gukibexhddam4j5y"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,
-        gents_protocol::schemas::PROJECTION_ACP_BINDING
+        gents_protocol::schemas::PROJECTION_ACP_BINDING,
+        "bafyreiauzohlxkx3x7wndadh7yl3pfbknle6crgjl7mpcqt37onus6em4i"
     ),
     baseline_entry!(
         gents_protocol::schemas::TASK_NAME,
-        gents_protocol::schemas::TASK
+        gents_protocol::schemas::TASK,
+        "bafyreih2yansmfmsye5xktsx2rbf7tri4zvtifselok46pdmm4qmde7blu"
     ),
     baseline_entry!(
         gents_protocol::schemas::SCHEDULE_NAME,
-        gents_protocol::schemas::SCHEDULE
+        gents_protocol::schemas::SCHEDULE,
+        "bafyreid2l4a57zydsgrxret3qkewued42bxjb4pcaqalqnjkhinlz4gsn4"
     ),
     baseline_entry!(
         gents_protocol::schemas::EVENT_TRIGGER_NAME,
-        gents_protocol::schemas::EVENT_TRIGGER
+        gents_protocol::schemas::EVENT_TRIGGER,
+        "bafyreih4b54rbekqry2nwymuppgil7v2ldmxirim5upv7nbjkvxjhihnwi"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_REGISTRY_NAME,
-        gents_protocol::schemas::TOOL_SERVICE_REGISTRY
+        gents_protocol::schemas::TOOL_SERVICE_REGISTRY,
+        "bafyreidyt2lufdrv2dhjsm2kusylwekdqktefp7jeyyvfik76zchfp5plq"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE_NAME,
-        gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE
+        gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE,
+        "bafyreif3vui3absvxqcthnguigulgso7w7ktcfo3orptrgqlhmp6ae2ani"
     ),
     baseline_entry!(
         gents_protocol::schemas::PEER_PAIRING_DESIRED_NAME,
-        gents_protocol::schemas::PEER_PAIRING_DESIRED
+        gents_protocol::schemas::PEER_PAIRING_DESIRED,
+        "bafyreicoms7ndji7z76sellaqumottresgd3uojmvrts5hxciho4lvu5xy"
     ),
     baseline_entry!(
         gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED_NAME,
-        gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED
+        gents_protocol::schemas::DATA_PLANE_PAIRING_DESIRED,
+        "bafyreia63drc777juius2tcsukzfnw425hjyz4xchz6f6ykeoed2gqmjd4"
     ),
     baseline_entry!(
         gents_protocol::schemas::PEER_PAIRING_APPLIED_NAME,
-        gents_protocol::schemas::PEER_PAIRING_APPLIED
+        gents_protocol::schemas::PEER_PAIRING_APPLIED,
+        "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4"
     ),
     baseline_entry!(
         gents_protocol::schemas::PEER_REGISTRY_NAME,
-        gents_protocol::schemas::PEER_REGISTRY
+        gents_protocol::schemas::PEER_REGISTRY,
+        "bafyreieyihzl6ibujs4jzxji64gmpff7jcyqqjpdfxz6my6dcswafjwhla"
     ),
     baseline_entry!(
         gents_protocol::schemas::CONSUMED_INVITE_NONCE_NAME,
-        gents_protocol::schemas::CONSUMED_INVITE_NONCE
+        gents_protocol::schemas::CONSUMED_INVITE_NONCE,
+        "bafyreigbedn4ebkz4cap5x6d53uif2ddimsyivpxbbijkjhqedbpuponfa"
     ),
     baseline_entry!(
         gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT_NAME,
-        gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT
+        gents_protocol::schemas::RECIPROCAL_CONVERSATION_INTENT,
+        "bafyreid6huhh2y4sslnmuw55mk7mnzundgjpjbqhihhfmhs3yrp2aaq6bm"
     ),
     baseline_entry!(
         gents_protocol::schemas::PAIRING_BEARER_CLAIM_NAME,
-        gents_protocol::schemas::PAIRING_BEARER_CLAIM
+        gents_protocol::schemas::PAIRING_BEARER_CLAIM,
+        "bafyreidlvcvil4o22lsy2byeh2yjugpj5mnnvkotxj56pg6mjswg2bzjjq"
     ),
     baseline_entry!(
         gents_protocol::schemas::BEARER_PAIRING_READY_NAME,
-        gents_protocol::schemas::BEARER_PAIRING_READY
+        gents_protocol::schemas::BEARER_PAIRING_READY,
+        "bafyreihuy5majnvf6mqy3ow54xjlzllgwqcvivuz2kvqtjrhdmb427ynry"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_NETWORK_NAME,
-        gents_protocol::schemas::AGENT_NETWORK
+        gents_protocol::schemas::AGENT_NETWORK,
+        "bafyreifafg2su5zfp2zzrmtnp2we5iu2owkweuevvu4hq25qposuyiuyfm"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_MEMBERSHIP_NAME,
-        gents_protocol::schemas::NETWORK_MEMBERSHIP
+        gents_protocol::schemas::NETWORK_MEMBERSHIP,
+        "bafyreiav6v7v2nab45gyqkcj2jrp7mfmtojuc7ypupzw4qnpsd5sidqni4"
     ),
     baseline_entry!(
         gents_protocol::schemas::PEER_ENDPOINT_NAME,
-        gents_protocol::schemas::PEER_ENDPOINT
+        gents_protocol::schemas::PEER_ENDPOINT,
+        "bafyreidubdiopvxh3zm447ttse6fbs7jzyagiyt7ipw4toib2z3svr4neq"
     ),
     baseline_entry!(
         gents_protocol::schemas::NETWORK_JOIN_REQUEST_NAME,
-        gents_protocol::schemas::NETWORK_JOIN_REQUEST
+        gents_protocol::schemas::NETWORK_JOIN_REQUEST,
+        "bafyreib5ufwrdzy77qvfziodcdgevd44pqoix4jcrriir3arpyyjwhdjym"
     ),
 ];
 
