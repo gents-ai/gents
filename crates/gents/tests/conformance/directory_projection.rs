@@ -220,22 +220,23 @@ async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
         first.upserted,
         BTreeSet::from(["did:key:shared-agent".to_string()])
     );
-    let entries = store.entries.lock().unwrap();
-    assert_eq!(
-        entries.get(&(foreign.source_did.clone(), foreign.agent_did.clone())),
-        Some(&foreign),
-        "local projection must not overwrite the foreign same-DID row"
-    );
-    assert_eq!(
-        entries
-            .get(&(
-                "did:key:local-home".to_string(),
-                "did:key:shared-agent".to_string()
-            ))
-            .map(|entry| entry.display_name.as_str()),
-        Some("Local")
-    );
-    drop(entries);
+    {
+        let entries = store.entries.lock().unwrap();
+        assert_eq!(
+            entries.get(&(foreign.source_did.clone(), foreign.agent_did.clone())),
+            Some(&foreign),
+            "local projection must not overwrite the foreign same-DID row"
+        );
+        assert_eq!(
+            entries
+                .get(&(
+                    "did:key:local-home".to_string(),
+                    "did:key:shared-agent".to_string()
+                ))
+                .map(|entry| entry.display_name.as_str()),
+            Some("Local")
+        );
+    }
 
     let second = reconcile_directory_tick(&store, "did:key:local-home")
         .await
