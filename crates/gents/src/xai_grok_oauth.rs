@@ -78,6 +78,10 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     );
     headers.insert("x-xai-token-auth", HeaderValue::from_static("xai-grok-cli"));
     headers.insert(
+        "x-authenticateresponse",
+        HeaderValue::from_static("authenticate-response"),
+    );
+    headers.insert(
         "x-grok-client-identifier",
         HeaderValue::from_static("grok-shell"),
     );
@@ -172,6 +176,16 @@ impl<S: BearerSource, H> XaiGrokOAuthHttpClient<S, H> {
         let value = self.fresh_auth_header().await?;
         let (mut parts, body) = req.into_parts();
         parts.headers.insert("authorization", value);
+        // The proxy's auth middleware and version gate expect the Grok-CLI
+        // identity headers on every request, regardless of wire API. Callers
+        // (e.g. the Responses client builder) may pre-set them; never overwrite.
+        let identity = build_xai_grok_oauth_headers()
+            .map_err(|error| http_client::Error::Instance(error.into()))?;
+        for (name, header_value) in identity.iter() {
+            if !parts.headers.contains_key(name) {
+                parts.headers.insert(name, header_value.clone());
+            }
+        }
         Ok(Request::from_parts(parts, body))
     }
 
@@ -299,11 +313,10 @@ fn patch_store_false(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-pub async fn build_responses_client(
+async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
-    endpoint: &str,
-) -> Result<rig::providers::openai::Client<XaiGrokOAuthHttpClient<DbCredentialBearer>>> {
+) -> Result<XaiGrokOAuthHttpClient<DbCredentialBearer>> {
     let provider = XAI_OAUTH_PROVIDER;
     let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
         .await
@@ -315,8 +328,6 @@ pub async fn build_responses_client(
                 &OAuthAuthProblem::Missing,
             ))
         })?;
-    let headers = build_xai_grok_oauth_headers()?;
-    let endpoint = normalize_endpoint(endpoint);
     let credential_id = credential.credential_id.clone();
     let bearer = shared_bearer(&credential_id, || {
         DbCredentialBearer::with_cache(
@@ -330,7 +341,17 @@ pub async fn build_responses_client(
             XAI_OAUTH_PRODUCT,
         )
     });
-    let http = XaiGrokOAuthHttpClient::new(bearer);
+    Ok(XaiGrokOAuthHttpClient::new(bearer))
+}
+
+pub async fn build_responses_client(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    endpoint: &str,
+) -> Result<rig::providers::openai::Client<XaiGrokOAuthHttpClient<DbCredentialBearer>>> {
+    let headers = build_xai_grok_oauth_headers()?;
+    let endpoint = normalize_endpoint(endpoint);
+    let http = build_authenticated_http(node, agent_did).await?;
     crate::inference_http::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
@@ -338,6 +359,18 @@ pub async fn build_responses_client(
         headers,
     )
     .context("building Grok OAuth Responses client")
+}
+
+pub async fn build_chat_completions_client(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    endpoint: &str,
+) -> Result<rig::providers::openai::CompletionsClient<XaiGrokOAuthHttpClient<DbCredentialBearer>>> {
+    let endpoint = normalize_endpoint(endpoint);
+    // Identity headers ride along via `prepare` on every request.
+    let http = build_authenticated_http(node, agent_did).await?;
+    crate::inference_http::build_openai_chat_completions_client("xai-oauth-managed", &endpoint, http)
+        .context("building Grok OAuth Chat Completions client")
 }
 
 #[cfg(test)]
@@ -416,6 +449,72 @@ mod tests {
         );
         let body: Value = serde_json::from_slice(prepared.body()).unwrap();
         assert_eq!(body.get("store").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn headers_include_proxy_auth_middleware_marker() {
+        let headers = build_xai_grok_oauth_headers().unwrap();
+        assert_eq!(
+            headers
+                .get("x-authenticateresponse")
+                .and_then(|value| value.to_str().ok()),
+            Some("authenticate-response")
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_injects_identity_headers_when_absent() {
+        let bearer = CountingBearer::new("tok-abc");
+        let client = XaiGrokOAuthHttpClient::new(bearer);
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://cli-chat-proxy.grok.com/v1/chat/completions")
+            .body(Bytes::from_static(br#"{"model":"grok-4.5"}"#))
+            .unwrap();
+        let prepared = client.prepare_for_test(req).await.unwrap();
+        for (name, expected) in [
+            ("x-xai-token-auth", "xai-grok-cli"),
+            ("x-authenticateresponse", "authenticate-response"),
+            ("x-grok-client-identifier", "grok-shell"),
+            ("user-agent", "xai-grok-cli"),
+        ] {
+            assert_eq!(
+                prepared
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok()),
+                Some(expected),
+                "{name} must be injected for proxy requests on any wire API"
+            );
+        }
+        assert_eq!(
+            prepared
+                .headers()
+                .get("x-grok-client-version")
+                .and_then(|value| value.to_str().ok()),
+            Some(grok_client_version().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_preserves_caller_supplied_identity_headers() {
+        let bearer = CountingBearer::new("tok-abc");
+        let client = XaiGrokOAuthHttpClient::new(bearer);
+        let req = Request::builder()
+            .method("POST")
+            .uri("https://cli-chat-proxy.grok.com/v1/responses")
+            .header("x-grok-client-version", "9.9.9-custom")
+            .body(Bytes::from_static(br#"{"model":"grok-4.5"}"#))
+            .unwrap();
+        let prepared = client.prepare_for_test(req).await.unwrap();
+        assert_eq!(
+            prepared
+                .headers()
+                .get("x-grok-client-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("9.9.9-custom"),
+            "caller-supplied identity headers must not be overwritten"
+        );
     }
 
     #[test]

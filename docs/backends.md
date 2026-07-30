@@ -17,7 +17,7 @@ agent loop itself.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `OpenAiCompatible` | OpenAI Responses by default; Chat Completions fallback for compatible local servers | API key or local/no-auth | SSE | Function tools through rig | Responses inherit the model default; local Chat Completions sends `chat_template_kwargs.enable_thinking` | Adds cache-scope `user` when available; does not assume every Responses model accepts `reasoning.effort` | Standard rig OpenAI handling | Planned by #545 |
 | `ChatGptCodex` | ChatGPT Codex Responses endpoint | `OAuthCredential` document, refreshed by owner runtime | SSE | Function tools, forced `strict: false` to match Codex CLI | `reasoning.effort` currently fixed at `medium` | Strips unsupported `max_output_tokens`, `temperature`, `top_p`; injects instructions/store/stream defaults; adds Codex `version` and `Accept` headers | Adds missing `Content-Type: text/event-stream` only when the backend omits it; synthesizes completion body from SSE for non-streaming probes | Unit-pinned in #530; replay corpus planned by #545 |
-| `XaiGrokOAuth` | Grok CLI subscription proxy Responses (`cli-chat-proxy.grok.com`) | `OAuthCredential` document (`provider=xai-oauth`), refreshed by owner runtime | SSE | Function tools through rig | Not forced (several Grok models reject `reasoning.effort`) | Sets `store: false` when absent; injects Grok-CLI identity headers (`x-xai-token-auth`, `x-grok-client-*`, User-Agent) + bearer | Adds missing SSE `Content-Type` when omitted | Unit tests for headers/bearer; live replay planned by #545 |
+| `XaiGrokOAuth` | Grok CLI subscription proxy (`cli-chat-proxy.grok.com`); Responses by default, `openai_wire: chat_completions` honored (the proxy serves both; the official client picks per model) | `OAuthCredential` document (`provider=xai-oauth`), refreshed by owner runtime | SSE | Function tools through rig | Not forced (several Grok models reject `reasoning.effort`) | Sets `store: false` when absent (Responses); injects Grok-CLI identity headers (`x-xai-token-auth`, `x-authenticateresponse`, `x-grok-client-*`, User-Agent) + bearer on every wire | Adds missing SSE `Content-Type` when omitted | Unit tests for headers/bearer/wire; live replay planned by #545 |
 | `OpenRouter` | Chat Completions | API key | SSE | Function tools through rig | Provider-dependent | Adds OpenRouter provider preference `require_parameters: true` | Standard rig OpenRouter handling | Planned by #545 |
 | local OpenAI-compatible servers | Responses or Chat Completions depending on server support | Usually none/local key | SSE varies by server | Function tools when server supports them | Reasoning parser support varies; Chat Completions sends `enable_thinking` for vLLM-style servers | Same as `OpenAiCompatible`; operators may need Chat Completions fallback for servers without `/v1/responses` | Standard rig OpenAI handling | Planned by #545 |
 
@@ -214,6 +214,12 @@ Spike facts (auth endpoints, public client id, proxy headers) live in
    ```sh
    gents grok-auth-probe --agent-did did:key:...
    ```
+
+Model discovery and the probe query the proxy's `/models-v2` catalog (the
+path the official Grok CLI uses); entries are identified by `model` /
+`modelId`. The wire API defaults to Responses; if a model turns out to be
+Chat-Completions-only, set `openai_wire: chat_completions` on the backend
+document — unlike `ChatGptCodex`, the setting is honored for this provider.
 
 ### Endpoint choice
 

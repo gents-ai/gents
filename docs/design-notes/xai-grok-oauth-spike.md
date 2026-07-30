@@ -13,7 +13,7 @@ documented public Grok CLI OAuth client (no client secret; `token_endpoint_auth_
 | 1 | Provider kind name | **`XaiGrokOAuth`** with serde aliases `xai-oauth`, `grok-oauth`, `xai-grok-oauth`. Credential `provider` string: **`xai-oauth`**. |
 | 2 | Subscription base URL | **`https://cli-chat-proxy.grok.com/v1`**. Same SuperGrok bearer against `https://api.x.ai/v1` is commonly **402** (`personal-team-blocked:spending-limit`) / **403** tier gate. API-key path remains `OpenAiCompatible` → `api.x.ai`. |
 | 3 | Public `client_id` | **`b1a00492-073a-47ea-816f-4c329264a828`** — public Grok CLI client used across Hermes / OpenCode / shunt / peer tools. **Provenance for review:** community-documented public OAuth client for Grok Build CLI; no secret. Flag in PR if legal wants a first-party registered client later. |
-| 4 | Default model | **`grok-4.5`** (subscription coding default; catalog also has `grok-build-0.1`). Probe may list live `/models` / `/models-v2` ids. |
+| 4 | Default model | **`grok-4.5`** (subscription coding default; catalog also has `grok-build-0.1`). Probe lists live `/models-v2` ids. |
 | 5 | Desktop events | **Parallel** `desktop_grok_login` / `desktop://grok-login-url` (mirror Codex; no shared event rename in v1). |
 | 6 | Schema | **No migration.** Leave `chatgpt_plan_type` / `is_fedramp` null/false for Grok. |
 | 7 | API-key preset | **Out of v1.** Document custom `OpenAiCompatible` + `https://api.x.ai/v1` + `XAI_API_KEY`. Optional later one-liner. |
@@ -117,29 +117,55 @@ Supported by discovery (`authorization_endpoint` + `S256`). v1 CLI/desktop can s
 
 | Surface | URL | Notes |
 | --- | --- | --- |
-| Subscription (this feature) | `https://cli-chat-proxy.grok.com/v1` | Responses API (`POST …/responses`). |
+| Subscription (this feature) | `https://cli-chat-proxy.grok.com/v1` | Serves **both** Responses (`POST …/responses`) and Chat Completions (`POST …/chat/completions`); the official client selects per model via the `/models-v2` `apiBackend` field (its compiled default is chat_completions; the newer pager client uses responses). Gents defaults to Responses and honors `openai_wire: chat_completions`. |
 | API key (existing) | `https://api.x.ai/v1` | Metered; not the OAuth default. |
 
 ### Required subscription proxy headers
+
+Source-verified against `xai-org/grok-build` (`inject_proxy_headers`, storage
+client identity docs):
 
 ```http
 Authorization: Bearer <access_token>
 Accept: text/event-stream, application/json
 x-xai-token-auth: xai-grok-cli
+x-authenticateresponse: authenticate-response
 x-grok-client-identifier: grok-shell
 x-grok-client-version: 0.2.93
 User-Agent: xai-grok-cli
 ```
 
-Without CLI identity headers the proxy often answers like an unentitled API client (**402** / **426**). Version pin may need a config/env override later if the proxy rejects stale versions.
+`x-xai-token-auth` and `x-authenticateresponse` are required by the proxy's
+auth middleware; `x-grok-client-version` feeds a version-gate check (env
+override: `GENTS_XAI_GROK_CLIENT_VERSION`). `grok-shell` is one of the
+documented client identifiers (`grok-shell` / `grok-pager` / `grok-desktop` /
+`grok-extension`). Without these the proxy often answers like an unentitled
+API client (**402** / **426**).
 
 Prefer **minimal** wire shaping vs Codex: no `ChatGPT-Account-ID`, no FedRAMP header, no Codex `version` header, no forced `strict: false` tool rewrite. Set `store: false` when absent if the proxy requires it (peer tools do).
 
 ### Model discovery
 
-- Prefer `GET {endpoint}/models` (OpenAI-compatible `data[].id`).
-- Some clients also hit `/models-v2`; accept either shape in the probe if present.
+- `GET {endpoint}/models-v2` — the official Grok CLI catalog path. Shape:
+  `{"data":[{"model":…,"modelId":…,"name":…,"contextWindow":…,"apiBackend":…}]}`
+  (`id`, when present, is a catalog row id — identify models by `model` /
+  `modelId`). Gents' discovery and `grok-auth-probe` parse this shape and
+  tolerate OpenAI-style `data[].id` / slug-style entries as fallbacks.
 - Default preset model: `grok-4.5`.
+
+## Source verification (2026-07-30)
+
+Checked against local checkouts of the official Grok CLI
+(`xai-org/grok-build`) and `nousresearch/hermes-agent`:
+
+- **client_id `b1a00492-…`** appears in grok-build's own test fixtures paired
+  with issuer `https://auth.x.ai` — first-party confirmation of the public
+  client.
+- **Scopes** match grok-build's `default_oauth2_scopes()` verbatim.
+- **Device-code flow** is first-party (`auth/device_code.rs`); servers can
+  disable it per-deployment (`DeviceCodeError::NotEnabled`).
+- Hermes takes a different route (browser PKCE loopback against `api.x.ai`
+  with fewer scopes) — not the model for this provider; grok-build is.
 
 ## Eligibility / error surface
 

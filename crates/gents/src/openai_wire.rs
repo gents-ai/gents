@@ -46,7 +46,7 @@ impl OpenAiWireApi {
                 }
                 Self::ChatCompletions
             }
-            BackendProviderKind::ChatGptCodex | BackendProviderKind::XaiGrokOAuth => {
+            BackendProviderKind::ChatGptCodex => {
                 if let Some(value) = configured {
                     tracing::warn!(
                         backend_id = %backend_id,
@@ -57,6 +57,9 @@ impl OpenAiWireApi {
                 }
                 Self::Responses
             }
+            // The Grok proxy serves both wires and the official client picks
+            // per model; default Responses, honor an explicit override.
+            BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
         }
     }
 
@@ -108,6 +111,28 @@ mod tests {
                 "codex",
             ),
             OpenAiWireApi::Responses
+        );
+    }
+
+    #[test]
+    fn xai_grok_oauth_defaults_to_responses_but_honors_configured_wire() {
+        // The Grok proxy serves both wires; the official client picks per
+        // model. Default to Responses, but let operators pin chat_completions.
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::XaiGrokOAuth,
+                None,
+                "grok",
+            ),
+            OpenAiWireApi::Responses
+        );
+        assert_eq!(
+            OpenAiWireApi::effective_for_provider(
+                BackendProviderKind::XaiGrokOAuth,
+                Some(OpenAiWireApi::ChatCompletions),
+                "grok",
+            ),
+            OpenAiWireApi::ChatCompletions
         );
     }
 }

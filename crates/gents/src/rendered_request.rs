@@ -39,9 +39,11 @@ impl RenderedRequestSource {
                 OpenAiWireApi::ChatCompletions => Self::OpenAiChatCompletions,
             },
             BackendProviderKind::OpenRouter => Self::OpenAiChatCompletions,
-            BackendProviderKind::ChatGptCodex | BackendProviderKind::XaiGrokOAuth => {
-                Self::OpenAiResponses
-            }
+            BackendProviderKind::ChatGptCodex => Self::OpenAiResponses,
+            BackendProviderKind::XaiGrokOAuth => match openai_wire_api {
+                OpenAiWireApi::Responses => Self::OpenAiResponses,
+                OpenAiWireApi::ChatCompletions => Self::OpenAiChatCompletions,
+            },
         }
     }
 }
@@ -174,6 +176,24 @@ mod tests {
         assert_eq!(
             sha256_canonical_json(&left).unwrap(),
             sha256_canonical_json(&right).unwrap()
+        );
+    }
+
+    #[test]
+    fn grok_rendered_source_follows_effective_wire_api() {
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::XaiGrokOAuth,
+                OpenAiWireApi::Responses,
+            ),
+            RenderedRequestSource::OpenAiResponses
+        );
+        assert_eq!(
+            RenderedRequestSource::for_behavior_provider(
+                BackendProviderKind::XaiGrokOAuth,
+                OpenAiWireApi::ChatCompletions,
+            ),
+            RenderedRequestSource::OpenAiChatCompletions
         );
     }
 

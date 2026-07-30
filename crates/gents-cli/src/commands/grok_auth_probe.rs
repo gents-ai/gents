@@ -10,22 +10,57 @@ struct ModelsResponse {
     #[serde(default)]
     models: Vec<ModelSummary>,
     #[serde(default)]
-    data: Vec<OpenAiModelSummary>,
+    data: Vec<ModelSummary>,
 }
 
+/// One catalog entry, tolerant of every shape the proxy is known to serve:
+/// official `/models-v2` entries (`model` / `modelId` / `name`; `id` is a row
+/// id), plus OpenAI-style (`id`) and slug-style (`slug` / `display_name`).
 #[derive(Deserialize)]
 struct ModelSummary {
+    #[serde(default)]
+    model: String,
+    #[serde(default, rename = "modelId")]
+    model_id: String,
     #[serde(default)]
     slug: String,
     #[serde(default)]
     id: String,
     #[serde(default)]
+    name: String,
+    #[serde(default)]
     display_name: String,
 }
 
-#[derive(Deserialize)]
-struct OpenAiModelSummary {
-    id: String,
+impl ModelSummary {
+    fn rendered(self) -> Option<String> {
+        let id = [self.model, self.model_id, self.slug, self.id]
+            .into_iter()
+            .find(|value| !value.trim().is_empty())?;
+        let display_name = if !self.display_name.trim().is_empty() {
+            self.display_name
+        } else {
+            self.name
+        };
+        let display_name = display_name.trim();
+        if display_name.is_empty() || display_name == id {
+            Some(id)
+        } else {
+            Some(format!("{id} ({display_name})"))
+        }
+    }
+}
+
+fn rendered_model_names(body: &[u8]) -> Result<Vec<String>> {
+    let ModelsResponse { models, data } =
+        serde_json::from_slice(body).context("failed to decode models response")?;
+    let mut rendered = models
+        .into_iter()
+        .chain(data)
+        .filter_map(ModelSummary::rendered)
+        .collect::<Vec<_>>();
+    rendered.sort();
+    Ok(rendered)
 }
 
 pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
@@ -44,7 +79,8 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
         })?;
 
     let backend_url = gents::xai_grok_oauth::default_backend_endpoint();
-    let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
+    // `/models-v2` is the catalog path the official Grok CLI queries.
+    let models_url = format!("{}/models-v2", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .bearer_auth(&credential.access_token);
@@ -83,8 +119,7 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
         }
         bail!("models request failed with HTTP {status}: {body}");
     }
-    let ModelsResponse { models, data } =
-        serde_json::from_slice(&body).context("failed to decode models response")?;
+    let rendered = rendered_model_names(&body)?;
 
     println!("Agent DID: {agent_did}");
     println!("Credential: {}", credential.credential_id);
@@ -100,26 +135,6 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
         );
     }
 
-    let mut rendered = models
-        .into_iter()
-        .filter_map(|model| {
-            let id = if !model.slug.trim().is_empty() {
-                model.slug
-            } else if !model.id.trim().is_empty() {
-                model.id
-            } else {
-                return None;
-            };
-            let display_name = model.display_name.trim();
-            if display_name.is_empty() || display_name == id {
-                Some(id)
-            } else {
-                Some(format!("{id} ({display_name})"))
-            }
-        })
-        .chain(data.into_iter().map(|model| model.id))
-        .collect::<Vec<_>>();
-    rendered.sort();
     println!("Models returned: {}", rendered.len());
 
     let max_models = args.max_models.min(rendered.len());
@@ -132,6 +147,25 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_model_names_reads_models_v2_data_entries() {
+        let body = br#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5"},{"id":"row-2","modelId":"grok-build-0.1"}]}"#;
+        let rendered = rendered_model_names(body).expect("models-v2 body parses");
+        assert_eq!(rendered, vec!["grok-4.5 (Grok 4.5)", "grok-build-0.1"]);
+    }
+
+    #[test]
+    fn rendered_model_names_still_reads_openai_and_slug_shapes() {
+        let body = br#"{"models":[{"slug":"grok-4.5","display_name":"Grok 4.5"}],"data":[{"id":"grok-2"}]}"#;
+        let rendered = rendered_model_names(body).expect("mixed body parses");
+        assert_eq!(rendered, vec!["grok-2", "grok-4.5 (Grok 4.5)"]);
+    }
 }
 
 pub(crate) async fn load_oauth_credential(
