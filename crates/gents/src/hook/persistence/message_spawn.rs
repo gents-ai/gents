@@ -95,7 +95,7 @@ impl DefraSessionHook {
             existing_sequence,
             current_request_id,
             current_requester_did,
-            _preferred_sequence,
+            preferred_sequence,
         ) = {
             let state = self.state.lock().await;
             let session_id = state
@@ -166,6 +166,7 @@ impl DefraSessionHook {
                 reasoning,
                 current_request_id.as_deref(),
                 message_key,
+                preferred_sequence,
             )
             .await?;
             let mut state = self.state.lock().await;

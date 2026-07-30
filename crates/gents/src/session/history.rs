@@ -230,6 +230,7 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
     reasoning: Option<&str>,
     request_id: Option<&str>,
     message_key: &str,
+    preferred_sequence: Option<u32>,
 ) -> Result<(u32, bool)> {
     if let Some(sequence) = message_sequence_for_key(node, session_id, message_key).await? {
         return Ok((sequence, false));
@@ -238,7 +239,12 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
     let mut attempts = 0;
     loop {
         attempts += 1;
-        let sequence = next_append_sequence(node, session_id).await?;
+        let sequence = match preferred_sequence {
+            Some(sequence) if !message_sequence_exists(node, session_id, sequence).await? => {
+                sequence
+            }
+            Some(_) | None => next_append_sequence(node, session_id).await?,
+        };
         match create_message(
             node,
             session_id,
@@ -274,6 +280,40 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
             }
         }
     }
+}
+
+async fn message_sequence_exists(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+) -> Result<bool> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    sequence: {{ _eq: {sequence} }}
+                }},
+                limit: 1
+            ) {{ sequence }}
+        }}"#
+    );
+    let response = execute_query_timed(node, &query, "message_sequence_exists").await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "checking AgentMessage sequence for session_id={} sequence={}: {:?}",
+            session_id,
+            sequence,
+            response.errors
+        );
+    }
+    Ok(response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()))
 }
 
 async fn message_sequence_for_key(

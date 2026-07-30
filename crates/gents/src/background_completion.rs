@@ -716,6 +716,7 @@ pub(crate) async fn append_background_tool_completion(
         None,
         Some(&notification_request_id),
         &notification_message_key,
+        None,
     )
     .await?;
 
@@ -809,6 +810,7 @@ async fn ensure_projection_side_effects(
             None,
             Some(&notification_request_id),
             &notification_message_key,
+            None,
         )
         .await?;
 
