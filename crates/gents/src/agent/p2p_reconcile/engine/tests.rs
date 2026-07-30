@@ -1988,13 +1988,14 @@ async fn add_replicator_records_filters_at_seam() {
         .await
         .expect("add_replicator empty filters");
 
-    let calls = admin.recorded_filters.lock().unwrap();
-    assert_eq!(calls.len(), 1);
-    assert!(
-        calls[0].1.is_empty(),
-        "empty filters should record as empty"
-    );
-    drop(calls);
+    {
+        let calls = admin.recorded_filters.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].1.is_empty(),
+            "empty filters should record as empty"
+        );
+    }
 
     // Non-empty filters are faithfully recorded.
     let mut filters = PairingFilters::default();
