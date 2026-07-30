@@ -497,7 +497,6 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     updated_at: "{now}"
                 }},
                 update: {{
-                    source_did: "{source_did}",
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     runtime_state: "{runtime_state}",
@@ -643,6 +642,23 @@ mod tests {
         assert_ne!(
             directory_entry_key("did:key:local-home", "did:key:shared-agent"),
             directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
+        );
+    }
+
+    #[test]
+    fn upsert_mutation_sets_immutable_source_did_only_when_adding() {
+        let mutation = upsert_directory_entry_mutation(
+            &entry("did:key:running", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        let (add, update) = mutation
+            .split_once("update: {")
+            .expect("upsert mutation has update payload");
+
+        assert!(add.contains(r#"source_did: "did:key:home""#));
+        assert!(
+            !update.contains("source_did:"),
+            "immutable source_did must not be resent in update payload: {update}"
         );
     }
 

@@ -302,7 +302,7 @@ mod tests {
     use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 
     use super::*;
-    use crate::agent::p2p_reconcile::templates::SUBAGENT_HOST_TEMPLATE;
+    use crate::agent::p2p_reconcile::templates::{Scope, SUBAGENT_HOST_TEMPLATE};
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter, FilterPredicate};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
@@ -586,6 +586,85 @@ mod tests {
         assert!(collections.contains(&expected_collection_id));
 
         node.shutdown().await;
+    }
+
+    /// Catalog-wide fence for defradb's replication-filter validation: every
+    /// builtin template's filter fields must be `@immutable` in the target
+    /// collection's schema, or `add_replicator` rejects the install at
+    /// pairing time (the exact failure that shipped in #873's merge: the
+    /// machine template filters `AgentDirectoryEntry.source_did`, which the
+    /// amended schema left mutable). Runs against real runtime schemas so a
+    /// new template or filter rule cannot pass review while violating the
+    /// constraint defradb only enforces at install time.
+    #[tokio::test]
+    async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
+        let local_test = runtime_test_node().await;
+        let remote_test = runtime_test_node().await;
+        let local = Arc::clone(&local_test.node);
+        let remote = Arc::clone(&remote_test.node);
+        let local_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&local));
+        let remote_admin = EmbeddedRemoteP2pAdmin::new(Arc::clone(&remote));
+        let remote_addresses = wait_for_peer_info(&remote_admin).await;
+        local_admin
+            .connect(&remote_addresses)
+            .await
+            .expect("connect remote");
+        wait_for_active_peer(&local_admin).await;
+        wait_for_active_peer(&remote_admin).await;
+
+        for template in super::super::templates::builtin_templates() {
+            if template.collections.is_empty() {
+                continue; // app-collections: bring-your-own collection set.
+            }
+            let filters = super::super::templates::scope_filter(
+                &template.scope,
+                template.collections,
+                "did:key:z6MkPeerForFilterValidation",
+                "did:key:z6MkSelfForFilterValidation",
+            );
+            match &template.scope {
+                Scope::Unscoped => assert!(
+                    filters.is_empty(),
+                    "unscoped template '{}' unexpectedly has filters",
+                    template.id
+                ),
+                Scope::PerCollection(_) => {
+                    let filter_collections =
+                        filters.keys().map(String::as_str).collect::<BTreeSet<_>>();
+                    let template_collections = template
+                        .collections
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>();
+                    assert_eq!(
+                        filter_collections, template_collections,
+                        "per-collection template '{}' must filter every collection",
+                        template.id
+                    );
+                }
+                Scope::PeerDid { .. } => {}
+            }
+            local_admin
+                .add_replicator(
+                    &remote_addresses,
+                    &template
+                        .collections
+                        .iter()
+                        .map(|c| (*c).to_string())
+                        .collect::<Vec<_>>(),
+                    &filters,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "template '{}' filter set rejected by add_replicator: {error:#}",
+                        template.id
+                    )
+                });
+        }
+
+        local.shutdown().await;
+        remote.shutdown().await;
     }
 
     #[tokio::test]
