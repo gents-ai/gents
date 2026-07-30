@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
 use super::context::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
@@ -200,7 +199,7 @@ pub(crate) async fn run_command(
     let cancellation_token = runtime
         .as_ref()
         .map(|runtime| runtime.cancellation_token.clone())
-        .unwrap_or_else(CancellationToken::new);
+        .unwrap_or_default();
     let live_output = runtime.and_then(|runtime| runtime.live_output);
     let started = Instant::now();
     let outcome = run_managed_exec(ManagedExecRequest {

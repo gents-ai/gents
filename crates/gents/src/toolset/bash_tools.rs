@@ -135,7 +135,6 @@ impl Tool for ReadOnlyBashTool {
             args.raw_json,
         )
         .await
-        .map_err(Into::into)
     }
 }
 
@@ -216,6 +215,5 @@ impl Tool for UnrestrictedBashTool {
             args.raw_json,
         )
         .await
-        .map_err(Into::into)
     }
 }

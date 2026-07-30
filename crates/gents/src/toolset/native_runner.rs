@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
-use tokio_util::sync::CancellationToken;
 
 use super::shared::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
@@ -68,7 +67,7 @@ impl NativeFsRunner {
         let cancellation_token = runtime
             .as_ref()
             .map(|runtime| runtime.cancellation_token.clone())
-            .unwrap_or_else(CancellationToken::new);
+            .unwrap_or_default();
         let live_output = runtime
             .as_ref()
             .and_then(|runtime| runtime.live_output.clone());
