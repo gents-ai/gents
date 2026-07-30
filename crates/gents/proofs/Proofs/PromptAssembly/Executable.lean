@@ -1,40 +1,9 @@
 import Proofs.PromptAssembly.State
 
-/-!
-# PromptAssembly Executable (issue #448)
-
-Executable mirrors of the Rust provider-input pipeline, in the exact
-composition order the code uses (`compaction.rs::sanitize_history_for_provider`):
-
-1. `dropOrphanedResults` — drop tool-result rows that are not closing the
-   currently active assistant tool-call block (Rust
-   `history::drop_orphaned_tool_results`). ORDER MATTERS: this must run FIRST
-   — see `Properties.lean`: the swapped composition keeps a call on the
-   strength of a result it is about to drop, and an unpaired call reaches the
-   provider (the counterexample that fixed the Rust order).
-2. `dropUnpairedCalls` — intersect each assistant row's call set with the
-   resolved set of the whole (orphan-free) list, dropping rows left empty
-   (Rust `history::drop_unpaired_tool_calls`).
-
-(The Rust pipeline composes a third stage,
-`history::normalize_assistant_content_order` — intra-message content
-ordering, below row granularity and deferred to the `MessageKind`
-content-order extension; see the granularity note in `State.lean`.)
-
-Plus the prompt-layer assembly mirrors (`LayeredPromptBuilder::build`, the
-skill-reminder injection in `daemon/request.rs`, and the per-turn request
-shape of `loop_stream::build_request`), so the layer order is fixed by
-definition and any reordering is a Lean-breaking change.
-
-Rust conformance: `crates/gents/tests/conformance/prompt_assembly.rs`
-runs the shared vectors through `sanitize_history_for_provider`.
--/
-
 namespace PromptAssembly
 
 open Transcript (MessageRow MessageKind MessageRole)
 
-/-- Replace a row's kind, keeping its identity fields. -/
 def withKind (row : MessageRow) (kind : MessageKind) : MessageRow :=
   { row with kind := kind }
 
@@ -47,8 +16,6 @@ theorem withKind_self (row : MessageRow) (kind : MessageKind)
   cases h
   rfl
 
-/-- Keep a tool-result row only if its call id is currently pending. Assistant
-rows replace the pending block; ordinary rows close it. -/
 def dropOrphanedFrom (pending : Finset ToolExecution.ToolCallId) :
     List MessageRow → List MessageRow
   | [] => []
@@ -64,9 +31,6 @@ def dropOrphanedFrom (pending : Finset ToolExecution.ToolCallId) :
 def dropOrphanedResults (msgs : List MessageRow) : List MessageRow :=
   dropOrphanedFrom ∅ msgs
 
-/-- Narrow each assistant row's announced set to `resolved`, dropping rows
-left empty (an assistant turn that was nothing but unpaired calls). Results
-and ordinary rows pass through untouched. -/
 def filterCallsBy (resolved : Finset ToolExecution.ToolCallId) :
     List MessageRow → List MessageRow
   | [] => []
@@ -83,12 +47,9 @@ def filterCallsBy (resolved : Finset ToolExecution.ToolCallId) :
 def dropUnpairedCalls (msgs : List MessageRow) : List MessageRow :=
   filterCallsBy (resolvedIn msgs) msgs
 
-/-- The provider-input narrowing map, in the Rust composition order:
-orphans first, then unpaired calls. -/
 def sanitize (msgs : List MessageRow) : List MessageRow :=
   dropUnpairedCalls (dropOrphanedResults msgs)
 
-/-! Reduction lemmas. -/
 section Reduction
 
 variable (row : MessageRow) (rest : List MessageRow)
@@ -132,11 +93,6 @@ theorem filterCallsBy_cons_ordinary (h : row.kind = .ordinary) :
 
 end Reduction
 
-/-! ## Prompt-layer assembly -/
-
-/-- One slot of the assembled provider input, in the layer vocabulary of
-`prompt.rs` (layers 1+2 = preamble, 3 = compaction-summary reminder,
-skills = per-turn skill reminders, 4 = conversation, prompt last). -/
 inductive Slot where
   | preamble
   | summaryReminder
@@ -146,22 +102,16 @@ inductive Slot where
   | prompt
   deriving DecidableEq, Repr
 
-/-- `LayeredPromptBuilder::build`: the summary reminder (when any summaries
-exist) leads the conversation. -/
 def buildLayers (summaryCount conversationLen : Nat) : List Slot :=
   (if summaryCount = 0 then [] else [Slot.summaryReminder]) ++
     (List.range conversationLen).map Slot.conversation
 
-/-- `daemon/request.rs`: skill reminders are PREPENDED to the built layers. -/
 def injectSkills (skillCount : Nat) (layers : List Slot) : List Slot :=
   (List.range skillCount).map Slot.skillReminder ++ layers
 
-/-- `loop_stream::build_request`: the preamble leads as a system message and
-the new prompt rides last. -/
 def perTurnRequest (layers : List Slot) : List Slot :=
   Slot.preamble :: layers ++ [Slot.prompt]
 
-/-- The full assembly for one request, mirroring the daemon pipeline. -/
 def assemble (skillCount summaryCount conversationLen : Nat) : List Slot :=
   perTurnRequest (injectSkills skillCount (buildLayers summaryCount conversationLen))
 

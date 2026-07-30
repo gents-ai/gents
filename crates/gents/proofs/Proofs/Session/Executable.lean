@@ -1,14 +1,7 @@
 import Proofs.Session.Transition
 
-/-!
-# Executable Session Queue Semantics
-
-Executable actions mirroring `SessionQueue.Transition`.
--/
-
 namespace SessionQueue
 
-/-- Executable queue actions. -/
 inductive Action where
   | appendPending (entry : QueueEntry)
   | coalescePending (entry : QueueEntry)
@@ -17,7 +10,6 @@ inductive Action where
   | drainAutomated (source : QueueSource) (queueKey : Option QueueKey)
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the session queue layer. -/
 def step? (pre : SessionQueueState) : Action → Option SessionQueueState
   | .appendPending entry =>
       if entry.policy = .append ∧
@@ -54,7 +46,6 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
       else
         none
 
-/-- Replay a finite action list through the executable queue semantics. -/
 def replay? : SessionQueueState → List Action → Option SessionQueueState
   | s, [] => some s
   | s, action :: rest =>

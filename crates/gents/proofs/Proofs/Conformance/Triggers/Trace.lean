@@ -1,41 +1,24 @@
 import Proofs.Conformance.Triggers.Materialization
 import Proofs.Properties.Safety
 
-/-!
-# Trigger/Request Trace Conformance
-
-Preservation and step-level bridge theorems after trigger materialization.
--/
-
-/--
-Update the trigger-layer terminal bit from a lifecycle state while preserving
-all other trigger-managed fields.
-
-This is the minimal "mirror" needed to talk about lifecycle evolution without
-reconstructing trigger metadata from scratch.
--/
 def syncTriggerTerminal (rTrig : AgentRequest) (rReq : RequestContext) : AgentRequest :=
   { rTrig with isTerminal := requestStateToTriggerTerminal rReq.state }
 
-/-- Syncing terminality leaves the trigger lineage untouched. -/
 theorem syncTriggerTerminal_preserves_causedBy
     (rTrig : AgentRequest) (rReq : RequestContext) :
     (syncTriggerTerminal rTrig rReq).causedBy = rTrig.causedBy := by
   rfl
 
-/-- Syncing terminality leaves the declared concurrency untouched. -/
 theorem syncTriggerTerminal_preserves_concurrency
     (rTrig : AgentRequest) (rReq : RequestContext) :
     (syncTriggerTerminal rTrig rReq).concurrency = rTrig.concurrency := by
   rfl
 
-/-- Syncing terminality does not mutate the trigger-assigned execution origin. -/
 theorem syncTriggerTerminal_preserves_origin
     (rTrig : AgentRequest) (rReq : RequestContext) :
     (syncTriggerTerminal rTrig rReq).executionOrigin = rTrig.executionOrigin := by
   rfl
 
-/-- A synchronized trigger view is coherent with the lifecycle context it mirrors. -/
 theorem syncTriggerTerminal_coherent
     (rTrig : AgentRequest)
     (rReq : RequestContext)
@@ -46,7 +29,6 @@ theorem syncTriggerTerminal_coherent
   · rfl
   · simpa using h_origin
 
-/-- Synchronizing terminality twice is equivalent to synchronizing once from the final state. -/
 theorem syncTriggerTerminal_idempotent
     (rTrig : AgentRequest)
     (mid post : RequestContext) :
@@ -55,13 +37,6 @@ theorem syncTriggerTerminal_idempotent
   cases rTrig
   rfl
 
-/--
-Lifecycle transitions preserve the trigger/lifecycle coherence relation after
-the trigger view synchronizes its terminal bit from the post-state.
-
-This theorem is load-bearing on `RequestContext.origin_preserved`: if a future
-lifecycle transition mutates `origin`, this statement must be revisited.
--/
 theorem triggerLifecycleCoherent_preserved_by_lifecycle_transition
     {rTrig : AgentRequest}
     {pre post : RequestContext}
@@ -73,10 +48,6 @@ theorem triggerLifecycleCoherent_preserved_by_lifecycle_transition
     rTrig.executionOrigin = pre.origin := h_coh.2
     _ = post.origin := (RequestContext.origin_preserved h_trans).symm
 
-/--
-Lifecycle traces preserve the trigger/lifecycle coherence relation after the
-trigger view synchronizes its terminal bit from the final lifecycle state.
--/
 theorem triggerLifecycleCoherent_preserved_by_lifecycle_trace
     {rTrig : AgentRequest}
     {pre post : RequestContext}
@@ -96,13 +67,6 @@ theorem triggerLifecycleCoherent_preserved_by_lifecycle_trace
         ih h_mid
       simpa [syncTriggerTerminal_idempotent] using h_post
 
-/--
-Lifecycle terminality is monotone in the trigger-observable Bool projection.
-
-Once a lifecycle state is terminal, every later state reached by a valid
-request transition remains terminal, and therefore the synchronized trigger
-view remains terminal as well.
--/
 theorem requestStateToTriggerTerminal_monotone
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post) :
@@ -115,7 +79,6 @@ theorem requestStateToTriggerTerminal_monotone
     terminal_irreversibility h_pre_isTerminal h_trans
   exact (requestStateToTriggerTerminal_eq_true_iff post.state).mpr h_post_isTerminal
 
-/-- The synchronized trigger view preserves terminal observations monotonically. -/
 theorem syncTriggerTerminal_monotone
     (rTrig : AgentRequest)
     {pre post : RequestContext}
@@ -124,13 +87,6 @@ theorem syncTriggerTerminal_monotone
     (syncTriggerTerminal rTrig post).isTerminal = true := by
   simpa [syncTriggerTerminal] using requestStateToTriggerTerminal_monotone h_trans
 
-/--
-Concrete trace-level conformance theorem for trigger-created requests.
-
-Starting from the canonical claimed embedding of a materialized trigger request,
-any valid lifecycle trace yields a final lifecycle context whose synchronized
-trigger view remains coherent with that final context.
--/
 theorem materializedTriggerRequest_coherent_along_trace
     (state : SystemState)
     (intent : FireIntent)
@@ -148,17 +104,6 @@ theorem materializedTriggerRequest_coherent_along_trace
   · exact materializedTriggerRequest_has_claimed_embedding state intent seed inputs
   · exact h_trace
 
-/--
-Step-level conformance entry point over an admissibility-constrained trigger
-trace.
-
-If `state` already lies on a `ReachableUnder P` trigger trace, `intent`
-satisfies the same boundary predicate, and `dispatch` materializes a seed, then:
-
-* the next trigger state stays on the same admissible trace
-* the materialized seed/origin pair satisfies `consistentLineage`
-* the created request shape has the canonical claimed lifecycle embedding
--/
 theorem reachableUnder_dispatch_materializedTriggerRequest_conforms
     (P : FireIntent → Prop)
     (state : SystemState)
@@ -178,10 +123,6 @@ theorem reachableUnder_dispatch_materializedTriggerRequest_conforms
   · exact dispatch_materializedTriggerRequest_consistentLineage state snap intent seed h_dispatch
   · exact materializedTriggerRequest_has_claimed_embedding state intent seed inputs
 
-/--
-`WellFormedReachable` specialization of the step-level creation-side conformance
-entry point.
--/
 theorem wellFormedReachable_dispatch_materializedTriggerRequest_conforms
     (state : SystemState)
     (snap : TriggerSnapshot)
@@ -207,13 +148,6 @@ theorem wellFormedReachable_dispatch_materializedTriggerRequest_conforms
     h_intent
     h_dispatch
 
-/--
-Step-level conformance entry point that continues from trigger materialization
-into an arbitrary valid lifecycle trace.
-
-This is the place where the strengthened trigger trace boundary and the
-lifecycle trace theorem surface meet explicitly.
--/
 theorem reachableUnder_dispatch_materializedTriggerRequest_coherent_along_trace
     (P : FireIntent → Prop)
     (state : SystemState)
@@ -238,10 +172,6 @@ theorem reachableUnder_dispatch_materializedTriggerRequest_coherent_along_trace
   · exact dispatch_materializedTriggerRequest_consistentLineage state snap intent seed h_dispatch
   · exact materializedTriggerRequest_coherent_along_trace state intent seed inputs h_trace
 
-/--
-`WellFormedReachable` specialization of the step-level trace conformance entry
-point.
--/
 theorem wellFormedReachable_dispatch_materializedTriggerRequest_coherent_along_trace
     (state : SystemState)
     (snap : TriggerSnapshot)

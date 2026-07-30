@@ -1,11 +1,5 @@
 import Proofs.CrossMachineComposed
 
-/-!
-# Safety Properties S1-S6
-
-Proofs that the ideal agent state machine satisfies safety invariants.
--/
-
 open RequestState RequestContext ProcessState PersistenceState ComposedState
 
 private theorem pending_not_terminal : ¬ isTerminal RequestState.pending := by
@@ -255,8 +249,6 @@ theorem deadline_structural_bound
     ¬post.deadlineExceeded ∨ post.persistence = .committed := by
   exact Or.inr (persistence_before_completion h_trans h_completed)
 
-/-- Request claim assigns the runtime deadline from `claimDeadline`, preserving
-    explicit submitter deadlines and using the runtime fallback otherwise. -/
 theorem claim_deadline_structural_bound
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post)
@@ -286,13 +278,6 @@ theorem claim_deadline_structural_bound
   | interrupt_processing _ _ _ h_post =>
       simp [h_post] at h_claimed
 
-/-- R-Int: request-local interrupt field monotonicity — once `interruptRequestedAt` is set on
-    a request, no subsequent transition may clear or change it. The runtime
-    treats this field as read-only; it is submitter-owned.
-
-    The stronger unconditional form (no `h_set` hypothesis) holds because no
-    transition ever rewrites `interruptRequestedAt`; `h_set` is retained in
-    the signature to document the operational invariant consumers care about. -/
 theorem interrupt_monotonicity
     {pre post : RequestContext}
     (_h_set : pre.interruptRequestedAt.isSome)
@@ -300,16 +285,12 @@ theorem interrupt_monotonicity
     post.interruptRequestedAt = pre.interruptRequestedAt := by
   cases h_trans <;> simp_all
 
-/-- R-TTL: request-local TTL field monotonicity — `validUntil` is submitter-owned and never
-    rewritten by any runtime transition, regardless of whether it was set. -/
 theorem valid_until_monotonicity
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post) :
     post.validUntil = pre.validUntil := by
   cases h_trans <;> simp_all
 
-/-- R-ReqDeadline: the submitter-owned request deadline is never rewritten by
-    runtime transitions; claim only copies it into the effective deadline. -/
 theorem request_deadline_monotonicity
     {pre post : RequestContext}
     (h_trans : RequestContext.Transition pre post) :

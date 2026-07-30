@@ -1,14 +1,6 @@
 import Proofs.ManagedExec
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Managed Exec Witness Cases
-
-Finite rows for the native managed-exec process boundary. These rows connect
-Lean liveness statements to Rust tests without persisting executor metadata on
-`AgentToolCall`.
--/
-
 namespace Conformance.ContractCases
 
 def managedExecLivenessCases : List ManagedExecLivenessCase :=

@@ -2,10 +2,6 @@ import Proofs.Request
 import Proofs.SessionRecovery
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Session Recovery Witness Cases
--/
-
 namespace Conformance.ContractCases
 
 def recoveryContextWith

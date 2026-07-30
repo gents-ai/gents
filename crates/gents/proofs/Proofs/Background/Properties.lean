@@ -5,5 +5,3 @@ import Proofs.Background.Properties.Projection
 import Proofs.Background.Properties.Cancellation
 import Proofs.Background.Properties.Foreground
 import Proofs.Background.Properties.DelegationGraph
-
-/-! Barrel import for focused subagent bridge property modules. -/

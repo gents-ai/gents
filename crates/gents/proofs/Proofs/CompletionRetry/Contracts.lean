@@ -1,14 +1,6 @@
 import Proofs.CompletionRetry.Executable
 import Proofs.Conformance.ContractTypes
 
-/-!
-# CompletionRetry Conformance Contracts
-
-Finite executable witnesses for the per-completion retry machine. Each row is
-computed by running `CompletionRetry.step?` against a concrete state/action
-pair; Rust consumes the resulting rows through `tests/conformance`.
--/
-
 namespace CompletionRetry.Contracts
 
 open Conformance.Contracts
@@ -167,15 +159,7 @@ def cases : List CompletionRetryCase :=
         (resampleUsed := 1)
         (lastParseError := some "json-parse"))
       (.preStreamFail .parseBadRequest "json-parse" 12)
-  , -- #653: the resample budget is INDEPENDENT of the transport ladder. The
-    -- model has always said so — `resampleBackoff`'s only budget guard is
-    -- `resampleUsed < budget.resampleRetries`, with no reference to
-    -- `transportRetries` (which State.lean documents as the ladder length).
-    -- Every witness until now happened to set `resampleRetries <=
-    -- transportRetries`, so the fence could not see that Rust drew the resample
-    -- delay from `ladder[resampleUsed]` and hard-failed the moment that index
-    -- ran off the end — abandoning both the unspent budget AND the repair
-    -- recourse. These two rows pin the independence.
+  ,
     caseFromStep
       "resample_budget_outlives_transport_ladder"
       "pre_stream_fail"

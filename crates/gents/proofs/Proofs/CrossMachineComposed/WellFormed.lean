@@ -3,16 +3,6 @@ import Proofs.CrossMachineComposed.UniqueCallIds
 
 namespace ComposedState
 
-/-!
-## Global composed-state well-formedness
-
-The C-theorems should not take structural coherence facts as ad-hoc per-tool
-hypotheses. `WellFormed` bundles the list-level invariants that are established
-at `initial` and preserved by every composed transition.
--/
-
-/-- A coherent tool remains coherent when the composed request and request id
-    are unchanged. -/
 private theorem coherent_of_request_eq
     {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
     (h_coherent : Coherent pre tool)
@@ -24,8 +14,6 @@ private theorem coherent_of_request_eq
          by simpa [h_request] using h_deadline,
          by simpa [h_request] using h_time⟩
 
-/-- A coherent tool remains coherent when only request fields irrelevant to
-    coherence changed. -/
 private theorem coherent_of_request_clock_eq
     {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
     (h_coherent : Coherent pre tool)
@@ -38,8 +26,6 @@ private theorem coherent_of_request_clock_eq
          by simpa [h_deadline] using h_tool_deadline,
          by simpa [h_time] using h_tool_time⟩
 
-/-- A coherent tool remains coherent when the request clock and tool clock
-    advance in lockstep. -/
 private theorem coherent_of_lockstep_clock
     {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
     (t : Time)
@@ -52,8 +38,6 @@ private theorem coherent_of_lockstep_clock
          by simpa [h_request] using h_tool_deadline,
          by simp [h_request]⟩
 
-/-- A persistent tool stays persistent whenever the composed request id is
-    unchanged (persistence is linkage + bridge, independent of the clock). -/
 private theorem persistent_of_requestId_eq
     {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
     (h_persistent : Persistent pre tool)
@@ -62,8 +46,6 @@ private theorem persistent_of_requestId_eq
   obtain ⟨h_linked, h_child⟩ := h_persistent
   exact ⟨h_linked.trans h_requestId.symm, h_child⟩
 
-/-- Persistence survives the lockstep clock advance: only `currentTime` changes,
-    and persistence depends on neither the clock nor the deadline. -/
 private theorem persistent_of_lockstep_clock
     {pre post : ComposedState} {tool : ToolExecution.ToolCallContext}
     (t : Time)
@@ -73,8 +55,6 @@ private theorem persistent_of_lockstep_clock
   obtain ⟨h_linked, h_child⟩ := h_persistent
   exact ⟨h_linked.trans h_requestId.symm, h_child⟩
 
-/-- Membership in `l.set i a` means either the member is the replacement or it
-    was already present in the original list. -/
 private lemma mem_set_eq_or_mem {α : Type _}
     (l : List α) (i : Nat) (a b : α)
     (h_mem : b ∈ l.set i a) :
@@ -98,29 +78,22 @@ private lemma mem_set_eq_or_mem {α : Type _}
         | inl h_eq => exact Or.inl h_eq
         | inr h_old => exact Or.inr (Or.inr h_old)
 
-/-- The empty initial tool list is list-coherent. -/
 theorem initial_allToolsCoherent : initial.AllToolsCoherent := by
   intro _ h_in
   simp [initial] at h_in
 
-/-- The empty initial tool list trivially satisfies persistent well-formedness. -/
 theorem initial_allToolsPersistent : initial.AllToolsPersistent := by
   intro _ h_in
   simp [initial] at h_in
 
-/-- The initial state has no pre-processing tools. -/
 theorem initial_noToolsBeforeProcessing : initial.NoToolsBeforeProcessing := by
   intro _ h_in
   simp [initial] at h_in
 
-/-- The empty initial tool list satisfies the foreground-live uniqueness
-    invariant. -/
 theorem initial_invFG : initial.invFG := by
   unfold invFG
   simp [initial]
 
-/-- List-level coherence is preserved by every composed transition, provided
-    the pre-state also rules out malformed pending/claimed states with tools. -/
 theorem allToolsCoherent_preserved
     {pre post : ComposedState}
     (h_coherent : pre.AllToolsCoherent)
@@ -223,11 +196,6 @@ theorem allToolsCoherent_preserved
     | inr h_in_pre =>
       exact coherent_of_request_eq (h_coherent tool h_in_pre h_live) h_request h_requestId
 
-/-- List-level persistence is preserved by every composed transition. Detached
-    tools are governed by linkage, which no transition disturbs: every
-    constructor leaves `requestId`/`childRequestId` of carried tools intact, and
-    a detaching `tool_step` (or detached `tool_spawn`) is guarded to land in
-    `Persistent`. -/
 theorem allToolsPersistent_preserved
     {pre post : ComposedState}
     (h_persistent : pre.AllToolsPersistent)
@@ -281,8 +249,6 @@ theorem allToolsPersistent_preserved
     | inr h_in_pre =>
       exact persistent_of_requestId_eq (h_persistent tool h_in_pre h_detached) h_requestId
 
-/-- The no-tools-before-processing invariant is preserved by every composed
-    transition. -/
 theorem noToolsBeforeProcessing_preserved
     {pre post : ComposedState}
     (h_no_early_tools : pre.NoToolsBeforeProcessing)
@@ -449,9 +415,6 @@ theorem noToolsBeforeProcessing_preserved
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
 
-/-- The global composed-state well-formedness invariant. Live tools are
-    `Coherent` (clock/deadline synced); detached tools are `Persistent`
-    (linked bridged subagents that own their own lifetime). -/
 structure WellFormed (s : ComposedState) : Prop where
   allToolsCoherent : s.AllToolsCoherent
   allToolsPersistent : s.AllToolsPersistent
@@ -459,8 +422,6 @@ structure WellFormed (s : ComposedState) : Prop where
   noToolsBeforeProcessing : s.NoToolsBeforeProcessing
   noDuplicateForegroundLive : s.invFG
 
-/-- Request-id linkage holds for every tool: live tools are linked via
-    `Coherent`, detached tools via `Persistent`. -/
 theorem WellFormed.allToolsLinked
     {s : ComposedState}
     (h_wf : s.WellFormed) :
@@ -470,7 +431,6 @@ theorem WellFormed.allToolsLinked
   · exact (h_wf.allToolsPersistent t h_in h).1
   · exact (h_wf.allToolsCoherent t h_in h).1
 
-/-- The initial composed state is globally well-formed. -/
 theorem initial_wellFormed : initial.WellFormed where
   allToolsCoherent := initial_allToolsCoherent
   allToolsPersistent := initial_allToolsPersistent
@@ -478,7 +438,6 @@ theorem initial_wellFormed : initial.WellFormed where
   noToolsBeforeProcessing := initial_noToolsBeforeProcessing
   noDuplicateForegroundLive := initial_invFG
 
-/-- Global composed-state well-formedness is preserved by every transition. -/
 theorem wellFormed_preserved
     {pre post : ComposedState}
     (h_wf : pre.WellFormed)
@@ -498,7 +457,6 @@ theorem wellFormed_preserved
       noDuplicateForegroundLive :=
         invFG_preserved h_wf.noDuplicateForegroundLive h_step }
 
-/-- Global composed-state well-formedness is preserved along traces. -/
 theorem wellFormed_trace
     {pre post : ComposedState}
     (h_wf : pre.WellFormed)
@@ -509,7 +467,6 @@ theorem wellFormed_trace
   | step h_step _ ih =>
     exact ih (wellFormed_preserved h_wf h_step)
 
-/-- Any state reachable from `initial` by a composed trace is well-formed. -/
 theorem wellFormed_from_initial
     {post : ComposedState}
     (h_trace : Trace initial post) :

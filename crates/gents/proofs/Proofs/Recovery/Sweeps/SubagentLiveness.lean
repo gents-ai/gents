@@ -1,34 +1,7 @@
 import Proofs.Recovery.Contract
 import Proofs.Request.State
 
-/-!
-# Subagent Liveness Recovery Sweeps (#465)
-
-Periodic sweeps over `AgentRequest` rows reached through running subagent
-bridges. Without them, a background child whose executor died past its
-deadline stays `processing` forever: the bridge never projects a terminal
-result, the parent's response wait wedges, and queued descendants of
-already-terminal parents never drain.
-
-Two staleness sources, two sweeps:
-
-* `expiredSubagentChildSweep` — a claimed/processing child whose deadline has
-  passed. A live executor enforces its own request deadline, so an expired
-  non-terminal row means the executor is gone; recovery terminalizes it to
-  `dead` (the same transition `terminalize_expired_local_child_request`
-  applies at startup).
-* `queuedDescendantSweep` — a pending child whose parent request is already
-  terminal can never legally run; recovery interrupts it (the queued-side
-  analogue of the cascade interrupt for running children). `bridgeLinked`
-  is the scope discriminator: only rows referenced by an `AgentToolCall`
-  bridge are spawn descendants. Queue rows that merely CARRY spawn lineage —
-  background-completion wake notifications, steering messages — are never
-  bridge-linked and must survive a terminal caller.
--/
-
 namespace Recovery
-
-/-! ## Expired subagent child terminalization -/
 
 structure ExpiredChildRow where
   state : RequestState
@@ -100,16 +73,9 @@ def expiredChildRecoveryEquivalence : RecoveryEquivalence expiredSubagentChildSw
   , h_recover_eq_uninterrupted := expiredChildRecover_matches_uninterrupted
   }
 
-/-! ## Queued descendants of terminal parents -/
-
 structure QueuedDescendantRow where
   state : RequestState
   parentTerminal : Bool
-  /-- True iff an `AgentToolCall` bridge references this row as its child
-  (`child_request_id == request_id`). Lineage-only queue rows (wake
-  notifications, steering messages) are NOT bridge-linked and never stale.
-  Rust derives this predicate at sweep time via a bridge-existence query
-  (`load_bridged_child_ids`); it is not a persisted column. -/
   bridgeLinked : Bool
   deriving Repr
 

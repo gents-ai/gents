@@ -1,9 +1,5 @@
 import Proofs.Conformance.ClientShell.Contracts.Cases
 
-/-!
-# ClientShell Contract JSON
--/
-
 namespace Conformance.ClientShellContracts
 
 open Conformance.Contracts

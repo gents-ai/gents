@@ -1,14 +1,3 @@
-/-!
-# Codex Shim Turn Lifecycle
-
-Small Codex-facing lifecycle for a single app-server turn.
-
-This deliberately models the adapter boundary, not the core GENTS request
-lifecycle. The important property is that a Codex interrupt is locally terminal:
-the shim must emit a terminal turn notification and clear its active-turn slot
-without waiting for the asynchronous GENTS request interrupt to settle.
--/
-
 namespace CodexShim
 
 inductive TurnPhase where
@@ -35,9 +24,6 @@ def terminal : TurnPhase → Prop
   | .notStarted => False
   | .inProgress => False
 
-/-- Lexicographic rank used for monotonic turn-lifecycle checks.
-Terminals are rank-equivalent because the adapter only needs to know that the
-turn is no longer active. -/
 def lexOrd : TurnPhase → Nat
   | .notStarted => 0
   | .inProgress => 1
@@ -94,7 +80,6 @@ theorem interrupted_is_terminal :
     TurnPhase.terminal .interrupted := by
   trivial
 
-/-- Valid Codex-facing turn lifecycle transitions never move backward. -/
 theorem turn_lifecycle_never_regresses
     {pre post : TurnPhase}
     {action : TurnAction}

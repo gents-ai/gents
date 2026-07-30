@@ -1,15 +1,7 @@
 import Proofs.RuntimeReconcile.State
 
-/-!
-# Runtime Reconcile Transitions
-
-Runtime reconciliation, control-plane visibility, and request acceptance transitions.
--/
-
 namespace RuntimeState
 
-/-- Runtime reconciliation, control-plane visibility, and request admission
-    transitions. -/
 inductive Transition : RuntimeState → RuntimeState → Prop where
   | ack_write {pre post : RuntimeState} (resolved : ResolvedSnapshot) :
       post = { pre with ackedResolved := some resolved } →
@@ -90,12 +82,6 @@ inductive Transition : RuntimeState → RuntimeState → Prop where
         } →
       Transition pre post
 
-/-- Active generation is non-decreasing under every transition.
-
-Most constructors leave `active` untouched. Only `publish` advances generation;
-that arm is the sole non-uniform case. Discharged with a single `cases` +
-`simp_all` so adding a constructor that preserves `active` does not require a
-new proof arm (#556). -/
 theorem transition_generation_monotone
     {pre post : RuntimeState}
     (h_trans : Transition pre post) :
@@ -262,6 +248,5 @@ theorem coherent_preserved
         exact h_live_bound current (Finset.mem_of_mem_erase h_current)
       · intro rid h_rid
         exact Finset.mem_erase.mpr ⟨h_clear rid h_rid, h_request_live rid h_rid⟩
-
 
 end RuntimeState

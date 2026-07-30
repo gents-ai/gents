@@ -1,13 +1,6 @@
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Transcript.Executable
 
-/-!
-# Transcript Conformance Cases
-
-Projection from the transcript proof model's executable witness rows into the
-shared conformance contract namespace.
--/
-
 namespace Conformance.ContractCases
 
 def transcriptCaseFromModel (witness : Transcript.TranscriptCase) : TranscriptCase :=

@@ -1,24 +1,8 @@
 import Proofs.CompletionRetry.Transition
 import Mathlib.Tactic.SplitIfs
 
-/-!
-# Executable CompletionRetry Semantics
-
-Executable actions, the total step function `step?`, and its equivalence with
-the relational `Transition` model (`step_sound` / `transition_complete`).
-
-Every failure action carries the observed `FailureClass` *and* the selected
-wake time, so `step?` genuinely consumes both — the classification *and* the
-fail-fast decision. On a pre-stream failure the executable semantics dispatches
-on the class and, when the retry budget is spent or the selected wake does not
-fit the claimed deadline, routes to the matching terminal `exhausted`/`failed`
-outcome. Wake-time and delay *values* are chosen by the action's data, not the
-model; the model constrains only budget counts and deadline fit.
--/
-
 namespace CompletionRetry
 
-/-- Deadline fit is decidable, so it can gate `step?`'s guards directly. -/
 instance decFitsDeadline (wake : Time) (deadline : Option Time) :
     Decidable (fitsDeadline wake deadline) := by
   unfold fitsDeadline
@@ -26,12 +10,6 @@ instance decFitsDeadline (wake : Time) (deadline : Option Time) :
   | none => exact isTrue trivial
   | some d => exact inferInstanceAs (Decidable (wake ≤ d))
 
-/-- Executable actions mirroring `Transition`. A single `preStreamFail` action
-carries the classification `c`, the (opaque) error text, and the selected wake
-time; `step?` dispatches it to the transport/resample/repair/permanent branch
-and, on budget/deadline overshoot, to the matching exhaust outcome. The
-turn-close continuation `continueAfterClose` likewise fails fast to
-`exhausted` when its selected wake overshoots. -/
 inductive Action where
   | issue
   | toolEffect
@@ -44,9 +22,6 @@ inductive Action where
   | repairIssue
   deriving DecidableEq, Repr
 
-/-- Total executable transition function. Every guard is directly decidable and
-every deadline check is `fitsDeadline wake s.deadline` on the action's own wake
-— no quantifiers. -/
 def step? (s : State) : Action → Option State
   | .issue =>
       if s.phase = Phase.issuing then
@@ -128,7 +103,6 @@ def step? (s : State) : Action → Option State
         some { s with phase := Phase.issuing, repairUsed := true }
       else none
 
-/-- Every executable step is a legal transition. -/
 theorem step_sound {s s' : State} {a : Action}
     (h : step? s a = some s') : Transition s s' := by
   cases a with
@@ -211,7 +185,6 @@ theorem step_sound {s s' : State} {a : Action}
     simp only [Option.some.injEq] at h; subst h
     exact Transition.repairIssue s hp hunused
 
-/-- Every legal transition is realized by some executable step. -/
 theorem transition_complete {s s' : State} (t : Transition s s') :
     ∃ a, step? s a = some s' := by
   cases t with

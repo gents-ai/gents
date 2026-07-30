@@ -3,20 +3,8 @@ import Proofs.Persistence
 import Proofs.ToolExecution.Policy
 import Proofs.Background.State
 
-/-!
-# Tool Call State
-
-Daemon-visible lifecycle vocabulary for an individual tool dispatch. The
-lifecycle picks up after `Policy.preflight = .dispatch`; a `.block` decision
-skips the lifecycle entirely and persists `failed` at the request level via
-the existing `tool_failure_class` field. That gating is enforced in Rust at
-the dispatch site and is documented here as a structural assumption rather
-than a Lean theorem.
--/
-
 namespace ToolExecution
 
-/-- The 7 persisted states of the tool-call lifecycle. -/
 inductive ToolCallState where
   | pending
   | awaitingApproval
@@ -29,7 +17,6 @@ inductive ToolCallState where
 
 namespace ToolCallState
 
-/-- String vocabulary persisted in `AgentToolCall.lifecycle_state`. -/
 def toDefraDB : ToolCallState → String
   | .pending => "pending"
   | .awaitingApproval => "awaitingApproval"
@@ -39,7 +26,6 @@ def toDefraDB : ToolCallState → String
   | .timedOut => "timedOut"
   | .cancelled => "cancelled"
 
-/-- Parse the persisted vocabulary. -/
 def fromDefraDB? : String → Option ToolCallState
   | "pending" => some .pending
   | "awaitingApproval" => some .awaitingApproval
@@ -54,7 +40,6 @@ theorem fromDefraDB_toDefraDB (s : ToolCallState) :
     fromDefraDB? s.toDefraDB = some s := by
   cases s <;> rfl
 
-/-- Exhaustive constructor list for Rust conformance vocabulary generation. -/
 def all : List ToolCallState :=
   [ .pending, .awaitingApproval, .running, .completed, .failed, .timedOut, .cancelled ]
 
@@ -81,18 +66,13 @@ end ToolExecution
 
 namespace ToolExecution
 
-/-- Identifier for an individual tool-call row. -/
 abbrev ToolCallId := Nat
 
-/-- Operator verdict recorded from an `AgentToolApproval` document. The
-    approver identity stays in the document layer; the lifecycle only needs
-    the decision. -/
 inductive ApprovalDecision where
   | approved
   | denied
   deriving DecidableEq, Repr
 
-/-- Mutable per-tool-call context that transitions carry along. -/
 structure ToolCallContext where
   callId         : ToolCallId
   requestId      : RequestId
@@ -103,10 +83,7 @@ structure ToolCallContext where
   currentTime    : Time
   failureClass   : Option FailureClass := none
   persistence    : PersistenceState
-  -- Subagent extensions:
-  -- Approvals extension: first recorded operator decision, if any.
   approval       : Option ApprovalDecision := none
-  -- Subagent extensions:
   awaitMode      : Subagent.AwaitMode := .foreground
   cancelPolicy   : Subagent.CancelPolicy := .cascade
   childRequestId : Option RequestId := none
@@ -114,21 +91,18 @@ structure ToolCallContext where
 
 namespace ToolCallContext
 
-/-- Whether the tool's deadline has been exceeded. -/
 def deadlineExceeded (c : ToolCallContext) : Prop :=
   c.currentTime > c.deadline
 
 instance (c : ToolCallContext) : Decidable c.deadlineExceeded :=
   Nat.decLt c.deadline c.currentTime
 
-/-- A call is cancellable iff it is in a non-terminal pre-state. -/
 def cancellable (c : ToolCallContext) : Prop :=
   c.state = .pending ∨ c.state = .awaitingApproval ∨ c.state = .running
 
 instance (c : ToolCallContext) : Decidable c.cancellable := by
   unfold cancellable; infer_instance
 
-/-- Linkage to a parent request. -/
 def linkedTo (c : ToolCallContext) (rid : RequestId) : Prop :=
   c.requestId = rid
 

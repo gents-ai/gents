@@ -1,7 +1,5 @@
 import Proofs.Session.Properties.Drain
 
-/-! Created-time ordering and earliest-claim properties for session queues. -/
-
 namespace SessionQueue
 
 theorem canAppendAfter_true
@@ -45,8 +43,6 @@ theorem head_earliest_of_createdOrdered
   · rw [h_eq]
   · exact h_order.1 other h_tail
 
-/-- A claim from a created-ordered pending list selects the earliest pending
-    entry, because `claim_next` can only claim the list head. -/
 theorem claim_next_selects_earliest
     {pre post : SessionQueueState}
     (h_active : pre.active = none)

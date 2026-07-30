@@ -1,10 +1,6 @@
 import Proofs.ClientShell
 import Proofs.Conformance.ContractTypes
 
-/-!
-# ClientShell Contract Types
--/
-
 namespace Conformance.ClientShellContracts
 
 open Conformance.Contracts
@@ -142,9 +138,6 @@ def sendBlockedReasonName : SendBlockedReason → String
   | .inconsistentObservation    => "inconsistentObservation"
   | .workflowBlocked            => "workflowBlocked"
 
-/-- Frontend-facing names for the same `SendBlockedReason` constructors above.
-    This intentionally differs where the TypeScript shell exposes existing UI
-    vocabulary (`submittingRequest`, `waitingForRequestObservation`, etc.). -/
 def frontendBlockedReasonName : SendBlockedReason → String
   | .clientOffline              => "clientOffline"
   | .agentNotSelected           => "agentNotSelected"

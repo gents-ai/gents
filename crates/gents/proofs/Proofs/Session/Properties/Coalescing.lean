@@ -1,7 +1,5 @@
 import Proofs.Session.Properties.Drain
 
-/-! Coalesced queue-key uniqueness preservation for session queues. -/
-
 namespace SessionQueue
 
 theorem containsCoalescedQueueKey_false
@@ -24,9 +22,6 @@ theorem containsCoalescedQueueKey_false
         · rw [h_eq]
           exact h_head
         · exact ih h_missing entry h_tail
-
-/-- An `Option RequestId` active slot cannot name two different active
-    requests. This is the queue-level one-active-request invariant. -/
 
 theorem uniqueCoalescedQueueKeys_append_append
     {entries : List QueueEntry}
@@ -127,8 +122,6 @@ theorem pendingAfterDrain_preserves_uniqueCoalescedQueueKeys
             (pendingAfterDrain_mem_original h_other)
         · exact ih h_unique.2
 
-/-- Coalescing a new keyed wake-up preserves coalesced queue-key uniqueness:
-    the transition is only legal when that key is absent. -/
 theorem coalesce_new_preserves_unique_coalesced_queueKeys
     {pre post : SessionQueueState}
     {entry : QueueEntry}
@@ -142,8 +135,6 @@ theorem coalesce_new_preserves_unique_coalesced_queueKeys
   rw [h_post, SessionQueueState.appendPending]
   exact uniqueCoalescedQueueKeys_append_fresh h_unique h_key h_missing
 
-/-- Coalescing an already-represented key is a no-op, so it cannot introduce a
-    second pending entry for that key. -/
 theorem coalesce_existing_preserves_unique_coalesced_queueKeys
     {pre post : SessionQueueState}
     (h_unique : UniqueCoalescedQueueKeys pre.pending)

@@ -1,14 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Managed Exec State
-
-Daemon-visible executor state for native subprocess work. The executor state is
-memory-only in Rust; the vocabulary is still modeled here so conformance rows
-can tie deadline/cancel behavior to the managed process boundary.
--/
-
-/-- Native managed-exec subprocess lifecycle states. -/
 inductive ManagedExecState where
   | pendingSpawn
   | running
@@ -21,7 +12,6 @@ inductive ManagedExecState where
 
 namespace ManagedExecState
 
-/-- String vocabulary emitted to Rust conformance contracts. -/
 def toDefraDB : ManagedExecState → String
   | .pendingSpawn => "pendingSpawn"
   | .running => "running"
@@ -31,7 +21,6 @@ def toDefraDB : ManagedExecState → String
   | .spawnFailed => "spawnFailed"
   | .reapFailed => "reapFailed"
 
-/-- Parse the emitted vocabulary. -/
 def fromDefraDB? : String → Option ManagedExecState
   | "pendingSpawn" => some .pendingSpawn
   | "running" => some .running
@@ -46,7 +35,6 @@ theorem fromDefraDB_toDefraDB (s : ManagedExecState) :
     fromDefraDB? s.toDefraDB = some s := by
   cases s <;> rfl
 
-/-- Exhaustive constructor list for conformance generation. -/
 def all : List ManagedExecState :=
   [ .pendingSpawn
   , .running
@@ -75,7 +63,6 @@ instance : HasTerminal ManagedExecState where
 
 end ManagedExecState
 
-/-- Mutable executor context carried by ManagedExec transitions. -/
 structure ManagedExecContext where
   state : ManagedExecState
   deadline : Time
@@ -86,7 +73,6 @@ structure ManagedExecContext where
 
 namespace ManagedExecContext
 
-/-- Whether the executor deadline has elapsed. -/
 def deadlineExceeded (c : ManagedExecContext) : Prop :=
   c.deadline < c.now
 

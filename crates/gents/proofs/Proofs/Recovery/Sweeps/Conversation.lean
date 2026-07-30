@@ -4,36 +4,6 @@ import Mathlib.Data.String.Basic
 import Proofs.Recovery.Contract
 import Proofs.Recovery.Outcome
 
-/-!
-# Conversation startup-recovery sweep (#693)
-
-Stuck `AgentConversation` docs (`status ∈ {processing, error}` after a daemon
-restart) are terminalized from their parent request's outcome.
-
-The sweep's `Row` is the *duplicate group* — every doc sharing one `session_id`
-— not a single doc. That is the whole point of this model:
-
-- On stores whose `AgentConversation` collection was created before
-  `session_id` was unique-indexed (the index cannot be added to an existing
-  collection), two docs can share a `session_id`. A write addressed by
-  `filter: { session_id }` then matches both, and DefraDB refuses it
-  (`cannot upsert multiple matching documents`) — #693 defect 1. Modeling the
-  group forces the recovery step to name a single doc.
-- `targetSelector = "_docID"` is part of the sweep contract: recovery must
-  address the canonical doc by its docID, never by a session_id filter. This is
-  what makes the sweep total on duplicate stores, and it is checkable in the
-  emitted witness rows.
-- Duplicates are *converged*, not deleted: `AgentConversation` is a replicated
-  (`@branchable`) collection, so a delete can be resurrected by a peer or fork
-  the CRDT. Every doc in the group is terminalized to the same status, which is
-  also what makes the sweep idempotent (a second pass finds nothing stale).
-
-The canonical doc is chosen by a total order on `(updatedAt, richness, docId)`.
-`canonical_perm_invariant` proves the choice does not depend on the order rows
-come back in — load-bearing, because DefraDB returns duplicates in docID order,
-not recency order, so "deterministic" must be a theorem rather than a hope.
--/
-
 namespace Recovery
 
 inductive ConversationStatus where
@@ -51,7 +21,6 @@ def toContract : ConversationStatus → String
   | .active => "active"
   | .completed => "completed"
 
-/-- A conversation is settled when it is no longer mid-flight. -/
 def isTerminal : ConversationStatus → Bool
   | .processing => false
   | .error => false
@@ -60,10 +29,6 @@ def isTerminal : ConversationStatus → Bool
 
 end ConversationStatus
 
-/-- The terminal status a stuck conversation is recovered to, derived from its
-    parent request's persisted outcome (`latest_request_id`): a completed
-    request settles the conversation as `completed`; anything else (failed,
-    missing, still open) returns it to `active` so the operator can resume it. -/
 inductive ParentOutcome where
   | completed
   | unfinished
@@ -81,9 +46,6 @@ theorem recoveredStatus_terminal (outcome : ParentOutcome) :
 
 end ParentOutcome
 
-/-- One persisted `AgentConversation` doc. `richness` counts populated optional
-    fields (title / preview_text / latest_request_id) — the tiebreak that keeps
-    a thin replicated duplicate from shadowing the real conversation. -/
 structure ConversationDoc where
   docId : String
   status : ConversationStatus
@@ -91,8 +53,6 @@ structure ConversationDoc where
   richness : Nat
   deriving DecidableEq, Repr
 
-/-- Every doc sharing one `session_id`. Non-empty by construction: the sweep
-    only ever sees groups it found in the store. -/
 structure ConversationGroup where
   sessionId : String
   head : ConversationDoc
@@ -113,26 +73,11 @@ def isDuplicated (group : ConversationGroup) : Bool :=
 
 end ConversationGroup
 
-/-! ## Canonical selection
-
-Duplicates are ranked lexicographically: newest `updatedAt`, then richest, then
-greatest `docId`. `docId` is the store's primary key, so distinct docs never tie
-— the rank order is total and its greatest element is unique.
-
-That uniqueness is exactly what makes the canonical pick independent of the
-order the store hands the rows back in (`canonical_perm_invariant`), and it is
-load-bearing: DefraDB returns duplicates in docID order, not recency order, so
-"pick the latest" cannot be left to scan order.
--/
-
-/-- Lexicographic ranking key. `Nat ×ₗ Nat ×ₗ String` carries Mathlib's
-    lexicographic `LinearOrder`, so transitivity and totality come with it. -/
 abbrev DocRank := Nat ×ₗ Nat ×ₗ String
 
 def docRank (doc : ConversationDoc) : DocRank :=
   toLex (doc.updatedAt, toLex (doc.richness, doc.docId))
 
-/-- Distinct docIds give distinct ranks: the tiebreak is the primary key. -/
 theorem docRank_inj_of_docId (left right : ConversationDoc)
     (h_rank : docRank left = docRank right) :
     left.docId = right.docId := by
@@ -141,7 +86,6 @@ theorem docRank_inj_of_docId (left right : ConversationDoc)
   simp [ofLex_toLex] at h
   exact h.2.2
 
-/-- Keep the higher-ranked doc. -/
 def betterDoc (best candidate : ConversationDoc) : ConversationDoc :=
   if docRank best < docRank candidate then candidate else best
 
@@ -153,9 +97,6 @@ theorem betterDoc_eq (best candidate : ConversationDoc) :
   unfold betterDoc
   by_cases h : docRank best < docRank candidate <;> simp [h]
 
-/-- The fold's result outranks its start and every doc it folded in. This is the
-    greatest-element property, proven once and reused for membership,
-    uniqueness, and permutation invariance. -/
 theorem foldl_betterDoc_greatest (docs : List ConversationDoc) (start : ConversationDoc) :
     docRank start ≤ docRank (docs.foldl betterDoc start) ∧
       ∀ doc ∈ docs, docRank doc ≤ docRank (docs.foldl betterDoc start) := by
@@ -183,7 +124,6 @@ theorem foldl_betterDoc_greatest (docs : List ConversationDoc) (start : Conversa
         exact le_trans h_better_hd h_start
       · exact h_mem doc h_in_tl
 
-/-- The fold either keeps its start or returns one of the folded docs. -/
 theorem foldl_betterDoc_mem (docs : List ConversationDoc) (start : ConversationDoc) :
     docs.foldl betterDoc start = start ∨ docs.foldl betterDoc start ∈ docs := by
   induction docs generalizing start with
@@ -199,8 +139,6 @@ theorem foldl_betterDoc_mem (docs : List ConversationDoc) (start : ConversationD
         rw [List.foldl_cons]
         simp [h]
 
-/-- The canonical doc is one of the group's docs — recovery never invents a
-    document. -/
 theorem canonicalOf_mem (group : ConversationGroup) :
     canonicalOf group ∈ group.docs := by
   unfold canonicalOf ConversationGroup.docs
@@ -208,7 +146,6 @@ theorem canonicalOf_mem (group : ConversationGroup) :
   · simp [h]
   · simp [h]
 
-/-- **No doc in the group outranks the canonical doc.** -/
 theorem canonicalOf_greatest (group : ConversationGroup) :
     ∀ doc ∈ group.docs, docRank doc ≤ docRank (canonicalOf group) := by
   intro doc h_mem
@@ -218,13 +155,6 @@ theorem canonicalOf_greatest (group : ConversationGroup) :
     exact h_start
   · exact h_rest doc h_tail
 
-/-- **The canonical pick does not depend on the order the store returns rows
-    in.** Two groups over the same multiset of docs — with docIds distinct, as
-    the store's primary key guarantees — pick the same canonical doc.
-
-    Without this, "deterministically pick the canonical doc" would be an
-    artifact of DefraDB's scan order (which is docID-ordered, not recency-
-    ordered), and two nodes could disagree about which duplicate is real. -/
 theorem canonical_perm_invariant (left right : ConversationGroup)
     (h_perm : left.docs.Perm right.docs)
     (h_distinct : ∀ a ∈ left.docs, ∀ b ∈ left.docs, a.docId = b.docId → a = b) :
@@ -235,18 +165,14 @@ theorem canonical_perm_invariant (left right : ConversationGroup)
     (List.Perm.mem_iff h_perm).mpr h_right_mem
   have h_left_in_right : canonicalOf left ∈ right.docs :=
     (List.Perm.mem_iff h_perm).mp h_left_mem
-  -- Each canonical outranks the other, so their ranks are equal …
   have h_le₁ : docRank (canonicalOf right) ≤ docRank (canonicalOf left) :=
     canonicalOf_greatest left (canonicalOf right) h_right_in_left
   have h_le₂ : docRank (canonicalOf left) ≤ docRank (canonicalOf right) :=
     canonicalOf_greatest right (canonicalOf left) h_left_in_right
   have h_rank : docRank (canonicalOf left) = docRank (canonicalOf right) :=
     le_antisymm h_le₂ h_le₁
-  -- … equal ranks share a docId, and docIds identify docs.
   exact h_distinct (canonicalOf left) h_left_mem (canonicalOf right) h_right_in_left
     (docRank_inj_of_docId _ _ h_rank)
-
-/-! ## The sweep -/
 
 def conversationStale (group : ConversationGroup) : Prop :=
   ∃ doc ∈ group.docs, ConversationStatus.isTerminal doc.status = false
@@ -255,11 +181,6 @@ instance (group : ConversationGroup) : Decidable (conversationStale group) := by
   unfold conversationStale
   infer_instance
 
-/-- Recover the whole group: every doc is terminalized to the status derived
-    from the parent request. The canonical doc is the one whose *content* the
-    live surfaces read (see `canonicalOf`); the duplicates are converged to the
-    same status rather than deleted, so the group stops being stale and a
-    replicated peer cannot resurrect a half-healed state. -/
 def conversationRecover (group : ConversationGroup) : ConversationGroup :=
   let settle := fun doc : ConversationDoc =>
     { doc with status := group.parent.recoveredStatus }
@@ -273,9 +194,6 @@ def conversationMeasure (group : ConversationGroup) : Nat :=
 def conversationTerminal (group : ConversationGroup) : Prop :=
   ∀ doc ∈ group.docs, ConversationStatus.isTerminal doc.status = true
 
-/-- The uninterrupted path: a live daemon settles the conversation to the same
-    status from the same parent outcome. Recovery re-derives it, never
-    re-executes the request. -/
 def conversationUninterrupted (group : ConversationGroup) : ConversationGroup :=
   conversationRecover group
 
@@ -294,8 +212,6 @@ theorem conversation_stale_positive :
     simp [List.mem_filter, h_mem, h_open]
   exact List.length_pos_of_mem h_mem_filter
 
-/-- Every doc in a recovered group is terminal — including the duplicates, which
-    is what makes the sweep idempotent on a duplicate store. -/
 theorem conversation_recover_terminal :
     ∀ group, conversationStale group → conversationTerminal (conversationRecover group) := by
   intro group _h_stale
@@ -343,13 +259,6 @@ def conversationRecoveryEquivalence : RecoveryEquivalence conversationRecoverySw
   , h_recover_eq_uninterrupted := conversation_recover_matches_uninterrupted
   }
 
-/-! ## Idempotence
-
-A recovered group is no longer stale, so a second pass recovers nothing — the
-operator-visible statement of "recovery converged". This is what a duplicate
-store could never reach before the fix: the failing upsert left both docs
-`processing`, so every restart re-reported the same "recovery". -/
-
 theorem conversation_recovered_not_stale (group : ConversationGroup)
     (h_stale : conversationStale group) :
     ¬ conversationStale (conversationRecover group) := by
@@ -365,14 +274,6 @@ theorem conversation_recover_idempotent (group : ConversationGroup)
   unfold conversationRecover
   simp
 
-/-! ## Duplicate tolerance
-
-The properties #693 asks for, stated over the group. -/
-
-/-- **Recovery is total on duplicate groups.** A group with any number of
-    duplicate docs is recovered — there is no multi-match failure mode, because
-    the sweep addresses each doc by its own `docId` (`targetSelector`), never by
-    a `session_id` filter that would match them all. -/
 theorem duplicate_group_recovers (group : ConversationGroup)
     (h_stale : conversationStale group) :
     conversationTerminal (conversationRecover group) ∧

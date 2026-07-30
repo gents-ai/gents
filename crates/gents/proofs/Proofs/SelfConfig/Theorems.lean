@@ -1,25 +1,7 @@
 import Proofs.SelfConfig.Apply
 
-/-!
-# Self-Configuration Theorems
-
-The four properties issue #654 names for the self-config write surface:
-
-- **T-SC1 identity immutability** — applying any patch leaves every protected
-  field (identity/unique keys, owner DID, runtime-owned status, secrets)
-  unchanged.
-- **T-SC2 field containment** — a patch mutates only fields it names, and only
-  within the target's declared writable set.
-- **T-SC3 transactional totality** — a write either validates and lands
-  wholesale (the stored document becomes exactly the merged result, nothing
-  else moves), or rejects with no mutation.
-- **T-SC4 no-lockout recoverability** — under the opt-in guard, any accepted
-  ToolSelection write keeps the agent's own self-config gate on.
--/
-
 namespace SelfConfig
 
-/-- A merge entry never touches a key outside the writable set. -/
 theorem applyEntry_protected (t : Target) (doc : Doc) (e : PatchEntry)
     (k : FieldKey) (hk : k ∉ writableFields t) :
     applyEntry t doc e k = doc k := by
@@ -31,7 +13,6 @@ theorem applyEntry_protected (t : Target) (doc : Doc) (e : PatchEntry)
     · simp [hke]
   · rw [if_neg hw]
 
-/-- T-SC1 (pointwise form): the merge preserves every non-writable key. -/
 theorem applyPatch_protected (t : Target) (doc : Doc) (p : Patch)
     (k : FieldKey) (hk : k ∉ writableFields t) :
     applyPatch t doc p k = doc k := by
@@ -42,7 +23,6 @@ theorem applyPatch_protected (t : Target) (doc : Doc) (p : Patch)
       rw [ih (applyEntry t doc e)]
       exact applyEntry_protected t doc e k hk
 
-/-- T-SC1: identity immutability. Every protected field survives any patch. -/
 theorem identity_immutable (t : Target) (doc : Doc) (p : Patch)
     (k : FieldKey) (hk : k ∈ protectedFields t) :
     applyPatch t doc p k = doc k := by
@@ -50,8 +30,6 @@ theorem identity_immutable (t : Target) (doc : Doc) (p : Patch)
   have hmem := List.mem_filter.mp hk
   exact of_decide_eq_true hmem.2
 
-/-- T-SC2: field containment. A changed field is named by the patch and lies
-    in the writable set. -/
 theorem containment (t : Target) (doc : Doc) (p : Patch) (k : FieldKey)
     (h : applyPatch t doc p k ≠ doc k) :
     k ∈ writableFields t ∧ p.any (fun e => e.key == k) = true := by
@@ -80,8 +58,6 @@ theorem containment (t : Target) (doc : Doc) (p : Patch) (k : FieldKey)
         · rw [if_neg hw] at he
           exact absurd rfl he
 
-/-- T-SC3 (acceptance shape): an accepted write is exactly the full merge —
-    no partial application exists. -/
 theorem step_accepts_wholesale (validate guard : Doc → Bool) (t : Target)
     (stored : Doc) (p : Patch) (merged : Doc)
     (h : step validate guard t stored p = some merged) :
@@ -98,7 +74,6 @@ theorem step_accepts_wholesale (validate guard : Doc → Bool) (t : Target)
   · rw [if_neg ha] at h
     exact Option.noConfusion h
 
-/-- An accepted write passed validation and the guard. -/
 theorem step_accept_validates (validate guard : Doc → Bool) (t : Target)
     (stored : Doc) (p : Patch) (merged : Doc)
     (h : step validate guard t stored p = some merged) :
@@ -116,7 +91,6 @@ theorem step_accept_validates (validate guard : Doc → Bool) (t : Target)
   · rw [if_neg ha] at h
     exact Option.noConfusion h
 
-/-- Patches naming any field outside the writable surface are rejected. -/
 theorem step_inadmissible_rejects (validate guard : Doc → Bool) (t : Target)
     (stored : Doc) (p : Patch) (h : admissible t p = false) :
     step validate guard t stored p = none := by
@@ -124,7 +98,6 @@ theorem step_inadmissible_rejects (validate guard : Doc → Bool) (t : Target)
   have hna : ¬(admissible t p = true) := by simp [h]
   rw [if_neg hna]
 
-/-- T-SC3 (rejection frame): a rejected write leaves the store untouched. -/
 theorem runStep_reject_frame (validate guard : Doc → Bool) (t : Target)
     (s : Store) (p : Patch)
     (h : (runStep validate guard t s p).2 = false) :
@@ -133,8 +106,6 @@ theorem runStep_reject_frame (validate guard : Doc → Bool) (t : Target)
   | none => simp [runStep, hstep]
   | some merged => simp [runStep, hstep] at h
 
-/-- T-SC3 (acceptance frame): an accepted write changes only the target
-    document. -/
 theorem runStep_accept_frame (validate guard : Doc → Bool) (t : Target)
     (s : Store) (p : Patch) (t' : Target) (ht : t' ≠ t) :
     (runStep validate guard t s p).1 t' = s t' := by
@@ -142,7 +113,6 @@ theorem runStep_accept_frame (validate guard : Doc → Bool) (t : Target)
   | none => simp [runStep, hstep]
   | some merged => simp [runStep, hstep, ht]
 
-/-- An accepted write lands the full merge at the target. -/
 theorem runStep_accept_target (validate guard : Doc → Bool) (t : Target)
     (s : Store) (p : Patch)
     (h : (runStep validate guard t s p).2 = true) :
@@ -153,10 +123,6 @@ theorem runStep_accept_target (validate guard : Doc → Bool) (t : Target)
       have hm := step_accepts_wholesale validate guard t (s t) p merged hstep
       simp [runStep, hstep, hm]
 
-/-- T-SC4: no-lockout recoverability. With the gate guard active, an accepted
-    ToolSelection write leaves the merged document with the self-config gate
-    still on — the agent cannot accidentally strip its own reconfigure
-    ability. -/
 theorem no_lockout_recoverable (validate : Doc → Bool) (s : Store) (p : Patch)
     (h : (runStep validate gateOn .toolSelection s p).2 = true) :
     gateOn ((runStep validate gateOn .toolSelection s p).1 .toolSelection)
@@ -168,8 +134,6 @@ theorem no_lockout_recoverable (validate : Doc → Bool) (s : Store) (p : Patch)
         (s .toolSelection) p merged hstep
       simp [runStep, hstep, hval.2]
 
-/-- Identity immutability lifted to the store step: even on acceptance, every
-    protected field of the target document is preserved. -/
 theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)
     (s : Store) (p : Patch) (k : FieldKey) (hk : k ∈ protectedFields t) :
     (runStep validate guard t s p).1 t k = s t k := by

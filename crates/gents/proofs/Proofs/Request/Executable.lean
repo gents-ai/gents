@@ -1,14 +1,7 @@
 import Proofs.Request.Transition
 
-/-!
-# Executable Request Semantics
-
-Executable actions, step function, replay, and equivalence with the relational transition model.
--/
-
 namespace RequestContext
 
-/-- Executable request actions mirroring `Transition`. -/
 inductive Action where
   | claim
   | dedupLose
@@ -23,7 +16,6 @@ inductive Action where
   | interruptProcessing
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the request layer. -/
 def step? (pre : RequestContext) : Action → Option RequestContext
   | .claim =>
       if pre.state = .pending ∧ pre.admission = .released ∧ pre.ttlOpen then
@@ -86,13 +78,11 @@ def step? (pre : RequestContext) : Action → Option RequestContext
       else
         none
 
-/-- A trace is a sequence of valid request transitions. -/
 inductive Trace : RequestContext → RequestContext → Prop where
   | refl {s : RequestContext} : Trace s s
   | step {s₁ s₂ s₃ : RequestContext} :
       Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
-/-- Replay a finite action list through the executable request semantics. -/
 def replay? : RequestContext → List Action → Option RequestContext
   | s, [] => some s
   | s, action :: rest =>
@@ -151,7 +141,6 @@ theorem step_sound
           rw [h_valid] at h_step
           simp at h_step
           rcases h_step with ⟨⟨h_state, h_admission, h_time⟩, h_post⟩
-          -- Rewrite `some t` back to `pre.validUntil` so the struct literal matches.
           rw [← h_valid] at h_post
           exact Transition.expire h_state h_admission h_valid h_time h_post.symm
   | interruptBeforeClaim =>
@@ -198,7 +187,6 @@ theorem transition_complete
   | interrupt_processing h_state h_admission h_int h_post =>
       exact ⟨.interruptProcessing, by simp [step?, h_state, h_admission, h_int, h_post]⟩
 
-/-- Executable claim uses an explicit submitter request deadline when one is present. -/
 theorem action_claim_deadline_explicit
     {pre post : RequestContext}
     {t : Time}
@@ -210,7 +198,6 @@ theorem action_claim_deadline_explicit
   rw [← h_post]
   simp [claimDeadline, h_requestDeadline]
 
-/-- Executable claim falls back to `currentTime + 1` without a submitter request deadline. -/
 theorem action_claim_deadline_default
     {pre post : RequestContext}
     (h_step : step? pre .claim = some post)

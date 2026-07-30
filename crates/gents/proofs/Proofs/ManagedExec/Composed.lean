@@ -2,13 +2,6 @@ import Proofs.Request
 import Proofs.ToolExecution
 import Proofs.ManagedExec.Properties
 
-/-!
-# Managed Exec Composition
-
-Small composed state tying request deadline, tool lifecycle, and managed
-executor kill-signaling into the #159 R3 operational theorem shape.
--/
-
 namespace ManagedExec
 
 structure ManagedExecComposedState where

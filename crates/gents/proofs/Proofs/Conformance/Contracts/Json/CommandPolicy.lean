@@ -1,12 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.CommandPolicy.Cases
 
-/-!
-# Command Policy JSON
-
-Serializers for command policy, sandbox, and environment witness rows.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

@@ -1,17 +1,8 @@
 import Proofs.ToolExecution.Transition
 
-/-!
-# Tool Call Single-Machine Properties
-
-T1..T5 — daemon-visible invariants over `ToolCallContext.Transition`.
-Composition theorems C1, C1', C2, C3 live in `Proofs/CrossMachineComposed.lean`.
--/
-
 namespace ToolExecution
 namespace ToolCallContext
 
-/-- T1: Terminal irreversibility. Once in completed/failed/timedOut/cancelled,
-    no transition leaves the state or mutates the failureClass. -/
 theorem terminal_irreversible
     {pre post : ToolCallContext}
     (h_terminal : isTerminal pre.state)
@@ -37,19 +28,11 @@ theorem terminal_irreversible
   | timeAdvance _ _ h_post          => simp_all
   | persistenceStep _ _ _ h_post    => simp_all
 
-
-/-- T4: A call is cancellable iff its state is non-terminal. Operational
-    meaning: any in-flight call accepts a cancel transition. -/
 theorem cancellable_iff_non_terminal (c : ToolCallContext) :
     c.cancellable ↔ ¬ isTerminal c.state := by
   unfold cancellable
   cases c.state <;> simp [isTerminal]
 
-
-/-- T2: TimedOut is reachable only when deadline is exceeded.
-    The property whose absence in the runtime caused issue #149.
-    The `h_pre` guard excludes `timeAdvance`/`persistenceStep`, which preserve
-    state — they cannot be the transition that *enters* `.timedOut`. -/
 theorem timedOut_requires_deadline_exceeded
     {pre post : ToolCallContext}
     (h_step : Transition pre post)
@@ -76,9 +59,6 @@ theorem timedOut_requires_deadline_exceeded
   | timeAdvance _ _ h_post'         => simp_all
   | persistenceStep _ _ _ h_post'   => simp_all
 
-/-- T3: Persistence before completion. Mirror of Request S6.
-    The `h_pre` guard excludes `timeAdvance`/`persistenceStep`, which preserve
-    state — they cannot be the transition that *enters* `.completed`. -/
 theorem completed_implies_committed
     {pre post : ToolCallContext}
     (h_step : Transition pre post)
@@ -105,17 +85,10 @@ theorem completed_implies_committed
   | timeAdvance _ _ h_post'         => simp_all
   | persistenceStep _ _ _ h_post'   => simp_all
 
-
-/-- T5: Bounded reachability to terminal (liveness). Any non-terminal call
-    has a 1- or 2-step trace to a terminal state, given a sufficient time
-    advance. Daemon-side liveness underlying issue #149's fix. -/
 theorem live_call_reaches_terminal
     (c : ToolCallContext)
     (h_live : ¬ isTerminal c.state) :
     ∃ post, Trace c post ∧ isTerminal post.state := by
-  -- Two non-terminal states: .pending and .running.
-  -- .pending  → cancelBeforeDispatch → .cancelled (terminal)
-  -- .running  → timeAdvance(deadline+1); timeout → .timedOut (terminal)
   match h_state : c.state with
   | .awaitingApproval =>
       let post : ToolCallContext := { c with state := .cancelled }
@@ -128,16 +101,13 @@ theorem live_call_reaches_terminal
         Transition.cancelBeforeDispatch .userCancelled (h_state := h_state) (h_post := rfl)
       exact ⟨post, Trace.step h_trans Trace.refl, Or.inr (Or.inr (Or.inr rfl))⟩
   | .running =>
-      -- If deadline is already exceeded, timeout in 1 step; otherwise advance time first.
       by_cases h_deadline : c.deadlineExceeded
       case pos =>
-        -- Already past deadline: timeout directly
         let post : ToolCallContext := { c with state := .timedOut }
         have h_step : Transition c post :=
           Transition.timeout (h_state := h_state) (h_deadline := h_deadline) (h_post := rfl)
         exact ⟨post, Trace.step h_step Trace.refl, Or.inr (Or.inr (Or.inl rfl))⟩
       case neg =>
-        -- Not yet past deadline: advance time to deadline+1, then timeout
         let mid : ToolCallContext := { c with currentTime := c.deadline + 1 }
         have h_le : c.currentTime ≤ c.deadline + 1 := by
           have h_not_gt : ¬ c.currentTime > c.deadline := by
@@ -160,9 +130,6 @@ theorem live_call_reaches_terminal
   | .timedOut  => exact absurd (Or.inr (Or.inr (Or.inl h_state))) h_live
   | .cancelled => exact absurd (Or.inr (Or.inr (Or.inr h_state))) h_live
 
-
-/-- Helper: every Transition preserves `requestId`. Parity with
-    `InferenceCall.transition_preserves_requestId`. -/
 theorem transition_preserves_requestId
     {pre post : ToolCallContext}
     (h_step : Transition pre post) :
@@ -187,10 +154,6 @@ theorem transition_preserves_requestId
   | timeAdvance _ _ h_post         => rw [h_post]
   | persistenceStep _ _ _ h_post   => rw [h_post]
 
-/-- Helper: every Transition preserves `callId`. The callId is set at
-    construction time and no inner transition mentions it in its
-    `post = { pre with ... }` rewrite. Used by
-    `ComposedState.uniqueCallIds_preserved`. -/
 theorem transition_preserves_callId
     {pre post : ToolCallContext}
     (h_step : Transition pre post) :
@@ -215,7 +178,6 @@ theorem transition_preserves_callId
   | timeAdvance _ _ h_post         => rw [h_post]
   | persistenceStep _ _ _ h_post   => rw [h_post]
 
-/-- Helper: `dispatch` sets `startedAt` to `some pre.currentTime`. -/
 theorem dispatch_sets_startedAt
     {pre post : ToolCallContext}
     (h_step : Transition pre post)
@@ -242,9 +204,6 @@ theorem dispatch_sets_startedAt
   | timeAdvance _ _ h_post'         => exfalso; rw [h_post'] at h_post; simp_all
   | persistenceStep _ _ _ h_post'   => exfalso; rw [h_post'] at h_post; simp_all
 
-/-- Helper: a transition that does not enter `.running` (from `.pending` via
-    dispatch or from `.awaitingApproval` via approve) preserves `startedAt`.
-    Captures "only dispatch and approve write startedAt." -/
 theorem startedAt_preserved_outside_dispatch
     {pre post : ToolCallContext}
     (h_step  : Transition pre post)
@@ -277,8 +236,6 @@ theorem startedAt_preserved_outside_dispatch
   | timeAdvance _ _ h_post'         => rw [h_post']
   | persistenceStep _ _ _ h_post'   => rw [h_post']
 
-/-- Approval soundness: the only transition that takes a held call to
-    `.running` is `approve`, and it requires recorded `approved` evidence. -/
 theorem held_runs_only_with_approval
     {pre post : ToolCallContext}
     (h_step : Transition pre post)

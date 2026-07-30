@@ -1,25 +1,5 @@
 import Proofs.Triggers.SerialSupport
 
-/-!
-# Serial Trigger Theorems
-
-Public T2 forms for serial trigger at-most-one behavior.
--/
-
-/--
-T2 (serial at-most-one): any reachable system state has at most one
-non-terminal request per trigger tuple, provided every request for that
-tuple in the state uses `.serial` concurrency.
-
-**Hypothesis framing**: the hypothesis is about the CURRENT state's
-requests, not the whole trace. This matches the original spec framing
-("the system state at this instant"). A future refinement may strengthen
-this to a pre-trace invariant (tracked as a follow-up).
-
-Stated over `Reachable s` — a hand-crafted `SystemState` with multiple
-parallel/latestOnly fires would violate the raw bound; this theorem is
-correctly about states reachable via `dispatchStep`/`lifecycleTerminateStep`.
--/
 theorem T2_serial_at_most_one
     (s : SystemState) (t : TriggerKey) (h_reach : Reachable s) :
     (∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) →
@@ -46,8 +26,6 @@ theorem T2_serial_at_most_one
       exact Nat.le_trans h_monotone h_before
   | terminate s' reqId h_prev ih =>
     intro h_hyp_post
-    -- Convert post-state hypothesis to pre-state via
-    -- lifecycleTerminateStep_preserves_causedBy_and_concurrency.
     have h_hyp_pre : ∀ r ∈ s'.requests, r.causedBy = some t → r.concurrency = .serial := by
       intro r h_mem h_causedBy
       obtain ⟨r', h_mem', h_cb, h_conc⟩ :=
@@ -59,13 +37,6 @@ theorem T2_serial_at_most_one
         ≤ s'.nonTerminalCountFor t := lifecycleTerminateStep_preserves_bound s' reqId t
       _ ≤ 1 := h_before
 
-/--
-T2 lifted to an admissibility-constrained trigger trace relation.
-
-This is the preferred theorem shape for downstream trigger proofs: prove the
-trace boundary once via `ReachableUnder`, then reuse the existing T2 result by
-forgetting back to the raw operational semantics.
--/
 theorem T2_serial_at_most_one_under
     (P : FireIntent → Prop)
     (s : SystemState)
@@ -75,7 +46,6 @@ theorem T2_serial_at_most_one_under
     s.nonTerminalCountFor t ≤ 1 :=
   T2_serial_at_most_one s t (ReachableUnder.toReachable h_reach)
 
-/-- T2 stated over the boundary-tightened `WellFormedReachable` relation. -/
 theorem T2_serial_at_most_one_wellFormed
     (s : SystemState)
     (t : TriggerKey)
@@ -84,11 +54,6 @@ theorem T2_serial_at_most_one_wellFormed
     s.nonTerminalCountFor t ≤ 1 :=
   T2_serial_at_most_one_under FireIntent.WellFormed s t h_reach
 
-/--
-Stronger pre-trace form of T2: if the trigger trace is well-formed and every
-intent targeting `t` is serial at the boundary, then the reachable state has
-at most one non-terminal request for `t`.
--/
 theorem T2_serial_at_most_one_pretrace
     (s : SystemState)
     (t : TriggerKey)

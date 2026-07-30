@@ -1,10 +1,6 @@
 import Proofs.Persistence
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Persistence Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def persistenceStates : List PersistenceState :=

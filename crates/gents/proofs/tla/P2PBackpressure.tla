@@ -1,61 +1,14 @@
 ---- MODULE P2PBackpressure ----
 EXTENDS Naturals, FiniteSets, TLC
 
-(***************************************************************************)
-(* Hub fan-in / fan-out admission model for issue #630.                    *)
-(*                                                                         *)
-(* PairingTransport.tla models one directed edge getting connected and     *)
-(* installable. This model starts later in the pipeline: the hub already   *)
-(* has replicator peers, local writes create PushLog work, and remote      *)
-(* peers can also push DAG roots into the hub.                              *)
-(*                                                                         *)
-(* It captures two production requirements that showed up in the Amy       *)
-(* v0.6.6 report:                                                          *)
-(*                                                                         *)
-(*   1. Outbound push workers are bounded. A nonresponsive peer must       *)
-(*      eventually release its worker slot by timeout/failure; otherwise a *)
-(*      small semaphore can be filled by stuck sends and healthy peers can *)
-(*      stop receiving updates.                                            *)
-(*                                                                         *)
-(*   2. Inbound successful PushLog replies must be backed by process-local  *)
-(*      tracked work: either the block merged, or the DAG root is           *)
-(*      registered in the pending-DAG map. If the map is full, the hub must *)
-(*      nack/backpressure rather than success-ack and drop tracking state.  *)
-(*      Shipping pending is an in-memory HashMap — NOT durable across       *)
-(*      restart without anti-entropy / delayed success-until-merge.         *)
-(*                                                                         *)
-(* The model is intentionally finite: each peer has one outbound update and *)
-(* each inbound peer sends one DAG. Repeated organic writes/retry loops,    *)
-(* multi-wave saturation, Bitswap stall lifetime, rate-limit token buckets, *)
-(* and gossip send-loop health are outside this first gate.                 *)
-(*                                                                          *)
-(* PRODUCTION FLOOD GAP (not modeled): shipping spawn of PushLog tasks can  *)
-(* precede semaphore acquire, and JoinHandles may be retained until         *)
-(* shutdown — so PushWorkers does not bound the queue of waiting tasks      *)
-(* under sustained multi-wave load. Queue admission before spawn is a       *)
-(* defradb.rs follow-up (#630), not an operator-knob fix.                   *)
-(*                                                                          *)
-(* Pending capacity is keyed by peer here as a one-wave abstraction;        *)
-(* production pending-DAG capacity is keyed by DAG root / CID (one peer     *)
-(* may hold many pending roots). The properties below are local admission   *)
-(* obligations for a single wave — not a proof that a live hub under        *)
-(* Amy-class multi-wave flood stays healthy.                                *)
-(*                                                                          *)
-(* PushWorkers maps to SyncConfig.max_concurrent_push_tasks /               *)
-(* P2PConfig.max_concurrent_push_tasks (operator-tunable on server via      *)
-(* --p2p-max-concurrent-push-tasks) for *in-flight* sends only.             *)
-(* TimeoutReleasesSlot models whether a timed-out PushLog frees its         *)
-(* semaphore permit — true in the green path.                               *)
-(***************************************************************************)
-
 CONSTANTS
-  Peer,                    \* finite set of replicator peers
-  ResponsivePeer,          \* peers whose PushLog request can succeed
-  InboundPeer,             \* peers that send a PushLog into this hub
-  PushWorkers,             \* outbound push semaphore capacity
-  MaxPending,              \* inbound pending-DAG capacity
-  TimeoutReleasesSlot,     \* BOOLEAN: does timeout/failure free a push slot?
-  AckWithoutPendingAllowed \* BOOLEAN: diagnostic switch for the bad ack bug
+  Peer,
+  ResponsivePeer,
+  InboundPeer,
+  PushWorkers,
+  MaxPending,
+  TimeoutReleasesSlot,
+  AckWithoutPendingAllowed
 
 ASSUME PeerFinite == IsFiniteSet(Peer)
 ASSUME ResponsiveSubset == ResponsivePeer \subseteq Peer
@@ -66,11 +19,11 @@ ASSUME TimeoutReleasesSlotBool == TimeoutReleasesSlot \in BOOLEAN
 ASSUME AckWithoutPendingAllowedBool == AckWithoutPendingAllowed \in BOOLEAN
 
 VARIABLES
-  outState, \* [Peer -> {"Queued","InFlight","Delivered","Failed"}]
-  pending,  \* inbound roots registered for later DAG completion
-  merged,   \* inbound roots already complete/merged
-  acked,    \* inbound PushLog success replies
-  nacked    \* inbound PushLog backpressure/error replies
+  outState,
+  pending,
+  merged,
+  acked,
+  nacked
 
 vars == <<outState, pending, merged, acked, nacked>>
 
@@ -97,10 +50,6 @@ Init ==
   /\ acked = {}
   /\ nacked = {}
 
-(***************************************************************************)
-(* Outbound push fan-out.                                                  *)
-(***************************************************************************)
-
 StartPush(p) ==
   /\ p \in Peer
   /\ outState[p] = "Queued"
@@ -121,10 +70,6 @@ PushTimesOut(p) ==
   /\ outState' = [outState EXCEPT ![p] = "Failed"]
   /\ UNCHANGED <<pending, merged, acked, nacked>>
 
-(***************************************************************************)
-(* Inbound PushLog admission.                                              *)
-(***************************************************************************)
-
 ReceiveComplete(p) ==
   /\ InboundUnsettled(p)
   /\ merged' = merged \cup {p}
@@ -144,9 +89,6 @@ NackAtCapacity(p) ==
   /\ nacked' = nacked \cup {p}
   /\ UNCHANGED <<outState, pending, merged, acked>>
 
-\* Diagnostic bad behavior: success-ack at capacity without registering the
-\* DAG. This is the bug the production PushLog reply invariant is meant to
-\* forbid.
 BadAckAtCapacity(p) ==
   /\ AckWithoutPendingAllowed
   /\ InboundUnsettled(p)
@@ -173,16 +115,6 @@ Next ==
   \/ \E p \in InboundPeer : SettleInbound(p)
   \/ \E p \in InboundPeer : ResolvePending(p)
 
-(***************************************************************************)
-(* Fairness.                                                              *)
-(*                                                                         *)
-(* StartPush uses strong fairness because semaphore availability can be    *)
-(* intermittent. Success/timeout/settle/resolve actions use weak fairness  *)
-(* once their guards continuously hold. There is deliberately no fairness  *)
-(* that can make a nonresponsive peer succeed or make a disabled timeout   *)
-(* release a slot.                                                         *)
-(***************************************************************************)
-
 Fairness ==
   /\ \A p \in Peer : SF_vars(StartPush(p))
   /\ \A p \in ResponsivePeer : WF_vars(PushSucceeds(p))
@@ -192,19 +124,12 @@ Fairness ==
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
-(***************************************************************************)
-(* Properties.                                                             *)
-(***************************************************************************)
-
 PushSlotsBounded ==
   Cardinality(InFlightPeers) <= PushWorkers
 
 PendingBounded ==
   Cardinality(pending) <= MaxPending
 
-\* A success reply cannot discard work. While pending, the DAG is tracked;
-\* after resolution, it is merged. Nacks are not success replies and do not
-\* have to satisfy this invariant.
 SuccessAckBacked ==
   \A p \in InboundPeer : p \in acked => (p \in pending \/ p \in merged)
 

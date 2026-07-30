@@ -1,11 +1,7 @@
 import Proofs.Recovery.Contract
 import Proofs.InferenceCall
 
-/-! Inference-call startup-recovery sweep contracts and slot-accounting consequence. -/
-
 namespace Recovery
-
-/-! ## Inference-call recovery obligation -/
 
 inductive InferenceRecoveryCause where
   | staleQueued

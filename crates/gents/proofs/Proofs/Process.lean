@@ -1,14 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Layer 1: Agent Process Lifecycle
-
-Models the agent process: startup, recovery, normal operation, shutdown.
-The key insight is that `recovering` is an explicit state where claims
-are blocked until startup recovery and runtime publication are complete.
--/
-
-/-- The 5 states of the agent process lifecycle. -/
 inductive ProcessState where
   | uninitialized
   | recovering
@@ -19,7 +10,6 @@ inductive ProcessState where
 
 namespace ProcessState
 
-/-- String vocabulary persisted in `AgentRuntime.process_state`. -/
 def toDefraDB : ProcessState → String
   | .uninitialized => "uninitialized"
   | .recovering => "recovering"
@@ -27,7 +17,6 @@ def toDefraDB : ProcessState → String
   | .shuttingDown => "shuttingDown"
   | .shutdown => "shutdown"
 
-/-- Parse the persisted `AgentRuntime.process_state` vocabulary. -/
 def fromDefraDB? : String → Option ProcessState
   | "uninitialized" => some .uninitialized
   | "recovering" => some .recovering
@@ -44,7 +33,6 @@ instance : HasTerminal ProcessState where
   isTerminal s := s = .shutdown
   isTerminal_dec s := decEq s .shutdown
 
-/-- A process state accepts new work only when ready. -/
 def acceptsWork : ProcessState → Prop
   | .ready => True
   | .uninitialized => False
@@ -60,13 +48,11 @@ instance : DecidablePred acceptsWork := fun s =>
   | .shuttingDown => isFalse (fun h => h)
   | .shutdown => isFalse (fun h => h)
 
-/-- Whether there are stuck requests requiring recovery at startup. -/
 structure StartupContext where
   hasStuckRequests : Bool
   activeRequestCount : Nat
   deriving DecidableEq, Repr
 
-/-- Process lifecycle transitions. -/
 inductive Transition : ProcessState → ProcessState → Prop where
   | startup_recover (ctx : StartupContext) :
       ctx.hasStuckRequests = true →
@@ -83,7 +69,6 @@ inductive Transition : ProcessState → ProcessState → Prop where
       activeRequestCount = 0 →
       Transition .shuttingDown .shutdown
 
-/-- Executable process actions mirroring `Transition`. -/
 inductive Action where
   | startupRecover (ctx : StartupContext)
   | startupClean (ctx : StartupContext)
@@ -92,7 +77,6 @@ inductive Action where
   | finishShutdown (activeRequestCount : Nat)
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the process layer. -/
 def step? (pre : ProcessState) : Action → Option ProcessState
   | .startupRecover ctx =>
       if pre = .uninitialized ∧ ctx.hasStuckRequests = true then
@@ -114,13 +98,11 @@ def step? (pre : ProcessState) : Action → Option ProcessState
       else
         none
 
-/-- A trace is a sequence of valid process transitions. -/
 inductive Trace : ProcessState → ProcessState → Prop where
   | refl {s : ProcessState} : Trace s s
   | step {s₁ s₂ s₃ : ProcessState} :
       Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
 
-/-- Replay a finite action list through the executable process semantics. -/
 def replay? : ProcessState → List Action → Option ProcessState
   | s, [] => some s
   | s, action :: rest =>

@@ -1,7 +1,5 @@
 import Proofs.Session.Executable
 
-/-! Drain helper theorems for automated session queue wake-ups. -/
-
 namespace SessionQueue
 
 theorem pendingAfterDrain_mem_original
@@ -102,9 +100,6 @@ theorem pendingAfterDrain_preserves_nonmatching
         · exact Or.inl h_eq
         · exact Or.inr (ih h_tail h_match)
 
-/-- All queue transitions preserve existing terminal history. In particular,
-    cancellation drains add terminalized automated wake-up ids instead of
-    deleting prior terminal ids. -/
 theorem terminal_history_monotonic
     {pre post : SessionQueueState}
     (h_trans : Transition pre post) :

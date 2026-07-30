@@ -3,12 +3,6 @@ import Proofs.Properties.Liveness
 
 open FleetState AdmissionState
 
-/-!
-# Scheduling Liveness
-
-Constructive admission and release traces.
--/
-
 theorem acquire_when_capacity_available
     {pre : FleetState} {wid : Nat} {bid : BackendId}
     (h_can : FleetState.CanAcquire pre wid bid) :

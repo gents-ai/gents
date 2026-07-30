@@ -1,14 +1,6 @@
 import Proofs.Conformance.Triggers.Trace
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Trigger Dispatch Conformance Contracts
-
-Finite executable trigger scenarios emitted for Rust conformance tests.
-The cases are computed from `dispatch` and `dispatchStep`, so Rust can
-exercise the same branch matrix without hand-maintaining expected outcomes.
--/
-
 namespace Conformance.TriggerContracts
 
 open Conformance.Contracts
@@ -24,9 +16,6 @@ def concurrencyName : ConcurrencyMode → String
   | .serial => "serial"
   | .latestOnly => "latest_only"
 
--- `jsonString`/`jsonArray`/`jsonStringArray` come from `Conformance.Contracts`
--- (the single escaping implementation, see #553). `jsonOptionString` is a thin
--- name-adapter for the shared `jsonOptionalString`.
 def jsonOptionString : Option String → String := jsonOptionalString
 
 def jsonOptionNat : Option Nat → String
@@ -113,8 +102,6 @@ def expectedSkipReason (scenario : TriggerScenario) : Option String :=
     | some _ =>
       match scenario.intent.concurrency with
       | .serial => some "serial: prior fire still in-flight"
-      -- Defensive for future skipped cases; current executable skips are
-      -- disabled triggers or serial gates.
       | .parallel | .latestOnly => none
 
 def expectedSupersedeCallKeys (scenario : TriggerScenario) : List TriggerKey :=

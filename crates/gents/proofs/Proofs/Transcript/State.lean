@@ -2,14 +2,6 @@ import Proofs.Basic
 import Proofs.ToolExecution.State
 import Mathlib.Data.Finset.Basic
 
-/-!
-# Transcript State
-
-Durable transcript vocabulary for one session. This model abstracts over
-`AgentMessage` and `AgentToolCall` rows, preserving only the fields needed for
-ordering, tool-result dedupe, and pair closure.
--/
-
 namespace Transcript
 
 abbrev Sequence := Nat
@@ -17,7 +9,6 @@ abbrev MessageId := Nat
 abbrev LogicalResultId := Nat
 abbrev PayloadHash := Nat
 
-/-- Abstract version of #160's stable tool-result message key inputs. -/
 structure ToolResultKey where
   sessionId : SessionId
   logicalResultId : LogicalResultId
@@ -46,7 +37,6 @@ theorem fromDefraDB_toDefraDB (role : MessageRole) :
 
 end MessageRole
 
-/-- Transcript-relevant shape of a persisted message. -/
 inductive MessageKind where
   | ordinary
   | assistantToolCalls (callIds : Finset ToolExecution.ToolCallId)
@@ -119,9 +109,6 @@ instance (row : ToolCallRow) : Decidable row.isCompleted := by
 
 end ToolCallRow
 
-/-- The runtime can reserve an assistant message sequence before persisting the
-assistant `AgentMessage`; this mirrors `TranscriptTurnState::AssistantBuilding`.
--/
 structure AssistantTurn where
   sessionId : SessionId
   sequence : Sequence
@@ -240,8 +227,6 @@ def PairClosed (s : TranscriptState) : Prop :=
     s.CompletedToolCallsPaired ∧
     s.ToolResultMessagesPaired
 
-/-- "Strong drain" is the stronger hook-drop property that current Rust does
-not implement: no durable row remains running. -/
 def StrongDrain (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls → call.state ≠ .running
 

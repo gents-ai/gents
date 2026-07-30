@@ -6,103 +6,94 @@ namespace Conformance.EventDelivery
 open _root_.EventDelivery
 open Conformance.Contracts
 
-/-! ## Family 1 — Transition cases -/
-
-/-- A single (pre, action, post) transition witness with a name. -/
 structure TransitionCase where
   name   : String
   pre    : World
   action : Action
   post   : World
 
-/-- Helper to build a fresh DocId. -/
 private def doc (s : String) : DocId := { raw := s }
 
-/-- The empty initial world used by most cases. -/
 private def w0 : World := World.empty
 
-/-- World constructor with all four fields explicit. -/
 private def mkWorld
     (ps : List DocId) (sq : List DocId) (proc : List DocId) (h : List DocId) : World :=
   { persistentSet := ps, subscriptionQueue := sq, processedSet := proc, handled := h }
 
-/-- 13 witness rows exercising every Transition constructor + a few
-    non-trivial variants. The `handle`-already-processed rejection is
-    structurally enforced by the inductive (no row needed). -/
 def transitionCases : List TransitionCase :=
-  [ -- persist on empty world
+  [
     { name   := "persist_into_empty"
     , pre    := w0
     , action := .persist (doc "a")
     , post   := mkWorld [doc "a"] [] [] []
     }
-  , -- persist after an existing doc
+  ,
     { name   := "persist_extends_set"
     , pre    := mkWorld [doc "a"] [] [] []
     , action := .persist (doc "b")
     , post   := mkWorld [doc "b", doc "a"] [] [] []
     }
-  , -- depersist
+  ,
     { name   := "depersist_removes"
     , pre    := mkWorld [doc "a", doc "b"] [] [] []
     , action := .depersist (doc "a")
     , post   := mkWorld [doc "b"] [] [] []
     }
-  , -- enqueue
+  ,
     { name   := "enqueue_from_persistent"
     , pre    := mkWorld [doc "a"] [] [] []
     , action := .enqueue (doc "a")
     , post   := mkWorld [doc "a"] [doc "a"] [] []
     }
-  , -- drop
+  ,
     { name   := "drop_from_queue"
     , pre    := mkWorld [doc "a"] [doc "a"] [] []
     , action := .drop (doc "a")
     , post   := mkWorld [doc "a"] [] [] []
     }
-  , -- deliverFromQueue
+  ,
     { name   := "deliver_consumes_queue"
     , pre    := mkWorld [doc "a"] [doc "a"] [] []
     , action := .deliverFromQueue (doc "a")
     , post   := mkWorld [doc "a"] [] [] []
     }
-  , -- rescanTick with empty persistent set
+  ,
     { name   := "rescan_on_empty"
     , pre    := w0
     , action := .rescanTick
     , post   := w0
     }
-  , -- rescanTick on one persistent, none processed → queue gets it
+  ,
     { name   := "rescan_fills_queue"
     , pre    := mkWorld [doc "a"] [] [] []
     , action := .rescanTick
     , post   := mkWorld [doc "a"] [doc "a"] [] []
     }
-  , -- rescanTick with mixed processed/unprocessed
+  ,
     { name   := "rescan_skips_processed"
     , pre    := mkWorld [doc "a", doc "b"] [] [doc "a"] []
     , action := .rescanTick
     , post   := mkWorld [doc "a", doc "b"] [doc "b"] [doc "a"] []
     }
-  , -- handle: legal path (queued + not processed)
+  ,
     { name   := "handle_legal_drains_queue"
     , pre    := mkWorld [doc "a"] [doc "a"] [] []
     , action := .handle (doc "a")
     , post   := mkWorld [doc "a"] [] [doc "a"] [doc "a"]
     }
-  , -- handle: idempotence (post-handle, processedSet contains d)
+  ,
     { name   := "handle_marks_processed"
     , pre    := mkWorld [doc "a", doc "b"] [doc "a", doc "b"] [] []
     , action := .handle (doc "a")
     , post   := mkWorld [doc "a", doc "b"] [doc "b"] [doc "a"] [doc "a"]
     }
-  , -- enqueue when queue already has the doc adds another instance
+  ,
     { name   := "enqueue_twice_multiset"
     , pre    := mkWorld [doc "a"] [doc "a"] [] []
     , action := .enqueue (doc "a")
     , post   := mkWorld [doc "a"] [doc "a", doc "a"] [] []
     }
-  , -- rescanTick prepends, not appends
+  ,
     { name   := "rescan_prepends_to_queue"
     , pre    := mkWorld [doc "a"] [doc "z"] [] []
     , action := .rescanTick
@@ -111,8 +102,6 @@ def transitionCases : List TransitionCase :=
   ]
 
 def transitionCaseCount : Nat := transitionCases.length
-
-/-! ## Family 2 — Source instance metadata -/
 
 structure SourceInstanceRow where
   name             : String
@@ -140,21 +129,14 @@ def sourceInstances : List SourceInstanceRow :=
 
 def sourceInstanceCount : Nat := sourceInstances.length
 
-/-! ## Family 3 — Convergence traces -/
-
 structure ConvergenceTraceRow where
   name           : String
   instanceName   : String
   initialWorld   : World
   actions        : List Action
   finalWorld     : World
-  /-- Expected runtime status for the finite witness. Current live source rows
-      should be "substantive"; "deviation" is retained only as legacy JSON
-      vocabulary for future documented gaps. -/
   status         : String
 
-/-- Worked convergence trace for the watcher: persist + rescanTick + handle
-    drives a doc from persistent to handled. Substantive. -/
 def watcherTrace : ConvergenceTraceRow :=
   { name := "watcher_persist_rescan_handle"
   , instanceName := "Watcher"
@@ -167,8 +149,6 @@ def watcherTrace : ConvergenceTraceRow :=
   , status := "substantive"
   }
 
-/-- EventSource convergence trace: a doc is persisted, the periodic
-    introspection rescan observes it, and the source emits a fire intent. -/
 def eventSourceTrace : ConvergenceTraceRow :=
   { name := "event_source_persist_rescan_handle"
   , instanceName := "EventSource"
@@ -181,8 +161,6 @@ def eventSourceTrace : ConvergenceTraceRow :=
   , status := "substantive"
   }
 
-/-- SubagentSource convergence trace: a running bridge row is persisted, the
-    periodic scan observes the orphan child, and the source materializes it. -/
 def subagentSourceTrace : ConvergenceTraceRow :=
   { name := "subagent_orphan_rescan_handle"
   , instanceName := "SubagentSource"
@@ -199,12 +177,6 @@ def convergenceTraces : List ConvergenceTraceRow :=
   [ watcherTrace, eventSourceTrace, subagentSourceTrace ]
 
 def convergenceTraceCount : Nat := convergenceTraces.length
-
-/-! ## JSON serializers
-
-`jsonString`/`jsonArray`/`jsonStringArray` come from `Conformance.Contracts`
-(the single escaping implementation, see #553). `jsonOptionString` is a thin
-name-adapter for the shared `jsonOptionalString`. -/
 
 def jsonOptionString : Option String → String := jsonOptionalString
 

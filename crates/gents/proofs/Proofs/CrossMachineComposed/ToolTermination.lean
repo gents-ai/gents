@@ -2,16 +2,6 @@ import Proofs.CrossMachineComposed.WellFormed
 
 namespace ComposedState
 
-/-!
-## Interrupted requests and inference-call cancellation
-
-The composed model includes a first-class `InferenceCall` state machine.
--/
-
-/--
-If a request is already interrupted, every live `InferenceCall` linked by
-`request_id` has a valid composed trace to persisted `cancelled`.
--/
 theorem interrupted_request_cancels_live_linked_call
     {pre : ComposedState}
     (h_interrupted : pre.request.state = .interrupted)
@@ -44,13 +34,6 @@ theorem interrupted_request_cancels_live_linked_call
     exact h_linked
   · exact InferenceCall.cancel_state pre.call
 
-
-/-- C2: An interrupted request cancels every live linked tool call.
-
-The witness preserves the parent request and re-emits its `.interrupted`
-state before the tool-membership/cancelled/linkage facts. The inner tool
-transition is tagged with `CancelCause.interrupted`; a future composed
-`CauseCoherent` invariant can make that tag/state agreement global. -/
 theorem interrupted_request_cancels_live_linked_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in           : toolPre ∈ pre.tools)
@@ -69,8 +52,6 @@ theorem interrupted_request_cancels_live_linked_tools
     h_wf.allToolsCoherent toolPre h_in h_live_kind
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
-  -- Case-split on cancellable: pending → cancelBeforeDispatch;
-  -- awaitingApproval → cancelWhileHeld; running → cancelDuringRun
   cases h_live with
   | inl h_pending =>
     have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
@@ -80,9 +61,6 @@ theorem interrupted_request_cancels_live_linked_tools
     let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
     refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
     · refine Trace.step ?_ Trace.refl
-      -- Discharge the foreground-flip guard: `cancelBeforeDispatch` only changes
-      -- `state`, so `toolPost.awaitMode = toolPre.awaitMode`. If `toolPre` is
-      -- background, `toolPost` is too — the consequent is unreachable.
       refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
               ⟨h_linked, h_deadline_eq, h_time_eq⟩
@@ -132,9 +110,6 @@ theorem interrupted_request_cancels_live_linked_tools
       · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
         simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
-/-- Reachable-state C2 wrapper: for states reached from `initial`, the global
-    well-formedness hypothesis is recovered from the trace. The C2 reachable
-    domain is inhabited — see `ReachabilityWitness.c2_reachable_domain_nonempty`. -/
 theorem interrupted_request_cancels_live_linked_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_reach        : Trace initial pre)
@@ -152,10 +127,6 @@ theorem interrupted_request_cancels_live_linked_tools_from_initial
   interrupted_request_cancels_live_linked_tools
     h_in (wellFormed_from_initial h_reach) h_live_kind h_interrupted h_live
 
-/-- C1: A request whose deadline is exceeded times out every Running linked
-    tool. Multi-flight form: any tool ∈ pre.tools that is running, linked, and
-    deadline-synced reaches .timedOut. The composition theorem whose absence
-    in the runtime caused issue #149. -/
 theorem deadline_exceeded_request_timesOut_running_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
@@ -171,27 +142,20 @@ theorem deadline_exceeded_request_timesOut_running_tools
       toolPost.requestId = pre.requestId := by
   have h_coherent : Coherent pre toolPre :=
     h_wf.allToolsCoherent toolPre h_in h_live_kind
-  -- Destructure h_coherent into its three component equalities.
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
-  -- Find the index of toolPre in pre.tools.
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
-  -- Apply the inner ToolCallContext.timeout transition on toolPre.
   have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
                     { toolPre with state := .timedOut } := by
     refine ToolExecution.ToolCallContext.Transition.timeout
       h_running ?_ rfl
-    -- discharge deadlineExceeded for toolPre using h_coherent + h_deadline
     show toolPre.currentTime > toolPre.deadline
     rw [h_deadline_eq, h_time_eq]
     exact h_deadline
-  -- Construct the post composed state by setting idx to the timed-out tool.
   let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .timedOut }
   let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
   refine ⟨post, toolPost, ?_, ?_, rfl, rfl, h_linked⟩
-  · -- One-step trace via tool_step
+  ·
     refine Trace.step ?_ Trace.refl
-    -- Pass h_coherent directly as the Coherent witness; discharge the
-    -- foreground-flip guard vacuously (timeout preserves awaitMode).
     refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
       ⟨h_linked, h_deadline_eq, h_time_eq⟩
@@ -199,14 +163,12 @@ theorem deadline_exceeded_request_timesOut_running_tools
         absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det) h_live_kind)
       (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
-  · -- toolPost ∈ post.tools — follows from `pre.tools.set idx toolPost`
+  ·
     show toolPost ∈ pre.tools.set idx toolPost
     have h_lt : idx < pre.tools.length :=
       (List.getElem?_eq_some_iff.mp h_idx).1
     exact List.mem_set pre.tools idx h_lt toolPost
 
-/-- Reachable-state C1 wrapper: for states reached from `initial`, the global
-    well-formedness hypothesis is recovered from the trace. -/
 theorem deadline_exceeded_request_timesOut_running_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_reach     : Trace initial pre)
@@ -223,17 +185,6 @@ theorem deadline_exceeded_request_timesOut_running_tools_from_initial
   deadline_exceeded_request_timesOut_running_tools
     h_in (wellFormed_from_initial h_reach) h_live_kind h_running h_deadline
 
-
-/-- C1': A request whose deadline is exceeded cancels every Pending linked
-    tool. Companion to C1 — a Pending tool never ran, so it reaches
-    .cancelled rather than .timedOut. The inner cancellation is tagged with
-    `.deadline`, tying this composed path to the deadline hypothesis even
-    though the single-machine pending-cancel transition itself has no deadline
-    guard.
-
-    The witness preserves the parent request and re-emits
-    `post.request.deadlineExceeded` before the tool-membership/cancelled/linkage
-    facts. -/
 theorem deadline_exceeded_request_cancels_pending_tools
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_in        : toolPre ∈ pre.tools)
@@ -252,7 +203,6 @@ theorem deadline_exceeded_request_cancels_pending_tools
     h_wf.allToolsCoherent toolPre h_in h_live_kind
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
-  -- Inner cancelBeforeDispatch transition
   have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
                     { toolPre with state := .cancelled } :=
     ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch .deadline h_pending rfl
@@ -268,12 +218,10 @@ theorem deadline_exceeded_request_cancels_pending_tools
                 h_live_kind)
             (fun h_bg h_fg => ?_)
     simp [toolPost, h_bg] at h_fg
-  · -- toolPost ∈ post.tools via List.mem_set
+  ·
     have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
     simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
-/-- Reachable-state C1' wrapper: for states reached from `initial`, the global
-    well-formedness hypothesis is recovered from the trace. -/
 theorem deadline_exceeded_request_cancels_pending_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}
     (h_reach     : Trace initial pre)
@@ -291,15 +239,6 @@ theorem deadline_exceeded_request_cancels_pending_tools_from_initial
   deadline_exceeded_request_cancels_pending_tools
     h_in (wellFormed_from_initial h_reach) h_live_kind h_pending h_deadline
 
-
-/-- C3: A request whose linked tools are all terminal can resume making progress.
-    Multi-flight form: ∀-quantified over `pre.tools`. Semantic complement of
-    issue #149: when every linked tool is terminal, the foreground-blocking
-    guard on `request_step` is satisfied and the request can `advance`.
-
-    This theorem performs no tool-call cancellation, so `CancelCause` has no
-    natural role here; future causal audit work should introduce a separate
-    progress-unblock witness rather than forcing a cancel cause into C3. -/
 theorem all_tools_terminal_unblocks_request_progress
     {pre : ComposedState}
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)
@@ -308,25 +247,18 @@ theorem all_tools_terminal_unblocks_request_progress
     ∃ post,
       Transition pre post ∧
       RequestContext.Transition pre.request post.request := by
-  -- Build the post-state by firing `advance` on the request layer.
   let postReq : RequestContext :=
     { pre.request with progressSeq := pre.request.progressSeq + 1 }
   let post : ComposedState := { pre with request := postReq }
-  -- Inner advance transition.
   have h_inner : RequestContext.Transition pre.request postReq :=
     RequestContext.Transition.advance h_proc h_admission rfl
   refine ⟨post, ?_, h_inner⟩
-  -- Build the request_step lift. After Task 11, request_step takes:
-  --   h_req, then 4 cross-layer rfls (process, call, tools, requestId),
-  --   then the pending→acceptsWork gate, then h_no_block.
   refine Transition.request_step h_inner rfl rfl rfl rfl ?_ ?_
-  · -- Pending gate: pre.request.state = .processing, not .pending — the
-    -- antecedent is false, so the implication is vacuous.
+  ·
     intro h_pending
     rw [h_proc] at h_pending
     cases h_pending
-  · -- Discharge h_no_block: any candidate live-foreground tool is contradicted
-    -- by h_all_terminal directly.
+  ·
     intro _h_advance
     intro ⟨t, h_in, _h_fg, h_nt⟩
     exact h_nt (h_all_terminal t h_in)

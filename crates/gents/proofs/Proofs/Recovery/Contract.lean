@@ -1,14 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Recovery Sweep Contract
-
-Closed, finite contract for persisted recovery sweeps. Most sweeps run once at
-startup over rows orphaned by a daemon restart; `periodic` sweeps additionally
-run on the live reconciler tick, for staleness that accrues without a restart
-(#465: expired subagent children whose executors died mid-run).
--/
-
 namespace Recovery
 
 inductive RecoveryCadence where
@@ -68,14 +59,6 @@ theorem all_complete (collection : PersistedRecoveryCollection) :
 
 end PersistedRecoveryCollection
 
-/--
-Per-sweep recovery contract.
-
-`Row` is dependent so each persisted collection can reuse its existing Lean row
-model. A sweep is intentionally an action over stale persisted rows — run once
-at startup, or repeatedly on the reconciler tick for `periodic` cadences — not
-a live observer loop.
--/
 structure RecoverySweep where
   Row : Type
   collection : PersistedRecoveryCollection
@@ -156,14 +139,6 @@ theorem finite_stale_rows_converge
 
 end RecoverySweep
 
-/--
-Equivalence between the daemon-restart recovery path and the canonical
-uninterrupted terminalization path for the same persisted facts.
-
-The relation is exact row equality: recovery is not allowed to re-execute,
-skip, or hang on a stale persisted row when the uninterrupted lifecycle path
-has a deterministic terminal outcome for that row.
--/
 structure RecoveryEquivalence (sweep : RecoverySweep) where
   uninterrupted : sweep.Row → sweep.Row
   h_recover_eq_uninterrupted :

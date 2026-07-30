@@ -1,25 +1,7 @@
 import Mathlib.Data.List.Basic
 
-/-!
-# Self-Configuration Types
-
-Vocabulary for the agent self-configuration write surface (#654): the eight
-control-plane collections an agent may patch about itself, and the per-target
-partition of schema fields into a *writable* set and its *protected*
-complement (identity/unique keys, owner DID, runtime-owned status fields,
-secrets, apply-managed fields).
-
-`allFields` mirrors the bundled SDL field lists
-(`gents-schemas/schemas/**` and `gents-protocol/schemas/**`), in
-declaration order. The Rust conformance test pins this mirror against the
-bundled SDL, so a schema field added without a self-config classification
-breaks the fence rather than silently defaulting to writable or protected.
--/
-
 namespace SelfConfig
 
-/-- Write targets of the self-config surface. The `automation` tool category
-    spans `task`/`schedule`/`eventTrigger`; targets are per collection. -/
 inductive Target where
   | agentBehavior
   | toolSelection
@@ -52,7 +34,6 @@ def Target.collectionName : Target → String
   | .schedule => "Schedule"
   | .eventTrigger => "EventTrigger"
 
-/-- Unique key per collection; parity with Rust `Collection::unique_field`. -/
 def Target.uniqueField : Target → String
   | .agentBehavior => "behavior_id"
   | .toolSelection => "selection_id"
@@ -63,8 +44,6 @@ def Target.uniqueField : Target → String
   | .schedule => "schedule_id"
   | .eventTrigger => "trigger_id"
 
-/-- Self-config tool category gating each target
-    (`ToolSelection.self_config_categories` vocabulary). -/
 def Target.category : Target → String
   | .agentBehavior => "behavior"
   | .toolSelection => "tools"
@@ -78,14 +57,11 @@ def Target.category : Target → String
 def selfConfigCategories : List String :=
   ["behavior", "tools", "profile", "backend", "mcp_service", "automation"]
 
-/-- Categories advertised when `self_config_categories` is unset: the core
-    spine. Extensions (backend / mcp_service / automation) are opt-in. -/
 def defaultCategories : List String :=
   ["behavior", "tools", "profile"]
 
 abbrev FieldKey := String
 
-/-- Full schema field list per target, in bundled-SDL declaration order. -/
 def allFields : Target → List FieldKey
   | .agentBehavior =>
       [ "behavior_id", "agent_did", "display_name", "description", "summary"
@@ -136,20 +112,6 @@ def allFields : Target → List FieldKey
       , "enabled", "concurrency", "created_at", "updated_at", "last_attempt_at"
       , "last_fired_source_doc_id", "last_status", "last_error", "fire_count" ]
 
-/-- The writable surface per target. Everything else is protected:
-    - identity/unique keys (`behavior_id`, `selection_id`, …) and the owner
-      `agent_did` — self-config never changes *who* the agent is;
-    - runtime-owned status (`probe_status`, `last_probe`, `next_run_at`,
-      `last_*`, `fire_count`) — the prober/scheduler/trigger engine own them;
-    - secrets (`InferenceBackend.api_key`; `api_key_env_var` is the writable
-      non-secret reference);
-    - apply-managed / deprecated fields (`write_tools`, `delegate_to`,
-      `tool_policy_version`);
-    - writer-stamped timestamps (`created_at`, `updated_at`);
-    - `Task.behavior_id`, the automation ownership link, pinned at create.
-
-    The self-config gate fields themselves ARE writable (an agent may disable
-    its own gate; the opt-in no-lockout guard refuses that patch). -/
 def writableFields : Target → List FieldKey
   | .agentBehavior =>
       [ "display_name", "description", "summary", "system_prompt"
@@ -193,48 +155,37 @@ def writableFields : Target → List FieldKey
       [ "task_id", "source_collection", "event_kind", "filter", "enabled"
       , "concurrency" ]
 
-/-- Protected fields are the complement of the writable surface, so the
-    partition is complete and disjoint by construction. -/
 def protectedFields (t : Target) : List FieldKey :=
   (allFields t).filter (fun k => decide (k ∉ writableFields t))
 
-/-- Every declared writable field exists in the schema. -/
 theorem writable_subset_all :
     ∀ t ∈ allTargets, ∀ k ∈ writableFields t, k ∈ allFields t := by
   native_decide
 
-/-- Schema field lists carry no duplicates (the partition is well-defined). -/
 theorem all_fields_nodup : ∀ t ∈ allTargets, (allFields t).Nodup := by
   native_decide
 
 theorem writable_fields_nodup : ∀ t ∈ allTargets, (writableFields t).Nodup := by
   native_decide
 
-/-- The unique key of every target is protected. -/
 theorem unique_field_protected :
     ∀ t ∈ allTargets, t.uniqueField ∈ protectedFields t := by
   native_decide
 
-/-- No target ever exposes `agent_did` for writing: self-config cannot forge
-    or reassign identity. -/
 theorem agent_did_never_writable :
     ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by
   native_decide
 
-/-- The backend secret is protected; only the env-var reference is writable. -/
 theorem api_key_protected :
     "api_key" ∈ protectedFields .inferenceBackend
       ∧ "api_key_env_var" ∈ writableFields .inferenceBackend := by
   native_decide
 
-/-- Runtime-owned backend health fields are protected from patches, so a
-    read-modify-write can never replay stale prober state. -/
 theorem backend_probe_fields_protected :
     "probe_status" ∈ protectedFields .inferenceBackend
       ∧ "last_probe" ∈ protectedFields .inferenceBackend := by
   native_decide
 
-/-- Runtime-owned scheduler/trigger bookkeeping is protected. -/
 theorem automation_runtime_fields_protected :
     (["next_run_at", "last_attempt_at", "last_status", "last_error",
       "fire_count"]).all (fun k => decide (k ∈ protectedFields .schedule))
@@ -243,14 +194,11 @@ theorem automation_runtime_fields_protected :
           (fun k => decide (k ∈ protectedFields .eventTrigger)) := by
   native_decide
 
-/-- Apply-stamped recreate identities are never writable through self-config. -/
 theorem recreate_identity_field_protected :
     ∀ t ∈ allTargets,
       "updated_at" ∈ allFields t → "updated_at" ∈ protectedFields t := by
   native_decide
 
-/-- Every target's gating category is part of the category vocabulary, and the
-    default (unset) category set is a subset of it. -/
 theorem categories_well_formed :
     (∀ t ∈ allTargets, t.category ∈ selfConfigCategories)
       ∧ ∀ c ∈ defaultCategories, c ∈ selfConfigCategories := by

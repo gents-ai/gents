@@ -1,19 +1,7 @@
 import Proofs.Request.State
 
-/-!
-# Request Transitions
-
-Relational request lifecycle transitions.
--/
-
 namespace RequestContext
 
-/-- Request lifecycle transitions. Each constructor encodes one valid
-    state transition together with the resulting record update.
-
-    `inputRequired` remains part of the persisted vocabulary, but the current
-    Rust product does not emit it. The core transition relation therefore has
-    no active path into or out of that reserved state. -/
 inductive Transition : RequestContext → RequestContext → Prop where
   | claim {pre post : RequestContext} :
       pre.state = .pending →
@@ -76,6 +64,5 @@ inductive Transition : RequestContext → RequestContext → Prop where
       pre.interruptRequestedAt.isSome →
       post = { pre with state := .interrupted, admission := .released } →
       Transition pre post
-
 
 end RequestContext

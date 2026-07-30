@@ -1,18 +1,7 @@
 import Proofs.InferenceCall.State
 
-/-!
-# Inference Call Transitions
-
-Relational semantics for a single `InferenceCall` row.
--/
-
 namespace InferenceCall
 
-/-- Cancellation-only transitions.
-
-The `cancelled` call state is a terminal vocabulary value used by more than
-request interrupts. Cross-layer theorems add request-interrupt preconditions
-where they need that stronger meaning. -/
 inductive CancellationTransition : InferenceCall → InferenceCall → Prop where
   | cancel_before_stream {pre post : InferenceCall} :
       pre.state = .queued →
@@ -23,7 +12,6 @@ inductive CancellationTransition : InferenceCall → InferenceCall → Prop wher
       post = pre.cancel →
       CancellationTransition pre post
 
-/-- All legal inference-call lifecycle transitions. -/
 inductive Transition : InferenceCall → InferenceCall → Prop where
   | start {pre post : InferenceCall} :
       pre.state = .queued →
@@ -41,7 +29,6 @@ inductive Transition : InferenceCall → InferenceCall → Prop where
       CancellationTransition pre post →
       Transition pre post
 
-/-- A trace is a sequence of valid call transitions. -/
 inductive Trace : InferenceCall → InferenceCall → Prop where
   | refl {s : InferenceCall} : Trace s s
   | step {s₁ s₂ s₃ : InferenceCall} :
@@ -61,7 +48,6 @@ theorem cancel_during_stream_transition
     Transition pre post :=
   Transition.cancel (CancellationTransition.cancel_during_stream h_state h_post)
 
-/-- Any live call has a one-step model path to `cancelled`. -/
 theorem live_trace_to_cancelled
     (call : InferenceCall)
     (h_live : call.cancellable) :

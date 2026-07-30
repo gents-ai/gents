@@ -2,7 +2,6 @@ import Proofs.Fleet.Transition
 
 namespace FleetState
 
-/-- Executable fleet actions mirroring `Transition`. -/
 inductive Action where
   | materializeScheduled (wid : Nat) (bid : BackendId)
   | acceptExisting (wid : Nat)
@@ -11,7 +10,6 @@ inductive Action where
   | releaseOnTerminal (wid : Nat) (bid : BackendId) (terminal : RequestState)
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the fleet layer. -/
 def step? (pre : FleetState) : Action → Option FleetState
   | .materializeScheduled wid bid =>
       if _h_not : wid ∉ pre.activeIds then
@@ -84,7 +82,6 @@ def step? (pre : FleetState) : Action → Option FleetState
       else
         none
 
-/-- Replay a finite action list through the executable fleet semantics. -/
 def replay? : FleetState → List Action → Option FleetState
   | s, [] => some s
   | s, action :: rest =>

@@ -2,12 +2,6 @@ import Proofs.CommandPolicy.Validation
 import Proofs.CommandPolicy.Sandbox
 import Proofs.CommandPolicy.Env
 
-/-!
-# Command Policy Theorems
-
-Safety properties for command/tool execution policy.
--/
-
 namespace CommandPolicy
 
 theorem forbidden_prefixes_deny

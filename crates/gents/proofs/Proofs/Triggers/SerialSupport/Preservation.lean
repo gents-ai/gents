@@ -1,18 +1,5 @@
 import Proofs.Triggers.Reachability
 
-/-!
-# Serial Trigger Preservation Helpers
-
-Seriality preservation facts used by the public serial-trigger theorems.
--/
-
-/--
-Trace-boundary preservation for the current T2 seriality hypothesis.
-
-If every pre-state request for tuple `t` is serial, and the incoming intent is
-serial whenever it targets `t`, then every post-state request for `t` is serial
-after one `dispatchStep`.
--/
 private theorem dispatchStep_preserves_target_seriality
     (s : SystemState) (snap : TriggerSnapshot) (intent : FireIntent) (t : TriggerKey)
     (h_before : ∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial)
@@ -145,10 +132,6 @@ private theorem dispatchStep_preserves_target_seriality
           rw [h_conc] at h_intent_serial
           cases h_intent_serial
 
-/--
-Lifecycle terminal transitions preserve the seriality hypothesis for requests
-already keyed to `t`, because they do not alter `causedBy` or `concurrency`.
--/
 theorem lifecycleTerminateStep_preserves_target_seriality
     (s : SystemState) (reqId : String) (t : TriggerKey)
     (h_before : ∀ r ∈ s.requests, r.causedBy = some t → r.concurrency = .serial) :
@@ -175,12 +158,6 @@ theorem lifecycleTerminateStep_preserves_target_seriality
   rw [h_conc]
   exact h_serial0
 
-/--
-Any request for tuple `t` in a `SeriallyReachable t` state is serial.
-
-This is the pre-trace bridge from the strengthened trace boundary back to T2's
-original post-state hypothesis shape.
--/
 theorem seriallyReachable_requests_for_key_are_serial
     (s : SystemState) (t : TriggerKey)
     (h_reach : SeriallyReachable t s) :

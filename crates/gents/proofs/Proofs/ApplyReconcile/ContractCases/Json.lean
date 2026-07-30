@@ -1,7 +1,5 @@
 import Proofs.ApplyReconcile.ContractCases.Fixtures
 
-/-! JSON serialization for emitted apply/reconcile contract case witnesses. -/
-
 namespace ApplyReconcile.ContractCases
 
 open Conformance.Contracts

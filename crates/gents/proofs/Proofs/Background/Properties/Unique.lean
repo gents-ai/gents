@@ -1,21 +1,8 @@
 import Proofs.Background.Transition
 
-/-! Unique tool-call id preservation for bridged subagent traces. -/
-
 namespace Subagent
 namespace BridgedState
 
-/-! ### INV-UNIQUE: BridgedState lift
-
-`ComposedState.UniqueCallIds` is preserved by every `ComposedState.Transition`
-(see `ComposedState.uniqueCallIds_preserved`). The BridgedState lift below
-states that both sides of the bridge satisfy `UniqueCallIds` across any
-single `BridgedState.Transition`, then the trace-level theorem threads it
-through `Trace.step`. -/
-
-/-- Helper: replacing element at `idx` with a tool that has the same callId
-    preserves `UniqueCallIds`. The `set`-style description in
-    `bridge_complete` / `bridge_failure` lets us reuse this proof shape. -/
 private theorem uniqueCallIds_set_callId_preserved
     {s sPost : ComposedState} {idx : Nat}
     {tPre tPost : ToolExecution.ToolCallContext}
@@ -34,7 +21,6 @@ private theorem uniqueCallIds_set_callId_preserved
   have h_pre_idx_eq : s.tools[idx] = tPre := by
     have := (List.getElem?_eq_some_iff.mp h_idx).2
     simpa using this
-  -- For each k, post.tools[k].callId = pre.tools[k].callId.
   have h_callId_at : ∀ (k : Nat) (h_k : k < s.tools.length),
       (sPost.tools[k]'(by rw [h_len]; exact h_k)).callId = s.tools[k].callId := by
     intro k h_k
@@ -62,8 +48,6 @@ private theorem uniqueCallIds_set_callId_preserved
     rw [← h_callId_at i h_i', ← h_callId_at j h_j']; exact h_eq
   exact h_uniq i j h_i' h_j' h_eq'
 
-/-- Helper: appending a tool with a callId fresh w.r.t. `pre.tools` preserves
-    `UniqueCallIds`. Used by the `bridge_spawn` arm. -/
 private theorem uniqueCallIds_append_fresh_preserved
     {s sPost : ComposedState} {newTool : ToolExecution.ToolCallContext}
     (h_uniq         : s.UniqueCallIds)
@@ -73,8 +57,6 @@ private theorem uniqueCallIds_append_fresh_preserved
   intro i j h_i h_j h_eq
   have h_len : sPost.tools.length = s.tools.length + 1 := by
     rw [h_tools_append, List.length_append, List.length_singleton]
-  -- For each k, sPost.tools[k] = (s.tools ++ [newTool])[k]; case-split based
-  -- on whether k < s.tools.length.
   have h_get_lt : ∀ (k : Nat) (h_lt : k < s.tools.length)
                     (h_k : k < sPost.tools.length),
       (sPost.tools[k]'h_k) = s.tools[k]'h_lt := by
@@ -96,14 +78,13 @@ private theorem uniqueCallIds_append_fresh_preserved
     have h_ge : s.tools.length ≤ k := by rw [h_k_eq]
     rw [List.getElem_append_right h_ge]
     simp [h_k_eq]
-  -- Case-split on whether i < s.tools.length and j < s.tools.length.
   by_cases h_i_lt : i < s.tools.length
   · by_cases h_j_lt : j < s.tools.length
-    · -- Both indices in pre.tools; uniqueness from h_uniq.
+    ·
       apply h_uniq i j h_i_lt h_j_lt
       rw [← h_get_lt i h_i_lt h_i, ← h_get_lt j h_j_lt h_j]
       exact h_eq
-    · -- j = length (newTool); i < length.  callIds equal contradicts freshness.
+    ·
       exfalso
       have hi := h_get_lt i h_i_lt h_i
       have hj := h_get_eq j h_j h_j_lt
@@ -112,7 +93,7 @@ private theorem uniqueCallIds_append_fresh_preserved
       rw [hi, hj] at h_eq
       exact h_eq
   · by_cases h_j_lt : j < s.tools.length
-    · -- i = length (newTool); j < length. Symmetric contradiction.
+    ·
       exfalso
       have hi := h_get_eq i h_i h_i_lt
       have hj := h_get_lt j h_j_lt h_j
@@ -120,14 +101,13 @@ private theorem uniqueCallIds_append_fresh_preserved
       apply h_fresh _ h_in_j
       rw [hi, hj] at h_eq
       exact h_eq.symm
-    · -- Both indices ≥ length; both = length; i = j.
+    ·
       have h_i_total : i < s.tools.length + 1 := by rw [← h_len]; exact h_i
       have h_j_total : j < s.tools.length + 1 := by rw [← h_len]; exact h_j
       have h_i_eq : i = s.tools.length := by omega
       have h_j_eq : j = s.tools.length := by omega
       rw [h_i_eq, h_j_eq]
 
-/-- Per-step preservation of INV-UNIQUE on both sides of the bridge. -/
 private theorem bridgedUniqueCallIds_step
     {s₁ s₂ : BridgedState}
     (h_parent_uniq : s₁.parent.UniqueCallIds)
@@ -143,23 +123,20 @@ private theorem bridgedUniqueCallIds_step
     rw [h_parent_eq]; exact h_parent_uniq
   | @bridge_spawn newTool _ _ h_newTool_callId _ _ h_tools_append _ h_post_child_tools _ _ h_callId_fresh =>
     refine ⟨?_, ?_⟩
-    · -- Uniqueness on post.parent.tools = pre.parent.tools ++ [newTool].
-      -- newTool.callId = post.bridgeCallId, and h_callId_fresh says no tool in
-      -- pre.parent.tools has callId = post.bridgeCallId.
+    ·
       apply uniqueCallIds_append_fresh_preserved (s := s₁.parent)
         h_parent_uniq ?_ h_tools_append
       intro t h_in
       rw [h_newTool_callId]
       exact h_callId_fresh t h_in
-    · -- post.child.tools = [] is trivially unique.
+    ·
       intro i j h_i h_j _
       rw [h_post_child_tools] at h_i
       cases h_i
   | @bridge_complete idx tPre tPost _ h_idx_pre h_pre_callId _ _ _
                        h_post_callId _ _ h_tools_set _ h_child_eq _ _ =>
     refine ⟨?_, ?_⟩
-    · -- post.parent.tools = pre.parent.tools.set idx tPost; tPost.callId =
-      -- tPre.callId via h_post_callId, h_pre_callId.
+    ·
       apply uniqueCallIds_set_callId_preserved (s := s₁.parent)
         h_parent_uniq h_idx_pre ?_ h_tools_set
       rw [h_post_callId, ← h_pre_callId]
@@ -173,7 +150,7 @@ private theorem bridgedUniqueCallIds_step
     · rw [h_child_eq]; exact h_child_uniq
   | bridge_cancel_cascade _ _ _ h_parent_eq _ _ _ _ _ h_child_tools_eq =>
     refine ⟨?_, ?_⟩
-    · -- post.parent = pre.parent → tools unchanged.
+    ·
       intro i j h_i h_j h_eq
       have h_tools : s₂.parent.tools = s₁.parent.tools := by rw [h_parent_eq]
       have h_i' : i < s₁.parent.tools.length := by rw [h_tools] at h_i; exact h_i
@@ -182,7 +159,7 @@ private theorem bridgedUniqueCallIds_step
       have hi : s₁.parent.tools[i] = s₂.parent.tools[i] := by congr 1 <;> rw [h_tools]
       have hj : s₁.parent.tools[j] = s₂.parent.tools[j] := by congr 1 <;> rw [h_tools]
       rw [hi, hj]; exact h_eq
-    · -- post.child.tools = pre.child.tools via h_child_tools_eq.
+    ·
       intro i j h_i h_j h_eq
       have h_i' : i < s₁.child.tools.length := by rw [h_child_tools_eq] at h_i; exact h_i
       have h_j' : j < s₁.child.tools.length := by rw [h_child_tools_eq] at h_j; exact h_j
@@ -193,8 +170,6 @@ private theorem bridgedUniqueCallIds_step
         congr 1 <;> rw [h_child_tools_eq]
       rw [hi, hj]; exact h_eq
 
-/-- INV-UNIQUE (BridgedState lift): both sides of the bridge satisfy
-    `ComposedState.UniqueCallIds` across any reachable bridge trace. -/
 theorem bridgedUniqueCallIds_preserved
     (pre post : BridgedState)
     (h_parent_init : pre.parent.UniqueCallIds)
