@@ -247,6 +247,10 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::AGENT_RUNTIME
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
+        gents_protocol::schemas::AGENT_DIRECTORY_ENTRY
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_MEMORY_NAME,
         gents_protocol::schemas::AGENT_MEMORY
     ),
