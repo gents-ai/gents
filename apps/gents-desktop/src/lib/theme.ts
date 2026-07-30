@@ -14,6 +14,5 @@ export function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme;
   try {
     window.localStorage.setItem(THEME_KEY, theme);
-  } catch {
-  }
+  } catch {}
 }

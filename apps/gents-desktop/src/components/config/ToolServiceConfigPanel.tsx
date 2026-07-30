@@ -127,8 +127,7 @@ export function ToolServiceConfigEditor({
     try {
       await onDeleteToolServiceConfig({ serviceId: toolService.serviceId, agentDid });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [serviceId, setServiceId] = useState("");
   const [displayName, setDisplayName] = useState("");

@@ -324,8 +324,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
         document.visibilityState === "visible" &&
         foregroundRepairEnabledRef.current
       ) {
-        void foregroundRepairRef.current().catch(() => {
-        });
+        void foregroundRepairRef.current().catch(() => {});
       }
     }
 

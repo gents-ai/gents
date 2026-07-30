@@ -153,7 +153,6 @@ describe("parseCommandDenial", () => {
   });
 });
 
-
 function deniedToolView(
   text: string,
   denial?: CommandDenialView,

@@ -135,8 +135,7 @@ export function ScheduleConfigEditor({
     try {
       await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId, agentDid });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [scheduleId, setScheduleId] = useState("");
   const [taskId, setTaskId] = useState("");

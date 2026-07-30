@@ -2,7 +2,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-
 const STYLES_ROOT = join(__dirname, "..", "src", "styles");
 const APP_CSS = join(__dirname, "..", "src", "App.css");
 const PACKAGES_ROOT = join(__dirname, "..", "..", "..", "packages");

@@ -191,8 +191,7 @@ export function BehaviorConfigEditor({
     try {
       await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId, agentDid });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
 
   useEffect(() => {

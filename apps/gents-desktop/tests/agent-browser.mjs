@@ -595,8 +595,7 @@ function waitForRunnerReady(child, timeoutMs) {
             if (message.kind === "ready") {
               finish(resolveReady, { ready: message, logs });
             }
-          } catch {
-          }
+          } catch {}
         }
         newline = stdoutBuffer.indexOf("\n");
       }
@@ -637,8 +636,7 @@ async function waitForHttp(url, child, logs, timeoutMs) {
       if (response.ok) {
         return;
       }
-    } catch {
-    }
+    } catch {}
     await delay(200);
   }
   throw new Error(`timed out waiting for Vite at ${url}\n${formatLogs(logs)}`);

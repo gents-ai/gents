@@ -1,4 +1,3 @@
-
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 const ABSOLUTE_URL = /^[a-z][a-z0-9+.-]*:/i;
 

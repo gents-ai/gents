@@ -141,8 +141,7 @@ async function resolveChromeExecutable() {
     if (existsSync(executablePath)) {
       return executablePath;
     }
-  } catch {
-  }
+  } catch {}
 
   if (process.env.CI) {
     throw new Error(
@@ -356,8 +355,7 @@ async function waitForVite(process, url) {
       if (response.ok) {
         return;
       }
-    } catch {
-    }
+    } catch {}
     await delay(200);
   }
   throw new Error(`timed out waiting for Vite at ${url}`);

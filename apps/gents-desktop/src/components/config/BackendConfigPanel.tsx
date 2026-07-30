@@ -111,8 +111,7 @@ export function BackendConfigEditor({
     try {
       await onDeleteBackendConfig({ backendId: backend.backendId, agentDid });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [backendId, setBackendId] = useState("");
   const [name, setName] = useState("");

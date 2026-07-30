@@ -64,5 +64,4 @@ export function isOptionalFloat(
   );
 }
 
-export function ignoreHandledActionError(_error: unknown) {
-}
+export function ignoreHandledActionError(_error: unknown) {}

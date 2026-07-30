@@ -278,8 +278,7 @@ export function createDesktopShellConfigActions({
     // (e.g. nothing in flight) must never block closing the wizard.
     try {
       await api.cancelCodexLogin();
-    } catch {
-    }
+    } catch {}
   }
 
   async function onSaveInferenceProfileConfig(request: InferenceProfileSaveRequest) {

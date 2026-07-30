@@ -40,8 +40,7 @@ export async function waitForReadyMessage(
           stdout,
           stderr,
         });
-      } catch {
-      }
+      } catch {}
     };
 
     const onStdout = (chunk: Buffer) => {

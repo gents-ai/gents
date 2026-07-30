@@ -130,8 +130,7 @@ export function InferenceProfileConfigEditor({
         agentDid,
       });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [profileId, setProfileId] = useState("");
   const [displayName, setDisplayName] = useState("");

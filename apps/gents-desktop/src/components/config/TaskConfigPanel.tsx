@@ -131,8 +131,7 @@ export function TaskConfigEditor({
     try {
       await onDeleteTaskConfig({ taskId: task.taskId, agentDid });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [taskId, setTaskId] = useState("");
   const [name, setName] = useState("");

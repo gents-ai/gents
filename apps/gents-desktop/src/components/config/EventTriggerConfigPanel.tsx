@@ -127,8 +127,7 @@ export function EventTriggerConfigEditor({
         agentDid,
       });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [triggerId, setTriggerId] = useState("");
   const [taskId, setTaskId] = useState("");

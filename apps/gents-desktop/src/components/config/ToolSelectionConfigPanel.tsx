@@ -153,8 +153,7 @@ export function ToolSelectionConfigEditor({
         agentDid: toolSelection.agentDid ?? agentDid,
       });
       onDeleted();
-    } catch {
-    }
+    } catch {}
   }
   const [selectionId, setSelectionId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -678,8 +677,7 @@ function describeWriteTool(decl: string): string {
     if (name) {
       return collection ? `${name} → ${collection}` : name;
     }
-  } catch {
-  }
+  } catch {}
   return decl;
 }
 
