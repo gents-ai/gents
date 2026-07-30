@@ -543,9 +543,8 @@ pub async fn assert_runtime_init_state(
     // semantically identical. Accept null/absent/[] as "empty".
     let mcp_allowlist = tool_selection.get("allowed_mcp_service_ids");
     assert!(
-        mcp_allowlist.map_or(true, |value| {
-            value.is_null() || value.as_array().is_some_and(Vec::is_empty)
-        }),
+        mcp_allowlist
+            .is_none_or(|value| { value.is_null() || value.as_array().is_some_and(Vec::is_empty) }),
         "expected default tool selection MCP allowlist to be empty (null or []): {tool_selection}"
     );
 

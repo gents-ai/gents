@@ -530,10 +530,12 @@ mod tests {
         // Only the backstop caps it.
         assert_eq!(clamp_limit(Some(MAX_LIMIT + 5_000)), MAX_LIMIT);
         // The scan budget must be able to surface MAX_LIMIT distinct sessions.
-        assert!(
-            REQUEST_SCAN_LIMIT >= MAX_LIMIT,
-            "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
-        );
+        const {
+            assert!(
+                REQUEST_SCAN_LIMIT >= MAX_LIMIT,
+                "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
+            );
+        }
     }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {

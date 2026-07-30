@@ -28,7 +28,7 @@ pub(crate) struct CodexLoginOutcome {
 
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let outcome = run_codex_login(
         &access,

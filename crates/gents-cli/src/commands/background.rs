@@ -25,7 +25,7 @@ async fn background_list(args: BackgroundListArgs) -> Result<()> {
     let now = Utc::now();
     let age_cutoff = age_cutoff(args.age_gt.as_deref(), now)?;
     let (access, _home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let tool_calls = load_background_tool_calls(&access, &args, age_cutoff).await?;
     let liveness = match &access {
         ConfigAccess::Graphql(graphql) => {

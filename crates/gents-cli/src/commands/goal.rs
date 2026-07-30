@@ -23,7 +23,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
 async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal show", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope, false).await?;
+    let (access, agent_did) = access_and_did(&args.scope).await?;
     let goal = load_goal(&access, &agent_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
@@ -36,7 +36,7 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
 async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
         .ensure_supported("goal set", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope, true).await?;
+    let (access, agent_did) = access_and_did(&args.scope).await?;
     let status = args.status.map(GoalStatus::from);
     let budget = if args.clear_token_budget {
         Some(None)
@@ -76,7 +76,7 @@ async fn goal_set(args: GoalSetArgs) -> Result<()> {
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal clear", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope, true).await?;
+    let (access, agent_did) = access_and_did(&args.scope).await?;
     let goal = load_goal(&access, &agent_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
@@ -111,10 +111,10 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     }))
 }
 
-async fn access_and_did(scope: &GoalScopeArgs, write: bool) -> Result<(ConfigAccess, String)> {
+async fn access_and_did(scope: &GoalScopeArgs) -> Result<(ConfigAccess, String)> {
     let agent_did = resolve_agent_did(scope.home.as_deref(), scope.agent_did.as_deref())
         .context("resolving goal owner agent_did")?;
-    let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref(), write)
+    let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())
         .await
         .context("resolving durable-goal access")?;
     Ok((access, agent_did))

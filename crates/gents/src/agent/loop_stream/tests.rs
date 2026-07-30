@@ -1061,7 +1061,7 @@ async fn context_message_is_sent_before_prompt() {
     assert!(matches!(
         &histories[0][0],
         Message::User { content }
-            if matches!(first_content(&content), UserContent::Text(text) if text.text.starts_with("<context>"))
+            if matches!(first_content(content), UserContent::Text(text) if text.text.starts_with("<context>"))
     ));
 }
 

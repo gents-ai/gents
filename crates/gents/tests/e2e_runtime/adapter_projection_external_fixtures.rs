@@ -14,13 +14,12 @@ const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_FIXTURES";
 #[test]
 #[ignore = "external interop: set GENTS_ADAPTER_INTEROP_FIXTURES and pass --ignored"]
 fn external_adapter_projection_fixtures_validate_against_contracts() -> Result<()> {
-    let Some(root) = std::env::var_os(FIXTURE_ROOT_ENV)
+    let root = std::env::var_os(FIXTURE_ROOT_ENV)
         .map(PathBuf::from)
         .map(resolve_fixture_root)
-    else {
-        eprintln!("{FIXTURE_ROOT_ENV} is not set; skipping external adapter fixture validation");
-        return Ok(());
-    };
+        .context(
+            "set GENTS_ADAPTER_INTEROP_FIXTURES to an adapter fixture path and pass --ignored to run external adapter fixture validation",
+        )?;
     let files = collect_json_files(&root)?;
     anyhow::ensure!(
         !files.is_empty(),

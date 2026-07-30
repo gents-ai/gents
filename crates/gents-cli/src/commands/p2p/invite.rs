@@ -46,8 +46,7 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .context("p2p pairings invite requires --member-did for v5 membership-gated invites")?;
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let network = load_single_network_record(&access)
         .await
         .context("loading local AgentNetwork for v5 invite")?;
@@ -104,8 +103,7 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     let template = resolve_pairing_template(&args.template)?;
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let network = load_single_network_record(&access)
         .await
         .context("loading local AgentNetwork for bearer invite")?;

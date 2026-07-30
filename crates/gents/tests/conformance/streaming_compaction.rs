@@ -525,7 +525,7 @@ async fn drive_streaming_response_interrupt_flow_case(
         assert!(post_response
             .reasoning
             .as_deref()
-            .map_or(true, |reasoning| reasoning.is_empty()));
+            .is_none_or(|reasoning| reasoning.is_empty()));
     }
 
     if case.partial_turn_materialized {

@@ -116,9 +116,7 @@ pub fn build_session_snapshot_from_store_for_agent(
 ) -> Option<DesktopSessionSnapshot> {
     let conversation = store.conversations.iter().find(|row| {
         row.session_id == session_id
-            && agent_did.map_or(true, |agent_did| {
-                row.agent_did.as_deref() == Some(agent_did)
-            })
+            && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
     });
     let session_row = store
         .sessions
@@ -126,7 +124,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         .enumerate()
         .find(|(index, row)| {
             row.session_id == session_id
-                && agent_did.map_or(true, |agent_did| {
+                && agent_did.is_none_or(|agent_did| {
                     source_matches_agent(&store.session_source_agent_dids, *index, agent_did, false)
                 })
         })
@@ -140,7 +138,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         .iter()
         .filter(|row| {
             row.session_id == session_id
-                && agent_did.map_or(true, |agent_did| row.agent_did == agent_did)
+                && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
         })
         .min_by(|left, right| {
             left.created_at
@@ -473,9 +471,7 @@ fn logical_turn_index_for_request(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.map_or(true, |agent_did| {
-                request_matches_agent(row, agent_did, false)
-            })
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
     let root_id = request_turn_root_id(request);
     logical_turn_roots_for_session(store, agent_did, session_id)
@@ -513,9 +509,7 @@ fn build_pending_turn(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.map_or(true, |agent_did| {
-                request_matches_agent(row, agent_did, false)
-            })
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
     })?;
 
     let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());

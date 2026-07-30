@@ -624,7 +624,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert!(files.files_modified.is_empty());
 
     if let Message::User { content } = &stripped[2] {
-        if let UserContent::ToolResult(tr) = first_content(&content) {
+        if let UserContent::ToolResult(tr) = first_content(content) {
             if let ToolResultContent::Text(text) = first_content(&tr.content) {
                 assert_eq!(
                     text.text,
@@ -846,7 +846,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .unwrap();
 
     if let Message::User { content } = &built.messages[0] {
-        if let UserContent::Text(text) = first_content(&content) {
+        if let UserContent::Text(text) = first_content(content) {
             assert!(text.text.contains("inspected the source files"));
             assert!(text
                 .text

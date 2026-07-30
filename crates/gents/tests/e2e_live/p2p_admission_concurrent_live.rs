@@ -449,10 +449,10 @@ impl Drop for LiveTopologyGuard {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored"]
 async fn concurrent_multiwave_single_push_worker_converges_with_live_d4f() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_P2P_ADMISSION is not 1; skipping concurrent multi-wave live e2e");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_P2P_ADMISSION=1 and pass --ignored to run the concurrent multi-wave live e2e"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();

@@ -11,8 +11,7 @@ use crate::{
 pub(super) async fn config_import(args: ConfigImportArgs) -> Result<()> {
     let bundle = read_config_import_bundle(args.path.as_deref())?;
     validate_config_import_bundle(&bundle)?;
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let txn = access.begin_apply_txn().await?;
 
     let result = async {

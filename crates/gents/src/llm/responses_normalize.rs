@@ -24,13 +24,13 @@ fn normalize_assistant_item(item: &mut Value, index: usize) {
     object
         .entry("type".to_string())
         .or_insert_with(|| Value::String("message".to_string()));
-    if !object.get("id").is_some_and(|value| !value.is_null()) {
+    if object.get("id").is_none_or(|value| value.is_null()) {
         object.insert(
             "id".to_string(),
             Value::String(format!("msg_gents_{index}")),
         );
     }
-    if !object.get("status").is_some_and(|value| !value.is_null()) {
+    if object.get("status").is_none_or(|value| value.is_null()) {
         object.insert("status".to_string(), Value::String("completed".to_string()));
     }
 

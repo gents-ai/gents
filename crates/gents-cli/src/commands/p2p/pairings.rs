@@ -46,7 +46,7 @@ struct PeerPairingAppliedRow {
 
 pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let rows = graphql_rows(&access, "PeerPairingDesired", pairings_list_query())
         .await
         .context("loading PeerPairingDesired rows")?;
@@ -89,7 +89,7 @@ pub(super) async fn p2p_pairings_set(args: P2pPairingSetArgs) -> Result<()> {
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let doc_id = write_pairing_desired(
         &access,
         &peer_id,
@@ -148,7 +148,7 @@ pub(super) async fn p2p_pairings_remove(args: P2pPairingRefArgs) -> Result<()> {
     let peer_id = required_trimmed(&args.peer_id, "--peer")?;
     let mutation = delete_pairing_mutation(&peer_id);
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let response = access
         .execute(&mutation)
         .await

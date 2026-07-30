@@ -27,7 +27,7 @@ pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
 
 async fn holds(args: ToolsHoldsArgs) -> Result<()> {
     let (access, _home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = if args.all {
         None
     } else {
@@ -49,7 +49,7 @@ async fn holds(args: ToolsHoldsArgs) -> Result<()> {
 
 async fn approve(args: ToolsApproveArgs) -> Result<()> {
     let (access, _home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let scope_did = match args.agent_did.as_deref() {
         Some(did) => Some(did.to_string()),
         None => resolve_agent_did(args.home.as_deref(), None).ok(),
@@ -103,7 +103,7 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
 
 async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let init_config = read_init_config(&home_dir)?;
     let (ceiling_arg, ceiling_source, tool_root, tool_ceiling) =

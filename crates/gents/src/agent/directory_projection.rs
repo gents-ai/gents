@@ -698,8 +698,17 @@ mod tests {
         // decodes to `None`, and `unwrap_or_default()` in
         // `list_directory_entries` maps that back to `""` — the same value
         // `derive_directory_entries` defaults to for a runtime-less principal.
-        let decoded: Option<String> = None;
-        assert_eq!(decoded.unwrap_or_default(), "");
+        let row: DirectoryRow = serde_json::from_value(serde_json::json!({
+            "directory_key": "dir-no-runtime",
+            "agent_did": "did:key:no-runtime",
+            "source_did": "did:key:home",
+            "display_name": "No Runtime",
+            "behaviors": [],
+            "runtime_state": "",
+            "last_seen": null,
+        }))
+        .expect("stored directory row with null last_seen should deserialize");
+        assert_eq!(row.last_seen.unwrap_or_default(), "");
     }
 
     #[test]

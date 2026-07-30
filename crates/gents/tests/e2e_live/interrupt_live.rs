@@ -38,10 +38,10 @@ const LIVE_BEHAVIOR_ID: &str = "live-interrupt";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
-    if std::env::var("GENTS_LIVE_OPENAI").as_deref() != Ok("1") {
-        eprintln!("GENTS_LIVE_OPENAI is not 1; skipping live interrupt smoke");
-        return Ok(());
-    }
+    assert!(
+        std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
+        "set GENTS_LIVE_OPENAI=1 and pass --ignored to run the live interrupt smoke test"
+    );
 
     let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
         .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string());
