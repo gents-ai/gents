@@ -777,14 +777,14 @@ impl ClientStore {
 pub type SharedClientStore = Arc<ClientStore>;
 
 fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
-    row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
+    row_agent_did.is_none_or(|row_agent_did| row_agent_did == agent_did)
 }
 
 fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did: &str) -> bool {
     sources
         .get(row_index)
         .and_then(|source| source.as_deref())
-        .map_or(true, |source_agent_did| source_agent_did == agent_did)
+        .is_none_or(|source_agent_did| source_agent_did == agent_did)
 }
 
 fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(&T) -> String) {
