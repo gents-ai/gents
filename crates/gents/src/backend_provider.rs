@@ -40,6 +40,15 @@ pub enum BackendProviderKind {
         alias = "codex"
     )]
     ChatGptCodex,
+    #[serde(
+        rename = "XaiGrokOAuth",
+        alias = "xai-oauth",
+        alias = "grok-oauth",
+        alias = "xai-grok-oauth",
+        alias = "xai_oauth",
+        alias = "grok_oauth"
+    )]
+    XaiGrokOAuth,
 }
 
 impl BackendProviderKind {
@@ -58,6 +67,12 @@ impl BackendProviderKind {
             | Some("chatgpt_codex")
             | Some("codex-chatgpt")
             | Some("codex") => Ok(Self::ChatGptCodex),
+            Some("XaiGrokOAuth")
+            | Some("xai-oauth")
+            | Some("grok-oauth")
+            | Some("xai-grok-oauth")
+            | Some("xai_oauth")
+            | Some("grok_oauth") => Ok(Self::XaiGrokOAuth),
             Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
         }
     }
@@ -67,7 +82,14 @@ impl BackendProviderKind {
             Self::OpenAiCompatible => "OpenAiCompatible",
             Self::OpenRouter => "OpenRouter",
             Self::ChatGptCodex => "ChatGptCodex",
+            Self::XaiGrokOAuth => "XaiGrokOAuth",
         }
+    }
+
+    /// Backends that authenticate with agent-scoped `OAuthCredential` documents
+    /// rather than a fleet-global API key. These must not be fleet-probed.
+    pub fn is_agent_scoped_oauth(self) -> bool {
+        matches!(self, Self::ChatGptCodex | Self::XaiGrokOAuth)
     }
 }
 
@@ -82,6 +104,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::OpenAiCompatible => "OpenAI-compatible",
         BackendProviderKind::OpenRouter => "OpenRouter",
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
+        BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
     }
 }
 
@@ -122,19 +145,19 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
-    chatgpt_credential: Option<&crate::chatgpt_codex::OAuthCredential>,
+    oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<String>> {
-    let endpoint = if kind == BackendProviderKind::ChatGptCodex {
-        crate::chatgpt_codex::normalize_endpoint(endpoint)
-    } else {
-        endpoint.trim_end_matches('/').to_string()
+    let endpoint = match kind {
+        BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
+        BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
+        _ => endpoint.trim_end_matches('/').to_string(),
     };
     let models_url = format!("{}{}", endpoint, MODEL_DISCOVERY_PATH);
     let provider_name = provider_display_name(kind);
     async {
         let mut request = client.get(&models_url);
         if kind == BackendProviderKind::ChatGptCodex {
-            let Some(credential) = chatgpt_credential else {
+            let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
                     "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the agent DID first"
@@ -160,6 +183,26 @@ pub async fn discover_models(
                 "client_version",
                 crate::chatgpt_codex::chatgpt_codex_client_version(),
             )]);
+        } else if kind == BackendProviderKind::XaiGrokOAuth {
+            let Some(credential) = oauth_credential else {
+                tracing::Span::current().record("failure_class", "auth");
+                anyhow::bail!(
+                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the agent DID first"
+                );
+            };
+            request = request.bearer_auth(&credential.access_token);
+            let headers = match crate::xai_grok_oauth::build_xai_grok_oauth_headers() {
+                Ok(headers) => headers,
+                Err(error) => {
+                    tracing::Span::current().record("failure_class", "auth");
+                    return Err(error);
+                }
+            };
+            for (name, value) in headers {
+                if let Some(name) = name {
+                    request = request.header(name, value);
+                }
+            }
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
         }

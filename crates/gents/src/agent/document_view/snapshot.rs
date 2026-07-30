@@ -133,6 +133,17 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     backend.backend_id,
                 );
             }
+            if backend.provider_kind == crate::backend_provider::BackendProviderKind::XaiGrokOAuth
+                && !view.has_enabled_oauth_credential(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER)
+            {
+                let agent_did = view.principal.value.agent_did.as_str();
+                anyhow::bail!(
+                    "behavior {} XaiGrokOAuth backend {} has no enabled OAuthCredential for agent \
+                     {agent_did}; run `gents grok-login --agent-did {agent_did}`",
+                    behavior.behavior_id,
+                    backend.backend_id,
+                );
+            }
             let profile_id = behavior
                 .inference_profile_id
                 .as_deref()

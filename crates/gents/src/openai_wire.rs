@@ -46,7 +46,7 @@ impl OpenAiWireApi {
                 }
                 Self::ChatCompletions
             }
-            BackendProviderKind::ChatGptCodex => {
+            BackendProviderKind::ChatGptCodex | BackendProviderKind::XaiGrokOAuth => {
                 if let Some(value) = configured {
                     tracing::warn!(
                         backend_id = %backend_id,

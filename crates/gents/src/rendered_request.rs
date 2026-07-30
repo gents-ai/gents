@@ -39,7 +39,9 @@ impl RenderedRequestSource {
                 OpenAiWireApi::ChatCompletions => Self::OpenAiChatCompletions,
             },
             BackendProviderKind::OpenRouter => Self::OpenAiChatCompletions,
-            BackendProviderKind::ChatGptCodex => Self::OpenAiResponses,
+            BackendProviderKind::ChatGptCodex | BackendProviderKind::XaiGrokOAuth => {
+                Self::OpenAiResponses
+            }
         }
     }
 }

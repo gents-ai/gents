@@ -157,6 +157,31 @@ pub async fn run_openai_oneshot_with_tools(
             )
             .await
         }
+        BackendProviderKind::XaiGrokOAuth => {
+            let client = crate::xai_grok_oauth::build_responses_client(
+                node.clone(),
+                behavior.agent_did(),
+                &behavior.backend_endpoint,
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "building Grok OAuth completion client for behavior {} against {}",
+                    behavior.behavior_id, behavior.backend_endpoint
+                )
+            })?;
+            run_oneshot_with_completion_client(
+                node,
+                behavior,
+                prompt,
+                prompt_builder,
+                preamble,
+                tools,
+                background_tool_registry,
+                client,
+            )
+            .await
+        }
     }
 }
 
