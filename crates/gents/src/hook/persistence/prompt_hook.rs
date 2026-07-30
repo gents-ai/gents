@@ -391,7 +391,7 @@ impl DefraSessionHook {
                     match terminal {
                         ManagedToolTerminal::TimedOut => lc.timeout().await?,
                         ManagedToolTerminal::Cancelled => {
-                            lc.cancel_during_run(CancelCause::Interrupted).await?
+                            let _ = lc.cancel_during_run(CancelCause::Interrupted).await?;
                         }
                     }
                 } else {

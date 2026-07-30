@@ -1,10 +1,24 @@
+//! Bridge contract fingerprint: command inventory, permission sets, events,
+//! error codes, and version. Phase 2 wires the snapshot; phase 3 enforces
+//! permission projection and typed errors against it.
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::BridgeErrorCode;
 
-pub const CONTRACT_VERSION: &str = "0.5";
+/// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 0.7: additive — retry eligibility projection and agent-scoped conversation rename.
+// 0.6: additive — predecessor-aware desktop_request_retry command.
+// 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
+// config-write) merged from main (#871); desktop://codex-login-url event.
+// 0.4: additive — Pairing error code; fingerprint set inventory aligned with
+// grantable [[set]] entries + default (core/client-lifecycle).
+// 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
+// 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
+pub const CONTRACT_VERSION: &str = "0.7";
 
+/// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -34,47 +48,68 @@ pub struct PermissionSetContract {
     pub kind: String,
 }
 
+/// Production event name emitted by the update pump.
 pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 
+/// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 
+/// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
+/// Provisional command → permission-set map from the design table.
+/// Phase 3 finalizes assignment under the no-read/mutate-mixing rule.
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[
+        // core
         ("desktop_bridge_contract", "core"),
         ("desktop_bootstrap_summary", "core"),
         ("desktop_client_snapshot", "core"),
         ("desktop_observer_metrics", "core"),
+        // client-lifecycle
         ("desktop_client_start", "client-lifecycle"),
         ("desktop_client_shutdown", "client-lifecycle"),
         ("desktop_set_selected_agent", "client-lifecycle"),
+        // runtime-admin
         ("desktop_init_local_standard", "runtime-admin"),
+        // session-read
         ("desktop_session_snapshot", "session-read"),
+        // trace-read
         ("desktop_request_timeline", "trace-read"),
+        // tool-surface-read
         ("desktop_tool_surface_explain", "tool-surface-read"),
+        // chat-write
         ("desktop_chat_send", "chat-write"),
         ("desktop_conversation_rename", "chat-write"),
         ("desktop_session_fork", "chat-write"),
+        // resend-control
         ("desktop_request_resend", "resend-control"),
+        ("desktop_request_retry", "resend-control"),
+        // fleet-read
         ("desktop_peer_status_fetch", "fleet-read"),
         ("desktop_network_status", "fleet-read"),
+        // workspace-read
         ("desktop_workspace_list", "workspace-read"),
+        // fleet-admin
         ("desktop_peer_add", "fleet-admin"),
         ("desktop_peer_pair_bearer", "fleet-admin"),
         ("desktop_peer_remove", "fleet-admin"),
         ("desktop_peer_rename", "fleet-admin"),
         ("desktop_peer_probe_address", "fleet-admin"),
         ("desktop_p2p_repair", "fleet-admin"),
+        // operations-read
         ("desktop_operations_snapshot", "operations-read"),
         ("desktop_list_subagent_tree", "operations-read"),
         ("desktop_list_backends_with_health", "operations-read"),
         ("desktop_list_mcp_services_with_health", "operations-read"),
         ("desktop_probe_mcp_service", "operations-read"),
+        // interrupt-read / interrupt-control
         ("desktop_preview_interrupt_cascade", "interrupt-read"),
         ("desktop_interrupt_request", "interrupt-control"),
+        // holds-read / holds-control
         ("desktop_list_tool_call_holds", "holds-read"),
         ("desktop_resolve_tool_call_hold", "holds-control"),
+        // config-write (save/delete/test/auth — 20 commands)
         ("desktop_agent_config_save", "config-write"),
         ("desktop_behavior_save", "config-write"),
         ("desktop_skill_save", "config-write"),
@@ -95,11 +130,13 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_probe_inference_endpoint", "config-write"),
         ("desktop_codex_login", "config-write"),
         ("desktop_codex_login_cancel", "config-write"),
+        // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
         ("desktop_schedule_run", "tasks"),
         ("desktop_event_trigger_save", "tasks"),
         ("desktop_task_run", "tasks"),
+        // native-e2e
         ("desktop_native_e2e_config", "native-e2e"),
         ("desktop_native_e2e_status", "native-e2e"),
     ];
@@ -112,6 +149,11 @@ pub fn command_inventory() -> Vec<CommandContract> {
         .collect()
 }
 
+/// Grantable permission sets aligned with `permissions/default.toml` +
+/// `permissions/sets.toml`. Labels:
+/// - `read` / `mutate`: fine-grained sets that must not mix categories
+/// - `bundle`: composed defaults (default) or E2E-only bundles that may
+///   intentionally span command classes (native-e2e)
 pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
     [
         ("default", "bundle"),
@@ -131,6 +173,7 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("interrupt-control", "mutate"),
         ("holds-read", "read"),
         ("holds-control", "mutate"),
+        // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
         ("config-write", "mutate"),
         ("tasks", "mutate"),
@@ -180,6 +223,7 @@ pub fn current_contract() -> BridgeContract {
     }
 }
 
+/// Pretty-printed fingerprint JSON (stable key order via serde_json::Value sort).
 pub fn fingerprint_json() -> String {
     let value = serde_json::to_value(current_contract()).expect("contract serializes");
     let sorted = sort_json(value);
@@ -206,6 +250,7 @@ fn sort_json(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Path to the committed fingerprint relative to the workspace root.
 pub const FINGERPRINT_REL_PATH: &str = "contracts/desktop-bridge.json";
 
 #[cfg(test)]
@@ -424,12 +469,17 @@ mod tests {
 
     #[test]
     fn no_fine_grained_permission_set_mixes_read_and_mutate() {
+        // Fine-grained sets (read/mutate) must be pure. Bundle sets (default,
+        // full, native-e2e) intentionally compose mixed surfaces.
         let mut kinds = std::collections::BTreeMap::<String, String>::new();
         for set in permission_set_inventory() {
             if let Some(existing) = kinds.insert(set.name.clone(), set.kind.clone()) {
                 assert_eq!(existing, set.kind, "set {} has mixed kinds", set.name);
             }
         }
+        // Independent per-command IO/privilege classification. Privileged
+        // active actions (address probe, service test, repair) classify as
+        // mutate deliberately: set purity tracks privilege, not just IO.
         const COMMAND_KINDS: &[(&str, &str)] = &[
             ("desktop_bridge_contract", "read"),
             ("desktop_bootstrap_summary", "read"),
@@ -446,6 +496,7 @@ mod tests {
             ("desktop_conversation_rename", "mutate"),
             ("desktop_session_fork", "mutate"),
             ("desktop_request_resend", "mutate"),
+            ("desktop_request_retry", "mutate"),
             ("desktop_peer_status_fetch", "read"),
             ("desktop_network_status", "read"),
             ("desktop_workspace_list", "read"),
@@ -512,6 +563,7 @@ mod tests {
                 );
             }
         }
+        // Every command maps to a fine-grained set or the native-e2e test set.
         let allowed_command_sets: std::collections::BTreeSet<_> = permission_set_inventory()
             .into_iter()
             .filter(|s| s.kind == "read" || s.kind == "mutate" || s.name == "native-e2e")

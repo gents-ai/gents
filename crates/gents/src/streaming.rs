@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -20,6 +20,31 @@ use queries::{
 };
 
 const MAX_LIVE_REASONING_BYTES: usize = 64 * 1024;
+
+type ResponseWriteGate = Mutex<()>;
+
+/// DefraDB commits mutations at a database-wide revision boundary, so
+/// independent behavior daemons streaming into different AgentResponse rows
+/// can still collide. Writers are constructed per behavior; this node-scoped
+/// gate keeps their short response mutations ordered without coupling daemon
+/// ownership or holding the gate while waiting on the provider.
+fn response_write_gate(node: &Arc<EmbeddedNode>) -> Arc<ResponseWriteGate> {
+    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<ResponseWriteGate>>>> = OnceLock::new();
+
+    let node_key = Arc::as_ptr(node) as usize;
+    let mut gates = GATES
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(node_key, Arc::downgrade(&gate));
+    gate
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamStatus {
@@ -81,6 +106,7 @@ pub struct DefraStreamWriter {
     agent_did: String,
     batch_interval: Duration,
     buffers: Mutex<HashMap<String, StreamBuffer>>,
+    response_write_gate: Arc<ResponseWriteGate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,11 +142,13 @@ struct StreamBufferSnapshot {
 
 impl DefraStreamWriter {
     pub fn new(node: Arc<EmbeddedNode>, agent_did: &str, batch_interval: Duration) -> Self {
+        let response_write_gate = response_write_gate(&node);
         Self {
             node,
             agent_did: agent_did.to_string(),
             batch_interval,
             buffers: Mutex::new(HashMap::new()),
+            response_write_gate,
         }
     }
 
@@ -136,6 +164,7 @@ impl DefraStreamWriter {
     }
 
     async fn flush_snapshot(&self, doc_id: &str, snapshot: &StreamBufferSnapshot) -> Result<()> {
+        let _write_guard = self.response_write_gate.lock().await;
         tracing::debug!(
             doc_id = %doc_id,
             token_count = snapshot.token_count,
@@ -211,6 +240,7 @@ impl DefraStreamWriter {
     }
 
     pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {
+        let _write_guard = self.response_write_gate.lock().await;
         tracing::debug!(
             doc_id = %doc_id,
             "resetting streaming response live tail"
@@ -266,6 +296,7 @@ impl DefraStreamWriter {
     }
 
     pub async fn set_error_message(&self, doc_id: &str, error_message: &str) -> Result<()> {
+        let _write_guard = self.response_write_gate.lock().await;
         let escaped_doc_id = escape_graphql_string(doc_id);
         let escaped_error_message = escape_graphql_string(error_message);
         let mutation = format!(
@@ -337,6 +368,7 @@ impl DefraStreamWriter {
     }
 
     pub async fn write_interrupted_at(&self, doc_id: &str, at: &str) -> Result<bool> {
+        let _write_guard = self.response_write_gate.lock().await;
         let Some(current) = load_response_state(&self.node, doc_id).await? else {
             return Ok(false);
         };
@@ -379,6 +411,7 @@ impl DefraStreamWriter {
         request_mode: RequestFinalizeMode,
         mark_interrupted: bool,
     ) -> Result<StreamResult> {
+        let _write_guard = self.response_write_gate.lock().await;
         let existing = load_response_state(&self.node, doc_id).await?;
         let snapshot = {
             let buffers = self.buffers.lock().await;
@@ -582,6 +615,7 @@ impl DefraStreamWriter {
         behavior_id: &str,
         requester_did: Option<&str>,
     ) -> Result<String> {
+        let _write_guard = self.response_write_gate.lock().await;
         if let Some(existing) = load_response_state_by_key(&self.node, request_id).await? {
             anyhow::bail!(
                 "refusing to begin response for request_id={} because AgentResponse {} already exists with status={}",

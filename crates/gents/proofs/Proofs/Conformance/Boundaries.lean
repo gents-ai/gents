@@ -167,7 +167,7 @@ def boundaries : List Boundary :=
     , domain := "SessionRecovery"
     , subject := "client retry surface"
     , statement :=
-        "Generated SessionRecovery cases cover DB-backed client retry/reissue and denial guards; gents startup recovery does not autonomously create successor requests."
+        "Generated SessionRecovery cases permit DB-backed client retry/reissue only for an interactive predecessor and deny automated origins; goal, schedule, and event recovery remain server-owned."
     , acceptedFollowUp :=
         some "Add a separate contract if gents core gains autonomous server-side reissue."
     }

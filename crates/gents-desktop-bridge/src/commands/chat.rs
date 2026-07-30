@@ -64,7 +64,7 @@ pub async fn send_chat_message(
     };
 
     let store = core.store().snapshot();
-    if let Some(turn_state) = store.derive_turn(&session_id) {
+    if let Some(turn_state) = store.derive_turn_for_agent(&session_id, &agent_did) {
         if !can_send_in_turn(turn_state) {
             bail!(
                 "cannot send while current turn is {}",
@@ -103,6 +103,17 @@ pub async fn rename_conversation(
     core: &ClientCore,
     request: ConversationRenameRequest,
 ) -> Result<()> {
+    let agent_did = request
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| core.selected_agent_did())
+        .unwrap_or_default();
+    if agent_did.is_empty() {
+        bail!("agent_did is required");
+    }
     let session_id = request.session_id.trim().to_string();
     if session_id.is_empty() {
         bail!("session_id is required");
@@ -111,6 +122,7 @@ pub async fn rename_conversation(
     if title.is_empty() {
         bail!("title is required");
     }
-    core.rename_conversation(&session_id, &title).await?;
+    core.rename_conversation(&agent_did, &session_id, &title)
+        .await?;
     Ok(())
 }

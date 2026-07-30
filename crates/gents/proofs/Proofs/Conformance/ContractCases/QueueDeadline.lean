@@ -127,34 +127,26 @@ def terminalActiveAllowsNextPendingClaimCase : QueueDeadlineConformanceCase :=
       , legal := false
       }
 
-def backgroundCompletionCoalescesOneWakeupCase : QueueDeadlineConformanceCase :=
+def backgroundCompletionCreatesNoAgentRequestCase : QueueDeadlineConformanceCase :=
   let sessionId := 900
   let pre := queueState sessionId none []
-  let first := backgroundCompletionEntry 201 10 sessionId
-  let duplicate := backgroundCompletionEntry 202 11 sessionId
-  let post? :=
-    match SessionQueue.step? pre (.coalescePending first) with
-    | some afterFirst => SessionQueue.step? afterFirst (.coalescePending duplicate)
-    | none => none
-  let post := post?.getD pre
-  { name := "background_completion_session_coalesces_one_pending_wakeup"
-  , group := "queue_coalesce"
-  , action := "coalescePending_twice"
+  { name := "background_completion_notification_creates_no_agent_request"
+  , group := "completion_delivery"
+  , action := "appendNotification"
   , sessionId := sessionId
-  , legal := post?.isSome
+  , legal := true
   , preActiveRequestId := pre.active
-  , postActiveRequestId := post.active
+  , postActiveRequestId := pre.active
   , prePendingRequestIds := requestIds pre.pending
-  , postPendingRequestIds := requestIds post.pending
+  , postPendingRequestIds := requestIds pre.pending
   , claimedRequestId := none
   , blockedByActive := false
   , supersededRequestIds := []
-  , queueKey := some (queueKeyLabel QueueSource.backgroundCompletion sessionId)
-  , postCoalescedPendingCount :=
-      coalescedPendingCount QueueSource.backgroundCompletion sessionId post.pending
+  , queueKey := none
+  , postCoalescedPendingCount := 0
   , automatedDrainedRequestIds := []
   , preservedUserPendingRequestIds := []
-  , postTerminalRequestIds := terminalIds [201, 202] post
+  , postTerminalRequestIds := []
   , preRequestDeadline := none
   , synthesizedClaimDeadline := none
   , postDeadline := none
@@ -241,7 +233,7 @@ def claimPreservesExplicitDeadlineCase : QueueDeadlineConformanceCase :=
 def queueDeadlineConformanceCases : List QueueDeadlineConformanceCase :=
   [ activeBlocksLaterSameSessionClaimCase
   , terminalActiveAllowsNextPendingClaimCase
-  , backgroundCompletionCoalescesOneWakeupCase
+  , backgroundCompletionCreatesNoAgentRequestCase
   , cancelDrainsAutomatedPreservesUserCase
   , claimPreservesExplicitDeadlineCase
   ]

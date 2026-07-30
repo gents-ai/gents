@@ -9,7 +9,10 @@ use tokio::sync::{watch, RwLock as AsyncRwLock};
 
 use super::collection_resolver::CollectionResolver;
 use super::peer_directory::PeerDirectory;
-use super::query::{fetch_doc_patch, load_agent_scoped_snapshot, load_full_snapshot};
+use super::query::{
+    fetch_doc_patch, isolate_legacy_bearer_rows, load_agent_scoped_snapshot_with_peer_records,
+    load_full_snapshot_with_peer_records,
+};
 use super::store::{ClientStore, SharedClientStore};
 
 const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -122,6 +125,26 @@ impl ObservedStore {
         self.version_tx.send_replace(next_version);
         next_version
     }
+
+    pub fn replace_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
+        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
+        let next_snapshot = snapshot.replace_agent_scope(agent_did, incoming);
+        *snapshot = Arc::new(next_snapshot);
+
+        let next_version = self.version_tx.borrow().saturating_add(1);
+        self.version_tx.send_replace(next_version);
+        next_version
+    }
+
+    pub fn replace_remote_agent_snapshot(&self, agent_did: &str, incoming: ClientStore) -> u64 {
+        let mut snapshot = self.snapshot.write().expect("store snapshot lock poisoned");
+        let next_snapshot = snapshot.replace_remote_agent_scope(agent_did, incoming);
+        *snapshot = Arc::new(next_snapshot);
+
+        let next_version = self.version_tx.borrow().saturating_add(1);
+        self.version_tx.send_replace(next_version);
+        next_version
+    }
 }
 
 pub struct ObserverHandle {
@@ -144,7 +167,8 @@ impl ObserverHandle {
 pub fn spawn_observer_with_selection(
     node: Arc<EmbeddedNode>,
     store: Arc<ObservedStore>,
-    _peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    peer_directory: Arc<AsyncRwLock<PeerDirectory>>,
+    requester_did: String,
     subscription: Subscription,
     selected_agent_did_rx: watch::Receiver<Option<String>>,
 ) -> ObserverHandle {
@@ -224,13 +248,42 @@ pub fn spawn_observer_with_selection(
                 redundant_fetches_pending.clear();
 
                 let scope = selected_agent_did_rx.borrow().clone();
+                let peers = peer_directory.read().await.records().to_vec();
+                let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
+                    peers.iter().any(|peer| {
+                        peer.agent_did == did
+                            && peer
+                                .graphql
+                                .as_deref()
+                                .is_some_and(|value| !value.trim().is_empty())
+                    })
+                });
                 let result = match scope {
-                    Some(ref did) => load_agent_scoped_snapshot(node.as_ref(), did).await,
-                    None => load_full_snapshot(node.as_ref()).await,
+                    _ if selected_is_legacy_remote => {
+                        load_full_snapshot_with_peer_records(node.as_ref(), &peers, &requester_did)
+                            .await
+                    }
+                    Some(ref did) => {
+                        load_agent_scoped_snapshot_with_peer_records(
+                            node.as_ref(),
+                            did,
+                            &peers,
+                            &requester_did,
+                        )
+                        .await
+                    }
+                    None => {
+                        load_full_snapshot_with_peer_records(node.as_ref(), &peers, &requester_did)
+                            .await
+                    }
                 };
                 match result {
                     Ok(snapshot) => {
-                        store.merge_snapshot(snapshot);
+                        match (selected_is_legacy_remote, scope.as_deref()) {
+                            (true, _) => store.replace_snapshot(snapshot),
+                            (false, Some(did)) => store.replace_agent_snapshot(did, snapshot),
+                            (false, None) => store.replace_snapshot(snapshot),
+                        };
                         metrics_for_task
                             .scope_reloads
                             .fetch_add(1, Ordering::Relaxed);
@@ -261,7 +314,75 @@ pub fn spawn_observer_with_selection(
                 match fetch_doc_patch(node.as_ref(), collection_name, &id_refs).await {
                     Ok(patch) => {
                         let row_count = patch.row_count();
-                        store.merge_snapshot(patch);
+                        if row_count == 0 {
+                            // An empty doc-id patch is authoritative delete
+                            // evidence. Reload and replace the selected scope so
+                            // the removed row cannot remain visible until restart.
+                            let scope = selected_agent_did_rx.borrow().clone();
+                            let peers = peer_directory.read().await.records().to_vec();
+                            let selected_is_legacy_remote = scope.as_deref().is_some_and(|did| {
+                                peers.iter().any(|peer| {
+                                    peer.agent_did == did
+                                        && peer
+                                            .graphql
+                                            .as_deref()
+                                            .is_some_and(|value| !value.trim().is_empty())
+                                })
+                            });
+                            let reload = match scope.as_deref() {
+                                _ if selected_is_legacy_remote => {
+                                    load_full_snapshot_with_peer_records(
+                                        node.as_ref(),
+                                        &peers,
+                                        &requester_did,
+                                    )
+                                    .await
+                                }
+                                Some(did) => {
+                                    load_agent_scoped_snapshot_with_peer_records(
+                                        node.as_ref(),
+                                        did,
+                                        &peers,
+                                        &requester_did,
+                                    )
+                                    .await
+                                }
+                                None => {
+                                    load_full_snapshot_with_peer_records(
+                                        node.as_ref(),
+                                        &peers,
+                                        &requester_did,
+                                    )
+                                    .await
+                                }
+                            };
+                            match reload {
+                                Ok(snapshot) => match (selected_is_legacy_remote, scope.as_deref())
+                                {
+                                    (true, _) => {
+                                        store.replace_snapshot(snapshot);
+                                    }
+                                    (false, Some(did)) => {
+                                        store.replace_agent_snapshot(did, snapshot);
+                                    }
+                                    (false, None) => {
+                                        store.replace_snapshot(snapshot);
+                                    }
+                                },
+                                Err(error) => {
+                                    tracing::warn!(
+                                        collection = collection_name,
+                                        error = %error,
+                                        "authoritative delete reload failed"
+                                    );
+                                }
+                            }
+                        } else {
+                            let mut rows = patch.to_rows();
+                            let peers = peer_directory.read().await.records().to_vec();
+                            isolate_legacy_bearer_rows(&mut rows, &peers, &requester_did);
+                            store.merge_snapshot(ClientStore::from_rows(rows));
+                        }
                         metrics_for_task
                             .docs_fetched
                             .fetch_add(row_count as u64, Ordering::Relaxed);
@@ -362,8 +483,14 @@ mod tests {
         ));
         let subscription = node.subscribe(&[EventName::Update]);
         let (_tx, rx) = watch::channel::<Option<String>>(None);
-        let handle =
-            spawn_observer_with_selection(node.clone(), store.clone(), peer_dir, subscription, rx);
+        let handle = spawn_observer_with_selection(
+            node.clone(),
+            store.clone(),
+            peer_dir,
+            "did:test:requester".to_string(),
+            subscription,
+            rx,
+        );
         (node, store, handle)
     }
 
@@ -538,7 +665,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_event_leaves_stale_row() {
+    async fn delete_event_reloads_authoritative_scope_and_removes_stale_row() {
         let (node, store, handle) = build_observer_fixture().await;
 
         seed_message(node.as_ref(), "sess-1", 1, "before-delete").await;
@@ -558,13 +685,13 @@ mod tests {
         .await;
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        // Soft-delete-by-omission posture: the row stays in the store. This
-        // is the behavior documented in design §3.3.2; tightening requires a
-        // delete signal from DefraDB.
+        // An empty document patch is ambiguous, so the observer reloads the
+        // authoritative scope. The deleted row must disappear from the local
+        // projection instead of remaining visible until restart.
         let snap = store.snapshot();
         assert!(
-            snap.messages.iter().any(|m| m.message_key == "sess-1:1"),
-            "expected stale row to remain after delete (soft-delete-by-omission)"
+            !snap.messages.iter().any(|m| m.message_key == "sess-1:1"),
+            "expected authoritative reload to remove the deleted row"
         );
         handle.shutdown().await;
     }

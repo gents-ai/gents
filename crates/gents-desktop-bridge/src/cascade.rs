@@ -1,3 +1,10 @@
+// Descendant tree walk for cascade preview and cascade interrupt.
+//
+// Mirrors `interrupt_request_local` in
+// `crates/gents-cli/src/commands/subagent.rs:327`, but stays in the
+// bridge so both `desktop_preview_interrupt_cascade` and
+// `desktop_interrupt_request` can share the walk.
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +20,7 @@ use crate::types::{
     DesktopPreviewInterruptCascadeRequest, InterruptRequestResult,
 };
 
+/// Maximum descent depth to match the CLI walker's safety limit.
 const MAX_CASCADE_DEPTH: usize = 8;
 const REMOTE_GRAPHQL_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -117,6 +125,8 @@ fn graphql_errors_are_empty(errors: &Value) -> bool {
     errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
 }
 
+/// Terminal lifecycle states — requests in these states are classified as
+/// `AlreadyTerminal` regardless of their `cancel_policy`.
 const TERMINAL_STATES: &[&str] = &[
     "completed",
     "failed",
@@ -125,6 +135,28 @@ const TERMINAL_STATES: &[&str] = &[
     "dead",
     "interrupted",
 ];
+
+fn request_row_is_terminal(row: &Value) -> bool {
+    let lifecycle_terminal = string_field(row, "lifecycle_state")
+        .as_deref()
+        .is_some_and(|state| TERMINAL_STATES.contains(&state));
+    let status_terminal = string_field(row, "status")
+        .as_deref()
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "completed"
+                    | "complete"
+                    | "error"
+                    | "failed"
+                    | "cancelled"
+                    | "superseded"
+                    | "dead"
+                    | "interrupted"
+            )
+        });
+    lifecycle_terminal || status_terminal
+}
 
 #[derive(Debug, Clone)]
 pub struct CascadeWalkRequest {
@@ -162,6 +194,15 @@ pub struct CascadeWalkResult {
     pub rows: Vec<CascadeWalkRow>,
 }
 
+/// Walks `AgentToolCall.child_request_id` edges from `root_request_id` down,
+/// classifying each descendant by the nearest bridge row's `cancel_policy`.
+/// Filters terminal rows when `include_terminal == false`, except as
+/// AlreadyTerminal evidence.
+///
+/// When `req.agent_did` is `Some(did)`, the root AgentRequest query is scoped
+/// to that operator's documents. Descendants are then authorized by persisted
+/// AgentToolCall.child_request_id edges, because linked subagents may be owned
+/// by a different deployment DID than the root request.
 pub async fn walk(
     core: &Arc<ClientCore>,
     req: &CascadeWalkRequest,
@@ -169,6 +210,7 @@ pub async fn walk(
     let agent_did = req.agent_did.as_deref();
     let access = GraphqlAccess::for_agent(core, agent_did).await?;
 
+    // Load root request.
     let root = fetch_request(core, &access, &req.root_request_id, agent_did)
         .await
         .map_err(|e| format!("cascade::walk: root request not found: {e}"))?;
@@ -199,6 +241,8 @@ pub async fn walk(
     Ok(result)
 }
 
+/// BFS descent over AgentToolCall edges. `parent_request_id` is the node whose
+/// children we're expanding at this call level. `depth` starts at 0.
 async fn bfs(
     core: &Arc<ClientCore>,
     access: &GraphqlAccess,
@@ -212,6 +256,10 @@ async fn bfs(
         return Err(format!("cascade depth exceeded at {parent_request_id}"));
     }
 
+    // Query all AgentToolCall rows where request_id == parent AND child_request_id is set.
+    // AgentToolCall does not carry agent_did. Operator scoping is enforced on
+    // the root request before the walk starts; child reachability is the bridge
+    // edge itself, which supports cross-deployment subagents.
     let escaped_parent = escape_graphql_string(parent_request_id);
     let query = format!(
         r#"{{
@@ -250,6 +298,7 @@ async fn bfs(
             _ => continue,
         };
 
+        // Cycle guard.
         if !seen_requests.insert(child_id.clone()) {
             continue;
         }
@@ -259,6 +308,9 @@ async fn bfs(
         let await_mode = string_field(tc, "await_mode");
         let cancel_policy = string_field(tc, "cancel_policy");
 
+        // Fetch child request to determine lifecycle state. Do not apply the
+        // root agent_did filter here: a valid subagent edge can point at a child
+        // request owned by a different deployment DID.
         let child_row = match fetch_request(core, access, &child_id, None).await {
             Ok(row) => row,
             Err(e) => {
@@ -300,6 +352,9 @@ async fn bfs(
             classification,
         });
 
+        // Recurse only for cascade non-terminal children (and terminals when
+        // include_terminal is set — the flag controls further descent into terminal
+        // subtrees, not whether the terminal row itself is emitted).
         let should_recurse = match classification {
             CascadeClassification::WillInterrupt => true,
             CascadeClassification::AlreadyTerminal => include_terminal,
@@ -323,6 +378,10 @@ async fn bfs(
     Ok(())
 }
 
+/// Fetch a single AgentRequest row by `request_id`. Returns Err if not found.
+///
+/// When `agent_did` is `Some(did)`, an additional `agent_did` filter is applied
+/// so only rows owned by that operator are visible.
 async fn fetch_request(
     core: &Arc<ClientCore>,
     access: &GraphqlAccess,
@@ -346,6 +405,7 @@ async fn fetch_request(
                 agent_did
                 behavior_id
                 session_id
+                status
                 lifecycle_state
                 interrupt_requested_at
             }}
@@ -366,6 +426,12 @@ async fn fetch_request(
         .ok_or_else(|| format!("request {request_id} not found in AgentRequest collection"))
 }
 
+/// Builds a `CascadeCancelPreview` by walking the descendant tree of
+/// `req.request_id` and grouping rows into the four classification buckets,
+/// then computing a BLAKE3 preview signature over the result.
+///
+/// This is the bridge-level helper called by both `desktop_preview_interrupt_cascade`
+/// and any tests that need the full preview pipeline.
 pub async fn build_cascade_preview(
     core: &Arc<ClientCore>,
     req: &DesktopPreviewInterruptCascadeRequest,
@@ -428,9 +494,14 @@ pub async fn build_cascade_preview(
     })
 }
 
+/// Result returned by `latch_root_interrupt`.
 #[derive(Debug, Clone)]
 pub struct LatchResult {
+    /// The RFC-3339 timestamp stored (or already present) in
+    /// `interrupt_requested_at`.
     pub interrupt_requested_at: String,
+    /// `true` if this call was the first to write the field; `false` if it
+    /// was already set (idempotent no-op path).
     pub was_first: bool,
 }
 
@@ -451,10 +522,23 @@ pub async fn latch_root_interrupt(
 ) -> Result<LatchResult, String> {
     let access = GraphqlAccess::for_agent(core, agent_did).await?;
 
+    // Scope the root lookup to the selected deployment. Descendant latches are
+    // authorized separately by the persisted cascade edges.
     let row = fetch_request(core, &access, request_id, agent_did)
         .await
         .map_err(|e| format!("latch_root_interrupt: {e}"))?;
 
+    // Request.Transition permits interrupt edges only from pending, claimed,
+    // and processing. A stale phone button must not write a fresh interrupt
+    // latch onto a terminal row: besides corrupting the audit trail, that
+    // falsely reports an accepted operator action after the work is done.
+    if request_row_is_terminal(&row) {
+        return Err(format!(
+            "request {request_id} is already terminal and cannot be interrupted"
+        ));
+    }
+
+    // 2. If already interrupted, return idempotent result.
     if let Some(existing) = string_field(&row, "interrupt_requested_at") {
         return Ok(LatchResult {
             interrupt_requested_at: existing,
@@ -462,6 +546,7 @@ pub async fn latch_root_interrupt(
         });
     }
 
+    // 3. Compute timestamp and write.
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_id = escape_graphql_string(request_id);
     let escaped_now = escape_graphql_string(&now);
@@ -476,15 +561,43 @@ pub async fn latch_root_interrupt(
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_id}" }}{agent_did_clause} }},
+                filter: {{
+                    request_id: {{ _eq: "{escaped_id}" }}{agent_did_clause},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }},
+                    interrupt_requested_at: {{ _eq: null }}
+                }},
                 input: {{ interrupt_requested_at: "{escaped_now}" }}
             ) {{ _docID }}
         }}"#
     );
 
-    access
+    let data = access
         .execute(core, &mutation, "latch_root_interrupt update_AgentRequest")
         .await?;
+    let updated = data
+        .get("update_AgentRequest")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if updated == 0 {
+        let current = fetch_request(core, &access, request_id, agent_did)
+            .await
+            .map_err(|error| format!("latch_root_interrupt recheck: {error}"))?;
+        if request_row_is_terminal(&current) {
+            return Err(format!(
+                "request {request_id} became terminal before the interrupt could be latched"
+            ));
+        }
+        if let Some(existing) = string_field(&current, "interrupt_requested_at") {
+            return Ok(LatchResult {
+                interrupt_requested_at: existing,
+                was_first: false,
+            });
+        }
+        return Err(format!(
+            "request {request_id} did not accept an interrupt latch"
+        ));
+    }
 
     Ok(LatchResult {
         interrupt_requested_at: now,
@@ -492,10 +605,22 @@ pub async fn latch_root_interrupt(
     })
 }
 
+/// Orchestrates a non-cascade or cascade interrupt request from the operator.
+///
+/// Only `"userCancelled"` is an operator-authentic cause. Any other value is
+/// rejected — the runtime owns deadline/interrupted derivation.
+///
+/// For the non-cascade path (`req.cascade == false`): latches
+/// `interrupt_requested_at` on the root request and returns an
+/// `InterruptRequestResult` reflecting whether this call was the first to set
+/// the field (`accepted`) or the field was already set (`already_interrupted`).
+///
 pub async fn interrupt_request(
     core: &Arc<ClientCore>,
     req: &DesktopInterruptRequest,
 ) -> Result<InterruptRequestResult, String> {
+    // Only "userCancelled" is operator-authentic. Other causes must be rejected
+    // — the runtime owns deadline/interrupted derivation.
     if req.cause != "userCancelled" {
         return Err(format!(
             "operator may only authentically produce cause=\"userCancelled\", got {:?}",
@@ -507,7 +632,7 @@ pub async fn interrupt_request(
         let latched = latch_root_interrupt(core, &req.request_id, req.agent_did.as_deref()).await?;
         return Ok(InterruptRequestResult {
             request_id: req.request_id.clone(),
-            accepted: true,
+            accepted: true, // idempotent success — always accepted when latched or already latched
             interrupt_requested_at: Some(latched.interrupt_requested_at),
             already_interrupted: !latched.was_first,
             stale_preview: false,
@@ -515,6 +640,7 @@ pub async fn interrupt_request(
         });
     }
 
+    // Cascade path:
     let expected_sig = req
         .expected_preview_signature
         .clone()
@@ -539,12 +665,17 @@ pub async fn interrupt_request(
         });
     }
 
+    // Signature matches — latch the root and every descendant that the
+    // preview classified as cascade-interruptible. This is the Rust bridge
+    // counterpart to Lean's bridge_cancel_cascade step: set
+    // interrupt_requested_at on the child so the child daemon can lift
+    // interrupt_processing to the interrupted terminal state.
     let access = GraphqlAccess::for_agent(core, req.agent_did.as_deref()).await?;
     let latched = latch_root_interrupt(core, &req.request_id, req.agent_did.as_deref()).await?;
     latch_cascade_descendants(core, &access, &preview).await?;
     Ok(InterruptRequestResult {
         request_id: req.request_id.clone(),
-        accepted: true,
+        accepted: true, // idempotent success — always accepted when latched or already latched
         interrupt_requested_at: Some(latched.interrupt_requested_at),
         already_interrupted: !latched.was_first,
         stale_preview: false,
@@ -558,35 +689,112 @@ async fn latch_cascade_descendants(
     preview: &CascadeCancelPreview,
 ) -> Result<(), String> {
     for child in &preview.will_interrupt {
-        let escaped_request_id = escape_graphql_string(&child.request_id);
-        let interrupted_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    input: {{ interrupt_requested_at: "{interrupted_at}" }}
-                ) {{ _docID }}
-            }}"#
-        );
-        access
-            .execute(
-                core,
-                &mutation,
-                &format!(
-                    "cascade interrupt update_AgentRequest for {}",
-                    child.request_id
-                ),
-            )
-            .await?;
-        tracing::info!(
-            root_request_id = %preview.root_request_id,
-            child_request_id = %child.request_id,
-            "cascade interrupt latched descendant request"
-        );
+        match latch_descendant_interrupt_with_access(core, access, &child.request_id).await? {
+            Some(latched) if latched.was_first => {
+                tracing::info!(
+                    root_request_id = %preview.root_request_id,
+                    child_request_id = %child.request_id,
+                    "cascade interrupt latched descendant request"
+                );
+            }
+            Some(_) => {
+                tracing::debug!(
+                    root_request_id = %preview.root_request_id,
+                    child_request_id = %child.request_id,
+                    "cascade descendant interrupt was already latched"
+                );
+            }
+            None => {
+                tracing::debug!(
+                    root_request_id = %preview.root_request_id,
+                    child_request_id = %child.request_id,
+                    "cascade descendant became terminal after preview; skipped interrupt latch"
+                );
+            }
+        }
     }
     Ok(())
 }
 
+async fn latch_descendant_interrupt_with_access(
+    core: &Arc<ClientCore>,
+    access: &GraphqlAccess,
+    request_id: &str,
+) -> Result<Option<LatchResult>, String> {
+    let row = fetch_request(core, access, request_id, None)
+        .await
+        .map_err(|error| format!("latch_cascade_descendant: {error}"))?;
+    if request_row_is_terminal(&row) {
+        return Ok(None);
+    }
+    if let Some(existing) = string_field(&row, "interrupt_requested_at") {
+        return Ok(Some(LatchResult {
+            interrupt_requested_at: existing,
+            was_first: false,
+        }));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_now = escape_graphql_string(&now);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }},
+                    interrupt_requested_at: {{ _eq: null }}
+                }},
+                input: {{ interrupt_requested_at: "{escaped_now}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let data = access
+        .execute(
+            core,
+            &mutation,
+            &format!("cascade interrupt update_AgentRequest for {request_id}"),
+        )
+        .await?;
+    let updated = data
+        .get("update_AgentRequest")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    if updated > 0 {
+        return Ok(Some(LatchResult {
+            interrupt_requested_at: now,
+            was_first: true,
+        }));
+    }
+
+    let current = fetch_request(core, access, request_id, None)
+        .await
+        .map_err(|error| format!("latch_cascade_descendant recheck: {error}"))?;
+    if request_row_is_terminal(&current) {
+        return Ok(None);
+    }
+    if let Some(existing) = string_field(&current, "interrupt_requested_at") {
+        return Ok(Some(LatchResult {
+            interrupt_requested_at: existing,
+            was_first: false,
+        }));
+    }
+    Err(format!(
+        "cascade descendant request {request_id} did not accept an interrupt latch"
+    ))
+}
+
+#[cfg(test)]
+pub(crate) async fn latch_cascade_descendant_interrupt(
+    core: &Arc<ClientCore>,
+    request_id: &str,
+) -> Result<Option<LatchResult>, String> {
+    let access = GraphqlAccess::for_agent(core, None).await?;
+    latch_descendant_interrupt_with_access(core, &access, request_id).await
+}
+
+/// Extract a non-empty string field from a JSON object.
 fn string_field(row: &Value, field: &str) -> Option<String> {
     row.get(field)
         .and_then(Value::as_str)

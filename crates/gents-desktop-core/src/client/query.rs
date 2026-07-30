@@ -37,7 +37,7 @@ const AGENT_MESSAGE_FIELDS: &str =
 const AGENT_SESSION_FIELDS: &str =
     "session_id agent_name requester_did behavior_id started ended status";
 const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state child_request_id await_mode cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
 const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
@@ -142,7 +142,10 @@ pub async fn load_full_snapshot_with_peer_records(
     Ok(ClientStore::from_rows(rows))
 }
 
-fn isolate_legacy_bearer_rows(
+/// Bearer replication is requester-scoped, but an upgraded database can still
+/// contain rows received by the old unfiltered replicator. Keep those rows
+/// durable for diagnostics while excluding them from every client projection.
+pub(crate) fn isolate_legacy_bearer_rows(
     rows: &mut ClientStoreRows,
     peers: &[PeerRecord],
     requester_did: &str,
@@ -238,9 +241,15 @@ fn isolate_legacy_bearer_rows(
                 || requester_matches(row.requester_did.as_deref())
         },
     );
+    // Goal was never part of the requester-scoped conversation template, so
+    // any bearer-owned goal in the local store necessarily came from the old
+    // broad replicator.
     rows.goals
         .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
 
+    // Configuration was also outside the signed bearer grant. The desktop
+    // uses the invite's signed default behavior until scoped conversation data
+    // arrives, rather than trusting legacy replicated configuration.
     rows.agent_principals
         .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
     rows.behaviors
@@ -252,6 +261,17 @@ fn isolate_legacy_bearer_rows(
     retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
         !is_bearer_did(row.agent_did.as_deref())
     });
+}
+
+pub async fn load_agent_scoped_snapshot_with_peer_records(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    peers: &[PeerRecord],
+    requester_did: &str,
+) -> Result<ClientStore> {
+    let mut rows = load_agent_scoped_snapshot(node, agent_did).await?.to_rows();
+    isolate_legacy_bearer_rows(&mut rows, peers, requester_did);
+    Ok(ClientStore::from_rows(rows))
 }
 
 fn retain_rows_with_sources<T>(
@@ -534,6 +554,9 @@ pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Re
     chat_patch_from_data(&data)
 }
 
+/// Load only the selected request's conversation slice from the embedded
+/// replica. This is the bounded polling fallback for a dropped/coalesced
+/// observer event; it does not reload every conversation for the agent.
 pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<ClientStore> {
     let request_id = request_id.trim();
     if request_id.is_empty() {
@@ -879,6 +902,11 @@ query DesktopRemoteSnapshot {{
     )
 }
 
+/// Fetch the rows for a specific set of `(collection, doc_id)` pairs and
+/// return them as a single-collection `ClientStore` patch suitable for
+/// `ObservedStore::merge_snapshot`. Empty `doc_ids` returns an empty store.
+/// Unknown `collection_name` errors so callers can fall back to a scoped
+/// reload.
 pub async fn fetch_doc_patch(
     node: &EmbeddedNode,
     collection_name: &str,
@@ -1061,6 +1089,13 @@ pub async fn fetch_doc_patch(
     Ok(ClientStore::from_rows(rows))
 }
 
+/// Load a snapshot of all rows for a specific `agent_did`. Agent-keyed
+/// collections (including Goal) are filtered by `agent_did`; transcript collections
+/// (Message, Session, ToolCall, CompactionEntry) are filtered by the
+/// session_id list derived from the agent's conversations. Control-plane
+/// collections (InferenceBackend, InferenceProfile, ToolServiceRegistry,
+/// Task, Schedule, EventTrigger) load in full — they're operator-authored
+/// and small.
 pub async fn load_agent_scoped_snapshot(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -1068,6 +1103,7 @@ pub async fn load_agent_scoped_snapshot(
     let did = escape_graphql_string(agent_did);
     let did_filter = format!("filter: {{ agent_did: {{ _eq: \"{did}\" }} }}");
 
+    // Agent-keyed collections.
     let agent_principals: Vec<AgentPrincipalRow> = load_rows(
         node,
         AGENT_PRINCIPAL_NAME,
@@ -1127,6 +1163,7 @@ pub async fn load_agent_scoped_snapshot(
     )
     .await?;
 
+    // Derive session_id list from the agent's conversations and sessions.
     let mut session_ids: HashSet<String> = HashSet::new();
     for c in &conversations {
         session_ids.insert(c.session_id.clone());
@@ -1140,6 +1177,7 @@ pub async fn load_agent_scoped_snapshot(
         session_ids.insert(goal.session_id.clone());
     }
 
+    // Session-keyed collections.
     let (messages, sessions, tool_calls, compaction_entries) = if session_ids.is_empty() {
         (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
@@ -1180,6 +1218,7 @@ pub async fn load_agent_scoped_snapshot(
         (messages, sessions, tool_calls, compaction_entries)
     };
 
+    // Control-plane (load in full; small).
     let tasks = load_tasks(node).await?;
     let schedules = load_schedules(node).await?;
     let event_triggers = load_event_triggers(node).await?;
@@ -1319,6 +1358,8 @@ mod tests {
         let response = node.execute(mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
 
+        // DefraDB's create_* mutations return an array, so each value is
+        // [{_docID: "..."}] rather than {_docID: "..."}.
         let doc_ids: Vec<String> = response
             .data
             .as_ref()
@@ -1514,6 +1555,47 @@ mod tests {
             .expect("created runtime");
         assert_eq!(runtime.behavior_executor_capacity, Some(7));
         assert_eq!(runtime.behavior_executor_queue_depth, Some(3));
+    }
+
+    #[tokio::test]
+    async fn load_agent_tool_calls_hydrates_subagent_projection_fields() {
+        let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+        ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+
+        let response = node
+            .execute(
+                r#"mutation {
+                    create_AgentToolCall(input: {
+                        tool_call_key: "session-1:spawn-1",
+                        request_id: "parent-1",
+                        session_id: "session-1",
+                        message_sequence: 1,
+                        tool_name: "spawn_subagent",
+                        tool_call_id: "spawn-1",
+                        args: "{}",
+                        result: "",
+                        status: "called",
+                        lifecycle_state: "running",
+                        child_request_id: "child-1",
+                        await_mode: "background",
+                        started_at: "2026-07-29T00:00:00Z"
+                    }) { tool_call_key }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let tool_calls = load_agent_tool_calls(node.as_ref())
+            .await
+            .expect("load agent tool calls");
+        let tool_call = tool_calls
+            .iter()
+            .find(|row| row.tool_call_key == "session-1:spawn-1")
+            .expect("created tool call");
+        assert_eq!(tool_call.child_request_id.as_deref(), Some("child-1"));
+        assert_eq!(tool_call.await_mode.as_deref(), Some("background"));
     }
 
     #[tokio::test]

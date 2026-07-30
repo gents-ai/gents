@@ -27,6 +27,7 @@ use super::{
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
     pub tool_calls_recovered: usize,
+    pub notifications_repaired: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -46,6 +47,7 @@ impl SubagentLivenessReport {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TerminalParentToolReport {
     pub tool_calls_terminalized: usize,
+    pub notifications_repaired: usize,
 }
 
 impl TerminalParentToolReport {
@@ -80,6 +82,12 @@ struct RunningToolCallRow {
     cancel_policy: Option<String>,
     #[serde(default)]
     cancel_cause: Option<String>,
+    #[serde(default)]
+    result: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+    #[serde(default)]
+    completion_notification_delivered_at: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
     #[serde(default)]
@@ -170,6 +178,8 @@ impl super::ToolCallLifecycle {
 
         Ok(ToolCallRecoveryReport {
             tool_calls_recovered: recover_stuck_running_tool_calls(node, agent_did).await?,
+            notifications_repaired: repair_missing_background_tool_notifications(node, agent_did)
+                .await?,
         })
     }
 
@@ -385,9 +395,13 @@ impl super::ToolCallLifecycle {
             );
         }
 
+        report.notifications_repaired =
+            repair_missing_background_tool_notifications(node, agent_did).await?;
+
         if !report.is_noop() {
             tracing::info!(
                 tool_calls_terminalized = report.tool_calls_terminalized,
+                notifications_repaired = report.notifications_repaired,
                 "reconciled terminal-parent owned tools"
             );
         }
@@ -870,6 +884,9 @@ async fn load_running_tool_call_rows_with_filter(
             await_mode
             cancel_policy
             cancel_cause
+            result
+            lifecycle_state
+            completion_notification_delivered_at
             child_request_id
             spawn_target_did
             unclaimed_deadline_at
@@ -889,6 +906,105 @@ async fn load_running_tool_call_rows_with_filter(
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
     Ok(rows)
+}
+
+async fn repair_missing_background_tool_notifications(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<usize> {
+    let agent_did_escaped = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did_escaped}" }},
+                    await_mode: {{ _eq: "background" }},
+                    lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
+                    completion_notification_delivered_at: {{ _eq: null }}
+                }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                session_id
+                tool_call_id
+                tool_name
+                result
+                lifecycle_state
+                cancel_cause
+                await_mode
+                child_request_id
+                completion_notification_delivered_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying missing background tool notifications: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<RunningToolCallRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+
+    let mut repaired = 0;
+    for row in rows {
+        if row.agent_did.as_deref() != Some(agent_did)
+            || child_request_id(&row).is_some()
+            || row.completion_notification_delivered_at.is_some()
+        {
+            continue;
+        }
+        let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        let lifecycle_state = row.lifecycle_state.as_deref().unwrap_or_default();
+        let (status, result, reason) = match lifecycle_state {
+            "completed" => ("completed", row.result.as_deref().unwrap_or_default(), None),
+            "cancelled" => (
+                "cancelled",
+                "",
+                Some(row.cancel_cause.as_deref().unwrap_or("cancelled")),
+            ),
+            "timedOut" => ("failed", "", Some("deadline_exceeded")),
+            "failed" => (
+                "failed",
+                row.result.as_deref().unwrap_or_default(),
+                Some(row.cancel_cause.as_deref().unwrap_or("tool_failed")),
+            ),
+            _ => continue,
+        };
+        match crate::background_completion::append_background_tool_completion(
+            node,
+            &row.session_id,
+            parent_request_id,
+            &row.tool_call_id,
+            &row.tool_name,
+            status,
+            result,
+            reason,
+        )
+        .await
+        {
+            Ok(()) => repaired += 1,
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = parent_request_id,
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    error = %error,
+                    "failed to repair missing background tool notification"
+                );
+            }
+        }
+    }
+    Ok(repaired)
 }
 
 async fn lookup_parent_request(

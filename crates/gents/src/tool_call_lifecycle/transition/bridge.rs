@@ -262,7 +262,7 @@ impl ToolCallLifecycle {
     /// Running → Cancelled. Called by request interruption handling and
     /// startup recovery for interrupted parent requests.
     ///
-    pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<()> {
+    pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<bool> {
         self.cancel_during_run_inner(cause, None).await
     }
 
@@ -281,11 +281,11 @@ impl ToolCallLifecycle {
         )?;
 
         let Some(child_request_id) = self.child_request_id.clone() else {
-            self.cancel_during_run_inner(cause, None).await?;
+            let _ = self.cancel_during_run_inner(cause, None).await?;
             return Ok(None);
         };
         if self.cancel_policy != CancelPolicy::Cascade {
-            self.cancel_during_run_inner(cause, None).await?;
+            let _ = self.cancel_during_run_inner(cause, None).await?;
             return Ok(None);
         }
 
@@ -294,15 +294,15 @@ impl ToolCallLifecycle {
             at: chrono::Utc::now(),
         };
         if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
-            self.cancel_during_run_inner(cause, None).await?;
-            if self.is_cancelled() {
+            let won = self.cancel_during_run_inner(cause, None).await?;
+            if won {
                 return Ok(Some(CascadeDispatch::Local(intent)));
             }
             return Ok(None);
         }
 
-        self.cancel_during_run_inner(cause, Some(intent.at)).await?;
-        if self.is_cancelled() {
+        let won = self.cancel_during_run_inner(cause, Some(intent.at)).await?;
+        if won {
             Ok(Some(CascadeDispatch::RemoteIntentWritten))
         } else {
             Ok(None)
@@ -313,7 +313,7 @@ impl ToolCallLifecycle {
         &mut self,
         cause: CancelCause,
         remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
         let doc_id = self.doc_id.as_ref().ok_or_else(|| {
@@ -378,12 +378,12 @@ impl ToolCallLifecycle {
         {
             self.sync_after_lost_running_compare("cancel_during_run")
                 .await?;
-            return Ok(());
+            return Ok(false);
         }
 
         self.state = ToolCallState::Cancelled;
         self.cancel_cause = Some(cause);
-        Ok(())
+        Ok(true)
     }
 }
 

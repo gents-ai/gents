@@ -26,7 +26,8 @@ use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
-    load_agent_scoped_snapshot, load_full_snapshot, load_full_snapshot_from_graphql,
+    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_from_graphql,
+    load_full_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
 
@@ -418,12 +419,42 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_agent_did();
+        let records = self.peer_directory.read().await.records().to_vec();
+        if let Some(record) = scoped.as_deref().and_then(|did| {
+            records.iter().find(|record| {
+                record.agent_did == did
+                    && record
+                        .graphql
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty())
+            })
+        }) {
+            return self.refresh_remote_peer_record(record).await;
+        }
         let snapshot = match scoped.as_deref() {
-            Some(did) => load_agent_scoped_snapshot(self.node.as_ref(), did).await?,
-            None => load_full_snapshot(self.node.as_ref()).await?,
+            Some(did) => {
+                load_agent_scoped_snapshot_with_peer_records(
+                    self.node.as_ref(),
+                    did,
+                    &records,
+                    self.principal.did(),
+                )
+                .await?
+            }
+            None => {
+                load_full_snapshot_with_peer_records(
+                    self.node.as_ref(),
+                    &records,
+                    self.principal.did(),
+                )
+                .await?
+            }
         };
         let rows = snapshot.row_count();
-        let version = self.store.merge_snapshot(snapshot);
+        let version = match scoped.as_deref() {
+            Some(did) => self.store.replace_agent_snapshot(did, snapshot),
+            None => self.store.replace_snapshot(snapshot),
+        };
         tracing::debug!(
             target: "gents_desktop_core::replication",
             version,
@@ -477,7 +508,9 @@ impl ClientCore {
                 .await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
-        let version = self.store.merge_snapshot(snapshot);
+        let version = self
+            .store
+            .replace_remote_agent_snapshot(&record.agent_did, snapshot);
         tracing::info!(
             target: "gents_desktop_core::replication",
             peer_id = %record.peer_id,
@@ -501,9 +534,27 @@ impl ClientCore {
                 return Ok(false);
             }
         }
-        let snapshot = load_agent_scoped_snapshot(self.node.as_ref(), agent_did).await?;
+        let records = self.peer_directory.read().await.records().to_vec();
+        if let Some(record) = records.iter().find(|record| {
+            record.agent_did == agent_did
+                && record
+                    .graphql
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+        }) {
+            self.refresh_remote_peer_record(record).await?;
+            map.insert(agent_did.to_string(), now);
+            return Ok(true);
+        }
+        let snapshot = load_agent_scoped_snapshot_with_peer_records(
+            self.node.as_ref(),
+            agent_did,
+            &records,
+            self.principal.did(),
+        )
+        .await?;
         let rows = snapshot.row_count();
-        let version = self.store.merge_snapshot(snapshot);
+        let version = self.store.replace_agent_snapshot(agent_did, snapshot);
         map.insert(agent_did.to_string(), now);
         tracing::info!(
             target: "gents_desktop_core::replication",

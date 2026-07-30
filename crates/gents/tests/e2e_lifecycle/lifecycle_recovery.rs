@@ -6,7 +6,9 @@ use gents::{
 };
 use serde::Deserialize;
 
-use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
+use crate::support::snapshots::{
+    fetch_message_snapshots_for_session, fetch_tool_call_snapshots_for_session,
+};
 use crate::support::{
     build_request, conversation_status_by_doc_id, create_conversation_row, create_request,
     create_response_with_content_and_status, create_response_with_status, first_row, test_db,
@@ -28,6 +30,11 @@ struct ResponseStatusRow {
 #[derive(Debug, Clone, Deserialize)]
 struct ConversationRow {
     status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NotificationDeliveryRow {
+    completion_notification_delivered_at: Option<String>,
 }
 
 async fn mark_request_interrupted(node: &gents::defra_node::EmbeddedNode, doc_id: &str) {
@@ -297,6 +304,73 @@ async fn recover_all_times_out_expired_running_tool_calls() {
     assert_eq!(snapshots[0].cancel_cause.as_deref(), Some("deadline"));
     assert_eq!(snapshots[0].status, "completed");
     assert!(snapshots[0].result.contains("deadline exceeded"));
+}
+
+#[tokio::test]
+async fn recover_all_repairs_terminal_background_tool_notification_once() {
+    let db = test_db("tool-call-repair-notification").await;
+    create_request(
+        &db.node,
+        "tool-notification-req",
+        "tool-notification-session",
+        "processing",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+
+    let mut lifecycle = ToolCallLifecycle::new_background_tool(
+        db.node.clone(),
+        "tool-notification-req".to_string(),
+        "tool-notification-session".to_string(),
+        AGENT_DID.to_string(),
+        "tool-notification-call".to_string(),
+        1,
+        "lookup".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    );
+    lifecycle.start_running().await.unwrap();
+    assert!(lifecycle
+        .bridge_complete("durable result".to_string())
+        .await
+        .unwrap());
+
+    assert!(
+        fetch_message_snapshots_for_session(&db.node, "tool-notification-session")
+            .await
+            .is_empty(),
+        "the test precondition is a terminal tool with a missing notification"
+    );
+
+    let first = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(first.notifications_repaired, 1);
+    let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(second.notifications_repaired, 0);
+
+    let messages = fetch_message_snapshots_for_session(&db.node, "tool-notification-session").await;
+    assert_eq!(messages.len(), 1, "repair must be durably idempotent");
+    assert!(messages[0].content.contains("durable result"));
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentToolCall(
+                    filter: { tool_call_id: { _eq: "tool-notification-call" } },
+                    limit: 1
+                ) { completion_notification_delivered_at }
+            }"#,
+        )
+        .await;
+    let row = first_row::<NotificationDeliveryRow>(&response, "AgentToolCall");
+    assert!(
+        row.completion_notification_delivered_at.is_some(),
+        "successful notification append must advance the delivery marker"
+    );
 }
 
 #[tokio::test]

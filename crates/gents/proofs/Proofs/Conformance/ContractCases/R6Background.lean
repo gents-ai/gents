@@ -1,10 +1,16 @@
 import Proofs.Background.State
 import Proofs.Background.ToolOutput
-import Proofs.Background.CompletionContinuation
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Recovery.Sweeps.BackgroundRestart
-import Proofs.Session.State
 import Proofs.ToolExecution.Executable
+
+/-!
+# R6 Tool Backgrounding Conformance Cases
+
+Finite witnesses for the Rust R6 implementation. These rows pin the operator
+allowlist budget, Tool-kind bridge terminal projection, restart recovery
+terminalization, completion delivery without request creation, and legacy
+queue-source parsing during the Subagent→Background rename.
+-/
 
 namespace Conformance.ContractCases
 
@@ -85,87 +91,6 @@ def r6BudgetCase (name : String) (preLiveCount : Nat) :
     none none
     (if legal then none else some "background_tool_budget_exceeded")
 
-/-- The R6 startup row is computed by the same total restart classifier that
-drives `ToolCallLifecycle::recover_all` conformance. -/
-def r6RestartCase : R6BackgroundingCase :=
-  let row : Recovery.RestartRow :=
-    { awaitMode := .background
-    , cancelPolicy := .cascade
-    , childLinked := false
-    , parent := .live
-    , deadlineExpired := false
-    , unclaimedExpired := false
-    }
-  let disposition := Recovery.restartDisposition row
-  let notification := disposition.notification
-  { name := "background_recovery_running_live_parent_to_cancelled"
-  , group := "recovery"
-  , action := disposition.causeContract.getD ""
-  , legal := true
-  , preLiveCount := 1
-  , maxBackgrounded := Subagent.maxBackgroundedPerParent
-  , awaitMode := row.awaitMode.toDefraDB
-  , cancelPolicy := row.cancelPolicy.toDefraDB
-  , childRequestId := if row.childLinked then some "linked" else none
-  , terminalState := disposition.terminalStateContract.getD "running"
-  , result := none
-  , reason := notification.map (·.notificationReason)
-  , errorCode := none
-  , queueSource := notification.map (·.queueSource)
-  , queueKey := notification.map (fun obligation =>
-      obligation.queueKeyPrefix ++ "900")
-  }
-
-def r6CompletionQueueCase : R6BackgroundingCase :=
-  let source := SessionQueue.QueueSource.backgroundCompletion
-  r6Case
-    "background_completion_source_writes_canonical_key"
-    "queue_source"
-    "enqueue_background_completion"
-    true
-    1
-    "completed"
-    (some "done")
-    none
-    none
-    (some source.toDefraDB)
-    (some (source.toDefraDB ++ ":900"))
-
-/-- The terminal → notification → coalesced wake → claimed continuation row is
-computed by the composed executable acceptance model. -/
-def r6CompletionContinuationCase : R6BackgroundingCase :=
-  let accepted := BackgroundCompletion.canonicalContinuationAccepted
-  let completion := BackgroundCompletion.canonicalCompletion
-  let wake := BackgroundCompletion.canonicalWake
-  r6Case
-    "terminal_completion_message_precedes_claimed_continuation"
-    "completion_continuation"
-    "terminalize_append_notification_enqueue_claim"
-    accepted
-    1
-    completion.toolState.toDefraDB
-    (if accepted then some "assistant_wait_precedes_notification" else none)
-    (if accepted then some "continuation_claimed" else none)
-    none
-    (some wake.source.toDefraDB)
-    (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
-
-def r6LegacyQueueAliasCase : R6BackgroundingCase :=
-  let legacy := "subagent_completion"
-  let parsed := SessionQueue.QueueSource.fromDefraDB? legacy
-  r6Case
-    "legacy_subagent_completion_source_aliases_canonical_key"
-    "queue_source"
-    "parse_legacy_subagent_completion"
-    parsed.isSome
-    1
-    "completed"
-    (some "done")
-    none
-    none
-    (some legacy)
-    (parsed.map fun source => source.toDefraDB ++ ":900")
-
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -191,10 +116,35 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (.cancelDuringRun .interrupted)
       none
       (some "parent_cancelled")
-  , r6RestartCase
-  , r6CompletionQueueCase
-  , r6CompletionContinuationCase
-  , r6LegacyQueueAliasCase
+  , r6Case
+      "background_recovery_running_live_parent_to_cancelled"
+      "recovery"
+      "TerminalizeBackgroundedAsInterrupted"
+      true
+      1
+      "cancelled"
+      none
+      (some "interrupted_on_restart")
+  , r6Case
+      "background_completion_notification_creates_no_request"
+      "completion_delivery"
+      "append_notification_without_request"
+      true
+      1
+      "completed"
+      (some "done")
+  , r6Case
+      "legacy_subagent_completion_source_aliases_canonical_key"
+      "queue_source"
+      "parse_legacy_subagent_completion"
+      true
+      1
+      "completed"
+      (some "done")
+      none
+      none
+      (some "subagent_completion")
+      (some "background_completion:900")
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -217,14 +167,9 @@ theorem r6BackgroundingCases_pinned :
       , ("tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
           true, "background", none, "cancelled", none, none)
       , ("background_recovery_running_live_parent_to_cancelled", true,
-          "background", none, "cancelled", some "background_completion",
-          some "background_completion:900")
-      , ("background_completion_source_writes_canonical_key", true,
-          "background", none, "completed", some "background_completion",
-          some "background_completion:900")
-      , ("terminal_completion_message_precedes_claimed_continuation", true,
-          "background", none, "completed", some "background_completion",
-          some "background_completion:900")
+          "background", none, "cancelled", none, none)
+      , ("background_completion_notification_creates_no_request", true,
+          "background", none, "completed", none, none)
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,
           "background", none, "completed", some "subagent_completion",
           some "background_completion:900")

@@ -61,6 +61,10 @@
       "permissionSet": "resend-control"
     },
     {
+      "name": "desktop_request_retry",
+      "permissionSet": "resend-control"
+    },
+    {
       "name": "desktop_peer_status_fetch",
       "permissionSet": "fleet-read"
     },
@@ -241,7 +245,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.5",
+  "contractVersion": "0.7",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",

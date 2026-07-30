@@ -95,6 +95,7 @@ export type DesktopApiAdapter = {
     content: string;
   }) => Promise<ChatSendResult>;
   renameConversation: (request: {
+    agentDid: string;
     sessionId: string;
     title: string;
   }) => Promise<void>;
@@ -105,6 +106,7 @@ export type DesktopApiAdapter = {
     behaviorId?: string | null;
   }) => Promise<SessionForkResult>;
   resendRequest: (requestId: string) => Promise<RequestResendResult>;
+  retryRequest: (requestId: string) => Promise<ChatSendResult>;
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

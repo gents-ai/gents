@@ -150,9 +150,6 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","
-    ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
-    ++ "\"queue_key_prefix\":"
-      ++ jsonOptionalString witness.queueKeyPrefix ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
     ++ "}"
 

@@ -148,9 +148,9 @@ Current parameters in `MCSubagentCompletion.cfg`:
 |-----------|-------|-----------|
 | `Deployment` | `{A, B}` | Parent bridge row on A, child terminal authority on B |
 | `ParentDeployment` / `ChildDeployment` | `A` / `B` | Avoids hard-coding deployment symbols inside the model |
-| `Child` | `{c1, c2}` | Two background children are enough to exercise wake-up coalescing |
+| `Child` | `{c1, c2}` | Two background children exercise independent projection and notification delivery |
 | `EventId` | `{e1, e2, e3, e4}` | Bounded document-gossip ids; `StateBound` permits three consumed ids |
-| `QueueId` | `{q1, q2}` | One user request plus one reusable automated wake-up row |
+| `QueueId` | `{q1, q2}` | Bounded ids for the independently modelled user request queue |
 | `MaxCrashes` | `1` | A and B can each crash once |
 | `MaxDrops` | `1` | One document-gossip observation can be dropped before fair re-emission |
 | `StateBound` | `Cardinality(eventIdsUsed) <= 3 /\ Cardinality(queueIdsUsed) <= 2` | Leaves enough room for two child terminals plus one dropped observation while cutting off arbitrary duplicate-event churn |
@@ -214,8 +214,8 @@ Active lines from `MCSubagentCompletion.cfg`:
 - **`INVARIANT ProjectionRequiresBDurableTerminal`**, **`ProjectionRequiresADurableObservation`**, **`ProjectionMatchesLeanBridgeMapping`** — A projects only from durable observations and maps child `Completed` to bridge `Completed`, all child non-completed terminals to bridge `Failed`.
 - **`INVARIANT CancelledOnlyByParentCancel`**, **`ParentCancelAbsorbsLateTerminal`**, **`CancelRequestedCausal`** — bridge `Cancelled` is parent-cancel only, and late child terminals cannot resurrect a cancelled bridge.
 - **`INVARIANT NotificationCausal`** — transcript notifications exist only after child projection.
-- **`INVARIANT QueueIdsTracked`**, **`WakeupCoalesced`**, **`CompletionWakeupUnique`**, **`WakeupCausal`**, **`UserPendingPreserved`** — automated wake-ups are coalesced, causal, and cancellation drain cannot terminalize user-originated pending work.
-- **`PROPERTY CompletionProgress`** — durable child terminals eventually project or settle to parent cancellation; projected terminals eventually notify; notifications eventually have a pending coalesced wake-up representation.
+- **`INVARIANT QueueIdsTracked`**, **`NoSyntheticCompletionWakeups`**, **`UserPendingPreserved`** — completion delivery never creates an agent request, while independently authored user requests remain pending.
+- **`PROPERTY CompletionProgress`** — durable child terminals eventually project or settle to parent cancellation, and projected terminals eventually append a durable notification.
 - **`CONSTRAINT StateBound`** — bounds finite event/queue id consumption to keep TLC from exploring duplicate-id churn that is not meaningful in the real unbounded-id system.
 
 Active lines from `MCSubagentCancelPropagation.cfg`:
@@ -292,9 +292,9 @@ Notes:
 
 - per-child `EmitTerminalObservation`
 - document delivery and A-side durable observation persistence
-- per-child bridge projection, notification append, and wake-up enqueue
+- per-child bridge projection and notification append
 
-It deliberately has no fairness on child terminal writes, document drops, crashes, parent cancellation, cancellation drain, or user request enqueue.
+It deliberately has no fairness on child terminal writes, document drops, crashes, parent cancellation, or user request enqueue.
 
 `SubagentCancelPropagation` uses weak fairness on:
 
@@ -358,7 +358,7 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 |--------|-------|--------|-------------|-------|---------|
 | `MCReversePairing.cfg` | `Collection = {c1}`, `MaxCrashes = 2` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 322,560 distinct states | 19 | 3min 21s |
 | `MCReversePairingMulti.cfg` | `Collection = {c1, c2}`, `MaxCrashes = 0` | Passes `TypeOK`, `RPCIdsTracked`, `RPCWellFormed`, `Convergence` | 2,164,720 distinct states; 28,085,121 generated | 18 | 36min 38s |
-| `MCSubagentCompletion.cfg` | `Child = {c1, c2}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = eventIdsUsed <= 3 /\ queueIdsUsed <= 2` | Passes all listed SubagentCompletion invariants and `CompletionProgress` | 787,112 distinct states; 5,752,621 generated | 20 | 2min 01s |
+| `MCSubagentCompletion.cfg` | `Child = {c1, c2}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = eventIdsUsed <= 3 /\ queueIdsUsed <= 2` | Passes all listed SubagentCompletion invariants and `CompletionProgress` | 504,272 distinct states; 3,648,561 generated | 18 | 1min 17s |
 | `MCSubagentCancelPropagation.cfg` | `Child = {c1}`, `MaxCrashes = 1`, `MaxDrops = 1`, `StateBound = unhandled child retains one fresh RPC id` | Passes all listed SubagentCancelPropagation invariants and `CancelPropagationProgress` | 416,230 distinct states; 1,651,727 generated | 21 | 11s |
 | `MCPairingTransportDialable.cfg` | `Dialable = TRUE`, `ReplicatorInstallable = TRUE` | Passes `TypeOK`, `PartialApplyHasProgress`, `ReplicationImpliesReplicator`, `ReplicatorLiveness`, `EndToEndLiveness` | 7 distinct states; 8 generated | — | <1s (OpenJDK 25) |
 | `MCPairingTransportUndialable.cfg` | `Dialable = FALSE`, `ReplicatorInstallable = TRUE` | **MODE A diagnostic:** invariants hold (`PartialApplyHasProgress` vacuous); `ReplicatorLiveness` intentionally VIOLATED (never-`Connected` trace = connect-fails-first hang) | 3 distinct states; 4 generated | — | <1s (OpenJDK 25) |
@@ -369,7 +369,7 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 
 The multi-collection run's final temporal-property pass dominated runtime: TLC completed BFS first, then checked 16 temporal branches over 34,635,520 total distinct states in 19min 27s.
 
-The SubagentCompletion run used TLC2 `2026.05.12.170007` (rev `8033878`) with OpenJDK 17.0.19 on macOS arm64, `-workers auto` using 18 workers. TLC checked 8 temporal branches; the final temporal phase took 1min 16s.
+The SubagentCompletion run used TLC2 `2026.07.03.221739` (rev `227f61b`) with OpenJDK 26.0.1 on macOS arm64, `-workers auto` using 18 workers. TLC checked 6 temporal branches; the final temporal phase took 45s.
 
 The SubagentCancelPropagation run used TLC2 `2026.05.12.170007` (rev `8033878`) with OpenJDK 17.0.19 on macOS arm64, `-workers auto` using 18 workers. TLC checked 2 temporal branches; the final temporal phase took 3s.
 
@@ -410,7 +410,7 @@ Crash-enabled two-collection attempts were stopped for tractability, not propert
 - **SubagentCompletion foreground mode.** The model covers background completion projection only. Foreground cross-deployment blocking is a separate liveness surface.
 - **SubagentCompletion cancel propagation.** `SubagentCompletion` still records only `cancelRequested[child]`; delivery of that cascade interrupt is modeled in the sibling `SubagentCancelPropagation` artifact.
 - **SubagentCompletion duplicate-event bound.** The default config permits two child terminal observations plus one dropped/re-emitted observation. Arbitrary duplicate document churn is cut off by `StateBound`; the real system relies on unbounded event ids and idempotent projection.
-- **SubagentCompletion queue abstraction.** A drained automated wake-up row is reactivated for later completion instead of accumulating historical drained rows. The checked properties are pending-row uniqueness, wake-up causality, and user-row preservation, not queue audit history.
+- **SubagentCompletion legacy queue rows.** The model proves that current completion delivery cannot create a `subagent_completion` queue row. Runtime migration code separately terminalizes such pending rows written by older versions or received through delayed replication.
 - **Unsafe early projection counterexample.** Not committed as a separate failing config. The counterexample is direct: if A projects from `pendingInboundA` before `PersistObservationOnA`, then `ProjectionRequiresADurableObservation` fails immediately, and an A crash would erase the only local evidence for the bridge terminal.
 - **SubagentCancelPropagation default fanout.** The default liveness config models one child. The action and properties are child-parametric, but a two-child sanity bound is left for future work if R5 needs explicit fanout coverage.
 - **SubagentCancelPropagation ack progress.** `CancelAckProgress` is defined but excluded from the default config because finite RPCId exhaustion can strand ack retirement after B durable handling has already satisfied the #188 delivery boundary.
@@ -422,11 +422,10 @@ The SubagentCompletion model surfaces these implementation obligations:
 
 1. A's projection worker must consume durable local child terminal/final-response rows, not volatile subscription callbacks.
 2. B must persist the child final response before or atomically with the child terminal, and terminal observability must wait until both documents are durable.
-3. Completion wake-up enqueue needs atomic coalescing for `(session_id, queue_key, pending)`.
-4. Projection, notification append, and wake-up enqueue must be idempotent under duplicate observations and retries.
-5. Transcript notification must be durable before the wake-up request is represented.
-6. Cancellation drain must filter automated `subagent_completion` rows and preserve user-originated pending work.
-7. Late child terminal after parent cancellation is a no-op for the parent bridge.
+3. Projection and notification append must be idempotent under duplicate observations and retries.
+4. Completion delivery must not create an `AgentRequest`; the durable notification is consumed by the next independently authored turn.
+5. Runtime intake must terminalize legacy `subagent_completion` wake rows without executing them and preserve user-originated pending work.
+6. Late child terminal after parent cancellation is a no-op for the parent bridge.
 
 ## SubagentCancelPropagation derived requirements
 

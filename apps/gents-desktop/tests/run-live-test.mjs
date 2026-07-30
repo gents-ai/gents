@@ -20,8 +20,8 @@ function takeFlag(argv, name) {
   return null;
 }
 
-const DEFAULT_LIVE_INFERENCE_URL = "http://100.69.4.79:8000/v1";
-const DEFAULT_LIVE_MODEL_NAME = "baa-ai/GLM-5.1-RAM-420GB-MLX";
+const DEFAULT_LIVE_INFERENCE_URL = "http://100.73.235.38:8000/v1";
+const DEFAULT_LIVE_MODEL_NAME = "GLM-5.2";
 
 const argv = [...process.argv.slice(2)];
 const inferenceUrl = takeFlag(argv, "--inference-url");

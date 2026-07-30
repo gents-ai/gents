@@ -77,6 +77,13 @@ pub(crate) fn is_automated_wakeup(metadata: Option<&str>) -> bool {
     })
 }
 
+pub(crate) fn is_deprecated_background_completion_wakeup(
+    execution_origin: Option<&str>,
+    metadata: Option<&str>,
+) -> bool {
+    execution_origin == Some("scheduled") && is_automated_wakeup(metadata)
+}
+
 pub(crate) fn is_subagent_owned_queue(metadata: Option<&str>) -> bool {
     parse_queue_hints(metadata).is_some_and(|hints| {
         matches!(hints.source, QueueSource::Steering)

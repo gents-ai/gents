@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
-    let legal = lean_session_recovery_case("legal_open_budget_latest");
+    let legal = lean_session_recovery_case("legal_initial_retry_slot");
     assert!(legal.legal);
     assert_eq!(legal.action.as_str(), "reissueFailed");
     assert_eq!(legal.pre_latest_state.as_str(), "failed");
@@ -15,8 +15,8 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert_eq!(legal.pre_failed_admission.as_str(), "released");
     assert_eq!(legal.post_failed_admission.as_str(), "released");
     assert_eq!(legal.post_new_admission.as_str(), "released");
-    assert_eq!(legal.pre_origin.as_str(), "scheduled");
-    assert_eq!(legal.pre_backend.as_str(), "contract-backend-alt");
+    assert_eq!(legal.pre_origin.as_str(), "interactive");
+    assert_eq!(legal.pre_backend.as_str(), "contract-backend");
     assert_eq!(legal.pre_origin.as_str(), legal.post_new_origin.as_str());
     assert_eq!(legal.pre_backend.as_str(), legal.post_new_backend.as_str());
     assert_eq!(legal.pre_retry_count + 1, legal.post_retry_count);
@@ -36,6 +36,11 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
     assert!(legal.new_request_inserted);
     assert!(legal.origin_preserved);
     assert!(legal.backend_preserved);
+
+    let automated = lean_session_recovery_case("illegal_automated_origin");
+    assert!(!automated.legal);
+    assert_eq!(automated.pre_origin.as_str(), "scheduled");
+    assert!(automated.post_latest_state.is_empty());
 
     let last_slot = lean_session_recovery_case("legal_last_retry_slot");
     assert!(last_slot.legal);
@@ -102,7 +107,7 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
 
 pub(super) async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
     let cases = &lean_contract_snapshot().session_recovery_cases;
-    assert_eq!(cases.iter().filter(|case| case.legal).count(), 3);
+    assert_eq!(cases.iter().filter(|case| case.legal).count(), 2);
     assert_eq!(cases.len(), 18);
 
     let db = test_db("session-recovery-generated-contract").await;
@@ -343,6 +348,12 @@ async fn reissue_failed_request_for_contract(
         return Err(format!(
             "retry parent request must be failed/error, got lifecycle_state={} status={}",
             parent.lifecycle_state, parent.status
+        ));
+    }
+    if parent.execution_origin != "interactive" {
+        return Err(format!(
+            "client retry parent request must be interactive, got execution_origin={}",
+            parent.execution_origin
         ));
     }
     if parent.retry_count >= parent.max_retries {
@@ -633,6 +644,8 @@ fn expected_reissue_denial_fragment(
         "not found"
     } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
         "failed/error"
+    } else if case.pre_origin != "interactive" {
+        "must be interactive"
     } else if case.pre_retry_count >= case.max_retries {
         "exhausted retry budget"
     } else if case.pre_deadline_exceeded {

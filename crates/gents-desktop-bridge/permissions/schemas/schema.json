@@ -775,6 +775,18 @@
           "markdownDescription": "Denies the desktop_request_resend command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_request_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-request-retry",
+          "markdownDescription": "Enables the desktop_request_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_request_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-request-retry",
+          "markdownDescription": "Denies the desktop_request_retry command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_request_timeline command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-request-timeline",
@@ -1057,10 +1069,10 @@
           "markdownDescription": "Chat send, rename, fork\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-conversation-rename`\n- `allow-desktop-session-fork`"
         },
         {
-          "description": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`",
+          "description": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`\n- `allow-desktop-request-retry`",
           "type": "string",
           "const": "resend-control",
-          "markdownDescription": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`"
+          "markdownDescription": "Request resend / retry\n#### This permission set includes:\n\n- `allow-desktop-request-resend`\n- `allow-desktop-request-retry`"
         },
         {
           "description": "Peer status (by saved id) and network status\n#### This permission set includes:\n\n- `allow-desktop-peer-status-fetch`\n- `allow-desktop-network-status`",

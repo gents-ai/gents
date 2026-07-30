@@ -371,6 +371,73 @@ async fn set_request_interrupt_requested_at(
     );
 }
 
+async fn mark_as_deprecated_background_completion_wakeup(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+    session_id: &str,
+) {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let metadata =
+        crate::lifecycle::queue::queue_metadata_json(&crate::lifecycle::queue::QueueHints {
+            source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
+            policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
+            key: Some(format!("background_completion:{session_id}")),
+            queued_after_request_id: Some("legacy-parent".to_string()),
+            interrupted_request_id: None,
+        });
+    let metadata = crate::graphql::escape_graphql_string(&metadata);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{
+                    execution_origin: "scheduled",
+                    metadata: "{metadata}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "mark legacy background completion wake failed: {:?}",
+        response.errors
+    );
+}
+
+async fn request_terminal_fields(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+) -> serde_json::Value {
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                limit: 1
+            ) {{
+                status
+                lifecycle_state
+                failure_reason
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "query AgentRequest terminal fields failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("AgentRequest terminal row")
+}
+
 #[tokio::test]
 async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     let node = test_node().await;
@@ -471,6 +538,49 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
             .collect::<Vec<_>>(),
         vec!["req-queued-interrupt"]
     );
+}
+
+#[tokio::test]
+async fn next_request_ignores_legacy_completion_wake_without_mutating_it() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-retire-completion-wake";
+    let session_id = "sess-retire-completion-wake";
+    let wake_doc_id = insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-legacy-completion-wake",
+        session_id,
+        "pending",
+        "pending",
+        "2026-03-12T00:00:00Z",
+    )
+    .await;
+    mark_as_deprecated_background_completion_wakeup(node.as_ref(), &wake_doc_id, session_id).await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-user",
+        session_id,
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+
+    let mut watcher = DefraWatcher::new(node.clone(), agent_did);
+    let request = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+        .await
+        .expect("watcher should not wait on an ignored legacy wake")
+        .expect("watcher should remain open")
+        .expect("user request should load");
+    assert_eq!(request.request_id, "req-user");
+
+    let unchanged = request_terminal_fields(node.as_ref(), "req-legacy-completion-wake").await;
+    assert_eq!(unchanged["status"], "pending");
+    assert_eq!(unchanged["lifecycle_state"], "pending");
+    assert!(unchanged["failure_reason"].is_null());
 }
 
 #[tokio::test]

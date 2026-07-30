@@ -1,5 +1,5 @@
 {
-  "name": "multi_completion_coalesce",
+  "name": "multi_completion_delivery",
   "actions": [
     {
       "op": "OperatorWritePairing",

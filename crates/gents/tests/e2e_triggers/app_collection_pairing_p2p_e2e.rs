@@ -1,3 +1,9 @@
+//! #657 — reconcile-driven app-collection replication fires an EventTrigger.
+//!
+//! Unlike `event_trigger_p2p_e2e` (manual `install_one_way_replicator`), this
+//! drives replication through `DataPlanePairingDesired` + the pairing
+//! reconciler. Both nodes run `Gents::run`.
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,6 +49,9 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
         .expect("add_schema ChangeProposed");
 }
 
+/// Write the signed AgentNetwork + active NetworkMembership + fresh PeerEndpoint
+/// documents on `node` so `GraphqlNetworkStore::load_materializable_entries`
+/// materializes `member_identity`'s endpoint.
 async fn seed_materializable_peer(
     node: &EmbeddedNode,
     network_id: &str,
@@ -201,6 +210,9 @@ async fn seed_materializable_peer(
             ) {{ _docID }}
         }}"#
     );
+    // The live runtime publishes this same DID's endpoint heartbeat. Keep the
+    // real concurrent write in the e2e, but cross the same bounded conflict
+    // retry boundary production document writers use (#730, #750).
     let resp =
         execute_graphql_with_conflict_retry(node, &ep_mutation, "seed materializable PeerEndpoint")
             .await;
@@ -222,6 +234,7 @@ async fn wait_for_peer_identity(node: &EmbeddedNode) -> (String, String) {
                 return (peer_id, address);
             }
         }
+        // Fallback: listen address + parse peer id from the multiaddr tail.
         if let Ok(addrs) = p2p.listen_addresses().await {
             if let Some(addr) = addrs.first() {
                 if let Some(peer_id) = addr.rsplit("/p2p/").nth(1) {
@@ -320,6 +333,7 @@ where
     }
 }
 
+/// Write a DataPlanePairingDesired row via desired-state config (NOT add_replicator).
 async fn write_app_collection_pairing(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -443,10 +457,7 @@ async fn wait_for_app_collections_pairing_applied(
             );
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
             let has_col = subscribed.iter().any(|c| c == expected_collection);
-            let has_control = NETWORK_CONTROL_COLLECTIONS
-                .iter()
-                .all(|expected| subscribed.iter().any(|actual| actual == expected));
-            if has_addr && has_col && has_control {
+            if has_addr && has_col {
                 return;
             }
         }
@@ -649,6 +660,7 @@ async fn query_change_proposed(node: &EmbeddedNode) -> Vec<Value> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seed_makes_peer_materializable() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_p2p_db("app-collection-seed").await;
     let admin = test_identity("app-collection-seed-admin");
     let member = test_identity("app-collection-seed-member");
@@ -670,10 +682,13 @@ async fn seed_makes_peer_materializable() {
         entries.iter().any(|e| e.peer_id == "peer-node"),
         "seeded peer must be materializable: {entries:?}"
     );
+    db.node.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    // Compress pairing sweeps for this process (read once at daemon start).
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-pairing-a").await;
@@ -733,6 +748,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
     let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
 
+    // Seed membership docs locally on both nodes (no chicken-and-egg with P2P).
     seed_materializable_peer(
         db_a.node.as_ref(),
         NETWORK_ID,
@@ -765,6 +781,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         "B must materialize A: {entries_b:?}"
     );
 
+    // B: document reconcile for Task + EventTrigger (ordering invariant).
     let startup = wait_for_runtime_snapshot(db_b.node.as_ref(), &did_b, |s| {
         s.process_state == "ready" && s.reconcile_phase == "idle" && s.active_generation >= 1
     })
@@ -795,6 +812,9 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     })
     .await;
 
+    // Co-existing control pairing: network reconciler materializes PeerPairingDesired
+    // (source=network, template=network-control) from the seeded membership docs.
+    // Do NOT create_PeerPairingDesired ourselves — peer_id is unique and would conflict.
     let control_a =
         wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
@@ -802,6 +822,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         wait_for_control_pairing_applied(db_b.node.as_ref(), &peer_a, Duration::from_secs(60))
             .await;
 
+    // App-collections data-plane rows on both sides.
     write_app_collection_pairing(
         db_a.node.as_ref(),
         &peer_b,
@@ -833,6 +854,9 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     )
     .await;
 
+    // Control subscriptions still present after app-collections merge. The
+    // per-peer applied row is an ownership ledger, not the transport's global
+    // subscription inventory, so assert against the actual P2P state.
     let subscribed_a = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
     for col in &control_a {
         assert!(
@@ -906,6 +930,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(fired.enabled, Some(true));
     assert_eq!(fired.concurrency.as_deref(), Some("serial"));
 
+    // Idempotence: applied state stable across another sweep window.
     let post = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
         .await
         .expect("post applied");
@@ -926,10 +951,13 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
+    db_a.node.shutdown().await;
+    db_b.node.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn empty_app_collection_row_does_not_stall_control_pairing() {
+    let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
     let db_a = test_p2p_db("app-collection-soft-skip-a").await;
@@ -1005,6 +1033,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     )
     .await;
 
+    // Network reconciler installs control pairing from seeded membership.
     let control =
         wait_for_control_pairing_applied(db_a.node.as_ref(), &peer_b, Duration::from_secs(60))
             .await;
@@ -1012,6 +1041,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         .await
         .expect("control applied");
 
+    // Blank-only collections: schema allows [String!]!, resolver soft-skips.
     let peer = escape_graphql_string(&peer_b);
     let did = escape_graphql_string(&did_a);
     let addr = escape_graphql_string(&addr_b);
@@ -1037,6 +1067,7 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
         resp.errors
     );
 
+    // Wait at least one sweep for the soft-skip path to run.
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let after = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
@@ -1061,4 +1092,6 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let _ = shutdown_b_tx.send(true);
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
+    db_a.node.shutdown().await;
+    db_b.node.shutdown().await;
 }

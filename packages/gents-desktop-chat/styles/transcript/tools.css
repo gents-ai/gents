@@ -126,6 +126,99 @@
       calc(var(--space-8) + var(--space-5));
   }
 
+  .subagent-tool-item {
+    background:
+      linear-gradient(
+        105deg,
+        rgb(var(--color-accent-rgb) / 0.09),
+        transparent 62%
+      ),
+      var(--color-surface-deep);
+  }
+
+  .subagent-tool-summary {
+    justify-content: space-between;
+  }
+
+  .subagent-tool-summary-left {
+    flex: 1;
+    flex-wrap: wrap;
+  }
+
+  .subagent-tool-kind,
+  .subagent-tool-mode,
+  .subagent-tool-status {
+    font-size: var(--text-xs);
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .subagent-tool-kind {
+    color: var(--color-accent-muted);
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .subagent-tool-mode,
+  .subagent-tool-status {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid rgb(var(--color-accent-rgb) / 0.22);
+    border-radius: var(--radius-pill);
+    color: var(--color-text-muted);
+    background: rgb(var(--color-accent-rgb) / 0.07);
+  }
+
+  .subagent-tool-status-success {
+    color: var(--color-success);
+    border-color: rgb(var(--color-success-rgb) / 0.35);
+  }
+
+  .subagent-tool-status-error {
+    color: var(--color-error);
+    border-color: rgb(var(--color-error-strong-rgb) / 0.35);
+  }
+
+  .subagent-tool-status-awaitingapproval {
+    color: var(--color-warning);
+    border-color: rgb(var(--color-warning-rgb) / 0.35);
+  }
+
+  .subagent-tool-preview {
+    flex: 1 1 20rem;
+  }
+
+  .subagent-tool-body {
+    gap: var(--space-5);
+  }
+
+  .subagent-tool-assignment {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-left: 2px solid rgb(var(--color-accent-rgb) / 0.45);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-soft);
+    background: var(--color-surface-strong);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .subagent-tool-child {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .subagent-tool-child code {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .tool-detail,
   .tool-detail-grid {
     display: grid;

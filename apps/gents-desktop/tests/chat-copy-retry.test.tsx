@@ -107,7 +107,9 @@ describe("transcript copy actions", () => {
 describe("error card retry", () => {
   const session: DesktopSessionSnapshot = {
     sessionId: "s1",
+    latestRequestId: "req-failed",
     turnState: "failed",
+    retryEligibility: { eligible: true, denialReason: null },
     latestResponse: { status: "failed", errorMessage: "provider exploded" },
     timelineItems: [
       {
@@ -133,12 +135,56 @@ describe("error card retry", () => {
     expect(card).toHaveTextContent("provider exploded");
 
     fireEvent.click(screen.getByTestId("retry-turn"));
-    expect(onRetryMessage).toHaveBeenCalledWith("the failed ask");
+    expect(onRetryMessage).toHaveBeenCalledWith("req-failed");
   });
 
   it("omits Retry when no handler is wired", () => {
     render(<ChatTranscriptPanel selectedSessionId="s1" session={session} />);
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
+  it("omits Retry when the persisted predecessor is ineligible", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={{
+          ...session,
+          retryEligibility: {
+            eligible: false,
+            denialReason: "nonInteractiveOrigin",
+          },
+        }}
+        onRetryMessage={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
+  });
+
+  it("disables Retry while the authoritative retry intent is pending", async () => {
+    let resolveRetry: (() => void) | undefined;
+    const onRetryMessage = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={session}
+        onRetryMessage={onRetryMessage}
+      />,
+    );
+
+    const retry = screen.getByTestId("retry-turn");
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(onRetryMessage).toHaveBeenCalledTimes(1);
+    expect(retry).toBeDisabled();
+    expect(retry).toHaveTextContent("Retrying");
+
+    resolveRetry?.();
+    await waitFor(() => expect(retry).not.toBeDisabled());
   });
 
   it("does not present an interrupted turn as a retryable failure", () => {
@@ -198,13 +244,17 @@ describe("error card retry", () => {
     expect(screen.queryByTestId("retry-turn")).not.toBeInTheDocument();
   });
 
-  it("submits retry content through the shell when the composer draft is empty", async () => {
-    const sendChatMessage = vi.fn().mockResolvedValue({
+  it("uses the predecessor-aware retry API when the composer draft is empty", async () => {
+    const sendChatMessage = vi.fn();
+    const retryRequest = vi.fn().mockResolvedValue({
       agentDid: deployment.agentDid,
       sessionId: "s1",
       requestId: "req_retry",
     });
-    setDesktopApiAdapterForTests({ sendChatMessage } as DesktopApiAdapter);
+    setDesktopApiAdapterForTests({
+      sendChatMessage,
+      retryRequest,
+    } as DesktopApiAdapter);
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
@@ -241,15 +291,9 @@ describe("error card retry", () => {
       shellProjection,
     });
 
-    actions.onRetryMessage("the failed ask");
+    actions.onRetryMessage("req-failed");
 
-    await waitFor(() =>
-      expect(sendChatMessage).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
-        behaviorId: deployment.defaultBehaviorId,
-        sessionId: "s1",
-        content: "the failed ask",
-      }),
-    );
+    await waitFor(() => expect(retryRequest).toHaveBeenCalledWith("req-failed"));
+    expect(sendChatMessage).not.toHaveBeenCalled();
   });
 });

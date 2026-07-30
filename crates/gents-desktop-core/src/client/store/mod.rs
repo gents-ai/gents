@@ -1,7 +1,7 @@
 mod indexing;
 mod turns;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gents_protocol::client_protocol::ClientTurnState;
@@ -114,6 +114,15 @@ pub struct TranscriptView<'a> {
     pub tool_results: Vec<&'a AgentToolResultRow>,
 }
 
+/// Aggregated recent-run bookkeeping for a task, rolled up across all
+/// triggers (Schedule + EventTrigger) that reference it.
+///
+/// The apply path owns the `Task` description while the trigger engine
+/// owns per-trigger fire bookkeeping on `Schedule` and `EventTrigger`.
+/// Operators looking at a single task need to see "how often has this
+/// task actually been fired, and what happened last time?" without
+/// having to click into every trigger individually -- this struct rolls
+/// those numbers up for the Task detail view.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct TaskRecentRuns {
     pub total_fires: u64,
@@ -243,6 +252,154 @@ impl ClientStore {
         );
 
         ClientStore::from_rows(rows)
+    }
+
+    /// Replace one agent's authoritative projection instead of additively
+    /// merging it. This is used for scoped reloads and delete recovery so rows
+    /// absent from the database snapshot (including foreign-requester legacy
+    /// bearer rows) cannot survive indefinitely in memory.
+    pub fn replace_agent_scope(&self, agent_did: &str, snapshot: ClientStore) -> Self {
+        self.replace_agent_scope_inner(agent_did, snapshot, true)
+    }
+
+    /// Replace rows fetched from a legacy remote authority. Remote snapshots
+    /// are source-stamped, so unstamped local rows must survive even when a
+    /// remote agent reuses the same session ID.
+    pub fn replace_remote_agent_scope(&self, agent_did: &str, snapshot: ClientStore) -> Self {
+        self.replace_agent_scope_inner(agent_did, snapshot, false)
+    }
+
+    fn replace_agent_scope_inner(
+        &self,
+        agent_did: &str,
+        snapshot: ClientStore,
+        replace_unstamped: bool,
+    ) -> Self {
+        let mut rows = self.to_rows();
+        let mut agent_session_ids = rows
+            .conversations
+            .iter()
+            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+            .map(|row| row.session_id.clone())
+            .collect::<HashSet<_>>();
+        agent_session_ids.extend(
+            rows.requests
+                .iter()
+                .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+                .filter_map(|row| row.session_id.clone()),
+        );
+
+        rows.agent_principals
+            .retain(|row| row.agent_did != agent_did);
+        rows.behaviors
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.runtimes.retain(|row| row.agent_did != agent_did);
+        rows.conversations
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.requests
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.responses
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.goals.retain(|row| row.agent_did != agent_did);
+        rows.tool_results
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.tool_selections
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+
+        retain_rows_and_sources(
+            &mut rows.messages,
+            &mut rows.message_source_agent_dids,
+            |row, source| {
+                source != Some(agent_did)
+                    && !(replace_unstamped
+                        && source.is_none()
+                        && row
+                            .session_id
+                            .as_deref()
+                            .is_some_and(|session_id| agent_session_ids.contains(session_id)))
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_agent_dids,
+            |row, source| {
+                source != Some(agent_did)
+                    && !(replace_unstamped
+                        && source.is_none()
+                        && agent_session_ids.contains(&row.session_id))
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_agent_dids,
+            |row, source| {
+                source != Some(agent_did)
+                    && !(replace_unstamped
+                        && source.is_none()
+                        && row
+                            .session_id
+                            .as_deref()
+                            .is_some_and(|session_id| agent_session_ids.contains(session_id)))
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compaction_entries,
+            &mut rows.compaction_entry_source_agent_dids,
+            |row, source| {
+                source != Some(agent_did)
+                    && !(replace_unstamped
+                        && source.is_none()
+                        && row
+                            .session_id
+                            .as_deref()
+                            .is_some_and(|session_id| agent_session_ids.contains(session_id)))
+            },
+        );
+
+        // Scoped snapshots reload the complete local control plane. Replace
+        // local rows (source=None) and this remote agent's rows, while retaining
+        // rows explicitly stamped as belonging to other remote agents.
+        retain_rows_and_sources(
+            &mut rows.tasks,
+            &mut rows.task_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+        retain_rows_and_sources(
+            &mut rows.schedules,
+            &mut rows.schedule_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+        retain_rows_and_sources(
+            &mut rows.event_triggers,
+            &mut rows.event_trigger_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+        retain_rows_and_sources(
+            &mut rows.skills,
+            &mut rows.skill_source_agent_dids,
+            |row, source| {
+                row.agent_did.as_deref() != Some(agent_did)
+                    && source != Some(agent_did)
+                    && (!replace_unstamped || source.is_some())
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_backends,
+            &mut rows.inference_backend_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_agent_dids,
+            |_row, source| source != Some(agent_did) && (!replace_unstamped || source.is_some()),
+        );
+
+        ClientStore::from_rows(rows).merge_snapshot(snapshot)
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> Self {
@@ -425,6 +582,13 @@ impl ClientStore {
             .collect()
     }
 
+    /// Return every `Task` bound to the given behavior.
+    ///
+    /// `Task` rows are not scoped by `agent_did` — they carry a single
+    /// `behavior_id` and are addressed globally by `task_id`. The
+    /// `_agent_did` parameter is kept so call sites that pass an agent scope
+    /// (today's behavior-diagnostics view, for example) stay ergonomic; the
+    /// filter is intentionally behavior-scoped only.
     pub fn tasks_for_behavior(&self, _agent_did: &str, behavior_id: &str) -> Vec<&TaskRow> {
         self.tasks
             .iter()
@@ -432,6 +596,9 @@ impl ClientStore {
             .collect()
     }
 
+    /// Return every `Schedule` whose `task_id` matches one of the provided
+    /// tasks. Useful for listing the schedules attached to a behavior
+    /// indirectly (via its tasks).
     pub fn schedules_for_tasks(&self, task_ids: &[&str]) -> Vec<&ScheduleRow> {
         if task_ids.is_empty() {
             return Vec::new();
@@ -446,6 +613,10 @@ impl ClientStore {
             .collect()
     }
 
+    /// Return every `EventTrigger` whose `task_id` matches one of the
+    /// provided tasks. Mirrors `schedules_for_tasks` so manage views can
+    /// list the triggers attached to a behavior indirectly (via its
+    /// tasks).
     pub fn event_triggers_for_tasks(&self, task_ids: &[&str]) -> Vec<&EventTriggerRow> {
         if task_ids.is_empty() {
             return Vec::new();
@@ -460,6 +631,19 @@ impl ClientStore {
             .collect()
     }
 
+    /// Roll up the trigger-engine bookkeeping for a `Task` across every
+    /// `Schedule` and `EventTrigger` that references it.
+    ///
+    /// Both trigger kinds carry their own independent `fire_count`,
+    /// `last_attempt_at`, `last_status`, and `last_error` fields. This
+    /// helper sums the fires and picks the most recent `last_attempt_at`
+    /// (lexicographic max on the ISO-8601 timestamp strings -- the
+    /// trigger engine always writes RFC3339/Z-suffixed stamps, so
+    /// lexical order matches chronological order), then surfaces the
+    /// status/error from the trigger that produced that most-recent
+    /// attempt. Used by the Task detail view to show operators a single
+    /// rolled-up "Recent Runs" summary instead of forcing them to click
+    /// into each individual trigger.
     pub fn recent_runs_for_task(&self, task_id: &str) -> TaskRecentRuns {
         let schedules: Vec<&ScheduleRow> = self
             .schedules
@@ -481,6 +665,7 @@ impl ClientStore {
                 .map(|t| t.fire_count.unwrap_or(0).max(0) as u64)
                 .sum::<u64>();
 
+        // Find the most recent attempt_at across all triggers.
         let all_attempts: Vec<&str> = schedules
             .iter()
             .filter_map(|s| s.last_attempt_at.as_deref())
@@ -488,6 +673,12 @@ impl ClientStore {
             .collect();
         let last_attempt_at = all_attempts.iter().max().map(ToString::to_string);
 
+        // Resolve status + error from the trigger whose timestamp
+        // equals the max. Ties (two triggers firing in the same second
+        // on the same task) resolve in favor of the first schedule
+        // found, then the first event trigger found -- rare in
+        // practice, and the operator still sees the aggregate
+        // fire-count.
         let (last_status, last_error) = if let Some(ref target_ts) = last_attempt_at {
             let mut pair = None;
             for s in &schedules {
@@ -612,10 +803,22 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id)
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .filter(|request_id| {
+                !self.requests.iter().any(|request| {
+                    request.request_id == *request_id
+                        && request.session_id.as_deref() == Some(session_id)
+                        && is_deprecated_background_completion_request(request)
+                })
+            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
-                    .and_then(|indexes| indexes.last().copied())
+                    .and_then(|indexes| {
+                        indexes.iter().rev().find(|index| {
+                            !is_deprecated_background_completion_request(&self.requests[**index])
+                        })
+                    })
+                    .copied()
                     .map(|index| self.requests[index].request_id.clone())
             })
     }
@@ -629,6 +832,14 @@ impl ClientStore {
             .iter()
             .find(|row| row.session_id == session_id && row.agent_did.as_deref() == Some(agent_did))
             .and_then(|row| clean_string(row.latest_request_id.as_deref()))
+            .filter(|request_id| {
+                !self.requests.iter().any(|request| {
+                    request.request_id == *request_id
+                        && request.session_id.as_deref() == Some(session_id)
+                        && row_agent_matches(request.agent_did.as_deref(), agent_did)
+                        && is_deprecated_background_completion_request(request)
+                })
+            })
             .or_else(|| {
                 self.requests_by_session_id
                     .get(session_id)
@@ -637,6 +848,8 @@ impl ClientStore {
                             row_agent_matches(
                                 self.requests[**index].agent_did.as_deref(),
                                 agent_did,
+                            ) && !is_deprecated_background_completion_request(
+                                &self.requests[**index],
                             )
                         })
                     })
@@ -726,22 +939,45 @@ impl ClientStore {
         turns::derive_turn(self, session_id)
     }
 
+    pub fn derive_turn_for_agent(
+        &self,
+        session_id: &str,
+        agent_did: &str,
+    ) -> Option<ClientTurnState> {
+        turns::derive_turn_for_agent(self, session_id, agent_did)
+    }
+
     pub fn derive_turn_for_request(&self, request_id: &str) -> Option<ClientTurnState> {
         turns::derive_turn_for_request(self, request_id)
+    }
+
+    pub fn derive_turn_for_request_for_agent(
+        &self,
+        request_id: &str,
+        agent_did: &str,
+    ) -> Option<ClientTurnState> {
+        turns::derive_turn_for_request_for_agent(self, request_id, agent_did)
     }
 }
 
 pub type SharedClientStore = Arc<ClientStore>;
 
 fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
-    row_agent_did.is_none_or(|row_agent_did| row_agent_did == agent_did)
+    row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
+}
+
+pub fn is_deprecated_background_completion_request(request: &AgentRequestRow) -> bool {
+    gents::lifecycle::is_deprecated_background_completion_request(
+        request.execution_origin.as_deref(),
+        request.metadata.as_deref(),
+    )
 }
 
 fn source_agent_matches(sources: &[Option<String>], row_index: usize, agent_did: &str) -> bool {
     sources
         .get(row_index)
         .and_then(|source| source.as_deref())
-        .is_none_or(|source_agent_did| source_agent_did == agent_did)
+        .map_or(true, |source_agent_did| source_agent_did == agent_did)
 }
 
 fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(&T) -> String) {
@@ -762,6 +998,30 @@ fn upsert_rows_by_key<T>(target: &mut Vec<T>, incoming: Vec<T>, key_fn: impl Fn(
     }
 }
 
+fn retain_rows_and_sources<T>(
+    rows: &mut Vec<T>,
+    sources: &mut Vec<Option<String>>,
+    mut keep: impl FnMut(&T, Option<&str>) -> bool,
+) {
+    sources.resize(rows.len(), None);
+    let mut kept_rows = Vec::with_capacity(rows.len());
+    let mut kept_sources = Vec::with_capacity(sources.len());
+    for (row, source) in std::mem::take(rows)
+        .into_iter()
+        .zip(std::mem::take(sources))
+    {
+        if keep(&row, source.as_deref()) {
+            kept_rows.push(row);
+            kept_sources.push(source);
+        }
+    }
+    *rows = kept_rows;
+    *sources = kept_sources;
+}
+
+/// Merge durable goals without allowing a later-created replicated twin to
+/// replace the canonical row selected by the runtime. A row with the same
+/// creation time and goal ID is treated as an update and replaces in place.
 fn upsert_goal_rows(target: &mut Vec<GoalRow>, incoming: Vec<GoalRow>) {
     let mut indexes = target
         .iter()
@@ -1050,6 +1310,183 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    fn request_row(
+        request_id: &str,
+        created_at: &str,
+        lifecycle_state: &str,
+        execution_origin: &str,
+        metadata: Option<String>,
+    ) -> AgentRequestRow {
+        serde_json::from_value(serde_json::json!({
+            "request_id": request_id,
+            "agent_did": "did:agent:1",
+            "behavior_id": "default",
+            "session_id": "session-1",
+            "content": "turn",
+            "status": lifecycle_state,
+            "lifecycle_state": lifecycle_state,
+            "execution_origin": execution_origin,
+            "metadata": metadata,
+            "created_at": created_at
+        }))
+        .expect("request row")
+    }
+
+    #[test]
+    fn legacy_wake_is_not_authoritative_latest_request() {
+        let metadata = background_wake_metadata();
+        let store = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![AgentConversationRow {
+                session_id: "session-1".to_string(),
+                agent_name: None,
+                agent_did: Some("did:agent:1".to_string()),
+                requester_did: None,
+                behavior_id: Some("default".to_string()),
+                title: None,
+                title_source: None,
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: None,
+                updated_at: None,
+                latest_request_id: Some("legacy-wake".to_string()),
+            }],
+            requests: vec![
+                request_row(
+                    "interactive",
+                    "2026-07-01T00:00:00Z",
+                    "completed",
+                    "interactive",
+                    None,
+                ),
+                request_row(
+                    "legacy-wake",
+                    "2026-07-01T00:00:01Z",
+                    "pending",
+                    "scheduled",
+                    Some(metadata),
+                ),
+            ],
+            ..ClientStoreRows::default()
+        });
+
+        assert_eq!(
+            store.latest_request_id_for_session("session-1").as_deref(),
+            Some("interactive")
+        );
+        assert_eq!(
+            store
+                .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
+                .as_deref(),
+            Some("interactive")
+        );
+        assert_eq!(
+            store.derive_turn("session-1"),
+            Some(ClientTurnState::Completed)
+        );
+    }
+
+    #[test]
+    fn unknown_conversation_pointer_preserves_partial_observation() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![AgentConversationRow {
+                session_id: "session-1".to_string(),
+                agent_name: None,
+                agent_did: Some("did:agent:1".to_string()),
+                requester_did: None,
+                behavior_id: Some("default".to_string()),
+                title: None,
+                title_source: None,
+                preview_text: None,
+                status: Some("active".to_string()),
+                created_at: None,
+                updated_at: None,
+                latest_request_id: Some("not-replicated-yet".to_string()),
+            }],
+            requests: vec![request_row(
+                "old-terminal",
+                "2026-07-01T00:00:00Z",
+                "completed",
+                "interactive",
+                None,
+            )],
+            ..ClientStoreRows::default()
+        });
+
+        assert_eq!(
+            store.latest_request_id_for_session("session-1").as_deref(),
+            Some("not-replicated-yet")
+        );
+        assert_eq!(
+            store
+                .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
+                .as_deref(),
+            Some("not-replicated-yet")
+        );
+        assert_eq!(
+            store.derive_turn_for_agent("session-1", "did:agent:1"),
+            None,
+            "an unknown latest pointer must not regress to an older terminal request"
+        );
+    }
+
+    #[test]
+    fn remote_scope_replacement_preserves_unstamped_same_session_rows() {
+        let current = ClientStore::from_rows(ClientStoreRows {
+            conversations: vec![
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "shared-session",
+                    "agent_did": "did:agent:local"
+                }))
+                .expect("local conversation"),
+                serde_json::from_value(serde_json::json!({
+                    "session_id": "shared-session",
+                    "agent_did": "did:agent:remote"
+                }))
+                .expect("remote conversation"),
+            ],
+            messages: vec![
+                serde_json::from_value(serde_json::json!({
+                    "message_key": "local:1",
+                    "session_id": "shared-session",
+                    "role": "user",
+                    "content": "local"
+                }))
+                .expect("local message"),
+                serde_json::from_value(serde_json::json!({
+                    "message_key": "remote:1",
+                    "session_id": "shared-session",
+                    "role": "user",
+                    "content": "remote"
+                }))
+                .expect("remote message"),
+            ],
+            message_source_agent_dids: vec![None, Some("did:agent:remote".to_string())],
+            ..ClientStoreRows::default()
+        });
+
+        let replaced =
+            current.replace_remote_agent_scope("did:agent:remote", ClientStore::default());
+
+        assert_eq!(replaced.conversations.len(), 1);
+        assert_eq!(
+            replaced.conversations[0].agent_did.as_deref(),
+            Some("did:agent:local")
+        );
+        assert_eq!(
+            replaced
+                .messages
+                .iter()
+                .map(|row| row.message_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["local:1"]
+        );
+        assert_eq!(replaced.message_source_agent_dids, vec![None]);
+    }
+
+    fn background_wake_metadata() -> String {
+        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#.to_string()
     }
 
     #[test]

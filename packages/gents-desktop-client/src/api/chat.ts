@@ -27,7 +27,7 @@ export function sendChatMessage(
 }
 
 export function renameConversation(
-  request: { sessionId: string; title: string },
+  request: { agentDid: string; sessionId: string; title: string },
   api?: DesktopApiAdapter,
 ) {
   return getDesktopApiAdapter(api).renameConversation(request);
@@ -47,4 +47,8 @@ export function forkSession(
 
 export function resendRequest(requestId: string, api?: DesktopApiAdapter) {
   return getDesktopApiAdapter(api).resendRequest(requestId);
+}
+
+export function retryRequest(requestId: string, api?: DesktopApiAdapter) {
+  return getDesktopApiAdapter(api).retryRequest(requestId);
 }

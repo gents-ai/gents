@@ -50,7 +50,10 @@ permissions = [
 [[set]]
 identifier = "resend-control"
 description = "Request resend / retry"
-permissions = ["allow-desktop-request-resend"]
+permissions = [
+  "allow-desktop-request-resend",
+  "allow-desktop-request-retry",
+]
 
 [[set]]
 identifier = "fleet-read"

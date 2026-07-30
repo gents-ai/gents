@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "desktop_conversation_rename",
     "desktop_session_fork",
     "desktop_request_resend",
+    "desktop_request_retry",
     "desktop_agent_config_save",
     "desktop_behavior_save",
     "desktop_skill_save",
