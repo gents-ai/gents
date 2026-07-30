@@ -95,7 +95,7 @@ impl DefraSessionHook {
             existing_sequence,
             current_request_id,
             current_requester_did,
-            preferred_sequence,
+            _preferred_sequence,
         ) = {
             let state = self.state.lock().await;
             let session_id = state
@@ -156,7 +156,7 @@ impl DefraSessionHook {
             if !matches!(message, Message::User { .. }) {
                 anyhow::bail!("only user tool-result messages may carry a message key");
             }
-            let sequence = session::append_message_with_key_and_requester_did(
+            let (sequence, _) = session::append_message_once_with_key_and_requester_did(
                 &self.node,
                 &session_id,
                 &self.agent_did,
@@ -166,7 +166,6 @@ impl DefraSessionHook {
                 reasoning,
                 current_request_id.as_deref(),
                 message_key,
-                preferred_sequence,
             )
             .await?;
             let mut state = self.state.lock().await;

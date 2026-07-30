@@ -512,7 +512,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 8);
 
     let names = cases
         .iter()
@@ -523,6 +523,7 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
         [
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
+            "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
             "background_recovery_running_live_parent_to_cancelled",
@@ -562,6 +563,10 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
         lean_r6_backgrounding_case("tool_kind_bridge_failure_cancelled_projects_parent_cancelled");
     assert_eq!(cancelled.terminal_state.as_str(), "cancelled");
     assert_eq!(cancelled.reason.as_deref(), Some("parent_cancelled"));
+
+    let backgrounded = lean_r6_backgrounding_case("tool_kind_background_mode_executes");
+    assert!(backgrounded.legal);
+    assert_eq!(backgrounded.terminal_state.as_str(), "running");
 
     let recovered =
         lean_r6_backgrounding_case("background_recovery_running_live_parent_to_cancelled");
