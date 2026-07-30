@@ -36,9 +36,6 @@ pub const MAX_CONCURRENT_PEER_PREPARATIONS: usize = 8;
 pub struct PairingTickOutcome {
     pub peer_id: String,
     pub ops_applied: Vec<DiffOp>,
-    /// Existing subagent replicators force-reinstalled after a disconnected
-    /// peer is dialed again. Reinstall performs a bounded full replay without
-    /// authoring same-value AgentRequest mutations.
     pub replayed_replicators: Vec<String>,
     pub desired_read_failed: bool,
 }
@@ -55,10 +52,6 @@ pub trait PairingStateStore: Send + Sync {
 
     async fn list_peer_ids(&self) -> Result<BTreeSet<String>>;
 
-    /// Materialize or retract the issuer-signed bearer readiness projection.
-    /// The default keeps non-GraphQL test stores and alternate implementations
-    /// source-compatible; the embedded runtime implementation persists the
-    /// acknowledgement only after desired and applied reciprocal wiring agree.
     async fn reconcile_bearer_readiness(
         &self,
         _peer_id: &str,
@@ -68,10 +61,7 @@ pub trait PairingStateStore: Send + Sync {
         Ok(())
     }
 
-    /// Called once at the start of each sweep, before the per-peer loop. Lets a
-    /// store amortize per-sweep work (e.g. computing the membership-materializable
     /// set once instead of re-verifying every signature for every peer — the
-    /// O(N²) the naive per-peer gate would do). Default is a no-op.
     async fn begin_sweep(&self) -> Result<()> {
         Ok(())
     }
@@ -148,22 +138,6 @@ async fn prepare_pairing_peer(
     let mut active_before = observed_active_before.unwrap_or(false);
     let mut reconnected = false;
     if desired_state.has_wiring() && !desired_state.replicator_addresses.is_empty() {
-        // Dial when the peer is not already connected OR its signed endpoint
-        // changed since the last successfully applied replicator. Iroh keeps
-        // the peer identity stable across relaunches while its shareable
-        // address can change. During that window `active_peers` may still
-        // contain the old connection, so peer-id liveness alone is a false
-        // positive and add_replicator reuses a stale route until it times out.
-        //
-        // The unchanged-address case still follows the Lean
-        // `PairingReconcile.Transition.dial`/`dialFailed` premises both require
-        // `connected = false`; a connected peer proceeds straight to the
-        // reconcile ops. A redundant redial is not merely wasted work: on Linux
-        // it can time out even though the connection is healthy, and a dial
-        // failure aborts this tick before the diff below runs — leaving an
-        // already-paired peer permanently unable to pick up new desired state
-        // (e.g. the filtered conversation data-plane replicator on top of an
-        // applied control-plane pairing).
         let endpoint_changed = !applied.replicator_addresses.is_empty()
             && applied.replicator_addresses != desired_state.replicator_addresses;
         if observed_active_before.is_none() {
@@ -235,24 +209,11 @@ async fn reconcile_prepared_peer(
     let desired_state = desired.clone().unwrap_or_default();
     let actual = read_actual(admin).await?;
 
-    // All three collection sets are in name-space: `desired_state` carries names,
-    // `read_actual` reverse-resolves the remote subscription ids back to names, and
-    // the persisted `applied` row records names. The diff therefore compares like
-    // with like, and `PeerPairingApplied.collections` stays human-readable for CLI
-    // display and health (review Finding #1).
     let ops = compute_owned_pairing_diff(&desired_state, &actual.state, &applied);
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
-    // #664 residual convergence: a subagent peer can be partitioned longer
     // than the persisted per-request redrive cap. DefraDB's idempotent
-    // add_replicator path deliberately skips initial replay for an existing
-    // identity, so after a real reconnect force-reinstall every otherwise-
-    // converged subagent replicator. This replays current owner-authored DAG
-    // heads (including arbitrarily old terminal requests) and does not create
-    // any new same-value request history. If the desired identity itself
-    // changed, the ordinary diff already contains teardown+install and is the
-    // replay; avoid doing it twice.
     if (reconnected || force_replay) && desired_state.uses_subagent_template() {
         for address in desired_state
             .replicator_addresses
@@ -296,13 +257,6 @@ async fn reconcile_prepared_peer(
     })
 }
 
-/// True when `peer_id` already has a live connection according to
-/// `active_peers`. Entries are either bare peer ids or the dial address
-/// recorded for the peer (the embedded adapter returns whichever it has), so
-/// extract the peer id from each entry rather than comparing verbatim —
-/// mirroring the desktop supervisor's `is_connected_peer`. A failed read
-/// degrades to "not connected": the tick dials exactly as it did before this
-/// check existed.
 async fn peer_already_active(admin: &dyn RemoteP2pAdmin, peer_id: &str) -> bool {
     let peers = match admin.active_peers().await {
         Ok(peers) => peers,
@@ -352,12 +306,7 @@ async fn run_pairing_reconciler_loop(
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
 
-    // A transient top-level read failure during the first sweep is no more
-    // terminal than one during a recurring sweep. The interval's first tick is
-    // immediately ready, so logging here preserves the prompt startup retry
     // without introducing a separate backoff path. Unlike the registry and
-    // endpoint heartbeat daemons, do not consume that first tick before this
-    // sweep: it is the retry fence if startup hits a transient store error.
     if !sweep_pairings_logged_until_cancelled(
         admin,
         store,
@@ -408,14 +357,6 @@ async fn run_pairing_reconciler_loop(
     }
 }
 
-/// Run one full sweep while keeping the supervisor cancellation boundary live.
-///
-/// Each remote admin call has its own timeout, but a sweep can visit many stale
-/// peers. Awaiting the sweep directly therefore multiplies shutdown latency by
-/// the number of peers. Dropping the sweep future on cancellation preempts the
-/// current admin wait and skips the remaining peer loop; the outer runtime can
-/// then join this task promptly. Sweep errors are logged and remain nonterminal;
-/// `false` means only that cancellation won the biased boundary.
 async fn sweep_pairings_logged_until_cancelled(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
@@ -430,10 +371,7 @@ async fn sweep_pairings_logged_until_cancelled(
     }
 }
 
-/// Run a sweep, logging (not propagating) a transient failure. A failed sweep —
 /// e.g. a momentary `list_peer_ids` read error — must not tear down the whole
-/// reconciler; the next tick retries. Mirrors the discovery / heartbeat daemons,
-/// which also log-and-continue rather than aborting the runtime task.
 async fn sweep_pairings_logged(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
@@ -451,9 +389,7 @@ async fn sweep_pairings(
     replay_connections: &mut BTreeMap<String, bool>,
     failing_peers: &mut BTreeSet<String>,
 ) -> Result<()> {
-    // Amortize the membership-materializable computation across the whole sweep
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
-    // per-peer gate falls back to a live read.
     store.begin_sweep().await?;
     let preparation_inputs = store
         .list_peer_ids()
@@ -464,16 +400,9 @@ async fn sweep_pairings(
             (peer_id, was_active)
         })
         .collect::<Vec<_>>();
-    // Discovery and dial preparation may wait on a stale mobile peer for the
-    // full remote-admin timeout. Prepare independent peers concurrently so a
-    // ready phone can enter the serialized topology-mutation section without
-    // waiting behind every stale peer in lexical order. `buffer_unordered`
-    // bounds remote pressure and yields whichever preparation finishes first.
     let mut preparations = stream::iter(preparation_inputs.into_iter().map(
         |(peer_id, was_active)| async move {
             let active_before = peer_already_active(admin, &peer_id).await;
-            // Replay once on daemon startup, and on an inactive -> active edge
-            // even when the remote peer established the connection first.
             let force_replay = was_active.is_none_or(|active| !active && active_before);
             prepare_pairing_peer(admin, store, peer_id, Some(active_before), force_replay).await
         },
@@ -483,20 +412,9 @@ async fn sweep_pairings(
     while let Some(prepared) = preparations.next().await {
         let peer_id = prepared.peer_id.clone();
         let active_before = prepared.active_before;
-        // Reconciliation mutates shared DefraDB topology. Consume one prepared
-        // result at a time so those mutations remain ordered even though
-        // discovery/dial preparation is concurrent.
         let tick_succeeded = match reconcile_prepared_peer(admin, store, prepared).await {
             Ok(outcome) => {
                 if outcome.desired_read_failed {
-                    // Desired-state failure performs no topology work, so a
-                    // replay obligation can only be kept or created here,
-                    // never discharged. An absent entry (daemon startup) and
-                    // an existing `false` (reconnect edge already observed)
-                    // both stay `false` so the pending replay fires on the
-                    // first healthy sweep; a previously-active peer only
-                    // stays `true` while it remains active, so a drop during
-                    // the degraded read still schedules its replay.
                     let was_active = replay_connections.get(&peer_id).copied().unwrap_or(false);
                     replay_connections.insert(peer_id.clone(), was_active && active_before);
                     continue;
@@ -518,10 +436,6 @@ async fn sweep_pairings(
                 true
             }
             Err(error) => {
-                // Transition-aware logging (#684): a backgrounded or
-                // NAT'd mobile peer fails every sweep in its steady state,
-                // so warn only on the healthy -> failing edge, drop to
-                // debug while the peer stays failing, and log recovery.
                 if failing_peers.insert(peer_id.clone()) {
                     tracing::warn!(
                         peer_id = %peer_id,
@@ -542,10 +456,6 @@ async fn sweep_pairings(
             tracing::info!(peer_id = %peer_id, "pairing reconcile recovered for peer");
         }
         let active_after = peer_already_active(admin, &peer_id).await;
-        // Keep replay pending after any transient delete/reinstall failure,
-        // even if the transport itself is connected. The next sweep then
-        // retries the bounded replay instead of mistaking connectivity for a
-        // successfully repaired data plane.
         replay_connections.insert(peer_id.clone(), tick_succeeded && active_after);
     }
     Ok(())
@@ -558,14 +468,6 @@ struct ActualSnapshot {
 }
 
 async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
-    // `list_p2p_collections` returns the remote subscription set in collection-*id*
-    // space, but desired/operator state and the persisted `PeerPairingApplied` row
-    // are in collection-*name* space (the human-readable, observable contract). The
-    // reconcile diff must compare both sides in one space, so normalize the read
-    // boundary by reverse-resolving each id back to its name. Every collection the
-    // remote is subscribed to is one this node also subscribed and therefore has
-    // locally, so its name is always resolvable; if an id somehow can't be resolved
-    // we degrade gracefully (keep the id and warn) rather than churn or panic.
     let mut collections = BTreeSet::new();
     for id in admin
         .list_p2p_collections()
@@ -607,12 +509,6 @@ async fn read_actual(admin: &dyn RemoteP2pAdmin) -> Result<ActualSnapshot> {
         .filter_map(|replicator| Some((replicator.address?, replicator.collections)))
         .collect::<BTreeMap<_, _>>();
 
-    // The diff compares the replicator's carried collection set in *name*
-    // space (part of the replicator identity, Lean
-    // `collections_change_forces_reinstall`), but the transport reports it in
-    // id space — reverse-resolve like the subscription set above. An
-    // unresolvable token is kept raw at debug (unlike subscriptions, some
-    // adapters report names here already, so raw is not necessarily wrong).
     let mut replicator_collections = BTreeMap::new();
     for (address, ids) in &replicator_collections_by_addr {
         let mut names = BTreeSet::new();
@@ -656,9 +552,6 @@ async fn apply_op(
     actual: &ActualSnapshot,
 ) -> Result<()> {
     match op {
-        // The diff runs entirely in collection-*name* space, and the admin
-        // subscribes/unsubscribes by name, so the op token is already the name —
-        // pass it straight through.
         DiffOp::InstallCollection(collection) => admin
             .add_p2p_collections(std::slice::from_ref(collection))
             .await
@@ -669,12 +562,6 @@ async fn apply_op(
             .with_context(|| format!("teardown P2P collection {collection}")),
         DiffOp::InstallReplicator(address) => {
             let addresses = vec![address.clone()];
-            // The replicator carries the template's collection set, which is
-            // independent of the subscription set (`collections`): a `Push`
-            // template subscribes to nothing but still replicates the full set.
-            // Legacy rows with no explicit replicator set fall back to the
-            // subscription collections (the same effective set the diff keys
-            // the replicator identity on).
             let collections = desired
                 .effective_replicator_collections()
                 .iter()
@@ -768,15 +655,10 @@ pub fn update_applied_after_success(
         }
         DiffOp::InstallReplicator(address) => {
             applied.replicator_addresses.insert(address.clone());
-            // The filter is part of the replicator's applied identity: record
-            // the desired filter that was just installed so a later change is
-            // detected as divergence (Lean `filter_change_forces_reinstall`).
             applied.replicator_filter = desired.replicator_filter.clone();
         }
         DiffOp::TeardownReplicator(address) => {
             applied.replicator_addresses.remove(address);
-            // Once no managed replicator remains, the recorded filter identity
-            // is meaningless — clear it so an empty applied state is canonical.
             if applied.replicator_addresses.is_empty() {
                 applied.replicator_filter = PairingFilters::default();
             }
@@ -800,15 +682,8 @@ async fn persist_applied(
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,
-    /// Per-sweep cache of the membership-materializable entries, refreshed by
-    /// [`begin_sweep`](PairingStateStore::begin_sweep). `Some` during a sweep so
     /// the Layer-2 gate verifies every signature ONCE per sweep instead of once
-    /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
-    /// live read (also the path for the very first read or a refresh failure).
     materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
-    /// Per-sweep cache of reciprocal conversation endpoints. Mirrors
-    /// `materializable_cache` so the Layer-2 reciprocal gate does not re-read and
-    /// re-verify every invited endpoint once per peer.
     reciprocal_materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
 }
 
@@ -826,8 +701,6 @@ impl GraphqlPairingStateStore {
         &self,
         peer_id: &str,
     ) -> Result<Option<NetworkEndpointEntry>> {
-        // Prefer the per-sweep cache; fall back to a live read when it is absent
-        // (first read, outside a sweep, or after a refresh failure).
         let cached = self.materializable_cache.lock().unwrap().clone();
         let entries = match cached {
             Some(entries) => entries,
@@ -1053,9 +926,6 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let collections = graphql_nullable_string_array(&applied.collections);
         let replicator_addresses = graphql_nullable_string_array(&applied.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.replicator_filter);
-        // Keep subsecond precision in the add payload. DefraDB derives document
-        // identity from genesis content, so an immediate delete/recreate with
-        // second-truncated timestamps can regenerate a tombstoned docID.
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
@@ -1138,11 +1008,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
     }
 
     async fn begin_sweep(&self) -> Result<()> {
-        // Compute the membership-materializable set ONCE for this sweep so the
-        // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
         // instead of re-verifying every membership/endpoint signature for every
-        // peer (the O(N²) the review flagged). A refresh failure is non-fatal:
-        // clear the cache so the per-peer path falls back to a live read.
         let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
         let refreshed = match network.load_materializable_entries().await {
             Ok(entries) => Some(entries),
@@ -1184,8 +1050,6 @@ struct PairingStateRow {
     replicator_filter: Option<String>,
 }
 
-/// The default scope template applied to rows that carry no `template` (e.g.
-/// rows written before the field existed). Mirrors the migration backfill.
 pub const DEFAULT_PAIRING_TEMPLATE: &str = "conversation";
 
 #[derive(Deserialize)]
@@ -1216,10 +1080,6 @@ fn desired_from_pairing_row(
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
 
-    // Template-driven resolution: the template is authoritative for the
-    // collection set, the per-peer scope filter, and the delivery mode. Rows
-    // without a `template` (pre-migration) default to `conversation`, matching
-    // the migration backfill.
     let template_id = row
         .template
         .as_deref()
@@ -1235,11 +1095,6 @@ fn desired_from_pairing_row(
             .expect("default pairing template is in the catalog")
     });
 
-    // app-collections is a data-plane-only (bring-your-own) policy: a
-    // control-plane / PeerPairingDesired row cannot supply row collections, so
-    // it would resolve to empty wiring yet has_wiring() would be true (addresses
-    // present). Refuse to wire it. Soft-skip (Ok(None) + warn) so a raw-GraphQL
-    // row cannot install an empty-collection replicator.
     if template.id == APP_COLLECTIONS_TEMPLATE {
         tracing::warn!(
             "PeerPairingDesired names the app-collections template, which is \
@@ -1248,12 +1103,6 @@ fn desired_from_pairing_row(
         return Ok(None);
     }
 
-    // The scope filter's peer value is the row's remote agent DID. Templates
-    // choose which immutable route field receives it (for example,
-    // conversation uses requester_did). A peer-DID-dependent template with a
-    // blank agent_did cannot be honored: it would build an empty predicate
-    // (matches nothing) or, worse, an unscoped replicator. Refuse the row and
-    // skip this peer, mirroring discovery's blank-DID guard.
     let peer_did = row.agent_did.as_deref().map(str::trim).unwrap_or_default();
     if peer_did.is_empty() && scope_requires_peer_did(&template.scope) {
         anyhow::bail!(
@@ -1270,10 +1119,7 @@ fn desired_from_pairing_row(
         scope_filter(&template.scope, template.collections, peer_did, local_did);
 
     let subscription_collections = match template.delivery {
-        // Push: never subscribe — the filtered replicator is the only channel,
-        // so the unfiltered collection never gossips.
         Delivery::Push => BTreeSet::new(),
-        // Replicate: subscribe to the whole collection set.
         Delivery::Replicate => replicator_collections.clone(),
     };
 
@@ -1362,11 +1208,6 @@ fn data_plane_desired_from_pairing_row(
         .filter(|value| !value.is_empty())
         .collect::<BTreeSet<_>>();
 
-    // app-collections (bring-your-own): the row supplies the collection set; the
-    // template supplies only scope (Unscoped) + delivery (Replicate). A blank set
-    // is malformed input — SOFT-SKIP this layer (Ok(None) + warn) rather than
-    // bail, so a bad app row never fails the whole peer's desired load and stalls
-    // a co-existing control pairing (reconcile_peer_tick desired_read_failed).
     let (replicator_collections, subscription_collections): (BTreeSet<String>, BTreeSet<String>) =
         if template.id == APP_COLLECTIONS_TEMPLATE {
             let row_cols = row
@@ -1384,11 +1225,8 @@ fn data_plane_desired_from_pairing_row(
                 );
                 return Ok(None);
             }
-            // Replicate: subscribe to the same set so the merged doc is observable.
             (row_cols.clone(), row_cols)
         } else {
-            // Legacy / template-driven data-plane rows: unchanged. Template
-            // collections drive the replicator; no subscription (push channel).
             let cols = template
                 .collections
                 .iter()
@@ -1472,24 +1310,10 @@ fn data_plane_scope_filter(
     }
 }
 
-/// Merge Layer-1 control-plane desired state with optional Layer-2 data-plane
-/// desired state for the same peer.
-///
-/// Most data-plane templates are delivered by filtered push replicators, so
-/// their collections extend only the per-peer replicator set — the subscription
-/// set is cleared so conversation data never gossips unfiltered. Exception:
-/// the `app-collections` (bring-your-own Unscoped/Replicate) policy preserves
-/// its subscription set so the merged doc is observable on both sides.
 pub fn merge_layered_desired(
     base: Option<PairingDesired>,
     data_plane: Option<PairingDesired>,
 ) -> Option<PairingDesired> {
-    // Layer-2 desired rows add data-plane collections to the per-peer
-    // replicator, not to the subscription set — EXCEPT the app-collections
-    // (bring-your-own) policy, which is a whole-collection Replicate that must
-    // subscribe on both sides for the merged doc to be observable. All other
-    // data-plane layers keep the clear so conversation data never gossips
-    // unfiltered.
     let data_plane = data_plane.map(|mut desired| {
         if !desired.template_ids.contains(APP_COLLECTIONS_TEMPLATE) {
             desired.collections.clear();
@@ -1511,10 +1335,6 @@ pub fn merge_layered_desired(
     }
 }
 
-/// Return the claimant and endpoint only after the exact conversation
-/// replicator identity has been persisted as applied. This is the Rust
-/// boundary for Lean `BearerReadiness.ready`: a connected peer or a desired
-/// row alone never earns an acknowledgement.
 fn earned_bearer_readiness(
     desired: Option<&PairingDesired>,
     applied: &PairingApplied,
@@ -1525,9 +1345,6 @@ fn earned_bearer_readiness(
         .template_ids
         .iter()
         .filter(|id| super::templates::conversation_like(id))
-        // A layered desired state can temporarily carry both ids while an
-        // operator/base edge coexists with the bearer data-plane edge.
-        // Prefer the wider machine acknowledgement in that case.
         .max()?;
     if desired.replicator_addresses.len() != 1
         || applied.replicator_addresses != desired.replicator_addresses
@@ -1654,9 +1471,6 @@ pub fn bearer_pairing_ready_upsert_mutation(
     )
 }
 
-/// Serialize the per-pairing scope filter to a GraphQL String literal (JSON),
-/// emitting `null` for the unfiltered (empty) case so the column is never an
-/// empty-list literal. The JSON round-trips through `decode_replicator_filter`.
 fn graphql_nullable_filter_literal(filter: &PairingFilters) -> String {
     if filter.is_empty() {
         return "null".to_string();
@@ -1665,8 +1479,6 @@ fn graphql_nullable_filter_literal(filter: &PairingFilters) -> String {
     format!(r#""{}""#, escape_graphql_string(&json))
 }
 
-/// Decode the persisted scope filter String (JSON) back into `PairingFilters`.
-/// Missing/empty/malformed values decode to an empty (unfiltered) filter.
 fn decode_replicator_filter(value: Option<&str>) -> PairingFilters {
     let Some(raw) = value.map(str::trim).filter(|v| !v.is_empty()) else {
         return PairingFilters::default();

@@ -118,7 +118,6 @@ pub struct AmyToolCallTraceRecord {
     pub task_outcome: Option<String>,
     pub tool_failure_class: Option<ToolFailureClass>,
     pub tool_error: Option<TraceToolError>,
-    /// Deprecated compatibility alias for tool_failure_class.
     pub failure_class: Option<ToolFailureClass>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -431,8 +430,6 @@ fn structured_tool_error_code_from_result(result: &str) -> Option<String> {
     }
 
     let raw = object.get("failure_class").and_then(Value::as_str)?;
-    // Preserve the policy-block reason for trace consumers while keeping
-    // discovery failures rebucketed to the canonical 5-variant vocabulary.
     (raw == "tool_not_allowed").then(|| raw.to_string())
 }
 
@@ -557,13 +554,10 @@ fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> O
 }
 
 fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
-    // Accept both new camelCase persisted vocab and legacy snake_case strings
-    // emitted by older MCP tool envelopes.
     if let Some(failure_class) = ToolFailureClass::from_persisted(raw) {
         return Some(failure_class);
     }
     match raw {
-        // Legacy snake_case strings rebucketed into the canonical vocabulary.
         "service_unavailable"
         | "tool_not_found"
         | "tool_not_allowed"
@@ -725,15 +719,10 @@ fn looks_like_tool_runtime_error(lower: &str) -> bool {
 
 fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> {
     match failure_class {
-        // ServiceUnavailable and External are transient; ArgumentInvalid is a
-        // model-fixable error so we let the request retry.
         ToolFailureClass::ServiceUnavailable
         | ToolFailureClass::External
         | ToolFailureClass::ArgumentInvalid => Some(true),
-        // Transport errors are retriable by definition.
         ToolFailureClass::Transport => Some(true),
-        // ToolReturnedError is non-retriable at the tool-call level; a denied
-        // approval is an operator verdict, never retried automatically.
         ToolFailureClass::ToolReturnedError
         | ToolFailureClass::PolicyDenied
         | ToolFailureClass::ApprovalDenied => Some(false),

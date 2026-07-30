@@ -56,17 +56,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         enabled: view.principal.value.enabled,
     };
 
-    // Snapshot the local prober's routing vetoes once per resolution so every
-    // behavior gate and admission config in this snapshot shares one opinion.
     let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
 
     let mut unavailable_behaviors = HashMap::new();
-    // Collect sync factory closures for each resolvable behavior.  All
-    // resolution done here is synchronous (the existing `async { }.await`
-    // was a try-block syntax workaround; there are no real `.await`s inside
-    // it).  We separate pre-resolution from Arc construction so that the
-    // single `Arc::new(AgentPrincipal { ... })` lives exclusively inside
-    // `assemble_principal_and_behaviors`.
     let mut behavior_factories: Vec<
         Box<
             dyn FnOnce(
@@ -76,8 +68,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         >,
     > = Vec::new();
 
-    // Convert the principal's Skill documents once; each behavior then filters
-    // this set to its D5 effective candidates (see `crate::skills`).
     let all_skills: Vec<crate::skills::Skill> = view
         .skills
         .values()
@@ -94,7 +84,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             continue;
         }
 
-        // Perform all synchronous resolution before the factory closure.
         let resolved_result: Result<_, anyhow::Error> = (|| {
             let backend_id = behavior
                 .backend_id
@@ -133,9 +122,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     backend.probe_status
                 );
             }
-            // ChatGptCodex needs an enabled OAuthCredential before a slot can build its client.
-            // Without this gate the behavior is admitted as runnable, the slot build fails at start,
-            // and the readiness barrier never completes (the process hangs instead of degrading).
             if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex
                 && !view.has_enabled_oauth_credential(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
             {
@@ -237,8 +223,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    // Construct one Arc<AgentPrincipal> and share it across all behaviors.
-    // This is the load-bearing site fenced by the loader-dedup proptest.
     let (principal, behavior_results) =
         assemble_principal_and_behaviors(principal_data, behavior_factories);
 
@@ -278,12 +262,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
     for (behavior, mut tool_surface) in behavior_surfaces {
-        // Warn for every LOCAL target that is about to be dropped because its
-        // target behavior did not make it into the active set (either disabled,
-        // or its backend/MCP resolution failed). Remote-DID targets are retained
-        // ONLY when `subagent_allow_cross_deployment` is true; with the flag off
-        // (the default) they are dropped in `resolve_with_available_subagent_targets`
-        // before this pass, so none appear here.
         for target in tool_surface.subagent_targets() {
             if target.agent_did == own_agent_did
                 && !active_behavior_ids.contains(&target.behavior_id)
@@ -354,10 +332,6 @@ async fn load_paired_peer_dids(node: &EmbeddedNode, local_did: &str) -> Result<H
         .and_then(|d| d.get("PeerPairingDesired"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
-    // Never treat this node's OWN DID as a trusted PEER (see
-    // `startup::load_startup_paired_peer_dids`): a self-referential pairing row
-    // would mis-route a LOCAL spawn into the trusted-paired-peer branch and
-    // wrongly deny it when cross-deployment is off. Empty/blank DIDs are dropped.
     let local_did = local_did.trim();
     Ok(rows
         .into_iter()
@@ -376,12 +350,6 @@ async fn load_paired_peer_dids(node: &EmbeddedNode, local_did: &str) -> Result<H
         .collect())
 }
 
-/// Classify every `Task` in `view` into `active_tasks` if it's enabled and
-/// bound to an available behavior. Unlike `resolve_schedules` /
-/// `resolve_event_triggers`, we don't keep an `unavailable_tasks` set here —
-/// tasks without a trigger aren't exposed to any runtime consumer except
-/// `ManualTriggerHandle::run_task_now`, which reports unavailability at the
-/// call site via a "not in the active snapshot" error.
 fn resolve_tasks(
     view: &DocumentRuntimeView,
     unavailable_behaviors: &HashMap<String, String>,
@@ -424,11 +392,6 @@ fn resolve_tasks(
     active_tasks
 }
 
-/// Classify every `Schedule` in `view` into either `active_schedules`
-/// (resolvable with its task and behavior) or `unavailable_schedules`
-/// (anything that fails one of the resolution gates). Mirrors the
-/// behavior-resolution pattern above: we never fail the whole snapshot for a
-/// single unresolvable schedule; we mark it unavailable instead.
 fn resolve_schedules(
     view: &DocumentRuntimeView,
     unavailable_behaviors: &HashMap<String, String>,
@@ -555,11 +518,6 @@ fn resolve_schedule_cadence(
     }
 }
 
-/// Classify every `EventTrigger` in `view` into either `active_event_triggers`
-/// (resolvable with its task and behavior) or `unavailable_event_triggers`
-/// (anything that fails one of the resolution gates). Mirrors
-/// `resolve_schedules`: we never fail the whole snapshot for a single
-/// unresolvable trigger; we mark it unavailable instead.
 fn resolve_event_triggers(
     view: &DocumentRuntimeView,
     unavailable_behaviors: &HashMap<String, String>,
@@ -694,10 +652,6 @@ pub(super) fn non_empty(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// Convert a `Skill` document into the runtime resolution type. An unknown or
-/// missing `scope` defaults to `Behavior` (the most restrictive — never
-/// auto-inherited); apply-time validation rejects invalid scopes before they
-/// reach the runtime, so this is defensive.
 fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
     crate::skills::Skill {
         skill_id: doc.skill_id.clone(),

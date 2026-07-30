@@ -1,11 +1,4 @@
 //! Background health checker for registered data services.
-//!
-//! Runs periodically to:
-//! 1. Query ToolServiceRegistry for online services
-//! 2. Detect stale heartbeats
-//! 3. Probe MCP endpoints
-//! 4. Evict dead connections
-//! 5. Publish local service health state for the meta-tools
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -130,20 +123,8 @@ impl HealthStateInternal {
         }
     }
 
-    /// String form persisted to the `ToolServiceHealthState` DefraDB
-    /// collection. Mirrors `HealthState.toDefraDB` in
-    /// `Proofs/MCPHealth/State.lean` exactly — including `degraded` rather
-    /// than the public `HealthStatus::Stale` projection name. Operators read
-    /// the precise internal-state vocabulary so the panel can distinguish
-    /// the staleness flavor of degraded (heartbeat lag, `failure_count = 0`)
-    /// from the failure-count flavor (`1 <= failure_count < K`).
-    ///
     /// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in
-    /// the Lean model; the production cycle does not emit that event today
     /// (the loop skips while backoff is active, then probes directly), so
-    /// rows with `status: "reconnecting"` will only appear once the cycle
-    /// is extended to bridge the gap. The persisted vocabulary covers it
-    /// so future production emission needs no schema change.
     fn to_defradb(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -193,13 +174,7 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
-/// Full MCP service health snapshot exposed to operators (CLI table, desktop
-/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
-///
 /// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
-/// that the public `HealthStatus` projection collapses. `status` is the
-/// internal `HealthStateInternal` projected to its DefraDB string
-/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
 #[derive(Debug, Clone, Serialize)]
 pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
@@ -243,10 +218,7 @@ impl ServiceHealthMap {
             .collect()
     }
 
-    /// Full per-service snapshot including the K-model fields. The
     /// `snapshot()` projection drops `failure_count` / `backoff_until` /
-    /// the internal `HealthState`; this one preserves them for operator
-    /// surfaces (the desktop panel, the persisted DefraDB row).
     pub async fn snapshot_full(&self, k_max: u32) -> Vec<MCPServiceHealthSnapshot> {
         let k_max = k_max.max(1);
         self.inner
@@ -297,10 +269,6 @@ impl ServiceHealthMap {
     }
 }
 
-/// Context for persisting `MCPServiceHealthSnapshot` rows to DefraDB at the
-/// end of every health-check cycle. The production `spawn_health_checker`
-/// builds one of these per agent; CLI one-shot probes (`gents mcp
-/// probe`) and tests pass `None` to skip persistence.
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
     pub node: &'a EmbeddedNode,
@@ -443,7 +411,6 @@ async fn run_health_check(
     .await
 }
 
-// Production transition step once the registry query has supplied online rows.
 pub async fn run_health_check_cycle(
     services: Vec<McpHealthCheckService>,
     now: DateTime<Utc>,
@@ -473,15 +440,8 @@ pub async fn run_health_check_cycle(
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
         let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
-        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
         // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
-        // `Evicted` cycle and the next probe. The production loop does not
         // emit that event today — it skips while backoff is active, then
-        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
-        // So persisted rows never carry `status: "reconnecting"` until the
-        // cycle is extended to bridge that gap (a future task; tracked
-        // alongside the K≥2 design pass in #303). The persisted vocabulary
-        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }
@@ -624,12 +584,6 @@ pub async fn run_health_check_cycle(
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
         persist_health_snapshot(&persistence, &snapshot, now).await;
-        // Source the stale-row set from DefraDB scoped to this agent rather
-        // than from the in-memory map: the in-memory entry is dropped by
-        // `retain_services` above, and the map is empty on a fresh start, so
-        // an in-memory diff misses rows persisted by a previous run (or by
-        // an earlier failed delete). Querying the persisted collection makes
-        // both restart-after-shutdown and delete-retry-on-error work.
         match load_persisted_service_ids(&persistence).await {
             Ok(persisted_ids) => {
                 for service_id in persisted_ids
@@ -768,10 +722,6 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Coarse classification of `last_error` strings persisted alongside the
-/// raw message so the panel can render a stable error-class chip
-/// independent of the freeform error text. Drift to the message is
-/// expected — the class is best-effort.
 fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
@@ -834,14 +784,6 @@ async fn upsert_persisted_health_state(
         None => ("null".to_string(), "null".to_string()),
     };
 
-    // The persisted-row identity is the compound (service_id, agent_did) —
-    // see the schema comment in
-    // crates/gents-protocol/schemas/services/tool_service_health_state.graphql.
-    // The upsert filter must match on both so two agents that register the
-    // same service_id don't overwrite each other's row.
-    //
-    // Predictable cost: one upsert per service per health-check cycle.
-    // Default `cycle_interval` = 30s + handful of services = far under 1 write/s.
     let mutation = format!(
         r#"mutation {{
             upsert_ToolServiceHealthState(
@@ -916,10 +858,6 @@ async fn delete_persisted_health_state(
     }
 }
 
-/// Source-of-truth read of every persisted `ToolServiceHealthState`
-/// service_id scoped to the writing agent — used by the cycle's stale-row
-/// reconciliation so restart-after-shutdown and one-off delete failures
-/// converge to the registry's current state.
 async fn load_persisted_service_ids(
     persistence: &HealthPersistenceContext<'_>,
 ) -> Result<HashSet<String>> {
@@ -955,7 +893,6 @@ async fn load_persisted_service_ids(
         .collect())
 }
 
-// Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod registry_parsing_tests {
     use super::McpHealthCheckService;

@@ -85,7 +85,6 @@ impl SpawnSubagentTool {
         Ok(())
     }
 
-    /// Model-facing names of the configured subagent targets.
     fn allowed_target_names(&self) -> Vec<String> {
         self.config
             .targets
@@ -634,8 +633,6 @@ impl Tool for CancelProcessTool {
     }
 }
 
-/// Build a model-facing description listing each allowed subagent target name
-/// with its description, so the model can pick the right `name`.
 fn subagent_target_name_description(targets: &[crate::document_config::SubagentTarget]) -> String {
     let mut description = String::from(
         "Friendly name of the subagent to spawn, from this behavior's allowed targets.",

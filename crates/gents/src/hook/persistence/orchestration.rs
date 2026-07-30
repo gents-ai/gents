@@ -6,10 +6,6 @@ use crate::workflow::{
     WORKFLOW_ROLE_SYNTHESIS,
 };
 
-/// A typed rejection raised from inside the workflow RUN path (e.g. the spawn-time
-/// local-behavior guard) so the dispatch can persist the correct
-/// `tool_failure_class` instead of the generic `External`. Carried through
-/// `anyhow` and recovered via `downcast_ref`.
 #[derive(Debug)]
 struct WorkflowSpawnRejected {
     failure_class: FailureClass,
@@ -24,10 +20,6 @@ impl std::fmt::Display for WorkflowSpawnRejected {
 
 impl std::error::Error for WorkflowSpawnRejected {}
 
-/// Map a workflow RUN-path error to the `(tool_failure_class, payload)` the
-/// dispatch persists. A typed `WorkflowSpawnRejected` (e.g. the spawn-time
-/// local-behavior guard) carries its own class so trace/projection/retry see the
-/// right `tool_failure_class`; everything else is genuinely `External`.
 fn classify_workflow_run_error(error: &anyhow::Error) -> (FailureClass, String) {
     match error.downcast_ref::<WorkflowSpawnRejected>() {
         Some(rejected) => (rejected.failure_class, rejected.payload.clone()),
@@ -55,9 +47,6 @@ struct WorkflowSpawnSpec {
 #[derive(Debug, Clone, Serialize)]
 struct WorkflowOutcome {
     task_id: String,
-    // Lineage retained for diagnostics but kept OUT of the synthesis payload:
-    // the synthesizer only needs the task label, the outcome status, and the
-    // report text — a UUID and the internal behavior id are noise in its prompt.
     #[serde(skip_serializing)]
     #[allow(dead_code)]
     child_request_id: String,
@@ -137,11 +126,7 @@ impl DefraSessionHook {
         }
 
         lifecycle.start_running().await?;
-        // Register the outer composite in the cancel-visible map so parent
-        // interrupt can terminalize it promptly (#837). The workflow future
         // must not hold exclusive ownership across await points; completion
-        // re-takes (or reloads) the lifecycle and uses CAS terminalization so
-        // a concurrent interrupt wins cleanly.
         self.in_flight_lifecycles
             .lock()
             .await
@@ -158,13 +143,6 @@ impl DefraSessionHook {
         Ok(self.skip_tool_result(FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, result))
     }
 
-    /// Terminalize the outer `fan_out_and_synthesize` composite after the
-    /// workflow future returns (or after interrupt cancelled it mid-flight).
-    ///
-    /// Uses take-or-load + lifecycle CAS so:
-    /// - interrupt that already cancelled the durable row wins;
-    /// - late complete/fail cannot overwrite a cancel terminal;
-    /// - in-memory map ownership is released either way.
     async fn terminalize_fan_out_composite(
         &self,
         session_id: &str,
@@ -177,8 +155,6 @@ impl DefraSessionHook {
         {
             Some(lifecycle) => lifecycle,
             None => {
-                // Lifecycle disappeared without a durable row — treat as cancelled
-                // so the model still gets a tool result.
                 return Ok(crate::tool_call_lifecycle::runtime::cancelled_result());
             }
         };
@@ -195,8 +171,6 @@ impl DefraSessionHook {
             Ok(result) => {
                 lifecycle.complete(&result).await?;
                 if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed {
-                    // Happy path: our CAS won — return the real result without a
-                    // redundant durable re-read.
                     Ok(result)
                 } else {
                     // Lost CAS to cancel/timeout/fail: durable terminal wins.
@@ -211,7 +185,6 @@ impl DefraSessionHook {
                 if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Failed {
                     Ok(payload)
                 } else {
-                    // Lost CAS to cancel/timeout: do not report our failure payload.
                     Ok(self
                         .composite_terminal_payload(session_id, &lifecycle)
                         .await)
@@ -220,7 +193,6 @@ impl DefraSessionHook {
         }
     }
 
-    /// Model-facing tool result for a durable terminal composite row.
     async fn composite_terminal_payload(
         &self,
         session_id: &str,
@@ -235,7 +207,6 @@ impl DefraSessionHook {
             }
             crate::tool_call_lifecycle::ToolCallState::Failed => "tool call failed".to_string(),
             crate::tool_call_lifecycle::ToolCallState::Completed => {
-                // Prefer the durable result when another path completed first.
                 crate::tool_call_lifecycle::query::load_tool_call_result(
                     &self.node,
                     session_id,
@@ -248,11 +219,6 @@ impl DefraSessionHook {
         }
     }
 
-    /// Fail-fast guard for LOCAL workflow targets (mirrors the spawn path's #377
-    /// check in message_spawn): a local target whose behavior no longer exists
-    /// would otherwise have an orphan child written that can never be claimed,
-    /// hanging the workflow until the parent deadline. Reject cleanly instead. On
-    /// a DB error we warn and proceed (same as the spawn path) rather than fail.
     async fn local_target_behavior_guard(
         &self,
         parent_context: &ParentSubagentContext,
@@ -408,7 +374,6 @@ impl DefraSessionHook {
                 "foreground cross-deployment synthesis is not supported in cut 1; use a local synthesis target",
             )));
         }
-        // Local synthesis target: its behavior must still exist (fail-fast #377).
         if let Some(failure) = self
             .local_target_behavior_guard(parent_context, synthesis_target, "/synthesis_target")
             .await
@@ -534,14 +499,6 @@ impl DefraSessionHook {
 
         // Idempotent adoption (reclaim safety): a parent reclaim mid-barrier
         // must not double-spawn the group. Adopt any bridges already persisted
-        // under this `workflow_group_id`; spawn only the missing slots.
-        //
-        // Cut-1 limitations (accepted, fail-safe): adopted fan-out rows are
-        // aligned to specs positionally over an `started_at ASC` order — ties are
-        // impossible today because spawns are sequential round-trips, and the
-        // downstream barrier gate count-check (`fan_out_barrier_satisfied`) fails
-        // closed on any misalignment, so a wrong alignment cannot admit synthesis.
-        // A persisted slot index (deterministic key) is a cut-2 hardening.
         let existing =
             load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
                 .await?;
@@ -574,7 +531,6 @@ impl DefraSessionHook {
                     Ok(bridge) => bridge,
                     Err(error) => {
                         // A spawn failure mid-fan-out must not orphan the bridges
-                        // already spawned this call; terminalize them before bailing.
                         self.cancel_workflow_bridges(parent_context, &fan_out_bridges)
                             .await;
                         return Err(error);
@@ -598,15 +554,6 @@ impl DefraSessionHook {
             );
         }
 
-        // Barrier enforcement, projection-side: gate synthesis on the proven
-        // predicate evaluated over the DURABLE fan-out bridge rows (the exact
-        // surface `Proofs/Workflow/FanOut.lean` and the conformance fence are
-        // stated over). The per-bridge await above terminalizes each bridge; this
-        // re-reads persisted state so a best-effort/deadline path that left a
-        // bridge non-terminal can never reach synthesis. Fail-CLOSED: the gate
-        // requires exactly `fan_out_bridges.len()` fan-out rows all terminal, so a
-        // NULL lifecycle_state or an unexpected/missing row refuses synthesis
-        // rather than passing open.
         let durable_rows =
             load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
                 .await?;
@@ -652,8 +599,6 @@ impl DefraSessionHook {
             WorkflowBridge {
                 tool_call_id: row.tool_call_id.clone(),
                 child_request_id: row.child_request_id.clone().unwrap_or_default(),
-                // Adopted on reclaim: the durable row already carries lifecycle;
-                // fall back to the request-deadline bound for the in-memory await.
                 unclaimed_deadline_at: None,
             }
         } else {
@@ -711,9 +656,6 @@ impl DefraSessionHook {
             .collect()
     }
 
-    /// Terminalize a set of just-spawned workflow bridges so a spawn failure
-    /// mid-fan-out cannot leave durable `running` bridge rows (and the cascade
-    /// policy interrupts their child requests). Best-effort per bridge.
     async fn cancel_workflow_bridges(
         &self,
         parent_context: &ParentSubagentContext,
@@ -739,19 +681,10 @@ impl DefraSessionHook {
         spec: &WorkflowSpawnSpec,
         await_mode: AwaitMode,
     ) -> anyhow::Result<WorkflowBridge> {
-        // Fail-fast re-check at the ACTUAL spawn point (TOCTOU): a LOCAL target's
-        // behavior can be deleted between invocation-time validation and here —
-        // e.g. while fan-out runs, before synthesis is spawned. Writing the bridge
-        // would orphan a child that is never claimed and hang the workflow to the
-        // parent deadline. Mirror message_spawn's #377 guard; warn-and-proceed on a
-        // DB error rather than fail.
         if let Some(target) = resolve_context_target(parent_context, &spec.target_name) {
             if self.subagent_target_host(target) == SubagentTargetHost::Local {
                 match load_agent_behavior(&self.node, &spec.behavior_id).await {
                     Ok(None) => {
-                        // Typed rejection so the dispatch persists
-                        // `serviceUnavailable` (matching the invocation-time guard
-                        // and the normal spawn path), NOT the generic `external`.
                         let pointer = if workflow_role == WORKFLOW_ROLE_SYNTHESIS {
                             "/synthesis_target"
                         } else {
@@ -811,10 +744,7 @@ impl DefraSessionHook {
         )
         .with_requester_did(self.active_requester_did().await);
         lifecycle.set_workflow_group(workflow_group_id, workflow_role);
-        // A background (cross-deployment) child that is never CLAIMED by its
         // remote node must not hold the barrier open until the whole parent
-        // request deadline — it goes dead at the spawn timeout, mirroring the
-        // regular background-subagent path.
         let unclaimed_deadline_at = if await_mode == AwaitMode::Background {
             let deadline = chrono::Utc::now()
                 + chrono::Duration::seconds(
@@ -848,8 +778,6 @@ impl DefraSessionHook {
         loop {
             let now = chrono::Utc::now();
             if now >= parent_context.request_deadline_at {
-                // A child can complete in the last poll window; prefer that real
-                // completion over recording 'dead' on the deadline edge.
                 if let Some(row) =
                     load_child_terminal_row(&self.node, &bridge.child_request_id).await?
                 {
@@ -891,10 +819,6 @@ impl DefraSessionHook {
                         }
                     }
                 }
-                // Genuinely timed out: terminalize the bridge (propagate a failed
-                // mutation rather than silently leaving a `running` row — the
-                // durable barrier gate also refuses synthesis on any non-terminal
-                // fan-out bridge).
                 if let Some(mut lifecycle) = self
                     .take_or_load_in_flight_lifecycle(
                         &parent_context.session_id,
@@ -926,11 +850,6 @@ impl DefraSessionHook {
             )
             .await?
             else {
-                // Unclaimed past the spawn timeout: the remote node never
-                // materialized this child (dead node / unresolvable target), so
-                // declare it dead now instead of holding the barrier open until
-                // the full parent request deadline. The barrier then proceeds over
-                // the structured failure (D10).
                 if bridge.unclaimed_deadline_at.is_some_and(|dl| now >= dl) {
                     if let Some(mut lifecycle) = self
                         .take_or_load_in_flight_lifecycle(
@@ -1031,8 +950,6 @@ impl DefraSessionHook {
 struct WorkflowBridge {
     tool_call_id: String,
     child_request_id: String,
-    /// For a background (cross-deployment) child: the instant after which an
-    /// UNCLAIMED child (no remote node materialized it) is declared dead.
     unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 

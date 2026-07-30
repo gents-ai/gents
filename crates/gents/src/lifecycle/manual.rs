@@ -1,17 +1,4 @@
 //! Helper for out-of-engine manual runs — used by CLI `config task run`
-//! and desktop "Run Now" buttons.
-//!
-//! Instead of pushing into `ManualSource`, this helper writes an
-//! `AgentRequest` document directly with the manual lineage tuple. The
-//! running agent's lifecycle watcher picks up the Pending row via normal
-//! intake. Two reasons for this path:
-//!
-//! 1. CLI runs out-of-process and has no `ManualTriggerHandle`.
-//! 2. Desktop can use it too — same code, same lineage, same
-//!    observability. Avoids maintaining two paths.
-//!
-//! Both paths produce the same `(caused_by_trigger_id = null,
-//! caused_by_trigger_kind = "manual")` lineage tuple.
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
@@ -23,14 +10,6 @@ use crate::lifecycle::{
 };
 use crate::template::{render_template, task_node_ctx, TemplateScope};
 
-/// Write an `AgentRequest` row representing a manual task run, after rendering
-/// the task's `prompt_template` against the given `args`.
-///
-/// Returns the new `AgentRequest`'s `_docID`. The row lands at
-/// `lifecycle_state = "pending"` so the agent's normal intake path picks it
-/// up. Lineage is `caused_by_trigger_kind = "manual"` and
-/// `caused_by_trigger_id = null` (the field is omitted from the create input
-/// so it remains null in the document).
 pub async fn write_manual_agent_request(
     node: &EmbeddedNode,
     agent_did: &str,

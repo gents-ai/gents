@@ -1,7 +1,4 @@
 // Soft-cap justified: six filesystem tool structs (list, read, write, edit,
-// glob, grep) that share private helpers defined in the same file. Splitting
-// each tool into its own file would scatter the shared defaults and make
-// cross-tool consistency harder to verify.
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -19,30 +16,16 @@ use super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::native_runner::NativeFsRunner;
 use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 
-/// Raw-byte content identity (#724): stable across line-ending or encoding
-/// drift precisely because nothing is normalized before hashing.
 fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
-/// Per-path serialization for FILE MUTATORS — edit_file's read →
-/// hash-check → match → write sequence AND write_file's overwrite share it:
-/// without it, a concurrent mutation can land inside edit_file's validated
-/// window and be silently overwritten (lost update). Scope: WITHIN this
-/// process, keyed by canonical path (falling back to the resolved path for
-/// not-yet-existing files). External writers are outside the lock — they
-/// are caught by the expected_content_hash check at entry and otherwise
 /// race as ordinary last-writer-wins POSIX writes (#724 documents the
-/// optimistic-concurrency boundary; there is no OS-level file lock).
 static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
 
-/// Lock key that is stable across path aliases even when the leaf does not
-/// exist yet: canonicalize the deepest existing ancestor and append the
-/// missing suffix, so `alias/new.txt` and `real/new.txt` (alias -> real)
-/// serialize on one lock.
 fn canonical_lock_key(path: &Path) -> PathBuf {
     if let Ok(canonical) = std::fs::canonicalize(path) {
         return canonical;
@@ -569,9 +552,6 @@ impl Tool for EditFileTool {
         let raw = tokio::fs::read(&path).await?;
         let pre_edit_hash = content_hash(&raw);
 
-        // #724 stale gate: fires BEFORE any matching (Lean E6), so a stale
-        // read never even reports ambiguity against content the model has
-        // not seen.
         if let Some(expected) = &args.expected_content_hash {
             if expected != &pre_edit_hash {
                 return Err(anyhow!(
@@ -602,7 +582,6 @@ impl Tool for EditFileTool {
         };
 
         // Strict UTF-8: a lossy conversion followed by a full-file rewrite
-        // would silently replace every invalid byte with U+FFFD.
         let raw_text = String::from_utf8(raw).map_err(|error| {
             anyhow!(
                 "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",
@@ -633,8 +612,6 @@ impl Tool for EditFileTool {
                 let post_edit_hash = content_hash(post_text.as_bytes());
                 if !args.dry_run {
                     tokio::fs::write(&path, post_text.as_bytes()).await?;
-                    // Post-write verification: some hosts report success
-                    // without persisting bytes; stat/mtime are not reliable.
                     let verify = tokio::fs::read(&path).await?;
                     if verify != post_text.as_bytes() {
                         return Err(anyhow!(
@@ -742,8 +719,6 @@ struct ReadFileMetadata {
     truncated: bool,
     start_line: usize,
     end_line: usize,
-    /// Raw-byte identity of the COMPLETE file (even for ranged/truncated
-    /// reads) — pass to edit_file's expected_content_hash (#724).
     content_hash: String,
 }
 

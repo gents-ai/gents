@@ -27,20 +27,14 @@ pub fn default_backend_endpoint() -> &'static str {
     CHATGPT_CODEX_BASE_URL
 }
 
-/// A user-actionable classification of why ChatGPT OAuth could not be used.
 #[derive(Debug, Clone)]
 pub enum ChatGptAuthProblem {
-    /// No matching OAuthCredential document exists.
     Missing,
-    /// A credential exists but is not usable for ChatGPT OAuth.
     WrongMode { found_mode: String },
-    /// Credentials are ChatGPT OAuth but the token is expired or revoked.
     Expired,
-    /// Anything else, with the underlying message.
     Other(String),
 }
 
-/// Render an actionable, multi-line message for a ChatGPT auth failure.
 pub fn classify_chatgpt_auth_error(
     agent_did: &str,
     provider: &str,
@@ -140,7 +134,6 @@ pub fn oauth_credential_id(agent_did: &str, provider: &str) -> String {
     format!("{provider}:{agent_did}")
 }
 
-/// Normalize a user-supplied provider string, defaulting blanks to [`CHATGPT_CODEX_PROVIDER`].
 pub fn normalize_provider(provider: &str) -> String {
     let provider = provider.trim();
     if provider.is_empty() {
@@ -188,8 +181,6 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     let add_input = render_oauth_input(&fields, &[]);
     // `agent_did` is `@immutable` and `credential_id` is the unique key. On this DefraDB pin the
     // immutability check rejects re-sending an immutable field on a pre-existing document, so the
-    // `update` branch (re-login and per-request token rotation both land here) must omit it.
-    // `credential_id` is likewise only ever written in `add`. Mirrors session/conversation.rs.
     let update_input = render_oauth_input(&fields, &["agent_did"]);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(
@@ -271,8 +262,6 @@ pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
     )
 }
 
-/// All OAuthCredential documents for an agent (any provider, enabled or not), so callers can
-/// reason about credential presence/state — e.g. behavior-availability gating at snapshot time.
 pub async fn list_oauth_credentials(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -341,9 +330,6 @@ pub fn build_chatgpt_codex_headers(
     is_fedramp: bool,
 ) -> Result<HeaderMap> {
     let mut headers = default_headers();
-    // The Codex backend selects the SSE response format from the Accept header. Without it the
-    // streaming response carries no `Content-Type: text/event-stream`, and rig's SSE reader
-    // rejects it ("Invalid content type was returned"). Match the real Codex CLI's Accept value.
     headers.insert(
         "Accept",
         HeaderValue::from_static("text/event-stream, application/json"),
@@ -356,9 +342,6 @@ pub fn build_chatgpt_codex_headers(
     if is_fedramp {
         headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
     }
-    // The ChatGPT Codex backend gates model availability on the advertised Codex client version
-    // (an old/unknown version gets a restricted, often empty, model set — and gpt-5.5 -> "requires
-    // a newer version of Codex"). See `chatgpt_codex_client_version`.
     headers.insert(
         "version",
         HeaderValue::from_str(&chatgpt_codex_client_version())
@@ -367,11 +350,6 @@ pub fn build_chatgpt_codex_headers(
     Ok(headers)
 }
 
-/// Codex CLI version advertised to the ChatGPT Codex backend — used for BOTH the request `version`
-/// header and the `/models` `client_version` query param, since the backend gates model
-/// availability on it. Advertise a recent supported Codex CLI version rather than gents's
-/// own crate version (which the backend treats as ancient and rejects everything). Override at
-/// runtime with `GENTS_CHATGPT_CODEX_CLIENT_VERSION` when the supported floor moves.
 pub fn chatgpt_codex_client_version() -> String {
     std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
         .ok()
@@ -380,13 +358,9 @@ pub fn chatgpt_codex_client_version() -> String {
         .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
 }
 
-/// Default recent supported Codex CLI version (see [`chatgpt_codex_client_version`]).
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
-/// Rendered `name: value` GraphQL input entries for an `OAuthCredential`, each paired with its
-/// field name so a caller can omit immutable keys (see [`oauth_credential_upsert_mutation`]).
-/// `credential_id` is intentionally absent — it is written literally in the `add` block only.
 fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static str, String)> {
     let field = |name: &str, value: &str| {
         format!(
@@ -464,7 +438,6 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
     ]
 }
 
-/// Join rendered input entries into a GraphQL input body, skipping any field in `exclude`.
 fn render_oauth_input(fields: &[(&'static str, String)], exclude: &[&str]) -> String {
     fields
         .iter()
@@ -525,15 +498,10 @@ fn parse_optional_datetime(value: Option<String>, field: &str) -> Result<Option<
         .transpose()
 }
 
-/// True when `expires_at` is far enough in the future that the runtime will serve the token without
-/// refreshing — i.e. beyond [`REFRESH_SKEW`] from now. Shared with `diagnose` so its health report
-/// agrees with what the runtime actually does.
 pub fn token_is_fresh(expires_at: DateTime<Utc>) -> bool {
     Utc::now() + REFRESH_SKEW < expires_at
 }
 
-/// Get the `Arc` stored under `key`, constructing it with `make` on first use. Subsequent calls for
-/// the same key return the original `Arc` and never run `make`.
 fn get_or_insert_arc<T>(
     registry: &std::sync::Mutex<std::collections::HashMap<String, Arc<T>>>,
     key: &str,
@@ -545,11 +513,6 @@ fn get_or_insert_arc<T>(
         .clone()
 }
 
-/// Process-wide registry of [`DbCredentialBearer`]s keyed by `credential_id`. Sharing one bearer —
-/// and therefore one cache and one `refresh_lock` — across every client for a credential keeps the
-/// rotating refresh token single-writer within the process. Two independent bearers could each
-/// observe a near-expiry token and both POST the same refresh token, which the provider's
-/// reuse-detection treats as a leak and revokes the credential.
 fn bearer_registry(
 ) -> &'static std::sync::Mutex<std::collections::HashMap<String, Arc<DbCredentialBearer>>> {
     static REGISTRY: std::sync::OnceLock<
@@ -558,8 +521,6 @@ fn bearer_registry(
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-/// The shared bearer for `credential_id`, constructed via `make` on first use (see
-/// [`bearer_registry`]).
 fn shared_bearer(
     credential_id: &str,
     make: impl FnOnce() -> DbCredentialBearer,
@@ -567,20 +528,14 @@ fn shared_bearer(
     get_or_insert_arc(bearer_registry(), credential_id, make)
 }
 
-/// Supplies a current OAuth bearer, refreshing it as needed.
 pub trait BearerSource: Send + Sync {
     fn current_bearer(&self) -> impl Future<Output = Result<String>> + Send;
 
-    /// Signal that the current bearer was rejected by the provider (401/403), so the next
-    /// [`current_bearer`](Self::current_bearer) must refresh rather than serve the rejected token.
-    /// Default is a no-op for sources that do not cache.
     fn invalidate(&self) -> impl Future<Output = ()> + Send {
         async {}
     }
 }
 
-/// HTTP status from a transport error that indicates the bearer itself was rejected (so it should
-/// be refreshed), or `None` for any other error. Both rig status-error variants are handled.
 fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
     match error {
         http_client::Error::InvalidStatusCode(status)
@@ -589,8 +544,6 @@ fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
     }
 }
 
-/// True when a transport error means the provider rejected the bearer (401 Unauthorized / 403
-/// Forbidden) — i.e. the cached token must be invalidated and refreshed.
 fn is_bearer_rejection(error: &http_client::Error) -> bool {
     matches!(bearer_rejection_status(error), Some(401) | Some(403))
 }
@@ -601,13 +554,9 @@ pub struct DbCredentialBearer {
     provider: String,
     credential_id: String,
     http: reqwest::Client,
-    /// In-memory authoritative credential. Holds any refresh token rotated at the provider but
-    /// not yet persisted, so it is the source of truth for a subsequent in-process refresh.
     cache: Mutex<Option<OAuthCredential>>,
     refresh_lock: Mutex<()>,
     is_owner: bool,
-    /// Set when the provider rejected the current bearer (401/403) before its clock expiry. Forces
-    /// the next `current_bearer` to refresh instead of serving the clock-fresh-but-revoked token.
     force_refresh: AtomicBool,
 }
 
@@ -622,8 +571,6 @@ impl DbCredentialBearer {
         Self::with_cache(node, agent_did, provider, credential_id, is_owner, None)
     }
 
-    /// Like [`new`](Self::new), but pre-seeds the in-memory cache with a credential the caller has
-    /// already loaded, so the first request serves from memory instead of re-reading the document.
     pub fn with_cache(
         node: Arc<EmbeddedNode>,
         agent_did: impl Into<String>,
@@ -678,9 +625,6 @@ impl DbCredentialBearer {
         *self.cache.lock().await = Some(credential.clone());
     }
 
-    /// Persist the credential with bounded retry. Called only after a successful provider
-    /// refresh, where the in-memory cache already holds the rotated token — so a persist failure
-    /// degrades to "serve from memory + log", never to stranding a consumed refresh token.
     async fn persist_with_retry(&self, credential: &OAuthCredential) -> Result<()> {
         let mut last_error = None;
         let mut delay_ms = 200u64;
@@ -708,8 +652,6 @@ impl DbCredentialBearer {
     }
 }
 
-/// Copy refreshed token material onto the credential, preserving prior optional fields when the
-/// refresh response omits them.
 fn apply_refreshed_tokens(
     credential: &mut OAuthCredential,
     refreshed: crate::chatgpt_oauth_refresh::RefreshedTokens,
@@ -732,8 +674,6 @@ fn apply_refreshed_tokens(
 
 impl BearerSource for DbCredentialBearer {
     async fn current_bearer(&self) -> Result<String> {
-        // A provider 401/403 sets this; a clock-fresh token is then known-revoked, so every "serve
-        // the fresh cached/DB token" short-circuit below is suppressed until a refresh re-mints it.
         let forced = self.force_refresh.load(Ordering::SeqCst);
 
         if !forced {
@@ -746,11 +686,9 @@ impl BearerSource for DbCredentialBearer {
 
         let _guard = self.refresh_lock.lock().await;
 
-        // Re-read the flag under the lock: a racing turn may have already refreshed and cleared it.
         let forced = self.force_refresh.load(Ordering::SeqCst);
 
         if !forced {
-            // Re-check under the lock: another turn may have refreshed while we waited.
             if let Some(cred) = self.cached().await {
                 if token_is_fresh(cred.access_token_expires_at) {
                     return Ok(cred.access_token);
@@ -758,8 +696,6 @@ impl BearerSource for DbCredentialBearer {
             }
         }
 
-        // Authoritative base: the in-memory credential (which may hold a rotated-but-not-yet-
-        // persisted refresh token) wins over the DB; fall back to the DB on a cold cache.
         let mut credential = match self.cached().await {
             Some(cred) => cred,
             None => {
@@ -773,19 +709,10 @@ impl BearerSource for DbCredentialBearer {
         }
 
         if !self.is_owner {
-            // Non-owner nodes never refresh: a second writer racing the owner with the same
-            // refresh token triggers provider reuse-detection and revokes the credential. They
-            // serve the latest replicated token and rely on the owner's write-back. Clear any
-            // force flag — a non-owner cannot resolve a rejection itself.
             self.force_refresh.store(false, Ordering::SeqCst);
             return Ok(credential.access_token);
         }
 
-        // Owner is about to mint a new token. Re-load from DefraDB first so a credential disabled
-        // after the cache warmed stops serving (load_credential bails when `enabled` is false),
-        // and so an externally-refreshed token is adopted. Take the DB copy when it is at least as
-        // fresh; keep the in-memory copy only when it is strictly ahead — i.e. a prior persist
-        // failed and the cache still holds the not-yet-written rotated refresh token.
         let db_credential = self.load_credential().await?;
         if db_credential.access_token_expires_at >= credential.access_token_expires_at {
             credential = db_credential;
@@ -795,8 +722,6 @@ impl BearerSource for DbCredentialBearer {
             }
         }
 
-        // Owner refresh. The provider ROTATES the refresh token here: once this returns 200 the
-        // old refresh token is consumed and `refreshed` is the ONLY source of truth for it.
         let refreshed = crate::chatgpt_oauth_refresh::refresh_chatgpt_token(
             &credential.refresh_token,
             &self.http,
@@ -805,11 +730,7 @@ impl BearerSource for DbCredentialBearer {
         .map_err(|problem| self.auth_error(&problem))?;
         apply_refreshed_tokens(&mut credential, refreshed);
 
-        // Make the rotated credential the in-memory source of truth BEFORE persisting, so a
-        // write failure can never strand the consumed refresh token and force a reuse-revoking
-        // re-refresh on the next request.
         self.cache_credential(&credential).await;
-        // The freshly-minted token clears the rejection: stop forcing refresh on every request.
         self.force_refresh.store(false, Ordering::SeqCst);
         if let Err(error) = self.persist_with_retry(&credential).await {
             tracing::error!(
@@ -825,8 +746,6 @@ impl BearerSource for DbCredentialBearer {
     }
 
     async fn invalidate(&self) {
-        // Keep the cache as the authoritative base (it may hold a rotated-but-unpersisted refresh
-        // token); just force the next call past the freshness short-circuits into a refresh.
         self.force_refresh.store(true, Ordering::SeqCst);
     }
 }
@@ -903,9 +822,6 @@ impl<S: BearerSource, H> ChatGptCodexHttpClient<S, H> {
         Ok(Request::from_parts(parts, body))
     }
 
-    /// If a transport result is a bearer rejection (401/403), return the bearer to invalidate so the
-    /// next request refreshes instead of replaying a clock-fresh-but-revoked token. Synchronous on
-    /// purpose: the caller must drop the (non-`Send`) `result` borrow before awaiting `invalidate`.
     fn bearer_to_invalidate<X>(&self, result: &http_client::Result<X>) -> Option<Arc<S>> {
         match result {
             Err(error) if is_bearer_rejection(error) => self.bearer.clone(),
@@ -1002,10 +918,6 @@ where
                 bearer.invalidate().await;
             }
             let mut response = result?;
-            // The Codex backend returns a 200 SSE stream but omits the `Content-Type` header.
-            // rig's SSE reader requires `text/event-stream` and otherwise fails with "Invalid
-            // content type was returned". The body IS SSE (the non-streaming path parses it as
-            // such), so provide the missing header while preserving any backend-supplied value.
             ensure_event_stream_content_type(response.headers_mut());
             Ok(response)
         }
@@ -1074,9 +986,6 @@ fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
         value["stream"] = Value::Bool(true);
         changed = true;
     }
-    // The ChatGPT Codex Responses endpoint rejects parameters the standard OpenAI Responses API
-    // accepts (e.g. `max_output_tokens` -> HTTP 400 "Unsupported parameter"). Strip the ones it
-    // does not support; the runtime sets them generically from the inference profile.
     for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
         if let Some(object) = value.as_object_mut() {
             if object.remove(*unsupported).is_some() {
@@ -1084,11 +993,6 @@ fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
             }
         }
     }
-    // rig hardcodes `strict: true` on Responses function tools and rewrites each tool's `required`
-    // to list every property, which OpenAI's strict validation then rejects for tools with
-    // optional params (e.g. defra_query's `filter`/`limit`): "Invalid schema ... Extra required
-    // key". The real Codex CLI sends `strict: false` for all tools, and the Codex backend does not
-    // require strict mode — so force it off here, matching codex.
     if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools {
             if let Some(object) = tool.as_object_mut() {
@@ -1105,8 +1009,6 @@ fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-/// Top-level request parameters the ChatGPT Codex Responses endpoint rejects (it is stricter than
-/// the standard OpenAI Responses API). Stripped from every Codex request body.
 const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] = &["max_output_tokens", "temperature", "top_p"];
 
 fn first_system_text(input: &Value) -> Option<String> {
@@ -1279,18 +1181,13 @@ pub async fn build_responses_client(
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
     let credential_id = credential.credential_id.clone();
-    // Share one bearer per credential across all clients in this process (see `bearer_registry`):
-    // the rotating refresh token must have a single writer or the provider revokes the credential.
-    // `is_owner` is `true` because the current routing model places each (did, behavior) on exactly
-    // one deployment, so the local runtime is the sole refresh writer; multi-node owner election is
-    // a later slice (docs/backends.md, oauth-credentials design doc Sharp edge A).
     let bearer = shared_bearer(&credential_id, || {
         DbCredentialBearer::with_cache(
             node,
             agent_did,
             provider,
             credential_id.clone(),
-            /*is_owner*/ true,
+            true,
             Some(credential.clone()),
         )
     });

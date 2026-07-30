@@ -1,17 +1,5 @@
 //! Presentation-neutral timeline ordering (#608 parity).
-//!
-//! Every client shell — desktop today, mobile next — must render a session's
-//! transcript in the **same order**, interleaving assistant/user messages with
-//! their tool groups, placing the pending turn, appending orphan tool groups,
-//! and the live-assistant overlay last. The *order and the message↔tool-group
-//! partition* are semantics; only the pixels are presentation.
-//!
 //! That ordering used to live only in the desktop Tauri bridge
-//! (`build_rendered_timeline`), unshared and unfenced — the single biggest
-//! parity risk, because a second shell that re-interleaves will drift on order
-//! and on which tool group is an orphan. This module is the shared, Lean-fenced
-//! skeleton (`proofs/Proofs/ClientShell/Timeline.lean`): shells compute the slot
-//! order here, then map each neutral slot to their own rich item.
 
 /// A message's role, reduced to what the ordering cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,36 +9,23 @@ pub enum TimelineRole {
 }
 
 /// The ordering-relevant projection of one transcript message.
-///
-/// A shell fills this from its rich view; the skeleton reads only these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessageInput {
-    /// Stable identity for first-wins dedup (the desktop `message_key`).
     pub key: String,
     /// Ordering key and tool-group attach key. `None` sorts first, matching the
-    /// `BTreeMap<Option<i64>, _>` grouping the desktop bridge uses.
     pub sequence: Option<i64>,
     pub role: TimelineRole,
-    /// Whether this message contributes a visible message slot. A message can
-    /// survive dedup, emit no slot (e.g. a user turn with no rendered content),
-    /// and still own a tool group — so this is separate from dedup.
     pub emits_item: bool,
-    /// Opaque secondary dedup token (the desktop presentation key). `None` opts
-    /// out of presentation dedup. The skeleton only compares tokens for
-    /// equality — it never inspects content, so it stays presentation-neutral.
     pub dedup_token: Option<String>,
 }
 
 /// The live-assistant overlay's ordering-relevant state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayInput {
-    /// True when the overlay's content equals the trailing assistant message
     /// already in the timeline — in which case it must NOT be re-emitted.
     pub matches_trailing_assistant: bool,
 }
 
-/// One ordered slot. A shell maps each to its rich, platform-specific item;
-/// the *order and identity* of the slots is the shared contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimelineSlot {
     Message {
@@ -67,7 +42,6 @@ pub enum TimelineSlot {
 
 /// The BTreeMap ordering the desktop bridge relies on: `None` first, then
 /// ascending. Kept explicit so the ordering is a stated contract, not an
-/// accident of a collection type.
 fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     match (left, right) {
         (None, None) => false,
@@ -77,22 +51,6 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     }
 }
 
-/// Build the canonical timeline slot order (#608).
-///
-/// `messages` are the already-content-filtered transcript messages in arbitrary
-/// order (the shell decides which messages are worth showing — that is
-/// presentation). `group_sequences` are the `message_sequence` keys that have
-/// at least one tool call. `has_pending` / `overlay` gate the two tail slots.
-///
-/// Discipline, mirrored by `ClientShell.Timeline.buildOrder`:
-/// 1. sort messages by `sequence` (None first),
-/// 2. first-wins dedup by `key`, then by `dedup_token`,
-/// 3. each surviving message emits its slot (if `emits_item`) immediately
-///    followed by its tool group (if it owns one), marking that group attached,
-/// 4. the pending turn,
-/// 5. orphan tool groups — those attached to no surviving message — in sequence
-///    order,
-/// 6. the overlay, iff present and not a duplicate of the trailing assistant.
 pub fn build_timeline_order(
     messages: &[TimelineMessageInput],
     group_sequences: &[Option<i64>],

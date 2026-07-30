@@ -1,14 +1,4 @@
 //! Held-tool-call approval watcher.
-//!
-//! A tool named in `ToolSelection.approval_required_tools` persists its
-//! `AgentToolCall` row in `awaitingApproval` (the Lean `holdForApproval`
-//! transition) instead of dispatching. This module drives the held call to
-//! its verdict: it polls for the first matching `AgentToolApproval` document
-//! (first decision wins; later documents are ignored) and follows the
-//! Lean-fenced edges — `approve` (→ running, tool dispatches), `deny`
-//! (→ failed, `approvalDenied`), `cancelWhileHeld` (interrupt), or
-//! `timeoutWhileHeld` (the call keeps aging against `deadline_at`; an
-//! unanswered approval times out like any other stall).
 
 use std::time::Duration;
 
@@ -22,8 +12,6 @@ use crate::tool_call_lifecycle::ToolCallState;
 
 use super::super::DefraSessionHook;
 
-/// Poll cadence for the approval verdict. Held calls are operator-latency
-/// bound, so sub-second polling is plenty.
 const APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Deserialize)]
@@ -39,8 +27,6 @@ enum ApprovalDecision {
     Denied { reason: Option<String> },
 }
 
-/// First matching decision for a held call, or None while unanswered.
-/// Documents with an unrecognized `decision` are ignored (log-only).
 async fn first_approval_decision(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
@@ -109,18 +95,12 @@ async fn first_approval_decision(
 }
 
 impl DefraSessionHook {
-    /// Drive a held tool call (already persisted in `awaitingApproval` and
-    /// registered in the in-flight map) to its verdict. Returns `Continue`
-    /// when approved — the caller dispatches the tool against the now-running
-    /// lifecycle — or `Skip` with the reason on deny/cancel/timeout.
     pub(crate) async fn drive_held_tool_call(
         &self,
         tool_name: &str,
         internal_call_id: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
         loop {
-            // Observe the in-flight entry first: interrupt cancellation and
-            // the deadline sweep mutate (or remove) it out from under us.
             let observed = {
                 let map = self.in_flight_lifecycles.lock().await;
                 map.get(internal_call_id)
@@ -155,16 +135,12 @@ impl DefraSessionHook {
                     )));
                 }
                 other => {
-                    // A held entry can only leave awaitingApproval through the
-                    // edges above (this loop owns the approve path). Anything
-                    // else is a programmer error worth surfacing.
                     anyhow::bail!(
                         "held tool call {internal_call_id} observed in unexpected state {other:?}"
                     );
                 }
             }
 
-            // Held calls keep aging against deadline_at: an unanswered
             // approval must not become a zombie.
             if Utc::now() >= deadline_at {
                 let mut map = self.in_flight_lifecycles.lock().await;
@@ -187,12 +163,8 @@ impl DefraSessionHook {
                         }
                     };
                     if approved {
-                        // Lifecycle stays in the map: the tool dispatches and
-                        // on_tool_result terminalizes it from Running.
                         return Ok(ToolCallHookAction::Continue);
                     }
-                    // Lost the compare (cancelled/timed out under us): loop to
-                    // observe and report the terminal state.
                     continue;
                 }
                 Some(ApprovalDecision::Denied { reason }) => {

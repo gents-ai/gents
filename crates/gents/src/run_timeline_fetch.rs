@@ -1,7 +1,4 @@
 //! Row fetch for [`crate::run_timeline`]: loads the persisted documents a
-//! request's timeline is reconstructed from, over either transport
-//! ([`ConfigAccess::Graphql`] or [`ConfigAccess::Local`]). Lifted from the
-//! CLI `trace` command so the desktop client shares one fetcher.
 
 use std::collections::BTreeSet;
 

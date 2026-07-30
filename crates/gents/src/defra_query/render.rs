@@ -1,20 +1,10 @@
 //! Rendering and validation of the structured query contract into DefraDB
-//! GraphQL syntax. All field/operator names are validated as identifiers and
-//! all string literals are escaped via [`escape_graphql_string`], so untrusted
-//! input cannot break out of the query.
 
 use anyhow::{bail, Result};
 use serde_json::Value;
 
 use crate::graphql::escape_graphql_string;
 
-/// Render a JSON filter object into DefraDB GraphQL filter object syntax.
-///
-/// e.g. `{"status": {"_eq": "pending"}}` -> `{ status: { _eq: "pending" } }`.
-///
-/// The top-level filter must be a JSON object. Keys (field names and operators
-/// such as `_eq`, `_and`) are validated as GraphQL identifiers; string values
-/// are escaped.
 pub(crate) fn render_filter(filter: &Value) -> Result<String> {
     if !filter.is_object() {
         bail!("filter must be a JSON object");
@@ -46,9 +36,6 @@ fn render_value(value: &Value) -> Result<String> {
     }
 }
 
-/// Validate that a name is a safe GraphQL identifier: ASCII alphanumeric and
-/// underscore, starting with a letter or underscore. This covers field names
-/// (`status`, `_docID`) and filter operators (`_eq`, `_and`).
 pub(crate) fn validate_identifier(name: &str) -> Result<()> {
     let mut chars = name.chars();
     match chars.next() {

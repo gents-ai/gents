@@ -66,22 +66,7 @@ pub(crate) async fn load_session_behavior_id(
         }))
 }
 
-/// Load every `AgentConversation` doc for a session, canonical doc first.
-///
-/// Duplicates exist in the wild (#693): `session_id` is unique-indexed in the
 /// current schema, but DefraDB cannot add an index to an already-created
-/// collection, so stores whose collection predates the unique index carry
-/// duplicate rows permanently — and replication can mint them. A write
-/// addressed by `filter: { session_id }` matches every duplicate, and DefraDB
-/// refuses it (`cannot upsert multiple matching documents`), which is why every
-/// conversation write must address a single `_docID`.
-///
-/// The canonical doc is the one live surfaces read and recovery repairs. It is
-/// chosen by an explicit total order (newest `updated_at`, then richest, then
-/// greatest `_docID`) rather than by scan order: DefraDB returns duplicates in
-/// docID order, not recency order. `Recovery.canonical_perm_invariant`
-/// (proofs/Proofs/Recovery/Sweeps/Conversation.lean) proves this choice does not
-/// depend on the order rows come back in.
 pub(super) async fn load_conversation_documents_ranked(
     node: &EmbeddedNode,
     session_id: &str,
@@ -130,14 +115,11 @@ pub(super) async fn load_conversation_documents_ranked(
         None => Vec::new(),
     };
 
-    // Descending by rank: the canonical doc is first.
     rows.sort_by(|left, right| conversation_rank(right).cmp(&conversation_rank(left)));
     Ok(rows)
 }
 
 /// Ranking key mirroring Lean `Recovery.docRank`: `(updated_at, richness,
-/// doc_id)`, compared lexicographically. `doc_id` is the store's primary key, so
-/// distinct docs never tie and the greatest element is unique.
 fn conversation_rank(doc: &ConversationDocument) -> (String, usize, String) {
     let richness = [
         doc.title.trim(),
@@ -150,7 +132,6 @@ fn conversation_rank(doc: &ConversationDocument) -> (String, usize, String) {
     (doc.updated_at.clone(), richness, doc.doc_id.clone())
 }
 
-/// The canonical conversation doc for a session, if any.
 pub(super) async fn load_conversation_document(
     node: &EmbeddedNode,
     session_id: &str,

@@ -24,8 +24,6 @@ pub use task_title::task_run_conversation_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
-/// Presentation adapters use the durable queue metadata, not prompt text, to
-/// identify runtime-authored background-completion wake turns.
 pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
     queue::is_automated_wakeup(metadata)
 }
@@ -95,10 +93,6 @@ impl ExecutionOrigin {
     }
 }
 
-/// Lineage describing which trigger (if any) caused a request to be
-/// materialized. Both fields are `None` for interactive user submissions and
-/// for recovery paths; scheduled and event-driven triggers populate them so
-/// downstream readers can follow the causal chain.
 #[derive(Debug, Clone, Default)]
 pub struct TriggerLineage {
     pub trigger_id: Option<String>,
@@ -208,11 +202,6 @@ pub(crate) fn active_runtime_lifecycle_state_graphql_list() -> String {
     )
 }
 
-/// The stale set startup recovery sweeps: `claimed ∨ processing`, mirroring the
-/// Lean `Recovery.requestRecoveryStale` predicate exactly. Deliberately keyed on
-/// `lifecycle_state` (the modeled field), not on the coarser `status` column, so
-/// a stuck `claimed` own-request is recovered even if a future transition ever
-/// writes `lifecycle_state=claimed` with a `status` other than `"processing"`.
 pub(crate) fn stuck_request_lifecycle_state_graphql_list() -> String {
     lifecycle_state_graphql_list([
         PersistedLifecycleState::Claimed,
@@ -220,9 +209,6 @@ pub(crate) fn stuck_request_lifecycle_state_graphql_list() -> String {
     ])
 }
 
-/// The terminal lifecycle states (`completed`, `failed`, `superseded`, `dead`,
-/// `interrupted`). Used by the owner terminal-convergence re-drive (#664) to
-/// scope its re-assert to already-terminalized rows.
 pub(crate) fn terminal_lifecycle_state_graphql_list() -> String {
     lifecycle_state_graphql_list(
         PersistedLifecycleState::ALL
@@ -258,7 +244,6 @@ impl RequestLifecycle {
         self.claimed_deadline_at
     }
 
-    /// Test-only accessor for S8 caching validation. Do not call from production code.
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.valid_until_at_claim
     }
@@ -268,23 +253,11 @@ impl RequestLifecycle {
 pub struct RecoveryReport {
     pub requests_recovered: usize,
     pub responses_recovered: usize,
-    /// Conversation SESSIONS successfully recovered — never attempts (#693).
-    /// A session whose write the store refuses is counted in
-    /// `conversations_failed`, not here: reporting attempts made a fully failed
-    /// pass look healthy.
     pub conversations_recovered: usize,
-    /// Sessions whose recovery write failed. They stay stuck and are retried on
-    /// the next pass; they are the opposite of a recovery, and are logged as
-    /// such.
     pub conversations_failed: usize,
-    /// Sessions carrying more than one `AgentConversation` doc. Legacy stores
-    /// (whose collection predates the unique `session_id` index, which DefraDB
-    /// cannot add retroactively) and P2P replication can both produce these.
     pub duplicate_conversation_sessions: usize,
 }
 
-/// Outcome of one durable request-terminal repair pass. A terminal response
-/// paired with a still-active request is the persisted repair obligation.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TerminalRepairReport {
     pub scanned: usize,
@@ -299,24 +272,14 @@ impl TerminalRepairReport {
     }
 }
 
-/// Max number of owner-authored terminal re-asserts per request. The consumed
-/// count is persisted in `AgentRequest.terminal_redrive_attempts`, so restart
-/// cannot refill it. A peer offline beyond this budget converges through the
-/// reconnect-triggered full replicator replay instead of more request writes.
 pub const TERMINAL_REDRIVE_CAP: u32 = 3;
 
-/// Per-tick batch cap on how many terminalized requests the owner re-drives, so
-/// a single reconcile pass stays bounded regardless of terminal-row backlog.
 pub const TERMINAL_REDRIVE_BATCH_LIMIT: usize = 64;
 
-/// Outcome of one owner terminal-convergence re-drive pass (#664).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TerminalRedriveReport {
-    /// Terminal own-requests re-asserted this pass (still under their cap).
     pub reasserted: usize,
-    /// Terminal own-requests scanned this pass (the bounded candidate window).
     pub scanned: usize,
-    /// Candidate mutations that failed and remain durably eligible.
     pub failed: usize,
 }
 

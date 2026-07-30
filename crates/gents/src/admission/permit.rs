@@ -17,10 +17,6 @@ pub(crate) struct AdmissionPermit {
     _doc_id: String,
     terminal: Option<PermitTerminal>,
     finished: bool,
-    /// Observed at Drop. If cancelled and no terminal is set, the Drop
-    /// path persists the call as cancelled/Cancelled instead of the
-    /// default failed/StreamDroppedBeforeTerminalResponse fallback.
-    /// Set from `AdmissionCallContext::inference_token` by the controller.
     cancel_observer: Option<CancellationToken>,
     terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
 }
@@ -73,12 +69,7 @@ impl AdmissionPermit {
         self.finish().await;
     }
 
-    /// Mark this permit as cancelled due to user-initiated interrupt.
-    /// On `finish()` or `Drop`, the controller persists the InferenceCall
-    /// with `call_state = "cancelled"` and `failure_reason = "Cancelled"`.
     /// Idempotent with the existing `finished` guard — callers should not
-    /// invoke `finish_*` after `mark_interrupted` and instead rely on the
-    /// Drop path (or explicit `finish_success`/`finish_failure`) to persist.
     pub(crate) fn mark_interrupted(&mut self) {
         if self.finished {
             return;
@@ -88,9 +79,6 @@ impl AdmissionPermit {
             failure_reason: Some("Cancelled".to_string()),
             usage: None,
         });
-        // Intentionally do NOT set `self.finished = true` here. The Drop
-        // path is the authority for the actual persist, which keeps the
-        // drop-path fallback working if the caller forgets to finish.
     }
 
     async fn finish(&mut self) {
@@ -152,13 +140,6 @@ impl Drop for AdmissionPermit {
                     Err(poisoned) => poisoned.into_inner().clone(),
                 });
         let terminal = self.terminal.clone().unwrap_or_else(|| {
-            // If the inference_token was cancelled, an interrupt caused the
-            // drop. Persist as cancelled/Cancelled to satisfy the cross-layer
-            // bridge theorem
-            // (`ComposedState::interrupted_request_cancels_live_linked_call`).
-            // If the daemon intentionally drops the stream for a terminal
-            // runtime condition, persist that failure reason. Otherwise fall
-            // back to the stream-drop default.
             if self
                 .cancel_observer
                 .as_ref()

@@ -1,10 +1,4 @@
 //! Serde mirrors for replicated collection rows.
-//!
-//! These types are deliberately permissive: stable identity keys remain
-//! required, while other nullable scalars are wrapped in `Option<T>` because
-//! DefraDB may omit unpopulated fields from GraphQL responses. Collection/list
-//! fields use a custom deserializer so both missing arrays and explicit `null`
-//! values deserialize as empty vectors. Callers should treat these as the wire
 //! shape, not a runtime invariant.
 
 use std::fmt;
@@ -118,10 +112,8 @@ pub struct AgentBehaviorRow {
     pub compaction_threshold: Option<f64>,
     #[serde(default)]
     pub enabled: Option<bool>,
-    /// Behavior-scoped skills this behavior opts into (decision D5).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub skill_refs: Vec<String>,
-    /// Inherited principal-scoped skills this behavior opts out of (decision D5).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub skill_excludes: Vec<String>,
     #[serde(default)]
@@ -320,10 +312,6 @@ pub struct AgentMessageRow {
     pub role: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
-    /// Durable chain-of-thought reasoning for an assistant turn (#492). Copied
-    /// from the finalized `AgentResponse` live tail at materialize time so a
-    /// post-finalize reader can recover the reasoning even though the live
-    /// `AgentResponse.reasoning` tail is cleared on finalize (#64).
     #[serde(default)]
     pub reasoning: Option<String>,
     #[serde(default)]
@@ -347,10 +335,6 @@ pub struct AgentSessionRow {
     pub status: Option<String>,
 }
 
-/// Durable session-scoped autonomous goal state.
-///
-/// Identity fields are required by the document contract; mutable fields stay
-/// permissive so peers can deserialize rows written by an older schema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
     pub goal_id: String,
@@ -455,10 +439,8 @@ pub struct AgentToolCallRow {
     pub cancel_cause: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
-    /// Rolling tail of live output for a running tool; flushed periodically.
     #[serde(default)]
     pub partial_output_tail: Option<String>,
-    /// Monotonic total-bytes-seen counter; readers detect growth.
     #[serde(default)]
     pub partial_output_seq: Option<i64>,
 }
@@ -514,11 +496,6 @@ pub struct CompactionEntryRow {
     pub created_at: Option<String>,
 }
 
-/// Serde mirror of the `Task` replicated document.
-///
-/// Mirrors `crates/gents-schemas/schemas/agent/task.graphql`.
-/// Tasks are apply-owned descriptions of a prompt template bound to a
-/// behavior. They are globally addressed by `task_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskRow {
     pub task_id: String,
@@ -540,15 +517,6 @@ pub struct TaskRow {
     pub updated_at: Option<String>,
 }
 
-/// Serde mirror of the `Skill` replicated document.
-///
-/// Mirrors `crates/gents-schemas/schemas/agent/skill.graphql`.
-/// A skill is a reusable instruction + tool-dependency fragment owned by a
-/// principal (`agent_did`) and composed into a behavior's prompt/tool surface
-/// at activation time (decision D1). `tool_refs` are *declared* dependencies,
-/// intersected with the behavior ceiling and never granted (decision D3);
-/// `scope` (`principal` | `behavior`) drives the D5 effective-set inheritance.
-/// Skills are apply-owned; the runtime never writes them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillRow {
     pub skill_id: String,
@@ -574,12 +542,6 @@ pub struct SkillRow {
     pub created_at: Option<String>,
 }
 
-/// Serde mirror of the `Schedule` replicated document.
-///
-/// Mirrors `crates/gents-schemas/schemas/agent/schedule.graphql`.
-/// Schedules bind a `Task` to a recurring trigger. The runtime owns the
-/// fire bookkeeping fields (`next_run_at`, `last_attempt_at`, `last_status`,
-/// `last_error`, `fire_count`); apply owns everything else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleRow {
     pub schedule_id: String,
@@ -613,15 +575,6 @@ pub struct ScheduleRow {
     pub updated_at: Option<String>,
 }
 
-/// Serde mirror of the `EventTrigger` replicated document.
-///
-/// Mirrors `crates/gents-schemas/schemas/agent/event_trigger.graphql`.
-/// EventTriggers bind a `Task` to a document-created event on a source
-/// collection. The apply path owns the description of the trigger
-/// (`trigger_id`, `task_id`, `source_collection`, `event_kind`, `filter`,
-/// `enabled`, `concurrency`, `created_at`, `updated_at`); the trigger
-/// engine owns the fire bookkeeping (`last_attempt_at`,
-/// `last_fired_source_doc_id`, `last_status`, `last_error`, `fire_count`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventTriggerRow {
     pub trigger_id: String,
@@ -674,22 +627,10 @@ pub struct ToolSelectionRow {
     pub bash_mode: Option<String>,
     #[serde(default)]
     pub command_execution_policy: Option<String>,
-    /// Argv-prefix allow gate. Empty = no gate. Non-empty = every command must
-    /// match a prefix; in ReadOnly mode a match also admits heads outside the
-    /// base allowlist (subcommand-precise). Prefer for **extending** the
-    /// surface. See `docs/macos-bash-sandbox.md` and the related
-    /// `read_only_command_allowlist` field (replace/narrow the base).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub command_allowed_argv_prefixes: Vec<String>,
-    /// Argv prefixes that are always denied (wins over allowed prefixes and
-    /// the read-only allowlist).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub command_forbidden_argv_prefixes: Vec<String>,
-    /// When non-empty, **replaces** the hardcoded default read-only command
-    /// heads wholesale (whole-executable granularity). Empty = no override.
-    /// Prefer for **narrowing** or fully customizing the base allowlist; use
-    /// `command_allowed_argv_prefixes` to extend with subcommand precision.
-    /// See `docs/macos-bash-sandbox.md`.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub read_only_command_allowlist: Vec<String>,
     #[serde(default)]
@@ -700,7 +641,6 @@ pub struct ToolSelectionRow {
     pub enable_meta_tools: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub allowed_mcp_service_ids: Vec<String>,
-    /// Deprecated: delegate_to_agent removed; field retained for schema-compat, never read.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub delegate_to: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
@@ -715,11 +655,6 @@ pub struct ToolSelectionRow {
     pub subagent_steering_enabled: Option<bool>,
     #[serde(default)]
     pub subagent_background_enabled: Option<bool>,
-    /// Default await mode for spawned subagents (`foreground` | `background`).
-    /// Parity field: the runtime `ToolSelectionDocument` and the GraphQL schema
-    /// already carry it; mirroring it on the row makes a lossless round-trip
-    /// possible. Wiring the desktop read query + upsert mutation to actually
-    /// carry it is Phase B (deferred while desktop-core is blocked on #490).
     #[serde(default)]
     pub subagent_default_await_mode: Option<String>,
     #[serde(default)]
@@ -736,16 +671,10 @@ pub struct ToolSelectionRow {
     pub enable_defra_query: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub defra_query_collections: Vec<String>,
-    /// Each entry is a JSON-serialized `WriteToolDecl` (the same `[String]`
-    /// substrate as `subagent_targets`), keeping `WriteToolDecl` out of the
-    /// protocol crate. The runtime loader is fail-closed: a malformed entry
-    /// fails the whole `ToolSelection` load, so writers must emit valid JSON.
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub write_tools: Vec<String>,
-    /// Self-configuration gate (#654): opt-in, never backfilled true.
     #[serde(default)]
     pub enable_self_config: Option<bool>,
-    /// Self-config category allowlist; empty = unset (core spine).
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub self_config_categories: Vec<String>,
     #[serde(default)]
@@ -825,8 +754,6 @@ pub struct InferenceProfileRow {
     pub max_turns: Option<i64>,
     #[serde(default)]
     pub temperature: Option<f64>,
-    /// Sampling knobs beyond temperature (#649). `None` inherits the served
-    /// model's `generation_config.json`; `Some` pins the value explicitly.
     #[serde(default)]
     pub top_p: Option<f64>,
     #[serde(default)]
@@ -894,14 +821,7 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
-/// Persisted snapshot of one MCP service's health, written by the agent's
-/// `health_checker` on every probe cycle. `status` carries the precise
-/// `HealthStateInternal` projection ("healthy" / "stale" / "evicted" /
-/// "reconnecting") so the operator UI can distinguish back-off from
-/// in-flight retry without going through the collapsed three-state
 /// `HealthStatus`. `failure_count` / `k_max` / `backoff_until` give the
-/// K-model context per the design in
-/// `Proofs/MCPHealth/{State,Transition}.lean`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,

@@ -37,7 +37,6 @@ impl BackendAdmissionController {
             backend_id: config.backend_id.clone(),
             generation,
             config,
-            // BackendAdmissionConfig validation guarantees this is >= 1.
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             waiters: AtomicUsize::new(0),
             running: AtomicUsize::new(0),

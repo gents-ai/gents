@@ -24,8 +24,6 @@ pub struct AgentRequest {
     pub doc_id: String,
     pub request_id: String,
     pub agent_did: String,
-    /// Coordinator DID that owns this remote child lineage's return route.
-    /// Ordinary local requests leave it unset.
     pub requester_did: Option<String>,
     pub behavior_id: Option<String>,
     pub session_id: String,
@@ -34,7 +32,6 @@ pub struct AgentRequest {
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
     pub max_tokens: Option<i64>,
-    /// Raw AgentRequest.metadata JSON payload, including lifecycle queue hints.
     pub metadata: Option<String>,
     pub execution_origin: Option<String>,
     pub created_at: String,
@@ -44,12 +41,6 @@ pub struct AgentRequest {
     pub caused_by_parent_tool_call_id: Option<String>,
 }
 
-/// Coherence check on AgentRequest's subagent fields:
-/// - caused_by_parent_tool_call_id requires caused_by_parent_request_id.
-/// - caused_by_parent_request_id without caused_by_parent_tool_call_id is only
-///   valid for queued steering requests, which preserve lineage without
-///   claiming a bridge call.
-/// - subagent_depth = 0 ↔ no parent lineage is present.
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
@@ -58,7 +49,7 @@ pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<(
     if has_parent_req != has_parent_tc && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    let is_top_level = !has_parent_req; // both None
+    let is_top_level = !has_parent_req;
     if is_top_level && req.subagent_depth != 0 {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
@@ -134,8 +125,6 @@ impl EventDeliveryRuntimeContract for DefraWatcher {
 }
 
 fn request_update_wakeup(message: &events::Message) -> Option<&events::Update> {
-    // Event origin is deliberately not an eligibility gate. The persisted
-    // AgentRequest query below owns scope and lifecycle validation.
     message.as_update()
 }
 
@@ -177,11 +166,6 @@ impl Watcher for DefraWatcher {
                     }
                 };
 
-            // Local writes and relayed writes are equally eligible wakeups.
-            // The subsequent document query is the authority for agent scope,
-            // lifecycle state, and lineage coherence. Ignoring local updates
-            // can strand a request until the 30-second fallback poll when it
-            // is created just after the loop's pending-request scan.
             let Some(update) = request_update_wakeup(&msg) else {
                 continue;
             };

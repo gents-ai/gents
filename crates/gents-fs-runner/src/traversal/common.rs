@@ -12,9 +12,6 @@ pub(crate) struct WalkLimits {
     pub(crate) max_wall: Duration,
 }
 
-/// Mutable walk accounting threaded through every traversal. Budgets stop the
-/// walk with partial results instead of letting a zero-match search scan an
-/// unbounded tree (#729).
 pub(crate) struct WalkState {
     limits: WalkLimits,
     started: Instant,
@@ -36,8 +33,6 @@ impl WalkState {
         }
     }
 
-    /// Admit one directory entry into the walk. Returns false when a budget
-    /// is exhausted; the caller must stop without processing the entry.
     pub(crate) fn admit_entry(&mut self, context: &RunnerContext, path: &Path) -> bool {
         if self.exhausted {
             return false;
@@ -52,8 +47,6 @@ impl WalkState {
         true
     }
 
-    /// Admit reading `bytes` of file content. Returns false when the byte
-    /// budget would be exceeded; the caller must skip the read and stop.
     pub(crate) fn admit_bytes(&mut self, context: &RunnerContext, path: &Path, bytes: u64) -> bool {
         if self.exhausted {
             return false;
@@ -83,9 +76,6 @@ impl WalkState {
         }
     }
 
-    /// Bound a single directory scan. Stops collecting once the remaining
-    /// entry budget is exceeded (the admit loop then reports exhaustion) or
-    /// the wall budget has expired (reported here, at the directory).
     pub(crate) fn dir_scan_should_stop(
         &mut self,
         context: &RunnerContext,
@@ -127,11 +117,6 @@ pub(super) fn sorted_children(
     };
     let mut children = Vec::new();
     for entry in read_dir {
-        // Budgets must bind DURING the readdir: a directory with millions of
-        // direct children would otherwise be fully read and sorted before the
-        // first admit_entry check — the exact #729 pathology. When the scan
-        // is cut short, the sorted result covers only the collected subset,
-        // which is fine: the walk is about to report budget exhaustion.
         if walk.dir_scan_should_stop(context, dir, children.len()) {
             break;
         }
@@ -145,13 +130,7 @@ pub(super) fn sorted_children(
     Ok(children)
 }
 
-/// Stack of `.gitignore` matchers accumulated while descending, checked
-/// nearest-directory-first so deeper files override shallower ones
-/// (including `!` whitelists). Applied to any `.gitignore` encountered in
-/// the walked tree — nested repos under a home-directory tool root get
 /// their generated junk filtered before it consumes walk budget. Note:
-/// `.gitignore` files ABOVE the walk root (e.g. a repo root above a pruned
-/// glob prefix) are not consulted; walks are filtered by what they can see.
 pub(crate) struct GitignoreStack {
     stack: Vec<ignore::gitignore::Gitignore>,
 }
@@ -161,8 +140,6 @@ impl GitignoreStack {
         Self { stack: Vec::new() }
     }
 
-    /// Load `dir/.gitignore` if present. Returns how many matchers were
-    /// pushed so the caller can pop symmetrically when leaving `dir`.
     pub(crate) fn push_dir(&mut self, dir: &Path) -> usize {
         let file = dir.join(".gitignore");
         if !file.is_file() {
@@ -197,22 +174,15 @@ impl GitignoreStack {
     }
 }
 
-/// Outcome of admitting one directory entry into a walk.
 pub(super) enum Admitted {
-    /// Filtered out; continue with the next sibling.
     Skip,
-    /// A walk budget is exhausted; stop scanning this directory.
     Stop,
-    /// Admitted and charged against the entry budget.
     Entry {
         path: std::path::PathBuf,
         is_dir: bool,
     },
 }
 
-/// Shared per-entry walk prologue: classify from the dirent (no stat per
-/// entry), apply the name and gitignore filters BEFORE charging the entry
-/// budget (filtered entries are free), then admit against the budgets.
 pub(super) fn admit_next(
     context: &RunnerContext,
     traversal_root: &Path,

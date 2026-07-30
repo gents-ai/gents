@@ -50,21 +50,6 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
     (stripped_messages, file_activity)
 }
 
-/// Drop assistant tool-calls that have no matching tool-result message, at the
-/// provider-send boundary (#445).
-///
-/// The durable transcript intentionally permits an assistant tool-call with no
-/// result (a tool that was interrupted/failed/timed-out, or whose result was
-/// never persisted) — `Transcript.PairClosed` only requires *completed* calls to
-/// be paired. But providers (OpenAI/Anthropic) reject a reloaded assistant
-/// `tool_call` that is not followed by its tool result. This narrows the
-/// permissive transcript to the stricter provider format: a call is kept only if
-/// some tool-result message carries the same call key. Dropping an unpaired call
-/// never orphans a result (a result implies its call is paired, so that call is
-/// kept); an assistant message left with no content is dropped entirely.
-///
-/// This runs at the request-build boundary, not inside the conformance-fenced
-/// `strip_tool_results` reducer, so the transcript-reduction model is unchanged.
 pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
     for message in &messages {
@@ -90,9 +75,6 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
                         _ => true,
                     })
                     .collect();
-                // Keep the message only if content survives filtering; an
-                // assistant turn that was nothing but unpaired tool calls is
-                // dropped so no dangling call reaches the provider.
                 if !kept.is_empty() {
                     kept_messages.push(Message::Assistant { id, content: kept });
                 }
@@ -103,20 +85,6 @@ pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     kept_messages
 }
 
-/// Drop tool-result user content whose assistant tool-call turn is not actively
-/// awaiting it at the provider-send boundary.
-///
-/// The inverse of [`drop_unpaired_tool_calls`]: a compaction split
-/// (`split_messages_for_summary`) or compacted-prefix drop can place an
-/// assistant tool-call in the compacted-away window while its result message
-/// survives in the recent window. Providers also reject a tool-result message
-/// after normal conversation has resumed, even if a matching call appears
-/// somewhere earlier in the transcript. Track only the currently open
-/// assistant tool-call turn: matching results close pending calls; any ordinary
-/// message or new assistant turn clears the old pending set. Orphan/stale
-/// results are dropped (their information lives on in the compaction summary
-/// and the durable AgentToolCall row). A user message left with no content is
-/// dropped entirely.
 pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
     let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut kept_messages = Vec::with_capacity(messages.len());
@@ -147,8 +115,6 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
                 if has_plain_content {
                     pending_calls.clear();
                 }
-                // Content is non-empty by convention (was `OneOrMany`); an
-                // emptied message is dropped rather than sent hollow.
                 if !kept.is_empty() {
                     kept_messages.push(Message::User { content: kept });
                 }
@@ -162,17 +128,7 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
     kept_messages
 }
 
-/// Normalize assistant content to the canonical provider order — text, then
-/// reasoning (and any other non-call content), then tool calls — at the
-/// provider-send boundary.
-///
-/// `AssistantTurnAccumulator::build_message` writes this order for newly
 /// persisted turns, but transcripts persisted before the ordering fix can carry
-/// text *after* tool calls, which strict providers reject on reload. Like
-/// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
-/// provider format at the request-build boundary; the stored messages and the
-/// conformance-fenced reducers are untouched. Relative order within each
-/// category is preserved.
 pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
@@ -356,8 +312,6 @@ fn tool_call_key(tool_call: &ToolCall) -> String {
         .unwrap_or_else(|| tool_call.id.clone())
 }
 
-/// The pairing key of a tool result — must mirror [`tool_call_key`] so calls
-/// and results match under the same identity.
 fn tool_result_key(tool_result: &ToolResult) -> String {
     tool_result
         .call_id

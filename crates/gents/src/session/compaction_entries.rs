@@ -126,8 +126,6 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let requester_did_field = super::requester_did_create_field(requester_did);
 
-    // `agent_did` is the immutable scope key: written only in the `add` branch
-    // (create), never rewritten on update.
     let compaction_key = format!("{escaped_session_id}:{sequence}");
     let mutation = format!(
         r#"mutation {{

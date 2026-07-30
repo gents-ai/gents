@@ -1,9 +1,4 @@
 //! Durable, session-scoped autonomous goals.
-//!
-//! A goal is control-plane state, not completion-loop memory. Helpers key
-//! every read and write by the agent/session pair and select a deterministic
-//! canonical row when replication or a create acknowledgement gap leaves
-//! duplicates behind.
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -194,9 +189,6 @@ impl GoalState {
     }
 }
 
-/// Advances the durable blocked-condition audit without double-counting a
-/// repeated tool call from the same request. A changed reason starts a fresh
-/// audit because it is a different blocking condition.
 pub fn next_blocked_audit(
     previous_count: i64,
     previous_reason: Option<&str>,
@@ -584,9 +576,6 @@ pub async fn set_goal(
         let action = operator_action_for_status(pre.status, status);
         let post = apply_operator_status_transition(pre, status)?;
         let active_time = existing.current_active_time_seconds(now);
-        // `active_time_seconds` has just absorbed the current active segment,
-        // so a still-active goal starts a fresh segment at this write. Keeping
-        // the old timestamp here would charge the same elapsed time twice.
         let active_started_at = if post.status.accrues_active_time() {
             now_string.clone()
         } else {
@@ -712,10 +701,7 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
         .is_some_and(mutation_returned_rows))
 }
 
-/// Delete every replicated twin for an agent/session goal. Goal identity is
 /// intentionally not unique at the schema layer because DefraDB unique indexes
-/// do not provide a distributed P2P uniqueness guarantee; clear must therefore
-/// sweep the complete ownership scope rather than delete only the canonical row.
 pub async fn delete_goals_for_session(
     node: &EmbeddedNode,
     agent_did: &str,

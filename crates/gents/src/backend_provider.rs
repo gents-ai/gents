@@ -3,8 +3,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
-/// A non-success HTTP status from model discovery, carried as a typed error source so callers can
-/// classify (e.g. 401/403 auth failures) by status rather than scraping the rendered message.
 #[derive(Debug, thiserror::Error)]
 #[error("{provider} model discovery failed at {url}: {status} {body}")]
 pub struct ModelDiscoveryHttpError {
@@ -15,7 +13,6 @@ pub struct ModelDiscoveryHttpError {
 }
 
 impl ModelDiscoveryHttpError {
-    /// True when the provider rejected the request on authentication grounds (401/403).
     pub fn is_auth(&self) -> bool {
         matches!(self.status, 401 | 403)
     }
@@ -105,10 +102,6 @@ struct OpenAiModelRecord {
 
 #[derive(Deserialize)]
 struct ChatGptCodexModelRecord {
-    /// ChatGPT Codex returns `slug`; llama.cpp/llama-server and other OpenAI-compatible
-    /// servers commonly return `id`, `name`, or `model` under a top-level `models` array.
-    /// All fields are optional so a non-Codex `models` entry cannot reject an otherwise valid
-    /// OpenAI `data[].id` response during deserialization.
     slug: Option<String>,
     id: Option<String>,
     name: Option<String>,
@@ -163,8 +156,6 @@ pub async fn discover_models(
                     request = request.header(name, value);
                 }
             }
-            // Must match the request `version` header: /models gates the returned model set on
-            // the advertised Codex client version (gents's own version returns an empty set).
             request = request.query(&[(
                 "client_version",
                 crate::chatgpt_codex::chatgpt_codex_client_version(),

@@ -1,33 +1,14 @@
 //! Runtime skill resolution — the executable realization of the privilege
-//! algebra proved in `proofs/Proofs/Skills.lean`.
-//!
-//! A [`Skill`] declares the tools it *depends on* (`tool_refs`); it never
-//! *grants* them (decision D3, Codex-faithful). [`effective_skills`] computes
-//! the per-behavior candidate set (decision D5: scope-on-skill inheritance +
-//! `skill_refs`/`skill_excludes`). [`skill_tools`] intersects a skill's
-//! declared refs with the behavior's resolved tool ceiling and degrades when a
-//! dep is missing, so activation can never widen the tool surface beyond the
-//! ceiling — the executable counterpart of `Skills.activation_subset_ceiling`.
-//!
-//! This module is pure (no DB / request plumbing). The runtime wiring that
-//! loads `Skill` documents and feeds these results into `prompt.rs` and
-//! `tool_surface` is layered on top of it.
 
 use std::collections::BTreeSet;
 
-/// Activation scope of a skill (decision D5). Mirrors the `Scope` inductive in
-/// `proofs/Proofs/Skills.lean`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillScope {
-    /// Inherited by every behavior of the owning principal.
     Principal,
-    /// A candidate only for behaviors that opt in via `skill_refs`.
     Behavior,
 }
 
 impl SkillScope {
-    /// Parse the on-document `scope` string. Returns `None` for unknown values
-    /// (apply-time validation rejects those before they reach the runtime).
     pub fn parse(value: &str) -> Option<SkillScope> {
         match value.trim() {
             "principal" => Some(SkillScope::Principal),
@@ -44,7 +25,6 @@ impl SkillScope {
     }
 }
 
-/// Runtime view of a `Skill` document, owned by a principal (`agent_did`).
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub skill_id: String,
@@ -53,24 +33,11 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub instructions: String,
-    /// Declared tool dependencies (host tool kinds, mcp service ids, cli names).
-    /// Advisory — intersected with the behavior ceiling, never granted (D3).
     pub tool_refs: Vec<String>,
-    /// Optional UI display name (from `agents/openai.yaml` `interface.display_name`).
-    /// Preferred over `name` for the catalog/activation label when present; opaque
-    /// to privilege (decision: UI metadata, not load-bearing).
     pub display_name: Option<String>,
     pub enabled: bool,
 }
 
-/// The D5 effective candidate set for a behavior. Mirrors `Skills.candidates`
-/// in `proofs/Proofs/Skills.lean`:
-///
-/// `{ s : s.agent_did == principal ∧ s.enabled ∧ (s.scope == principal ∨ s.id ∈ skill_refs) } − skill_excludes`
-///
-/// A principal-scoped skill of the owning principal is inherited by every
-/// behavior; a behavior-scoped skill is a candidate only when listed in
-/// `skill_refs`; `skill_excludes` removes inherited principal-scoped skills.
 pub fn effective_skills<'a>(
     skills: &'a [Skill],
     behavior_principal: &str,
@@ -90,23 +57,6 @@ pub fn effective_skills<'a>(
         .collect()
 }
 
-/// The D3 tool ceiling a skill's `tool_refs` are evaluated against.
-///
-/// `names` is the behavior's built tool names UNION its explicitly-allowed MCP
-/// service ids (MCP services are callable via `call_tool` but never appear in
-/// the built tool-name list). `mcp_unrestricted` is the default "any MCP service
-/// allowed" case — meta tools enabled AND an EMPTY allowlist (see
-/// `meta_tools::mcp_service_allowed`): there we cannot enumerate the reachable
-/// services, so a ref that isn't a built tool must be assumed reachable rather
-/// than flagged unavailable (it may well be an MCP service the behavior can
-/// call). Treating it as missing would be a spurious degrade note.
-///
-/// Tradeoff (accepted): under `mcp_unrestricted` this also suppresses the
-/// degrade note for a genuinely-absent host/CLI ref (e.g. a skill naming `bash`
-/// when bash is off) — indistinguishable from an MCP service id without a
-/// built-in-tool registry. The note is advisory only (privilege is unaffected:
-/// the ceiling never *grants* a tool, it only annotates), so we prefer missing a
-/// hint over emitting false "unavailable" notes for reachable MCP services.
 #[derive(Debug, Clone, Default)]
 pub struct SkillToolCeiling {
     names: BTreeSet<String>,
@@ -121,17 +71,11 @@ impl SkillToolCeiling {
         }
     }
 
-    /// Whether the behavior can actually use `tool`. A built/allowlisted tool is
-    /// in `names`; under unrestricted MCP everything else is given the benefit
-    /// of the doubt (it may be a reachable MCP service).
     pub fn allows(&self, tool: &str) -> bool {
         self.mcp_unrestricted || self.names.contains(tool)
     }
 }
 
-/// Build the D3 ceiling from a behavior's resolved tool surface. `mcp_enabled`
-/// is whether the behavior can call MCP at all (meta tools effectively on); an
-/// empty `allowed_mcp_service_ids` then means "any service" (unrestricted).
 pub fn skill_tool_ceiling(
     tool_names: impl IntoIterator<Item = String>,
     allowed_mcp_service_ids: &[String],
@@ -143,10 +87,6 @@ pub fn skill_tool_ceiling(
     SkillToolCeiling::new(names, mcp_unrestricted)
 }
 
-/// Tools an active skill may use against a behavior's resolved `ceiling`: the
-/// declared `tool_refs` intersected with the ceiling (D3 intersect+degrade).
-/// Never returns a tool the ceiling disallows — the executable form of
-/// `Skills.skillTools` / `Skills.activation_subset_ceiling`.
 pub fn skill_tools<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Vec<&'a str> {
     skill
         .tool_refs
@@ -156,9 +96,6 @@ pub fn skill_tools<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Vec<&'a 
         .collect()
 }
 
-/// Declared `tool_refs` the behavior ceiling does NOT grant. Used to annotate
-/// the activated-skill prompt so the model adapts (D3 degrade), and never to
-/// expand the tool surface.
 pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Vec<&'a str> {
     skill
         .tool_refs
@@ -169,7 +106,6 @@ pub fn missing_tool_refs<'a>(skill: &'a Skill, ceiling: &SkillToolCeiling) -> Ve
 }
 
 fn skill_label(skill: &Skill) -> &str {
-    // Prefer the UI display name, then the canonical name, then the id.
     if let Some(display_name) = skill
         .display_name
         .as_deref()
@@ -185,12 +121,6 @@ fn skill_label(skill: &Skill) -> &str {
     }
 }
 
-/// Cached-layer skill **catalog**: name + description per candidate skill — the
-/// progressive-disclosure "discovery" tier. The full body is NOT included; the
-/// model loads it on demand via the `load_skill` tool. Returns `None` when the
-/// behavior has no skills (so the preamble is unchanged). This is the design
-/// shared by Anthropic Agent Skills, Codex, and Hermes: descriptions always in
-/// context, bodies on demand.
 pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -210,10 +140,6 @@ pub fn render_skill_catalog(skills: &[Skill]) -> Option<String> {
     Some(out)
 }
 
-/// Render a single skill's full body for on-demand activation (the `load_skill`
-/// tool output). Appends a degrade note for any `tool_refs` the behavior ceiling
-/// does not grant (D3), so the model knows the capability is unavailable rather
-/// than silently failing.
 pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> String {
     let mut out = format!("Skill: {}\n\n{}", skill_label(skill), skill.instructions);
     let missing = missing_tool_refs(skill, ceiling);
@@ -227,17 +153,8 @@ pub fn render_activated_skill(skill: &Skill, ceiling: &SkillToolCeiling) -> Stri
     out
 }
 
-/// Find a skill by display name, `name`, or `skill_id` (exact, then
-/// case-insensitive). The catalog labels skills with `display_name` when set
-/// (see `skill_label`), so the model may call `load_skill` with that label —
-/// it must resolve here too, or a cataloged skill becomes unloadable. Also used
-/// to resolve an explicitly-selected skill id against a behavior's effective set
-/// for deterministic per-turn injection.
 pub fn find_skill<'a>(skills: &'a [Skill], needle: &str) -> Option<&'a Skill> {
     let needle = needle.trim();
-    // Trim the stored display name to match the catalog, which renders the
-    // trimmed label (see `skill_label`) — otherwise a name with incidental
-    // whitespace shows as loadable but fails to resolve.
     let display_name = |skill: &Skill| {
         skill
             .display_name
@@ -266,12 +183,6 @@ pub struct PromptSlashSkillSelection {
     pub prompt: String,
 }
 
-/// Extract native leading skill selectors from a prompt.
-///
-/// The selector is request-control syntax, not user text: selected ids are
-/// recorded as metadata, and the returned prompt has selector tokens removed so
-/// they do not reach the provider. The runtime later resolves ids against the
-/// behavior's effective skill set before injecting any skill body.
 pub fn prompt_slash_skill_selection(prompt: &str) -> PromptSlashSkillSelection {
     let mut selected = Vec::new();
     let mut body_lines = Vec::new();
@@ -320,7 +231,6 @@ pub fn prompt_slash_skill_selection(prompt: &str) -> PromptSlashSkillSelection {
     }
 }
 
-/// Extract skill ids named by leading slash selectors in a prompt.
 pub fn selected_skill_ids_from_prompt_slash_commands(prompt: &str) -> Vec<String> {
     prompt_slash_skill_selection(prompt).selected_skill_ids
 }
@@ -352,10 +262,6 @@ fn leading_slash_skill_selector(line: &str) -> Option<SlashSkillSelector> {
         return None;
     }
 
-    // Treat `/work/file.rs` and similar as a path, not a slash selector. If
-    // this rejects a path-shaped skill id, the model can still load it through
-    // the normal catalog-driven `load_skill` tool or the caller can use
-    // structured metadata.
     if rest[end..].starts_with('/') {
         return None;
     }
@@ -440,8 +346,6 @@ fn is_reserved_client_slash_command(command: &str) -> bool {
     )
 }
 
-/// Error type for [`LoadSkillTool`]. A missing skill is returned as readable
-/// `Ok` text (so the model can recover), not an error.
 #[derive(Debug)]
 pub struct LoadSkillError(pub String);
 
@@ -455,15 +359,9 @@ impl std::error::Error for LoadSkillError {}
 
 #[derive(Debug, serde::Deserialize)]
 pub struct LoadSkillArgs {
-    /// The skill name or skill_id from the Skills catalog.
     pub name: String,
 }
 
-/// The `load_skill` tool — progressive-disclosure activation. Given a skill name
-/// (or id) from the catalog, returns that skill's full instructions, with tool
-/// dependencies intersected against the behavior's tool ceiling (D3). It holds
-/// the behavior's resolved effective skill set + ceiling, so it can only reveal
-/// skills in the behavior's candidate set and never widens the tool surface.
 #[derive(Clone)]
 pub struct LoadSkillTool {
     skills: Vec<Skill>,

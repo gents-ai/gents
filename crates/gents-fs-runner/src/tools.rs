@@ -17,13 +17,7 @@ use crate::traversal::{
     WalkState,
 };
 
-// Walk budgets (#729): bound what a single search may do before returning
-// partial results with explicit exhaustion metadata. Without these, a
-// zero-match pattern over a large tool root (a home directory is ~6M entries)
-// walks everything and looks like a hang to the model.
 const DEFAULT_MAX_ENTRIES_VISITED: usize = 200_000;
-/// How many top-level names a zero-match diagnostic reveals (#729): enough to
-/// correct a wrong path anchor, small enough to stay cheap.
 const SEARCH_DIR_ENTRY_HINTS: usize = 10;
 const DEFAULT_MAX_BYTES_READ: u64 = 128 * 1024 * 1024;
 const DEFAULT_MAX_WALL_MS: u64 = 15_000;
@@ -42,15 +36,10 @@ fn walk_state(
     })
 }
 
-/// Top-level entry names of the searched directory, attached to zero-match
-/// results so a wrong anchor is visible on the first attempt.
 fn top_level_entry_names(dir: &Path) -> Vec<String> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    // Keep only the lexicographically smallest names while scanning: the
-    // searched directory can be huge, and allocating + sorting every entry
-    // name would re-do unbudgeted work the walk just gave up on.
     let mut names: Vec<String> = Vec::with_capacity(SEARCH_DIR_ENTRY_HINTS + 1);
     for entry in read_dir.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -113,10 +102,6 @@ fn list_files(context: &RunnerContext, args: ListFilesArgs) -> Result<String> {
     )
 }
 
-/// Leading literal path components of a glob pattern. The walk only needs to
-/// enter this subtree — nothing outside it can ever match (#729). The final
-/// component is the filename position and is matched, not walked; `.`/`..`
-/// and metacharacter components end the prefix.
 fn glob_literal_prefix(pattern: &str) -> Vec<&str> {
     let components: Vec<&str> = pattern.split('/').collect();
     let mut literal = Vec::new();
@@ -143,14 +128,6 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
     let walk = walk_state(args.max_entries_visited, None, args.max_wall_ms);
     let prefix = glob_literal_prefix(&args.pattern);
     let pattern_prefix = (!prefix.is_empty()).then(|| prefix.join("/"));
-    // The pattern is matched against BASE-relative display paths, so its
-    // literal prefix resolves against the base — never joined onto the path
-    // argument, which would apply the prefix twice when the path already
-    // lies inside it. The walk is the intersection of the path subtree and
-    // the prefix subtree; when the two are disjoint nothing can match and no
-    // walk happens at all. An empty prefix prunes nothing, and an absolute
-    // path argument outside the base is walked as-is (display paths are not
-    // base-relative there, so pruning assumptions do not hold).
     let (walk_dir, pattern_prefix_exists) =
         if prefix.is_empty() || !dir.starts_with(context.base_dir()) {
             (Some(dir.clone()), true)
@@ -179,8 +156,6 @@ fn glob(context: &RunnerContext, args: GlobArgs) -> Result<String> {
         },
     };
     let truncated = matches.truncated || matches.walk.budget_exhausted;
-    // Anchor hint only when the zero-match is a genuine miss: a budget-
-    // stopped search says nothing about the anchor being wrong.
     let search_dir_entries = (matches.items.is_empty() && !matches.walk.budget_exhausted)
         .then(|| top_level_entry_names(&dir));
     let output = GlobOutput {
@@ -244,9 +219,6 @@ fn grep(context: &RunnerContext, args: GrepArgs) -> Result<String> {
         .collect::<Vec<_>>();
 
     let truncated = collected.truncated || collected.walk.budget_exhausted;
-    // Anchor hint only when the zero-match is a genuine directory-search
-    // miss: a single-file grep has no anchor to correct, and a budget-
-    // stopped search says nothing about the anchor being wrong.
     let search_dir_entries =
         (matches.is_empty() && path.is_dir() && !collected.walk.budget_exhausted)
             .then(|| top_level_entry_names(&path));

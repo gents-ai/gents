@@ -1,9 +1,4 @@
 //! Shared helpers for parsing `ToolServiceRegistry` rows.
-//!
-//! The registry schema allows nullable address fields (`hostname`,
-//! `tailscale_ip`, `lan_ip`, `mcp_path`). Default serde behavior rejects
-//! explicit JSON `null` when deserializing into `String`, so consumers
-//! that model these fields as `String` need a null-tolerant deserializer.
 
 use serde::{Deserialize, Deserializer};
 

@@ -1,30 +1,15 @@
 use crate::truncation::{TruncationLimits, TruncationMode, TruncationTrigger};
 
-/// Result of the canonical honest truncation. Carries enough structured
-/// metadata that callers needing a machine-readable envelope (e.g. the bash
-/// stdout/stderr truncation summary) can build it without re-counting bytes.
 #[derive(Debug, Clone)]
 pub struct TextTruncation {
-    /// The (possibly truncated) text, with an honest marker appended/prepended
-    /// when truncation occurred.
     pub text: String,
-    /// Whether truncation occurred.
     pub truncated: bool,
-    /// Which limit forced truncation, if any.
     pub trigger: Option<TruncationTrigger>,
-    /// Total lines in the original input.
     pub original_lines: usize,
-    /// Total bytes in the original input.
     pub original_bytes: usize,
-    /// Bytes of original content retained (excludes the honest marker).
     pub returned_bytes: usize,
 }
 
-/// Honest line+byte truncator. This is the single truncation primitive for
-/// model-ingested tool output across the runtime: it bounds by both line count
-/// and byte size and always appends/prepends a marker stating exactly what was
-/// shown vs. what existed (`[Showing lines 1-N of M (B bytes total)]`). Callers
-/// that only need the text+flags should use the [`truncate_text`] wrapper.
 pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> TextTruncation {
     let original_bytes = text.len();
     let lines: Vec<&str> = text.lines().collect();
@@ -130,8 +115,6 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
     }
 }
 
-/// Tuple-returning convenience wrapper over [`truncate`] for callers that only
-/// need `(text, trigger, truncated)`.
 pub fn truncate_text(
     text: &str,
     mode: TruncationMode,

@@ -12,23 +12,14 @@ use serde::de::DeserializeOwned;
 pub const CONTRACT_JSON_BEGIN: &str = "---BEGIN GENTS LEAN CONTRACT JSON---";
 pub const CONTRACT_JSON_END: &str = "---END GENTS LEAN CONTRACT JSON---";
 
-// Build only the module artifact needed by `lake env lean --run`; the broader
-// target can pull package extra artifacts such as ProofWidgets' widget bundle.
 const CONTRACT_TARGET: &str = "Proofs.Conformance.Contracts:olean";
 const CONTRACT_RUN_FILE: &str = "Proofs/Conformance/Contracts.lean";
 const LAKE_BUILD_ATTEMPTS: usize = 3;
 
-/// Advisory lock file under the proofs `.lake` tree. Scoped per proofs checkout
-/// so independent worktrees do not serialize on each other, while every
-/// consumer of the same checkout shares one exclusive mutation guard.
 const LOCK_FILE_NAME: &str = "gents-lean-contract.lock";
 
-/// Process-wide successful stdout payload. Failures are not cached so the next
-/// caller can retry after a transient or prior error.
 static PROCESS_STDOUT_CACHE: OnceLock<String> = OnceLock::new();
 
-/// In-process single-flight gate. Only one thread runs Lake / generation; the
-/// rest wait and then observe the cache (or retry after a failed attempt).
 static PROCESS_LOAD_MUTEX: Mutex<()> = Mutex::new(());
 
 pub fn load_contract_snapshot<T>() -> Result<T>
@@ -57,11 +48,6 @@ pub fn load_contract_stdout() -> Result<String> {
     )
 }
 
-/// Single-flight + cross-process-locked load core.
-///
-/// Production `load_contract_stdout` and concurrency tests share this path so
-/// regressions cannot pass against a parallel reimplementation that omits the
-/// lock. Callers inject build/generate (real Lake, or fixtures).
 fn load_contract_stdout_for(
     proofs_dir: &Path,
     cache: &OnceLock<String>,
@@ -103,7 +89,6 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
             .args(["build", CONTRACT_TARGET])
             .current_dir(proofs_dir)
             // Match `Command::output`: Lake must never inherit an interactive
-            // stdin while this process holds the proofs-directory lock.
             .stdin(Stdio::null());
         let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
             .with_context(|| {
@@ -139,19 +124,6 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
     unreachable!("lake build retry loop should return or bail")
 }
 
-/// Run a command while forwarding its output to the parent process and
-/// retaining the same bytes for retry classification and failure diagnostics.
-///
-/// `Command::output` makes a legitimate cold Lake build look hung because it
-/// buffers several minutes of dependency-build progress. Direct writes to the
-/// parent streams also remain visible when this loader runs inside libtest,
-/// whose print capture does not intercept direct writes to those handles.
-///
-/// Each output drainer forwards synchronously. A slow live destination can
-/// therefore backpressure that stream and eventually the child after its OS
-/// pipe fills. This accepted observability tradeoff keeps progress live without
-/// adding an asynchronous sink queue; callers that configure stdin retain that
-/// configuration.
 type OutputTask = thread::JoinHandle<io::Result<Vec<u8>>>;
 
 fn run_with_visible_output(
@@ -201,7 +173,6 @@ fn run_with_visible_output(
             return Err(error.into());
         }
     };
-    // Join both drainers even if one reports an error so no task is detached.
     let stdout = join_output_task(stdout_task, "stdout");
     let stderr = join_output_task(stderr_task, "stderr");
     let stdout = stdout?;
@@ -224,11 +195,7 @@ fn spawn_output_task(
         .spawn(move || forward_and_capture(source, destination))
 }
 
-/// Best-effort termination followed by an unconditional reap and task joins.
-///
-/// The original setup/wait error remains the reported error; cleanup failures
 /// must not replace it or make a Lake invocation eligible for different retry
-/// behavior.
 fn terminate_and_reap_child(child: &mut Child, tasks: Vec<OutputTask>) {
     let _ = child.kill();
     let _ = child.wait();
@@ -252,7 +219,6 @@ fn forward_and_capture(mut source: impl Read, mut destination: impl Write) -> io
         let chunk = &buffer[..read];
         captured.extend_from_slice(chunk);
         // Observability must not change command success semantics if a caller
-        // closes its output stream early (for example, a piped test command).
         let _ = destination.write_all(chunk);
         let _ = destination.flush();
     }
@@ -306,11 +272,6 @@ fn run_contract_generator_unlocked(proofs_dir: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("Lean conformance contract stdout was not UTF-8")
 }
 
-/// Hold an exclusive advisory lock for `proofs_dir` for the duration of `op`.
-///
-/// The lock file lives under the canonical proofs checkout's `.lake` directory,
-/// is released when the guard is dropped (including on panic/process exit), and
-/// is independent across distinct proof checkouts (e.g. separate worktrees).
 fn with_proofs_dir_lock<T>(proofs_dir: &Path, op: impl FnOnce() -> Result<T>) -> Result<T> {
     let lock_path = lock_path_for(proofs_dir)?;
     let _guard = acquire_exclusive_lock(&lock_path)?;
@@ -332,8 +293,6 @@ fn canonicalize_proofs_dir(proofs_dir: &Path) -> Result<PathBuf> {
     match std::fs::canonicalize(proofs_dir) {
         Ok(path) => Ok(path),
         Err(err) => {
-            // Fixtures may not exist yet; fall back to an absolute path so the
-            // lock is still scoped to this checkout rather than the process cwd.
             let absolute = if proofs_dir.is_absolute() {
                 proofs_dir.to_path_buf()
             } else {

@@ -124,25 +124,14 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolPolicyBash {
-    /// Bash availability/mode gate (`Off ≤ ReadOnly ≤ Unrestricted`): whether the
-    /// bash tool exists and at what mode. A ranked capability with a `min` meet
-    /// (`meet_bash_mode`), `Effective ≤ Ceiling` also enforced by `downgrade_bash`
-    /// at the build site. It sits OUTSIDE the proven Lean `BashPolicy` execution
-    /// product (which models the per-command constraints applied *given* bash is
-    /// available); see the `BashPolicy` carve-out note in `ToolPolicy/Types.lean`.
     pub tool: BashMode,
     pub execution_mode: CommandExecutionMode,
     pub network_mode: CommandNetworkMode,
     pub sandbox: bool,
     pub allowed_argv_prefixes: EndpointScope<Vec<String>, ()>,
-    /// Argv prefixes forbidden in any mode. A plain set with a **union** meet:
-    /// a prefix forbidden by either the behavior or the ceiling is forbidden in
     /// the effective policy (top = ∅ = nothing forbidden). Mirrors Lean
-    /// `BashPolicy.forbidden` (`bash_meet_forbidden_superset`).
     pub forbidden_argv_prefixes: BTreeSet<Vec<String>>,
-    /// Command heads permitted in read-only mode, an `EndpointScope` with an
     /// **intersection** meet (top = `All`). Mirrors Lean `BashPolicy.readOnly`
-    /// (`bash_meet_readonly_*`).
     pub read_only_allowlist: EndpointScope<String, ()>,
 }
 
@@ -180,13 +169,11 @@ impl ToolPolicyBash {
             allowed_argv_prefixes: self
                 .allowed_argv_prefixes
                 .meet_with(&other.allowed_argv_prefixes, |(), ()| ()),
-            // forbidden: a prefix forbidden by either side is forbidden (union).
             forbidden_argv_prefixes: self
                 .forbidden_argv_prefixes
                 .union(&other.forbidden_argv_prefixes)
                 .cloned()
                 .collect(),
-            // read-only allowlist: narrower of the two (scope intersection).
             read_only_allowlist: self
                 .read_only_allowlist
                 .meet_with(&other.read_only_allowlist, |(), ()| ()),
@@ -347,9 +334,6 @@ impl ToolPolicySurface {
         } else if selection.defra_query_collections.is_empty() {
             EndpointScope::all()
         } else {
-            // Scope aliases (e.g. "agent-config") expand here so both the
-            // document path and the builder path resolve identically, and the
-            // runtime/explain projections see the literal collection set.
             EndpointScope::<String, ()>::only_units(
                 crate::defra_query::expand_collection_scope_aliases(
                     selection.defra_query_collections.iter().map(String::as_str),
@@ -357,10 +341,6 @@ impl ToolPolicySurface {
             )
         };
 
-        // Self-config categories: gate off => deny-all; unset => the core
-        // spine (behavior/tools/profile); an explicit list narrows or extends
-        // per category. An explicit empty list is `Only(∅)` = deny-all, like
-        // every other allowlist scope.
         let self_config_categories = if !selection.enable_self_config {
             EndpointScope::none()
         } else {
@@ -398,10 +378,6 @@ impl ToolPolicySurface {
                     EndpointScope::<Vec<String>, ()>::only_units(allowed_argv_prefixes)
                 },
                 forbidden_argv_prefixes: forbidden_argv_prefixes.into_iter().collect(),
-                // Asymmetric with allowed_argv_prefixes: an empty read-only
-                // allowlist is the permissive TOP (`All`, no behavior-side
-                // narrowing), not deny-all — only an operator ceiling that sets a
-                // read-only `Only(set)` narrows it. A non-empty list is `Only`.
                 read_only_allowlist: if read_only_allowlist.is_empty() {
                     EndpointScope::all()
                 } else {
@@ -491,23 +467,10 @@ impl ToolPolicySurface {
         self.meta && !self.mcp_services.is_deny_all()
     }
 
-    /// Whether the defra_query tool should be surfaced. The capability bit is not
-    /// sufficient: when the effective `defra_collections` scope meets down to a
-    /// deny-all (`None` or `Only(∅)`), the tool must be dropped rather than
-    /// surfaced with an empty runtime list — otherwise a deny-all would escalate
-    /// above the ceiling (the `Only(∅) ≠ All` trap). This is the primary gate;
-    /// [`defra_query_collection_scope`] is the defense-in-depth projection that
-    /// keeps the same distinction at the executable boundary. Mirror of
-    /// [`include_meta_tools`] for the MCP category.
     pub fn include_defra_query(&self) -> bool {
         self.defra_query && !self.defra_collections.is_deny_all()
     }
 
-    /// Project the effective `defra_collections` scope onto the executable
-    /// [`CollectionScope`] tristate. `All` permits everything; a non-empty
-    /// `Only` restricts to that set; `None`/`Only(∅)` deny — preserving the
-    /// `Only(∅) ≠ All` distinction at the projection boundary so a deny-all can
-    /// never be read as allow-all (defense-in-depth behind `include_defra_query`).
     pub fn defra_query_collection_scope(&self) -> CollectionScope {
         match &self.defra_collections {
             EndpointScope::All => CollectionScope::all(),
@@ -517,16 +480,10 @@ impl ToolPolicySurface {
         }
     }
 
-    /// Whether the self-config tool family should be surfaced: the
-    /// capability bit AND a non-deny-all category scope (`Only(∅) ≠ All`
-    /// trap, mirroring [`include_defra_query`]).
     pub fn include_self_config(&self) -> bool {
         self.self_config && !self.self_config_categories.is_deny_all()
     }
 
-    /// Effective self-config categories as a sorted set. `All` appears only
-    /// from programmatic ceilings/runtime surfaces; the selection path always
-    /// narrows to an explicit `Only`, so `All` projects to every category.
     pub fn self_config_category_set(&self) -> std::collections::BTreeSet<String> {
         match &self.self_config_categories {
             EndpointScope::All => crate::config_client::patch::SELF_CONFIG_CATEGORIES

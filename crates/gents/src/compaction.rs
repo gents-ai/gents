@@ -79,10 +79,8 @@ pub struct DefraCompactor<M: CompletionModel> {
 
 impl<M: CompletionModel> DefraCompactor<M> {
     pub(crate) fn new(model: Arc<M>, mut config: crate::agent::loop_stream::LoopConfig) -> Self {
-        // Compaction is an internal, non-persisting sub-completion, not a user
         // execution origin; it must not inherit the parent's retry ladder (which
         // for scheduled origins is a deadline-less 5s/30s/120s backoff that would
-        // block inline compaction for minutes). Fail fast instead (#648).
         config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
         Self { model, config }
     }
@@ -141,8 +139,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
-        // Summarize via the owned loop (#400): a non-persisting, tool-free single
-        // completion (no hook, empty tool surface, `max_turns: 0`).
         let raw_summary = crate::agent::loop_stream::run_loop_to_text(
             (*self.model).clone(),
             None,
@@ -199,35 +195,13 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
     history::strip_tool_results(messages)
 }
 
-/// The full provider-send boundary sanitization for loaded history: drop
-/// orphaned tool results, then drop unpaired tool calls (#445), then
-/// normalize assistant content order. New sanitizers that narrow the
-/// permissive durable transcript to the stricter provider format belong here
-/// (see the `history` components), NOT in the conformance-fenced reducers.
-/// Runs on the loaded transcript AND on the compaction output (the recent
-/// window can begin mid-exchange).
-///
-/// ORDER MATTERS (PromptAssembly model, P1 soundness): orphan-drop must run
-/// FIRST. A result that precedes its call is orphaned; if unpaired-drop ran
-/// first it would keep that call on the strength of the about-to-be-dropped
-/// result, and an unpaired call would reach the provider. Orphan-drop also
-/// treats normal conversation as closing the active tool-call block, so late
-/// results do not survive on the strength of stale earlier calls. In this
-/// order, unpaired-drop only removes calls NO surviving result references (so
-/// it can never create a new orphan).
 pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
     history::normalize_assistant_content_order(history::drop_unpaired_tool_calls(
         history::drop_orphaned_tool_results(messages),
     ))
 }
 
-/// Bound a compaction summary on its way into the prompt. The summary is
-/// model-emitted free text injected into every subsequent request's system
-/// reminder; bounding at the consumption point covers oversized entries
-/// already persisted as well as new ones.
 pub fn bounded_summary(summary: String) -> String {
-    // Head mode: the narrative leads the summary; bulleted file/decision
-    // lists trail and are the right part to lose.
     let (bounded, _, _) = crate::truncation::truncate_text(
         &summary,
         crate::truncation::TruncationMode::Head,

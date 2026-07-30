@@ -23,10 +23,7 @@ pub(crate) struct SubagentToolConfig {
     pub steering_enabled: bool,
     pub background_enabled: bool,
     pub default_await_mode: AwaitMode,
-    /// When false (default), cross-deployment (remote-DID) subagent delegation is
-    /// disabled: remote-DID targets are not surfaced to the model and remote spawns
     /// are rejected at runtime. Cross-deployment is deferred pending ACP; only
-    /// trusted-fleet deployments should opt in.
     pub allow_cross_deployment: bool,
 }
 
@@ -109,31 +106,17 @@ pub struct ToolSelection {
     pub enable_meta_tools: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
-    /// Tool names that hold in `awaitingApproval` until an operator writes an
-    /// AgentToolApproval decision (or the call deadline expires).
     pub approval_required_tools: Vec<String>,
-    /// Enable hook-managed workflow orchestration tools.
     pub orchestration_enabled: bool,
-    /// Enable the feature-gated, per-agent persistent key-value memory tool.
     pub enable_memory: bool,
-    /// Enable the narrower `sessions` convenience tool for recent session history.
     pub enable_session_history_tool: bool,
-    /// Enable the read-only `context_budget` context-budget inspection tool.
     pub enable_context_budget: bool,
-    /// Enable the read-only `defra_query` structured query tool.
     pub enable_defra_query: bool,
-    /// Optional allowlist of collections `defra_query` may read. Empty = all.
     pub defra_query_collections: Vec<String>,
-    /// Declarative write-tool bindings from the ToolSelection document.
     pub write_tools: Vec<crate::document_config::WriteToolDecl>,
-    /// Enable the agent self-configuration tools (#654).
     pub enable_self_config: bool,
-    /// Self-config category allowlist. `None` = the core spine
-    /// (behavior, tools, profile); extensions are opt-in per category.
     pub self_config_categories: Option<Vec<String>>,
-    /// Opt-in no-lockout guardrail for self-config patches.
     pub self_config_no_lockout: bool,
-    /// Opt-in dry-run preview support on `get_my_config`.
     pub self_config_dry_run: bool,
 }
 
@@ -153,13 +136,9 @@ impl Default for ToolSelection {
             enable_memory: false,
             enable_session_history_tool: false,
             enable_context_budget: true,
-            // defra_query is opt-in (#592): an unscoped read tool dominates the
-            // surface, so only an explicit enable turns it on.
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
             write_tools: Vec::new(),
-            // Self-config is opt-in like defra_query: an unset gate stays off
-            // for every policy version, with no legacy backfill.
             enable_self_config: false,
             self_config_categories: None,
             self_config_no_lockout: false,
@@ -213,19 +192,12 @@ impl ToolSelection {
             enable_context_budget: selection
                 .enable_context_budget
                 .unwrap_or(policy_version.default_enabled(true)),
-            // defra_query is opt-in for every policy version (#592): legacy
-            // docs are NOT grandfathered — the legacy backfill / wide-open
-            // preset materialize an explicit `true` where the permissive
-            // surface is intended.
             enable_defra_query: selection.enable_defra_query.unwrap_or(false),
             defra_query_collections: selection
                 .defra_query_collections
                 .clone()
                 .unwrap_or_default(),
             write_tools: selection.write_tools.clone().unwrap_or_default(),
-            // Opt-in for every policy version, mirroring enable_defra_query:
-            // legacy docs are NOT grandfathered and the wide-open preset does
-            // NOT materialize it.
             enable_self_config: selection.enable_self_config.unwrap_or(false),
             self_config_categories: selection.self_config_categories.clone(),
             self_config_no_lockout: selection.self_config_no_lockout.unwrap_or(false),
@@ -307,12 +279,6 @@ fn command_policy_from_document(
     } else {
         CommandExecutionPolicy::write_capable()
     };
-    // read_only_command_allowlist REPLACES the hardcoded default base when
-    // present AND non-empty (whole-executable heads). Empty/absent = no
-    // override — never a deny-all surface. This is orthogonal to
-    // command_allowed_argv_prefixes, which is an argv-prefix gate for
-    // subcommand-precise extension (not base replacement). See #629 and
-    // docs/macos-bash-sandbox.md.
     let base = match (mode, selection.read_only_command_allowlist.as_deref()) {
         (CommandExecutionMode::ReadOnly, Some(list)) if !list.is_empty() => {
             base.with_read_only_allowlist(list.to_vec())

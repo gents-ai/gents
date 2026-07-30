@@ -12,17 +12,8 @@ use crate::graphql::escape_graphql_string;
 
 pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 
-/// Sessions returned when the caller does not request a specific count.
 const DEFAULT_LIMIT: usize = 10;
-/// Upper bound on a caller-requested session count. Deliberately large so the
-/// limit is under the caller's control in practice (SP3 de-cap); the bound only
-/// exists as a backstop against a pathological request triggering an enormous
-/// node scan.
 const MAX_LIMIT: usize = 1000;
-/// How many recent AgentRequest rows to scan to discover distinct session ids.
-/// MUST stay >= MAX_LIMIT: a session spans multiple requests, so surfacing
-/// `MAX_LIMIT` sessions requires scanning at least that many requests (in
-/// practice several times more). Kept comfortably above MAX_LIMIT.
 const REQUEST_SCAN_LIMIT: usize = 5000;
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -66,8 +66,6 @@ async fn create_session_with_behavior_id_and_requester_did(
         let escaped_started = escape_graphql_string(&started);
         let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
 
-        // `agent_did` is the immutable scope key: written only in the `add`
-        // branch (create), never rewritten on update.
         let mutation = format!(
             r#"mutation {{
                 upsert_AgentSession(

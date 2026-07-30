@@ -8,12 +8,6 @@ pub(crate) const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
 pub(crate) const CONVERSATION_TITLE_SOURCE_GENERATED: &str = "generated";
 pub(crate) const CONVERSATION_TITLE_SOURCE_TASK: &str = "task";
 
-/// The mutable payload of an `AgentConversation` doc.
-///
-/// `session_id`, `agent_did`, and `requester_did` are create-only:
-/// `agent_did` is the immutable replication scope key, `requester_did` is the
-/// immutable return route, and `session_id` is the doc's identity. None appears
-/// in an update.
 struct ConversationFields<'a> {
     session_id: &'a str,
     agent_name: &'a str,
@@ -67,17 +61,7 @@ impl ConversationFields<'_> {
     }
 }
 
-/// Write a conversation: update the doc addressed by `doc_id`, or create one
-/// when the session has no doc yet.
-///
-/// **Never upsert by a `session_id` filter (#693).** `session_id` is unique in
 /// the current schema, but DefraDB cannot add an index to an already-created
-/// collection, so stores whose `AgentConversation` predates the unique index
-/// carry duplicate rows permanently (replication can mint them too). A
-/// `filter: { session_id }` upsert matches every duplicate and DefraDB refuses
-/// it with `cannot upsert multiple matching documents` — which bricked both
-/// startup recovery *and* ordinary request handling on the affected hosts.
-/// Addressing one `_docID` is what makes the write total on those stores; the
 /// Lean sweep contract pins the selector (`targetSelector = "_docID"`).
 async fn write_conversation_doc(
     node: &EmbeddedNode,
@@ -227,7 +211,6 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
 ) -> Result<ConversationUpdateOutcome> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_agent_name = escape_graphql_string(agent_name);
-    // `agent_did` is intentionally not interpolated: it is the immutable scope
     // key and must never appear in an update mutation. The parameter is retained
     // for signature symmetry with the create-path identity helpers.
     let _ = agent_did;
@@ -259,8 +242,6 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
     let escaped_preview_text = escape_graphql_string(&existing.preview_text);
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
-    // Addressed by the canonical doc's `_docID`, not by a `session_id` filter:
-    // a filtered update writes EVERY duplicate on an affected store (#693).
     let escaped_doc_id = escape_graphql_string(&existing.doc_id);
     let mutation = format!(
         r#"mutation {{
@@ -333,7 +314,6 @@ pub(crate) async fn update_conversation_title_with_source(
     let escaped_created_at = escape_graphql_string(&existing.created_at);
     let escaped_behavior_id =
         escape_graphql_string(existing.behavior_id.as_deref().unwrap_or_default());
-    // Canonical doc only: a `session_id` filter titles every duplicate (#693).
     let escaped_doc_id = escape_graphql_string(&existing.doc_id);
 
     let mutation = format!(

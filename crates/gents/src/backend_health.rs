@@ -1,19 +1,6 @@
 //! Scheduled inference-backend prober (#640).
-//!
-//! Measures per-runtime reachability of enabled backends and keeps an
-//! in-memory [`BackendHealthMap`] that the admission/reconcile layer merges
-//! into effective availability. Reachability is observer-relative — each
-//! runtime's opinion governs only its own routing — so measured state is
-//! deliberately NOT persisted to the fleet-replicated `InferenceBackend`
-//! document. The shared document's `probe_status` stays the operator/bootstrap
-//! intent knob; the prober's only doc write is the recurring
-//! `unknown → healthy` promotion (closing the dead-at-startup gap the
-//! startup-only ratchet left open).
-//!
 //! The state machine mirrors `Proofs/BackendHealth/Transition.lean` exactly
 //! and is fenced by the generated `backend_health_cases`: K consecutive
-//! failures demote to `Unhealthy` (vetoing routing), a single success
-//! promotes back to `Healthy`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -34,7 +21,6 @@ use crate::backend_registry::{
 pub struct BackendProberOptions {
     pub probe_interval: Duration,
     pub probe_timeout: Duration,
-    /// Consecutive failures required to demote to `Unhealthy` (K).
     pub failure_threshold_k: u32,
 }
 
@@ -48,7 +34,6 @@ impl Default for BackendProberOptions {
     }
 }
 
-/// Measured health of one backend as observed by THIS runtime.
 /// Mirrors `Proofs.BackendHealth.HealthState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendHealthState {
@@ -59,9 +44,6 @@ pub enum BackendHealthState {
 }
 
 impl BackendHealthState {
-    /// The routing veto — mirrors `HealthState.blocksRouting`: only a
-    /// measured `Unhealthy` vetoes; `Unknown` (never probed) and `Degraded`
-    /// (below-threshold failures) do not.
     pub fn blocks_routing(self) -> bool {
         matches!(self, Self::Unhealthy)
     }
@@ -77,7 +59,6 @@ impl BackendHealthState {
 }
 
 /// Probe outcome vocabulary — mirrors `Proofs.BackendHealth.Event`.
-/// `ProbeFail` folds connect failure, non-2xx, and timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess,
@@ -92,7 +73,6 @@ struct BackendHealthEntry {
     last_error: Option<String>,
 }
 
-/// Public per-backend snapshot — the #631 signal surface (completion retry
 /// consults this for fail-fast-vs-backoff) and the metrics overlay source.
 #[derive(Debug, Clone)]
 pub struct BackendHealthSnapshot {
@@ -103,8 +83,6 @@ pub struct BackendHealthSnapshot {
     pub last_error: Option<String>,
 }
 
-/// In-memory measured-health map, shared between the prober (writer), the
-/// reconcile/admission merge, the metrics endpoint, and the owned loop.
 #[derive(Clone, Default)]
 pub struct BackendHealthMap {
     inner: Arc<RwLock<HashMap<String, BackendHealthEntry>>>,
@@ -132,8 +110,6 @@ impl BackendHealthMap {
             .collect()
     }
 
-    /// Backend ids whose measured state currently vetoes routing. This is
-    /// the set the snapshot resolver merges into `BackendAdmissionConfig`.
     pub async fn vetoed_backend_ids(&self) -> HashSet<String> {
         self.inner
             .read()
@@ -144,8 +120,6 @@ impl BackendHealthMap {
             .collect()
     }
 
-    /// Whether THIS runtime's measurement vetoes the backend. Absent or
-    /// never-probed entries do not veto (startup grace — doc intent governs).
     pub async fn measured_blocks_routing(&self, backend_id: &str) -> bool {
         self.inner
             .read()
@@ -225,20 +199,12 @@ fn step_backend(
     }
 }
 
-/// Outcome of one probe cycle over the enabled backends.
 #[derive(Debug, Default)]
 pub struct ProbeCycleOutcome {
-    /// Backends whose routing veto flipped this cycle (either direction).
     pub flipped: Vec<String>,
-    /// Reachable backends whose shared document still said
-    /// `probe_status: "unknown"` — the recurring-promote set.
     pub promotable: Vec<String>,
 }
 
-/// Probe every probeable backend once and step the health map. Free of
-/// DefraDB so tests can drive it against real listeners; the production
-/// wrapper `run_backend_probe_cycle` supplies the backend list and persists
-/// the recurring promotion.
 pub async fn probe_backends_cycle(
     client: &reqwest::Client,
     backends: &[InferenceBackend],
@@ -251,10 +217,6 @@ pub async fn probe_backends_cycle(
 
     for backend in backends {
         if backend.provider_kind == BackendProviderKind::ChatGptCodex {
-            // OAuthCredential is agent-scoped, so a runtime-level probe has
-            // no credential to present; never probed means never demoted —
-            // the shared document's status governs (same constraint as the
-            // startup ratchet's skip).
             continue;
         }
         probed_ids.insert(backend.backend_id.clone());
@@ -294,8 +256,6 @@ pub async fn probe_backends_cycle(
             );
             outcome.flipped.push(backend.backend_id.clone());
         } else if event == ProbeEvent::ProbeFail {
-            // Steady-state failures stay at debug so a long outage does not
-            // spam the log every cycle (#588 prior art).
             tracing::debug!(
                 backend_id = %backend.backend_id,
                 endpoint = %backend.endpoint,
@@ -327,8 +287,6 @@ pub async fn probe_backends_cycle(
     outcome
 }
 
-/// Production cycle: list enabled backends, probe them, and persist the
-/// recurring `unknown → healthy` promotion to the shared document.
 pub async fn run_backend_probe_cycle(
     node: &EmbeddedNode,
     client: &reqwest::Client,
@@ -363,10 +321,6 @@ pub async fn run_backend_probe_cycle(
     outcome
 }
 
-/// Spawn the scheduled prober. Runs one cycle immediately (populating the
-/// map right after startup), then every `probe_interval`. Routing-relevant
-/// transitions nudge `health_events_tx` so the control watcher re-resolves
-/// the runtime snapshot without waiting for a document update.
 pub fn spawn_backend_prober(
     node: Arc<EmbeddedNode>,
     health_map: BackendHealthMap,

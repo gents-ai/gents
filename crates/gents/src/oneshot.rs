@@ -34,7 +34,6 @@ pub async fn run_openai_oneshot_with_tools(
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
-    // Single schema entry point: baseline + chain + lineage verification.
     crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
     let api_key = behavior.completion_client_api_key()?;
@@ -47,8 +46,6 @@ pub async fn run_openai_oneshot_with_tools(
 
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
-    // Unwrapped tool surface for the owned loop (#400): the loop applies its own
-    // deadline/cancellation envelope, so these are not RuntimeManagedTool-wrapped.
     let tools = Arc::new(tools);
     let background_tool_registry = BackgroundToolRegistry::from_tools(
         tool_surface
@@ -178,8 +175,6 @@ where
     C::CompletionModel: 'static,
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
-    // Drive the owned loop (#400) directly over the model + tool surface rather
-    // than building a rig `Agent`.
     let model = client.completion_model(&behavior.model_name);
     let config = loop_config(behavior, preamble, tools.len());
     run_oneshot_owned(

@@ -78,12 +78,6 @@ fn render_request_context_message(
         "now".to_string(),
         serde_json::json!(Utc::now().to_rfc3339()),
     );
-    // Populate the (potentially expensive) live summary whenever the template
-    // could reference it. A literal substring check can never miss a real read
-    // — the catalog variable name must appear verbatim to be referenced — while
-    // a best-effort AST walk drops names bound inside set/with/filter/macro
-    // bodies, which would leave `collection_summary` undefined and fail the
-    // render under strict-undefined for an otherwise-valid template.
     if template.contains("collection_summary") {
         ctx.insert(
             "collection_summary".to_string(),
@@ -131,9 +125,6 @@ where
 }
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
-    // Threads request, admission, shutdown, and interrupt state into a single
-    // inference drive. Splitting further would require re-threading the
-    // same receivers through private helpers with no readability gain.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
@@ -157,9 +148,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let has_deadline = !deadline_at.is_empty();
         let workspace_cwd_set = workspace_cwd.is_some();
 
-        // Render the per-request <context> message ONCE, before the loop-owned
-        // retry machinery. Rendering per provider attempt would recompute
-        // ctx.now, diverging from the persisted/visible request context.
         let request_context_message =
             render_request_context_message(self.node.as_ref(), &self.behavior, request)?;
 
@@ -199,9 +187,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .await;
                 let persistence_hook = hook.clone();
 
-                // Owned completion loop (#400): drive our own multi-turn stream
-                // over the model + tool surface. Per-request sampling is resolved
-                // into the loop config from the behavior + request.
                 let model = (*self.model).clone();
                 let mut loop_config = crate::completion_factory::loop_config_for_request(
                     &self.behavior,
@@ -244,10 +229,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
                 let loop_tools = self.loop_tools.clone();
-                // Keep a per-attempt token for the admission permit and cancel it
-                // explicitly on interrupt before dropping the guarded stream. The
-                // permit's Drop path observes this token to persist the linked
-                // InferenceCall as cancelled rather than a generic stream drop.
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
@@ -305,13 +286,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                         let mut stream_error = None;
                         // A retry's backoff sleep runs *inside* the loop
-                        // generator, spanning the next `stream.next()` poll. The
                         // liveness timeout wraps that poll, so a backoff longer
-                        // than `liveness_timeout` would otherwise be misread as a
-                        // dead stream and turned into a spurious terminal
                         // "stream liveness timeout", defeating the retry (#648).
                         // Carry the pending backoff forward and add it to the
-                        // next poll's liveness budget.
                         let mut pending_backoff = std::time::Duration::ZERO;
 
                         loop {
@@ -344,10 +321,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to persist interrupted assistant turn before terminal transition"
                                         );
                                     }
-                                    // #442: a tool that completed inline before the
-                                    // interrupt recorded its result on the AgentToolCall
-                                    // row but may not have persisted its result message;
-                                    // backfill so the transcript stays pair-closed.
                                     if let Err(error) = persistence_hook
                                         .backfill_completed_tool_results()
                                         .await
@@ -426,8 +399,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                             };
                             // The generator sleeps this backoff before its next
-                            // yield, so extend the *next* poll's liveness budget
-                            // by it (reset to zero for any non-retry item).
                             pending_backoff = match &item {
                                 Ok(crate::agent::loop_stream::LoopStreamItem::AttemptFailed {
                                     backoff,
@@ -455,12 +426,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
-                            // #442: a tool that completed inline before the stream
-                            // stalled recorded its result on the AgentToolCall row but
-                            // may not have persisted its result message (the streamed
-                            // ToolResult never arrived); backfill so the transcript
-                            // stays pair-closed and the next request is not sent a
-                            // dangling assistant tool call.
                             if let Err(error) = persistence_hook
                                 .backfill_completed_tool_results()
                                 .await

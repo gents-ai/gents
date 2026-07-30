@@ -45,12 +45,7 @@ impl DefraSessionHook {
             match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
                 Ok(edge) => edge,
                 Err(error) => {
-                    // #593: if the edge failed to RESOLVE (child absent or
-                    // unlinked) and the caller owns a spawn bridge for this
-                    // child, the id is real — explain the bridge state
                     // (retryable while non-terminal). Child-present
-                    // corruption and query failures keep the original error;
-                    // a probe failure falls through to the generic payload.
                     if authorization_lookup_error(&error, &request_id, child_request_id) {
                         if let Ok(Some(bridge)) =
                             load_spawn_bridge_row(&self.node, &request_id, child_request_id).await
@@ -278,9 +273,6 @@ impl DefraSessionHook {
                 ));
             }
             SteerSubagentTarget::AwaitingMaterialization { message } => {
-                // #593: the bridge exists but the child has not materialized;
-                // steering needs a child session, so explain and let the
-                // model retry once the child appears.
                 let result = service_unavailable_payload(
                     STEER_SUBAGENT_TOOL_NAME,
                     "/child_request_id",
@@ -405,8 +397,6 @@ impl DefraSessionHook {
             match load_authorized_child_edge(&self.node, &parent_context, child_request_id).await {
                 Ok(edge) => edge,
                 Err(error) => {
-                    // #593: same resolution-gated bridge-state explanation as
-                    // wait_subagent.
                     if authorization_lookup_error(&error, &request_id, child_request_id) {
                         if let Ok(Some(bridge)) =
                             load_spawn_bridge_row(&self.node, &request_id, child_request_id).await

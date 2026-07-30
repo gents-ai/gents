@@ -1,13 +1,4 @@
 //! Fleet-discovery directory projection (issue #714).
-//!
-//! Projects AgentPrincipal x AgentBehavior x AgentRuntime into
-//! AgentDirectoryEntry rows — the replicated agent index the `machine`
-//! pairing template pushes to attached clients. Modeled in
-//! `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`; fenced by
-//! `tests/conformance/directory_projection.rs`. The sweep runs on source
-//! Update events, so the load-bearing property is that a settled state is a
-//! write-free fixpoint. Each runtime owns only the rows stamped with its
-//! source DID; replicated foreign rows remain outside its projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -22,11 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
 
-/// One row of the fleet-discovery directory: a principal's identity,
-/// available behaviors, and last-known runtime state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
-    /// Durable DefraDB identity for the `(source_did, agent_did)` partition.
     pub directory_key: String,
     pub agent_did: String,
     pub source_did: String,
@@ -45,17 +33,9 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    /// Live `AgentPrincipal` rows, as (agent_did, display_name).
     async fn load_principals(&self) -> Result<Vec<(String, String)>>;
-    /// Behavior display names for each principal, keyed by agent_did.
     async fn load_behavior_names(&self) -> Result<BTreeMap<String, Vec<String>>>;
-    /// Runtime (process_state, updated_at) for each principal, keyed by
-    /// agent_did. `updated_at` here is `AgentRuntime.updated_at` — NOT
-    /// wall-clock — so the settled check stays a pure function of source
-    /// rows.
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
-    /// Directory rows owned by `source_did`. Foreign replicated rows are
-    /// deliberately outside this projector's state partition.
     async fn list_directory_entries(
         &self,
         source_did: &str,
@@ -64,12 +44,6 @@ pub trait DirectoryStore: Send + Sync {
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()>;
 }
 
-/// Deterministic persisted identity for one source-owned directory row.
-///
-/// DefraDB supports unique indexes only on one field, so `agent_did` alone
-/// cannot identify a row: replicated homes may legitimately advertise the
-/// same agent DID. Hashing length-delimited inputs keeps the durable key
-/// unambiguous without exposing a delimiter convention to storage queries.
 pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(source_did.as_bytes());
@@ -81,29 +55,8 @@ pub fn directory_entry_key(source_did: &str, agent_did: &str) -> String {
     )
 }
 
-/// Canonicalize a runtime `updated_at` into the exact lexical form DefraDB's
-/// `DateTime` column stores and returns, so a settled directory row stays a
-/// write-free fixpoint.
-///
-/// `AgentRuntime.updated_at` is a *String* column the runtime writes as
-/// `Utc::now().to_rfc3339()` — offset `+00:00`, sub-second precision — but
-/// `AgentDirectoryEntry.last_seen` is a `DateTime` column that re-serializes on
-/// storage: it renders the offset as `Z`, and its sub-second rendering is not
-/// guaranteed byte-stable (Go's DefraDB trims trailing zeros; chrono buckets to
-/// 3/6/9 digits). Comparing the raw source string against the normalized stored
-/// string made `existing != desired` on *every* sweep, so each tick re-upserted
-/// the row, and each upsert re-fired the Update-driven sweep — an unbounded
-/// write/event storm that starved the runtime.
-///
-/// Quantizing to whole-second UTC `...Z` removes the sub-second ambiguity
-/// entirely: DefraDB round-trips a second-precision `Z` value unchanged (the
-/// conformance fence and the embedded-node fixpoint test pin this), and
-/// sub-second freshness is not meaningful for a fleet "last seen". The function
 /// is idempotent (`canon(canon(x)) == canon(x)`), preserving the model's
 /// projection idempotence. Blank input (a principal with no `AgentRuntime` row)
-/// stays blank → rendered as `null`. Genuinely unparseable non-blank input
-/// passes through trimmed unchanged; that one row still fails its upsert, as
-/// before, under the per-entry error tolerance in `reconcile_directory_tick`.
 fn canonicalize_last_seen(updated_at: &str) -> String {
     let trimmed = updated_at.trim();
     if trimmed.is_empty() {
@@ -117,10 +70,6 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
     }
 }
 
-/// The projection: one entry per principal, contents a function of the
-/// principal's payload (display name, behavior names, runtime state). The
-/// runtime `updated_at` is canonicalized (see `canonicalize_last_seen`) so the
-/// derived `last_seen` matches its own stored `DateTime` round-trip.
 /// Mirrors Lean `project`.
 pub fn derive_directory_entries(
     source_did: &str,
@@ -152,12 +101,7 @@ pub fn derive_directory_entries(
         .collect()
 }
 
-/// One reconcile sweep: derive the desired directory rows from source
-/// collections and diff against this source's `AgentDirectoryEntry` rows,
 /// upserting/refreshing/retracting exactly what has drifted. Mirrors Lean
-/// `projectStep`; a settled state (desired == existing) must be a
-/// write-free fixpoint (`settled_fixpoint`), since the sweep runs on every
-/// Update event.
 pub async fn reconcile_directory_tick(
     store: &dyn DirectoryStore,
     source_did: &str,
@@ -180,12 +124,7 @@ pub async fn reconcile_directory_tick(
         .await
         .context("list directory entries")?;
 
-    // Per-entry error tolerance: one principal's malformed source row (e.g.
-    // no AgentRuntime row, previously producing an unparseable `last_seen`)
     // must not abort the whole sweep. Warn-and-continue past each failure,
-    // collecting only the first error to return once every entry has had a
-    // chance to converge; outcome sets only ever record operations that
-    // actually succeeded.
     let mut outcome = DirectoryTickOutcome::default();
     let mut first_error: Option<anyhow::Error> = None;
     for (did, entry) in &desired {
@@ -239,9 +178,6 @@ pub async fn reconcile_directory_tick(
     Ok(outcome)
 }
 
-/// Run the directory projection reconciler until cancelled. Unlike the P2P
-/// reconcilers, this has no P2P-idle guard: the directory is useful even
-/// without P2P transport (the desktop reads it locally), so it always runs.
 pub async fn run_directory_projection(
     node: Arc<EmbeddedNode>,
     source_did: String,
@@ -520,8 +456,6 @@ fn delete_directory_entry_mutation(source_did: &str, agent_did: &str) -> String 
 }
 
 /// Renders a GraphQL string-list literal. Empty renders as `null`, never
-/// `[]` — an empty list literal types as `JsonArray` and corrupts nillable
-/// array columns.
 fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
     let items = values
         .into_iter()
@@ -534,17 +468,6 @@ fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>) ->
     }
 }
 
-/// Renders a nullable `DateTime` literal for `AgentDirectoryEntry.last_seen`.
-/// Blank/whitespace-only input — the default `derive_directory_entries`
-/// produces for a principal with no `AgentRuntime` row — renders as `null`;
-/// DefraDB rejects a non-RFC3339 `""` on create AND upsert alike, and an
-/// unconditional quoted-string render used to poison the whole sweep (one
-/// never-deployed principal wedged the directory forever). Non-blank values
-/// pass through escaped and quoted unchanged: `AgentRuntime.updated_at` is a
-/// String schema-side, not guaranteed RFC3339, so this helper does not
-/// attempt to validate it — a genuinely-garbage non-blank value still fails
-/// that one row, which is acceptable and pre-existing (see the per-entry
-/// error tolerance in `reconcile_directory_tick`).
 fn graphql_nullable_datetime_literal(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {

@@ -9,8 +9,6 @@ use minijinja::syntax::SyntaxConfig;
 use super::catalog::{Catalog, Site, Volatility};
 use super::TemplateError;
 
-/// Collect the complete set of full variable refs a system template reads,
-/// rejecting constructs that introduce bindings or control flow.
 pub fn collect_system_reads(template: &str) -> Result<BTreeSet<String>, TemplateError> {
     let ast = parse(template, "system_prompt", SyntaxConfig, Default::default())
         .map_err(|e| TemplateError::Parse(e.to_string()))?;
@@ -19,17 +17,13 @@ pub fn collect_system_reads(template: &str) -> Result<BTreeSet<String>, Template
     Ok(reads)
 }
 
-/// Validate a system template against the runtime-owned catalog.
 pub fn validate_system_template(template: &str, cat: &Catalog) -> Result<(), TemplateError> {
     let reads = collect_system_reads(template)?;
     for r in &reads {
         match cat.volatility(r) {
             Some(Volatility::RunConstant) => {
                 // Cache-safety is about volatility, but the catalog also models
-                // per-site availability; a run-constant var that is not declared
                 // available in the system preamble must not silently enter the
-                // cacheable prefix. Bind the guard to the catalog's own model so
-                // it stays correct as the catalog grows (fail-closed by default).
                 if !cat.is_available_at(r, Site::System) {
                     return Err(TemplateError::Render(format!(
                         "system template references `{r}`, which is run-constant but not \
@@ -55,17 +49,6 @@ pub fn validate_system_template(template: &str, cat: &Catalog) -> Result<(), Tem
     Ok(())
 }
 
-/// Collect the COMPLETE set of catalog-namespaced variable refs a
-/// request-context/task template reads, across every statement form. Unlike a
-/// system template, control flow is permitted here; unlike a best-effort scan,
-/// this recurses into `if`/`for`/`with`/`set`/`set`-block/`filter`/`autoescape`
-/// bodies and every expression form, so apply-time availability validation
-/// cannot be bypassed by hiding a ref inside e.g. `{% set x = ctx.bogus %}`.
-///
-/// The statement and expression matches are exhaustive over our minijinja
-/// feature set (no `_` arm), so enabling a new construct (macros/multi-template)
-/// breaks the build rather than silently under-collecting — fail-closed by
-/// construction.
 pub fn collect_request_reads(template: &str) -> Result<BTreeSet<String>, TemplateError> {
     let ast = parse(
         template,
@@ -98,9 +81,6 @@ fn walk_stmt_system(stmt: &Stmt<'_>, reads: &mut BTreeSet<String>) -> Result<(),
     }
 }
 
-/// Complete request-context walker (see `collect_request_reads`). Exhaustive
-/// over the live `Stmt` variants — no `_` arm, so a newly-enabled statement
-/// form is a compile error here, not a silent gap in availability validation.
 fn walk_stmt_request(stmt: &Stmt<'_>, reads: &mut BTreeSet<String>) {
     match stmt {
         Stmt::Template(t) => {
@@ -167,10 +147,6 @@ fn walk_stmt_request(stmt: &Stmt<'_>, reads: &mut BTreeSet<String>) {
     }
 }
 
-/// Complete expression-ref collector for request-context templates. Exhaustive
-/// over `Expr` (no `_` arm) so every reference is captured; recurses through
-/// every nesting form rather than rejecting it (request-context permits any
-/// expression, unlike the restrictive system collector).
 fn collect_request_expr(expr: &Expr<'_>, reads: &mut BTreeSet<String>) {
     if let Some(path) = dotted_path(expr) {
         reads.insert(path);

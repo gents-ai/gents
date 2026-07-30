@@ -1,21 +1,12 @@
 //! Env-overridable reconciler intervals.
-//!
-//! Production defaults match the historic constants; tests and live e2e runs can
-//! compress convergence by setting the env vars. Lean-neutral: no transition,
 //! invariant, or provider-input depends on these wall-clock values.
 
 use std::time::Duration;
 
-/// Default heartbeat cadence, matching the historic registry heartbeat.
 pub const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);
-/// Default pairing/discovery sweep cadence.
 pub const DEFAULT_SWEEP: Duration = Duration::from_secs(30);
-/// Default stale window multiplier relative to the heartbeat.
 pub const DEFAULT_STALE_MULTIPLE: u32 = 3;
 
-/// Parse a millisecond override. A non-positive (`0`) or unparsable value is
-/// rejected (returns `None`, so the default applies): `Duration::ZERO` would
-/// panic `tokio::time::interval`, and a zero interval is never a meaningful
 /// cadence — an operator typo must not crash the reconciler daemons.
 fn parse_ms(raw: &str) -> Option<Duration> {
     raw.trim()
@@ -37,9 +28,6 @@ pub fn sweep_interval() -> Duration {
     env_ms("GENTS_PAIRING_SWEEP_MS").unwrap_or(DEFAULT_SWEEP)
 }
 
-/// Signed endpoint heartbeat reuses the registry heartbeat env unless explicitly
-/// overridden so registry freshness and endpoint freshness do not drift by
-/// accident.
 pub fn endpoint_interval() -> Duration {
     env_ms("GENTS_ENDPOINT_HEARTBEAT_MS").unwrap_or_else(heartbeat_interval)
 }
@@ -49,19 +37,8 @@ pub fn stale_after() -> Duration {
         .unwrap_or_else(|| heartbeat_interval() * DEFAULT_STALE_MULTIPLE)
 }
 
-/// Default staleness window for reciprocal conversation endpoints.
 pub const DEFAULT_RECIPROCAL_STALE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Staleness window for reciprocal conversation endpoints (mobile peers).
-///
-/// Deliberately much wider than the fleet `stale_after` window: a fleet node
-/// heartbeats continuously, so 3× the heartbeat is a meaningful liveness
-/// signal, but a phone stops heartbeating the moment the app backgrounds. With
-/// the fleet window every background/foreground cycle would retract the
-/// reciprocal desired row, uninstall the push replicator, and replay history on
-/// re-add. A stale reciprocal endpoint costs only replicator retries against an
-/// unreachable address; deliberate revocation is intent removal, which retracts
-/// immediately regardless of freshness.
 pub fn reciprocal_stale_after() -> Duration {
     env_ms("GENTS_RECIPROCAL_STALE_MS").unwrap_or(DEFAULT_RECIPROCAL_STALE)
 }

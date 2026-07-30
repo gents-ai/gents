@@ -156,9 +156,6 @@ pub struct TimelineInferenceCallRow {
     pub call_id: String,
     #[serde(default)]
     pub request_id: String,
-    /// Monotone per-request provider-call counter. Retry rollups order by
-    /// `call_seq`; `attempt` below is legacy daemon-attempt metadata and is
-    /// expected to remain constant once the daemon outer retry is removed.
     #[serde(default)]
     pub call_seq: i64,
     #[serde(default)]
@@ -678,11 +675,6 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
     }));
 }
 
-/// Fallback inference for rows persisted before `AgentMessage.request_id`
-/// existed (added alongside this projection work). New writes carry the field
-/// explicitly; once pre-field data is no longer projected, these heuristics
-/// (materialized-sequence match, single-request session) can be deleted and
-/// the explicit field made authoritative.
 fn infer_request_id_for_message<'a>(
     message: &TimelineMessageRow,
     responses: &'a [TimelineResponseRow],
@@ -710,8 +702,6 @@ fn infer_request_id_for_message<'a>(
         })
 }
 
-/// Same legacy-data fallback chain as [`infer_request_id_for_message`]; the
-/// explicit `request_id` short-circuit is the steady-state path.
 fn infer_request_id_for_tool_call(
     tool_call: &TimelineToolCallRow,
     requests: &[TimelineRequestRow],

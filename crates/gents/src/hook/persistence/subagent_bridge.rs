@@ -113,11 +113,6 @@ impl DefraSessionHook {
         parent_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
         let mut missing_owner_since = None;
-        // After the spawn convergence (#377) the child `AgentRequest` is
-        // materialized asynchronously by `SubagentSource`, so the foreground
-        // poller may start before the child row exists. Adopt the child session
-        // id from the edge once it appears (the caller may pass an empty
-        // placeholder for the not-yet-materialized child).
         let mut child_session_id = child_session_id.to_string();
 
         loop {
@@ -126,13 +121,8 @@ impl DefraSessionHook {
                 try_load_authorized_child_edge(&self.node, parent_context, child_request_id)
                     .await?
             else {
-                // Child not yet materialized by SubagentSource. Back off,
-                // honoring the parent deadline, and keep polling.
                 if now >= parent_deadline_at {
                     // Terminalize the bridge as dead (parent deadline exceeded
-                    // before the child was ever materialized), mirroring the
-                    // running-edge deadline path so the bridge does not leak in
-                    // a `running` state.
                     if let Some(mut lifecycle) =
                         self.take_owned_in_flight_lifecycle(internal_call_id).await
                     {
@@ -976,8 +966,6 @@ impl DefraSessionHook {
                 "failure_class": "external"
             })
         };
-        // The embedded result is bounded so the envelope survives the outer
-        // skip bounding as valid JSON; the full output stays on the row.
         Ok(json_envelope_with_bounded_result(
             json!({
                 "ok": lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed,

@@ -1,24 +1,8 @@
 //! Signed pairing-invite token (current version: v5).
-//!
-//! The token carries everything the joining peer needs to connect plus a
 //! signature over that payload by the issuer's DID key.  The join command
 //! verifies the signature (TOFU) before writing a `PeerPairingDesired` row.
-//!
-//! Encoding: CBOR (ciborium) → base58 → `"dapair1-"` prefix.
-//!
-//! Signing payload: CBOR of a copy of the token with `sig = []`.  This means
 //! the signature covers `v`, `issuer_did`, `peer_id`, `ticket`, `nonce`,
-//! `network_id`, `issued_at`, `template`, `grant`, and `network` — every field
-//! that matters for correctness — while remaining stable across sig values.
-//!
-//! Version history:
-//!   v2 — original release (profiles, no template)
-//!   v3 — adds `template: String`; older tokens rejected with a re-issue hint
-//!   v4 — drops the now-dead `profiles` field (scope comes solely from
 //!        `template`) and adds a single-use `nonce: String`; older tokens
-//!        rejected with a re-issue hint
-//!   v5 — carries admin-signed `NetworkRecord` + `MembershipRecord` so join
-//!        admission can be membership-gated before control-plane replication
 
 use std::io::Cursor;
 
@@ -28,10 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::network_token::{MembershipRecord, NetworkRecord};
 
-/// Versioned pairing-invite envelope.  CBOR-encoded, bs58-encoded, prefixed.
-///
-/// Current version: v5.  The `grant` and `network` records were added in v5;
-/// v4 and earlier tokens are rejected on decode with a re-issue hint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InviteToken {
     pub v: u8,
@@ -45,23 +25,15 @@ pub struct InviteToken {
     pub nonce: String,
     pub network_id: String,
     pub issued_at: String,
-    /// Scope template id (e.g. `"conversation"`) selected by the invite issuer.
-    /// Added in v3; the `join` command writes this as the desired row's template
-    /// and (since v4) is the sole source of the pairing's collection scope.
     pub template: String,
-    /// Admin-signed active grant for the intended joiner.
     pub grant: MembershipRecord,
-    /// Admin-signed network root record for the grant.
     pub network: NetworkRecord,
     /// Ed25519 (or other) signature over `signing_payload(self)`.
-    /// Empty when computing the payload itself (circular-dependency break).
     pub sig: Vec<u8>,
 }
 
-/// Prefix for all encoded invite tokens.
 pub const TOKEN_PREFIX: &str = "dapair1-";
 
-/// Encode a token as `TOKEN_PREFIX` + base58(CBOR(token)).
 pub fn encode(token: &InviteToken) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(token, &mut bytes).context("encoding pairing invite token")?;
@@ -71,11 +43,6 @@ pub fn encode(token: &InviteToken) -> Result<String> {
     ))
 }
 
-/// Decode a `TOKEN_PREFIX`-prefixed invite token string.
-///
-/// Returns an error (mentioning "re-issue with a newer gents") for any
-/// token whose `v` field is not `5`.  Older tokens are rejected so the issuer
-/// must re-mint with a current `gents` binary.
 pub fn decode(raw: &str) -> Result<InviteToken> {
     let encoded = raw
         .trim()
@@ -95,11 +62,7 @@ pub fn decode(raw: &str) -> Result<InviteToken> {
     }
 }
 
-/// Compute the bytes that are signed/verified for a token.
-///
-/// Serialises a copy of the token with `sig` zeroed to an empty vec, so the
 /// signature covers every other field (including `v`, guarding against version
-/// downgrade replays) without a circularity.
 pub fn signing_payload(token: &InviteToken) -> Vec<u8> {
     let mut unsigned = token.clone();
     unsigned.sig = Vec::new();
@@ -109,25 +72,14 @@ pub fn signing_payload(token: &InviteToken) -> Vec<u8> {
     bytes
 }
 
-/// Default maximum age of a pairing invite before it is rejected at join.
-///
-/// `issued_at` is part of the signed payload, so this bounds the replay window of
-/// a leaked or intercepted token without any token-format change. It is a coarse
-/// freshness gate, NOT a single-use guarantee — a token can still be replayed
 /// within the window; true single-use needs a server-tracked nonce (deferred).
 pub const DEFAULT_INVITE_MAX_AGE: Duration = Duration::hours(1);
 
-/// Verify that a token's signed `issued_at` is fresh relative to `now`: not older
-/// than `max_age`, and not more than `max_age` in the future (clock-skew bound).
-/// A malformed `issued_at` is rejected. This is the replay-window check the join
 /// path runs after verifying the signature.
 pub fn check_freshness(token: &InviteToken, now: DateTime<Utc>, max_age: Duration) -> Result<()> {
     check_issued_at_freshness(&token.issued_at, now, max_age)
 }
 
-/// Freshness check over a bare `issued_at` string, shared by the DID-bound
-/// invite ([`check_freshness`]) and the bearer invite
-/// (`bearer_token::check_bearer_freshness`).
 pub fn check_issued_at_freshness(
     raw_issued_at: &str,
     now: DateTime<Utc>,

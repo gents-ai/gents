@@ -19,13 +19,6 @@ use super::templates::resolve_template;
 pub const RECIPROCAL_CONVERSATION_TEMPLATE: &str = "conversation";
 pub const SOURCE_RECIPROCAL: &str = "reciprocal";
 
-/// Select endpoints that can materialize a reciprocal conversation data-plane
-/// edge for a previously invited member DID.
-///
-/// This is intentionally pure: the store layer verifies `PeerEndpoint` records
-/// and supplies only signed endpoint entries; the derivation only joins those
-/// entries with `ReciprocalConversationIntent.member_did` and defers entries
-/// without a dialable peer id/address.
 pub fn derive_reciprocal_desired<'a>(
     intent_dids: &BTreeSet<String>,
     revoked_member_dids: &BTreeSet<String>,
@@ -40,13 +33,6 @@ pub fn derive_reciprocal_desired<'a>(
         .collect()
 }
 
-/// Reciprocal-owned `DataPlanePairingDesired` state the tick reconciles. The
-/// engine always materializes from the live signed endpoint, but the row must
-/// still converge to the derived value (Lean `settled` is full-row equality,
-/// including the intent's template, not peer-id membership) — a drifted
-/// address or a stale template (e.g. a machine re-claim over a
-/// conversation-template row) would otherwise warn on every engine sweep
-/// forever.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReciprocalRowState {
     pub address: String,
@@ -62,9 +48,6 @@ pub struct ReciprocalTickOutcome {
 
 #[async_trait]
 pub trait ReciprocalStore: Send + Sync {
-    /// Live `ReciprocalConversationIntent` rows, keyed by member DID, mapped
-    /// to the template the intent was stamped with (Lean `conversationLike`
-    /// filter — `conversation` or `machine`).
     async fn load_intents(&self) -> Result<BTreeMap<String, String>>;
     async fn load_revoked_member_dids(&self) -> Result<BTreeSet<String>>;
     async fn load_endpoint_for_did(&self, did: &str) -> Result<Option<NetworkEndpointEntry>>;
@@ -78,11 +61,6 @@ pub trait ReciprocalStore: Send + Sync {
     async fn delete_reciprocal_data_plane(&self, peer_id: &str) -> Result<()>;
     async fn list_reciprocal_data_plane_rows(&self)
         -> Result<BTreeMap<String, ReciprocalRowState>>;
-    /// Peers whose `DataPlanePairingDesired` row is owned by another source
-    /// (operator/manual/legacy-null). Mirrors the network reconciler's blocked
-    /// set: these peers are excluded from the desired set up front so the tick
-    /// neither re-attempts a guarded upsert every sweep nor reports it as
-    /// upserted.
     async fn list_non_reciprocal_data_plane_peers(&self) -> Result<BTreeSet<String>>;
 }
 
@@ -512,8 +490,6 @@ async fn verify_endpoint(identity: &dyn AgentIdentity, record: &EndpointRecord) 
         Ok(true) => Ok(true),
         Ok(false) => Ok(false),
         Err(error) => {
-            // Best-effort swallow: a transient verifier failure skips this row now
-            // and retries on the next sweep instead of halting reconciliation.
             tracing::warn!(error = %error, did = %record.did, "PeerEndpoint signature verification errored");
             Ok(false)
         }

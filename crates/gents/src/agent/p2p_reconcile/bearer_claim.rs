@@ -1,27 +1,11 @@
 //! Issuer-side bearer-claim reconciler (issue #666).
-//!
-//! Claimant devices redeem an audience-unbound `dabear1-` invite by pushing a
-//! self-signed `PairingBearerClaim` row to the issuer. This reconciler is the
-//! authority that turns a valid claim into state: it verifies the embedded
 //! token's issuer signature and the row's claimant signature, checks the
 //! bearer freshness window, burns the token nonce in the issuer-side
-//! `ConsumedInviteNonce` ledger (bound to the claimant DID), authors the
-//! admin-signed `NetworkMembership`, and — for `conversation` tokens — records
-//! the `ReciprocalConversationIntent` consumed by the reciprocal reconciler.
-//!
-//! Fenced by `Proofs/PeerRegistryDiscovery/BearerClaim.lean`:
 //! - `decide_bearer_claim` mirrors `admits` (both signatures + freshness +
 //!   nonce not bound elsewhere);
 //! - the tick mirrors `claimStep` (atomic bind + mint, idempotent
 //!   re-processing, ownership safety, intent iff `conversation`).
-//!
-//! Effects are ensure-if-absent, never update: re-processing a claim after a
 //! crash between the nonce burn and the grant write repairs the missing rows,
-//! but an operator's later revocation (a `NetworkMembership` row in any
-//! status, including revoked) is never overwritten. The bearer freshness
-//! window bounds the repair horizon: once a token is stale its claim rows are
-//! inert forever, so operator deletions after the window can never be
-//! resurrected by a lingering claim row.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -46,7 +30,6 @@ pub const BEARER_CONVERSATION_TEMPLATE: &str = "conversation";
 
 /// Signature/freshness verdicts for one claim, computed at the store seam and
 /// consumed by the pure admission decision. Mirrors the Lean booleans on
-/// `BearerToken`/`Claim` (`authoritySigned`, `fresh`, `claimantSigned`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BearerClaimVerdicts {
     pub token_authority_signed: bool,
@@ -96,13 +79,11 @@ pub fn decide_bearer_claim(
     Ok(())
 }
 
-/// One claim after the store seam decoded and verified it: the fields the tick
 /// needs plus the signature/freshness verdicts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedBearerClaim {
     pub nonce: String,
     /// Authority-signed token issuance time. Together with the nonce this is
-    /// the stable total order used when a claimant has multiple fresh claims.
     pub issued_at: String,
     pub network_id: String,
     pub template: String,
@@ -114,26 +95,17 @@ pub struct PreparedBearerClaim {
 pub struct BearerClaimTickOutcome {
     /// Claimant DIDs admitted (nonce newly burned) this tick.
     pub admitted: BTreeSet<String>,
-    /// Claimant DIDs whose previously admitted claim was repaired (missing
-    /// membership/intent rows re-ensured after a partial apply).
     pub repaired: BTreeSet<String>,
 }
 
 #[async_trait]
 pub trait BearerClaimStore: Send + Sync {
-    /// All replicated claim rows, decoded and verified. Malformed rows are
-    /// dropped at the seam (they can never become admissible).
     async fn load_prepared_claims(&self) -> Result<Vec<PreparedBearerClaim>>;
     async fn nonce_binding(&self, nonce: &str, claimant_did: &str) -> Result<NonceBinding>;
     /// Burn the nonce bound to the claimant. The ledger's unique nonce index
     /// is the race backstop: losing the race is not an error — the tick
-    /// re-reads the binding and proceeds only if this claimant won.
     async fn burn_nonce(&self, nonce: &str, issuer_did: &str, claimant_did: &str) -> Result<()>;
-    /// Author the admin-signed membership IF ABSENT. A row in any status
-    /// (including operator-revoked) is left untouched.
     async fn ensure_membership(&self, network_id: &str, member_did: &str) -> Result<()>;
-    /// Record the reciprocal conversation intent IF ABSENT, or overwrite its
-    /// template when it differs from the preferred authority-signed claim.
     /// Preference is deterministic by `(issued_at, nonce)`, so unordered
     /// DefraDB reads cannot oscillate a claimant between templates.
     async fn ensure_conversation_intent(&self, member_did: &str, template: &str) -> Result<()>;
@@ -297,8 +269,6 @@ impl GraphqlBearerClaimStore {
         Self { node, identity }
     }
 
-    /// True when this node administers `network_id` locally: the token's
-    /// network must be one whose grants this identity is entitled to author.
     async fn administers_network(&self, network_id: &str) -> Result<bool> {
         let escaped = escape_graphql_string(network_id);
         let query = format!(
@@ -358,8 +328,6 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
                     continue;
                 }
             };
-            // Only the issuer processes a claim, and only for a network it
-            // administers: claims replicated onward to other peers are inert.
             if token.issuer_did.trim() != self.identity.did() {
                 continue;
             }
@@ -458,7 +426,6 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
             response if response.has_errors() => {
                 let message = format!("{:?}", response.errors);
                 // Losing the unique-index race is not an error: the tick
-                // re-reads the binding and rejects if another claimant won.
                 if message.contains("unique") || message.contains("duplicate") {
                     Ok(())
                 } else {
@@ -482,8 +449,6 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "query NetworkMembership for bearer claim")?;
         if first_row::<MembershipKeyRow>(&response, "NetworkMembership")?.is_some() {
-            // Ensure-if-absent: never overwrite an existing row — an
-            // operator-revoked membership must stay revoked.
             return Ok(());
         }
 
@@ -525,7 +490,6 @@ impl BearerClaimStore for GraphqlBearerClaimStore {
             first_row::<IntentKeyRow>(&response, "ReciprocalConversationIntent")?
         {
             if existing.template.as_deref().map(str::trim) == Some(template.trim()) {
-                // Already recorded with this exact template: nothing to do.
                 return Ok(());
             }
         }
@@ -612,8 +576,6 @@ async fn verify_sig(identity: &dyn AgentIdentity, did: &str, payload: &[u8], sig
     match identity.verify(did, payload, sig).await {
         Ok(valid) => valid,
         Err(error) => {
-            // Best-effort swallow: a transient verifier failure skips this row
-            // now and retries on the next sweep instead of halting the tick.
             tracing::warn!(error = %error, did = %did, "bearer claim signature verification errored");
             false
         }

@@ -1,8 +1,4 @@
 //! Shared GraphQL query and mutation presets for agent-facing applications.
-//!
-//! This module keeps transport concerns out of the protocol crate. Callers are
-//! can either execute the rendered strings themselves or use the shared
-//! transport helpers here.
 
 use std::time::Duration;
 
@@ -250,9 +246,6 @@ pub async fn execute_graphql_async(
     execute_graphql_async_with_tx(graphql, query, options, None).await
 }
 
-/// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
-/// `txn_id` is `Some`. Used by `gents-cli` to drive DefraDB HTTP
-/// transactions during `config apply`.
 pub async fn execute_graphql_async_with_tx(
     graphql: &str,
     query: &str,
@@ -547,34 +540,8 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
     )
 }
 
-/// Converts a `serde_json::Value` into a GraphQL input literal for use in
-/// DefraDB document mutations (create/update/upsert payloads).
-///
-/// This is the generic renderer used by the apply and import code paths
-/// (and the direct writers for `Task`, `Schedule`, and `EventTrigger`) when
-/// materializing desired-state documents as GraphQL `input:` arguments.
-///
-/// # Empty list handling
-///
-/// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
-/// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
-/// `NillableStringArray` (`[String]`) columns (used for `cli_tool_names`,
-/// `subagent_targets`, `tool_refs`, `skill_refs`, `models`, `allowed_mcp_service_ids`,
-/// etc.). A create may appear to succeed while storing the wrong type; any
-/// subsequent update then fails re-validation.
-///
-/// This behaviour matches the dedicated helpers (`string_list_field`,
 /// `graphql_string_list_field` etc.) introduced for the same quirk in #382.
-///
-/// The primary upstream defence lives in `sanitize_import_document` (and the
-/// filtering in `desired_from_value`), which omits empty lists on create and
 /// writes explicit `null` on update for most collections. `graphql_input_literal`
-/// acts as a defensive backstop for any path that reaches it with an explicit
-/// empty array value.
-///
-/// All array fields that currently flow through this function for DefraDB
-/// collections are list-of-string columns. The blanket rule is therefore
-/// safe for the documented use cases in the apply/desired-state machinery.
 pub fn graphql_input_literal(value: &Value) -> Result<String> {
     match value {
         Value::Null => Ok("null".to_string()),
@@ -582,10 +549,6 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
         Value::Number(value) => Ok(value.to_string()),
         Value::String(value) => Ok(graphql_string_literal(value)),
         Value::Array(values) => {
-            // Empty lists must serialize as `null`, never `[]`. A bare `[]`
-            // literal is typed by DefraDB as JsonArray and corrupts
-            // NillableStringArray columns (create stores JsonArray, later
-            // updates fail re-validation). Matches `string_list_field`.
             if values.is_empty() {
                 return Ok("null".to_string());
             }
@@ -672,13 +635,6 @@ pub fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> 
 
 pub fn string_list_field(name: &str, values: &[String]) -> Option<String> {
     // Empty lists serialize as `null`, NOT `[]`. A bare `[]` GraphQL literal is
-    // typed by DefraDB as `JsonArray([])`, which is incompatible with a
-    // `NillableStringArray` (`[String]`) column: the create "succeeds" but
-    // stores a JsonArray, and every later update of that document fails
-    // re-validation ("expected ScalarArray(NillableStringArray), got
-    // JsonArray([])"). `null` is the NillableStringArray-faithful empty and
-    // round-trips back to an empty list, matching the `nullable_string_field`
-    // idiom used for scalar fields.
     if values.is_empty() {
         Some(format!("{name}: null"))
     } else {

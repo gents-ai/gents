@@ -8,9 +8,6 @@ use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
 
-/// Grace period after cancellation before force-aborting children, so in-flight
-/// cancellable work can observe the cancel and return cleanly. Codex-aligned:
-/// long enough for HTTP futures to observe, short enough that Esc feels instant.
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
@@ -33,14 +30,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         admission::scope_request(admission_context, async {
             self.spawn_conversation_title_generation(&request, title_admission_context);
 
-            // Deterministically activate explicitly-selected skills (the Codex
-            // "pill"): the request metadata names skill ids; the prompt builder
-            // resolves each against this behavior's effective set (D5) and renders
-            // its body — with the D3 degrade note — as a per-turn system reminder.
-            // Resolution/scoping lives entirely here in the runtime; the shim only
-            // forwards the selection. Rendered up front so the body's tokens count
-            // toward the compaction-threshold decision below (a large skill-only
-            // turn must still be able to trigger compaction).
             let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
             let skill_reminders = self
                 .prompt_builder
@@ -84,16 +73,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     stripped_history,
                     total_compacted_messages(&compaction_entries),
                 );
-                // Sanitize the loaded transcript early so the compaction
-                // split arithmetic and prompt-builder token estimates operate
-                // on provider-shaped history. Provider validity itself is
-                // GUARANTEED deeper: run_loop_stream sanitizes its history at
-                // entry (the chokepoint every completion request passes
-                // through), so no call site can forget the boundary.
                 let mut history = compaction::sanitize_history_for_provider(history);
-                // Summaries are model-emitted free text headed into the system
-                // reminder; bound them at the consumption point (covers
-                // oversized entries already persisted).
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| compaction::bounded_summary(entry.summary))
@@ -111,7 +91,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         summary_count = summaries.len(),
                     ))
                     .await?;
-                // Count the to-be-injected skill bodies toward the threshold.
                 built.estimated_tokens =
                     built.estimated_tokens.saturating_add(skill_reminder_tokens);
                 if prompt_exceeds_compaction_threshold(
@@ -134,10 +113,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     )
                     .await?;
 
-                    // The recent window can begin mid tool exchange (the split
-                    // is token-budgeted, not pair-aware); run_loop_stream's
-                    // entry sanitization repairs that before the provider
-                    // sees it.
                     history = result.messages;
                     if let Some(summary) = result.summary {
                         let entry = session::save_compaction_entry_with_requester_did(
@@ -190,9 +165,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             ))
             .await?;
 
-            // Inject the rendered skill reminders ahead of the conversation so
-            // they're in context for the turn (their tokens were already folded
-            // into the compaction decision above).
             if !skill_reminders.is_empty() {
                 let mut reminders = skill_reminders;
                 reminders.append(&mut built.messages);
@@ -254,10 +226,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let token_was_cancelled = request_token.is_cancelled();
             let watched_interrupt = { interrupt_rx.borrow().clone() };
             let interrupt_at = if token_was_cancelled {
-                // Interrupt detected inside run_inference. Prefer the watch
-                // intent, but fall back to the persisted latch: a foreground
-                // tool path can observe interrupt_requested_at before the
-                // polling observer publishes on the channel.
                 if let Some(intent) = watched_interrupt {
                     Some(intent.at.to_rfc3339())
                 } else {
@@ -289,9 +257,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             }
 
             if let Some(interrupt_at) = interrupt_at {
-                // Interrupt detected inside run_inference, by the observer just
-                // after it returned, or by a synchronous tool path that read
-                // interrupt_requested_at before the observer's next poll.
                 if !request_token.is_cancelled() {
                     request_token.cancel();
                 }
@@ -312,11 +277,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     interrupt_at = %interrupt_at,
                 );
                 async {
-                    // 1. request_token is already cancelled (the inference arm fired it).
-                    // 2. Grace wait so any in-flight work can observe cancellation.
                     tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
-                    // 3. Force-abort: no child tasks currently (Task 8 adds tool children).
-                    // 4. Flip AgentResponse.interrupted_at (sequenced BEFORE step 5).
                     if let Err(error) = self
                         .stream_writer
                         .write_interrupted_at(&doc_id, &interrupt_at)
@@ -329,9 +290,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             "failed to stamp interrupted_at on response; continuing to terminal transition"
                         );
                     }
-                    // 5. Complete the response-side interrupt edge without
-                    // rewriting the request as failed; the request has its
-                    // own Lean interrupt transition below.
                     if let Err(error) = self.stream_writer.finalize_interrupted_response(&doc_id).await
                     {
                         tracing::warn!(
@@ -341,7 +299,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             "failed to finalize interrupted response; continuing to terminal request transition"
                         );
                     }
-                    // 6. Write terminal lifecycle_state = interrupted.
                     lifecycle.transition_to_interrupted().await?;
                     if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
                         &self.node,
@@ -388,9 +345,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     }
 }
 
-/// Parse `selected_skill_ids` out of an `AgentRequest`'s metadata JSON. The
-/// shim writes these for an explicit Codex skill selection; absent/malformed
-/// metadata yields an empty list (no injection).
 fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
     let Some(metadata) = metadata else {
         return Vec::new();

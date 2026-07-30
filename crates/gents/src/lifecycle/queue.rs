@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Some helpers are introduced ahead of the R4 subagent completion worker.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -363,11 +363,6 @@ pub(crate) async fn enqueue_goal_continuation(
 }
 
 // SAFETY (#664): `agent_did` scopes the candidate query AND the supersede
-// mutation to the owning principal. Under P2P replication a foreign-DID
-// `AgentRequest` sharing this `session_id` can be replicated onto this node;
-// without the owner guard the session-only filter would supersede that foreign
-// replica locally. Defense in depth: the foreign row never becomes a candidate,
-// and the write is DID-scoped even if it somehow did.
 pub async fn reconcile_coalesced_pending_request(
     node: &EmbeddedNode,
     session_id: &str,
@@ -623,9 +618,6 @@ pub(crate) async fn drain_subagent_owned_queue(
 }
 
 // SAFETY (#664): `agent_did` scopes both the pending-row scan AND the interrupt
-// mutation to the owning principal. A foreign-DID replica sharing this
-// `session_id` (P2P replication) is neither surfaced as a drain candidate nor
-// interrupted by this owner's drain. Defense in depth on the query and the write.
 async fn drain_pending_session_requests_where(
     node: &EmbeddedNode,
     session_id: &str,

@@ -1,16 +1,5 @@
 //! Reference implementation of the apply model mirroring
-//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`.
-//!
-//! This is test-only scaffolding: property tests and conformance tests
-//! exercise it, but production apply lives in `gents-cli`.
-//! Conformance cases (`tests/apply_conformance.rs`) anchor the production
-//! code to the semantics pinned here; property tests (`tests/apply_property.rs`)
-//! exercise `diff`, `apply_one`, `apply_prefix`, `retry_after_prefix`, and
-//! `apply_all` at generator scale.
-//!
 //! Variants, apply-order ranks, and `diff` ordering MUST agree with
-//! both the Lean `ApplyReconcile` module and the Rust
-//! `gents::Collection` enum.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,9 +12,6 @@ pub struct DocRef {
 }
 
 /// Mirrors the Lean `ApplyReconcile.DesiredFields` structure.
-/// `content` is the opaque payload; `refs` holds cross-document
-/// references that must point to strictly-lower-rank DocRefs for the
-/// manifest to be WellFormed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DesiredFields {
     pub content: String,
@@ -33,7 +19,6 @@ pub struct DesiredFields {
 }
 
 impl DesiredFields {
-    /// Shorthand constructor for payloads with no references.
     pub fn opaque(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
@@ -41,7 +26,6 @@ impl DesiredFields {
         }
     }
 
-    /// Constructor for payloads with references.
     pub fn with_refs(content: impl Into<String>, refs: Vec<DocRef>) -> Self {
         Self {
             content: content.into(),
@@ -58,7 +42,7 @@ pub struct Manifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveState {
     pub desired: BTreeMap<DocRef, DesiredFields>,
-    pub live: BTreeMap<DocRef, String>, // live stays String — opaque runtime payload
+    pub live: BTreeMap<DocRef, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,20 +87,16 @@ impl DiffReport {
     }
 }
 
-/// References declared by a desired-fields payload. Projects `.refs` from the
 /// `DesiredFields` struct, mirroring the Lean `referencesOf` function.
 pub fn references_of(payload: &DesiredFields) -> Vec<DocRef> {
     payload.refs.clone()
 }
 
 /// Default convergence diff. Mirrors Lean `diffManaged`: writes manifest rows
-/// and retracts absent rows only for manifest-authoritative collections.
 pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
     diff_inner(m, l, false)
 }
 
-/// Prune convergence diff. Adds safe generic live-only deletions to the
-/// always-on manifest-authoritative retractions.
 pub fn diff_prune(m: &Manifest, l: &LiveState) -> DiffReport {
     diff_inner(m, l, true)
 }
@@ -195,9 +175,6 @@ pub fn apply_all(l: &LiveState, steps: &[ApplyStep]) -> LiveState {
     steps.iter().fold(l.clone(), |acc, s| apply_one(&acc, s))
 }
 
-/// Apply the first `prefix_len` steps from a previously computed diff.
-/// This is the Rust analog of Lean `ApplyPrefix.state`: it models a crash or
-/// interruption after a durable prefix of the ordered write sequence.
 pub fn apply_prefix(l: &LiveState, steps: &[ApplyStep], prefix_len: usize) -> LiveState {
     debug_assert!(
         prefix_len <= steps.len(),
@@ -207,7 +184,6 @@ pub fn apply_prefix(l: &LiveState, steps: &[ApplyStep], prefix_len: usize) -> Li
     apply_all(l, &steps[..len])
 }
 
-/// Recompute diff after an applied prefix and run the retry pass to completion.
 pub fn retry_after_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) -> LiveState {
     let initial_steps = diff(m, l).into_steps();
     let prefix_state = apply_prefix(l, &initial_steps, prefix_len);
@@ -223,14 +199,12 @@ pub fn retry_after_prune_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) 
 }
 
 /// Manifest-realized predicate mirrored from Lean:
-/// every manifest document is present with the requested desired payload.
 pub fn manifest_realized(m: &Manifest, l: &LiveState) -> bool {
     m.docs
         .iter()
         .all(|(doc, desired)| l.desired.get(doc) == Some(desired))
 }
 
-/// Full desired-projection reference closure.
 pub fn desired_references_closed(l: &LiveState) -> bool {
     l.desired
         .values()
@@ -238,7 +212,6 @@ pub fn desired_references_closed(l: &LiveState) -> bool {
         .all(|r| l.desired.contains_key(&r))
 }
 
-/// Product-facing corollary scoped to documents already written by a prefix.
 pub fn prefix_referrers_closed(prefix: &[ApplyStep], l: &LiveState) -> bool {
     prefix.iter().all(|step| {
         if matches!(step, ApplyStep::Delete(_)) {

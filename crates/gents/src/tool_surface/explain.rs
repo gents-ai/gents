@@ -69,12 +69,6 @@ impl ToolSurfaceExplanation {
         explain_builtin_reads(config, surface, &mut builder);
 
         let tool_names = surface.tool_names();
-        // Re-integrated from main (#526-era): the operator ToolCeiling still only
-        // clamps host-native file/bash/CLI tools, so a behavior with no host
-        // tools but a model-callable built-in read is a sign the ceiling is not
-        // globally clamping. (SP1 made the ceiling category-complete in the
-        // model/resolver; this warning stays until the host-ceiling story is
-        // fully unified.)
         if surface.host_tools.tool_names().is_empty()
             && tool_names.iter().any(|name| {
                 name == CONTEXT_BUDGET_TOOL_NAME
@@ -352,9 +346,6 @@ fn explain_builtin_reads(
         builder.exclude("built_in_read", CONTEXT_BUDGET_TOOL_NAME);
     }
 
-    // The `sessions` history tool is opt-in via the ToolSelection
-    // `enable_session_history_tool` field (default off), so report it as
-    // included only when the operator enabled it; otherwise it is excluded.
     if surface.enable_session_history_tool {
         builder.include_many("built_in_read", [SESSION_HISTORY_TOOL_NAME.to_string()]);
     } else {
@@ -404,8 +395,6 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         [
             (policy.context_budget, CONTEXT_BUDGET_TOOL_NAME),
             (policy.session_history, SESSION_HISTORY_TOOL_NAME),
-            // `include_defra_query` not the raw `defra_query` bit: a deny-all
-            // collection scope (`Only(∅)`/`None`) gates the tool off, so the
             // effective trace must not list it as present.
             (policy.include_defra_query(), DEFRA_QUERY_TOOL_NAME),
         ]

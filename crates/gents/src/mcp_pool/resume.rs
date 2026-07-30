@@ -1,41 +1,6 @@
 //! Bounded client-side resume policy for rmcp streamable-HTTP sessions (#639).
-//!
-//! rmcp's `SseAutoReconnectStream` resumes a closed SSE stream forever: a
-//! graceful close consults the retry policy with `current_times == 0` every
-//! time, so `max_times`-style caps can never fire. Against a server that
-//! answers resume-of-a-dead-session with 200 + empty stream (the rmcp
-//! streamable-HTTP server does exactly this), the client re-resumes in a hot
-//! loop — ~5/s sustained in the 2026-07-06/07 incidents — and the #626 idle
-//! TTL cannot break it because an actively-failing session is never idle.
-//!
-//! [`SessionResumePolicy`] is installed as the transport's `retry_config` and
-//! closes both holes from our side:
-//!
-//! - A granted resume whose stream dies within
-//!   [`RAPID_STREAM_DEATH_THRESHOLD`] is the dead-session empty-stream
 //!   signature: the session is poisoned after that one attempt and no resume
-//!   is ever granted again.
-//! - Consecutive resume *errors* are capped at
-//!   [`MAX_CONSECUTIVE_RESUME_FAILURES`], then the session is poisoned —
-//!   defense in depth so no future resume path can hot-loop either.
-//!
-//! Poisoning is terminal for the session only: the pool observes it via
-//! [`SessionResumePolicy::is_poisoned`] on next use, drops the connection
-//! (which terminates the server-side session through the #626 drop →
-//! cancellation → worker-cleanup DELETE path) and connects fresh.
-//!
-//! One policy instance is shared by every SSE stream of one transport (the
-//! standalone GET stream and any POST-response streams), so interleaved
-//! closes from different streams can in rare cases be misread as a rapid
-//! death. The consequence is one extra session re-initialization — accepted
-//! for the simplicity of keeping the policy stateless per-stream.
-//!
-//! Scope note: rmcp bypasses `retry_config.retry(0)` when an SSE stream
-//! supplies a `retry:` field, because the server-provided interval takes
-//! precedence. The production pathology this module bounds was a 200 + empty
-//! stream with no `retry:` field; bounding a server that repeatedly sends only
 //! `retry:` control frames and then closes requires an upstream rmcp seam or a
-//! custom transport wrapper.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -44,39 +9,24 @@ use std::time::Duration;
 use rmcp::transport::common::client_side_sse::SseRetryPolicy;
 use tokio::time::Instant;
 
-/// Delay before reconnecting after a graceful SSE stream close (mirrors
 /// rmcp's default base backoff).
 pub(crate) const RESUME_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
-/// A granted resume whose stream lives shorter than this is treated as the
 /// dead-session empty-stream signature and poisons the session. Healthy
-/// streams live minutes-to-forever; the pathological empty stream closes
-/// within one round-trip.
 pub(crate) const RAPID_STREAM_DEATH_THRESHOLD: Duration = Duration::from_secs(10);
 
-/// Consecutive resume *errors* tolerated for one stream before the session
-/// is poisoned.
 pub(crate) const MAX_CONSECUTIVE_RESUME_FAILURES: usize = 3;
 
-/// Per-service counters for the resume/re-init lifecycle, so a flapping MCP
-/// server is visible without log archaeology. Shared between the pool (which
-/// counts re-inits and connect failures) and each connection's
-/// [`SessionResumePolicy`] (which counts resume attempts and failures).
 #[derive(Debug, Default)]
 pub struct McpResumeStats {
-    /// SSE reconnects granted by the policy (resume attempts).
     pub resume_attempts: AtomicU64,
-    /// Resume attempts that errored (consulted on the transport error path).
     pub resume_failures: AtomicU64,
     /// Sessions declared terminal (empty-stream signature or failure cap).
     pub sessions_poisoned: AtomicU64,
-    /// Poisoned connections replaced by the pool with a fresh session.
     pub session_reinits: AtomicU64,
-    /// Failed attempts to establish a fresh connection.
     pub connect_failures: AtomicU64,
 }
 
-/// `SseRetryPolicy` for one pooled MCP connection. See the module docs.
 #[derive(Debug)]
 pub(crate) struct SessionResumePolicy {
     service_id: String,
@@ -108,8 +58,6 @@ impl SessionResumePolicy {
         Arc::new(Self::new(service_id, Arc::new(McpResumeStats::default())))
     }
 
-    /// True once resume has been declared terminal for this session. The
-    /// pool must drop the connection and connect fresh instead of reusing it.
     pub(crate) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
     }
@@ -127,7 +75,6 @@ impl SessionResumePolicy {
     fn poison(&self, reason: &str) {
         if !self.poisoned.swap(true, Ordering::AcqRel) {
             self.stats.sessions_poisoned.fetch_add(1, Ordering::Relaxed);
-            // At most one warn per session generation — the pathology being
             // fixed is log flood, so the failure path must not add to it.
             tracing::warn!(
                 service_id = %self.service_id,
@@ -156,8 +103,6 @@ impl SseRetryPolicy for SessionResumePolicy {
             return None;
         }
 
-        // rmcp's error path passes the count of consecutive reconnect
-        // failures for one stream (1-based); cap it.
         if current_times >= 1 {
             self.stats.resume_failures.fetch_add(1, Ordering::Relaxed);
             if current_times >= MAX_CONSECUTIVE_RESUME_FAILURES {
@@ -167,9 +112,6 @@ impl SseRetryPolicy for SessionResumePolicy {
             return Some(self.grant(RESUME_RECONNECT_DELAY));
         }
 
-        // Graceful-close path: rmcp always passes 0 here, so the previous
-        // grant's stream lifetime is the only signal that distinguishes a
-        // healthy long-lived stream from a resume that came back dead.
         let previous_grant = *self.last_grant.lock().expect("last_grant lock");
         if let Some(grant) = previous_grant {
             let stream_lifetime = Instant::now()

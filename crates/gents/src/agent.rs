@@ -70,17 +70,6 @@ pub trait ProcessLifecycleObserver: Send + Sync {
     fn on_process_state_change(&self, state: ProcessLifecycleState);
 }
 
-/// Host-facing view of each published runtime generation.
-///
-/// Every runtime subsystem that depends on which behaviors are runnable is a
-/// subscriber of the reconciler's published snapshot, so it re-derives its own
-/// enablement whenever the control plane changes. Subsystems the *host* owns —
-/// the Codex shim being the one that bit us in #699 — had no such signal: they
-/// could only sample the control documents once at boot, and a behavior applied
-/// later left them stranded until the process restarted.
-///
-/// This is that signal. It fires once for the boot generation and again for
-/// every generation the reconciler publishes.
 pub trait RuntimeSnapshotObserver: Send + Sync {
     fn on_generation_published(&self, generation: u64, runnable_behavior_ids: &[String]);
 }
@@ -95,18 +84,9 @@ pub struct DocumentRuntimeOptions {
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
-    /// Share a pre-built measured-health map with the embedder (the CLI
-    /// `serve` hands the same handle to its metrics endpoint). `None` lets
-    /// the runtime create its own.
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
-    /// Observes every published runtime generation, so host-owned subsystems can
-    /// re-derive their enablement from `runnable` instead of a boot-time sample
-    /// (#699).
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
-    /// Startup readiness knobs (#559): the build-failure budget that demotes a
-    /// persistently un-buildable behavior instead of wedging `Ready`, and the
-    /// per-attempt build timeout that turns a hanging build into a failure.
     pub startup_readiness: crate::startup_readiness::StartupReadinessOptions,
 }
 
@@ -114,8 +94,6 @@ pub struct DocumentRuntimeOptions {
 pub(crate) struct DocumentResolveContext {
     pub(crate) identity: Arc<dyn AgentIdentity>,
     pub(crate) tool_ceiling: ToolCeiling,
-    /// The local prober's measured backend health, merged into behavior
-    /// availability and admission configs at snapshot resolution (#640).
     pub(crate) backend_health: BackendHealthMap,
 }
 
@@ -140,10 +118,6 @@ pub struct Gents {
     startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
-    /// Populated once the runtime's `TriggerEngine` has constructed the
-    /// `ManualSource`. In-process callers that cloned this `Gents`
-    /// before calling `run()` can then observe the handle via
-    /// [`Self::manual_trigger_handle`].
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
 }
 
@@ -157,10 +131,7 @@ impl Gents {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
-        // Run the AgentBehavior migration before any behavior read so that
-        // desktops, embedders, and CLI serve paths all see description/summary
         // even when the DB was created before branch #377. This is idempotent
-        // (field-presence-checked) and cheap on already-migrated DBs.
         migration::ensure_agent_behavior_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let document_runtime_context = DocumentResolveContext {
@@ -177,8 +148,6 @@ impl Gents {
              means a non-production path bypassed the loader and would produce a \
              Gents.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
         );
-        // The snapshot carries the principal Arc constructed once in the loader.
-        // Fall back to a synthetic principal if (in tests) the snapshot has none.
         let principal = resolved_snapshot.principal.clone().unwrap_or_else(|| {
             let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
             Arc::new(AgentPrincipal {
@@ -228,8 +197,6 @@ impl Gents {
         })
     }
 
-    /// The local prober's measured backend health — the truthful signal
-    /// behind effective availability. Exposed for embedders and for the
     /// completion-retry path (#631) to make fail-fast-vs-backoff decisions.
     pub fn backend_health(&self) -> BackendHealthMap {
         self.backend_health.clone()
@@ -239,23 +206,11 @@ impl Gents {
         &self.behaviors
     }
 
-    /// Returns the deployment principal record.
-    ///
-    /// All DefraDB ops issued by this `Gents` are signed by
-    /// `self.principal.identity`. Two `AgentBehavior`s on the same
-    /// `Gents` share this Arc by construction (single-principal
     /// per snapshot invariant), so any DID-keyed permission decision
-    /// returns identical results for behaviors on this deployment.
     pub fn principal(&self) -> &AgentPrincipal {
         &self.principal
     }
 
-    /// Returns a clone of the deployment principal Arc.
-    ///
-    /// Use this when threading the principal into a task / spawned
-    /// future / snapshot rebuild path that needs to hold the Arc
-    /// independently. Prefer `principal()` for read-only access
-    /// from a single scope.
     pub(crate) fn principal_arc(&self) -> Arc<AgentPrincipal> {
         Arc::clone(&self.principal)
     }
@@ -280,15 +235,7 @@ impl Gents {
         self.document_runtime_context.as_ref()
     }
 
-    /// Returns the `ManualTriggerHandle` once the runtime's `TriggerEngine`
-    /// has been brought up.
-    ///
-    /// `None` means the runtime is still in early bootstrap (the trigger
-    /// engine spawns after `run()` resolves the initial snapshot and passes
-    /// the startup barrier). In-process callers that need to push manual
-    /// fires should clone this `Gents`, spawn `run()` on one copy, and
-    /// poll the clone until this returns `Some`.
-    #[allow(dead_code)] // consumed by CLI (Task 8) and desktop (Task 10)
+    #[allow(dead_code)]
     pub(crate) fn manual_trigger_handle(&self) -> Option<&ManualTriggerHandle> {
         self.manual_trigger_handle.get()
     }

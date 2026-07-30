@@ -127,27 +127,11 @@ pub(super) fn build_host_tools(
     Ok(builder.build())
 }
 
-/// Build the executable `CommandExecutionPolicy` for the bash tool, applying the
-/// effective (behavior ⊓ ceiling) bash policy on top of the behavior's own
-/// command policy.
-///
-/// Step 1 reproduces the historical `BashMode` downgrade (the per-behavior
-/// policy as run today). Step 2 overlays the operator-ceiling narrowing carried
-/// in `effective_bash`: forbidden prefixes (union), the allowed-prefix gate
-/// (including the `Only(∅) → deny-all` trap, carried via the `deny_all_argv`
-/// sentinel rather than an empty list), the read-only allowlist, and the
-/// network/execution mode — so a ceiling that narrows bash binds at command
-/// time, not just in the policy meet.
-///
-/// Preserves today's behavior exactly when there is no ceiling narrowing: a
-/// behavior with no command policy and an unconstrained effective bash still
-/// resolves to `None`.
 fn constrain_command_policy_to_effective_bash(
     command_policy: Option<CommandExecutionPolicy>,
     effective_bash: &ToolPolicyBash,
     bash: BashMode,
 ) -> Option<CommandExecutionPolicy> {
-    // Step 1 — historical BashMode-downgrade base.
     let base: Option<CommandExecutionPolicy> = match (command_policy, bash) {
         (_, BashMode::Off) => return None,
         (None, _) => None,
@@ -165,7 +149,6 @@ fn constrain_command_policy_to_effective_bash(
         ),
     };
 
-    // Step 2 — overlay the effective ceiling narrowing.
     let (allowed_override, deny_all) =
         project_allowed_prefixes(&effective_bash.allowed_argv_prefixes);
     let forbidden: Vec<Vec<String>> = effective_bash
@@ -175,10 +158,6 @@ fn constrain_command_policy_to_effective_bash(
         .collect();
     let read_only_override = project_read_only_allowlist(&effective_bash.read_only_allowlist);
 
-    // Does the ceiling impose an argv/forbidden/read-only constraint? Network/
-    // execution mode are folded in only when a base policy already exists (a
-    // None-policy behavior with mode/network-only ceiling narrowing keeps `None`
-    // — those factors were never enforced for it and are out of scope here).
     let imposes_constraint = deny_all
         || matches!(effective_bash.allowed_argv_prefixes, EndpointScope::Only(_))
         || !forbidden.is_empty()
@@ -203,9 +182,6 @@ fn constrain_command_policy_to_effective_bash(
     ))
 }
 
-/// Project the effective allowed-prefix scope onto `(prefixes, deny_all)`:
-/// `All` → no gate (empty, false); a non-empty `Only` → that set; `None`/
-/// `Only(∅)` → deny-all (empty, true) — the `Only(∅) ≠ All` trap.
 fn project_allowed_prefixes(
     scope: &EndpointScope<Vec<String>, ()>,
 ) -> (Option<Vec<Vec<String>>>, bool) {
@@ -217,8 +193,6 @@ fn project_allowed_prefixes(
     }
 }
 
-/// Project the effective read-only allowlist: `All` → keep the base's list;
-/// non-empty `Only` → that set; `None`/`Only(∅)` → empty (deny-all read-only).
 fn project_read_only_allowlist(scope: &EndpointScope<String, ()>) -> Option<Vec<String>> {
     match scope {
         EndpointScope::All => None,
@@ -242,16 +216,12 @@ fn apply_effective_bash(
     } else if let Some(allowed) = allowed_override {
         policy.allowed_argv_prefixes = allowed;
     }
-    // Effective forbidden already includes the behavior's (union meet ⊇ behavior),
-    // so replacing is the union. Only overwrite when the ceiling adds entries.
     if !forbidden.is_empty() {
         policy.forbidden_argv_prefixes = forbidden;
     }
     if let Some(read_only) = read_only_override {
         policy = policy.with_read_only_allowlist(read_only);
     }
-    // Effective mode/network are ≤ the behavior's, so meeting tightens (never
-    // relaxes) and never undoes the BashMode read-only downgrade.
     policy.mode = meet_execution_mode(policy.mode, effective_bash.execution_mode);
     policy.network_mode = meet_network_mode(policy.network_mode, effective_bash.network_mode);
     policy
@@ -327,8 +297,6 @@ pub(super) fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf>
     Ok(resolved)
 }
 
-/// Dedupe subagent targets by their model-facing `name`, dropping structurally
-/// invalid entries. Keeps the first occurrence of each name.
 pub(super) fn dedupe_subagent_targets(
     values: Vec<crate::document_config::SubagentTarget>,
 ) -> Vec<crate::document_config::SubagentTarget> {

@@ -34,8 +34,6 @@ impl CommandExecutionMode {
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim() {
             "" | "read_only" | "ReadOnly" => Ok(Self::ReadOnly),
-            // Compatibility alias: managed_write currently has the same enforced
-            // runtime contract as workspace_write, so normalize it at parse time.
             "workspace_write" | "WorkspaceWrite" | "managed_write" | "ManagedWrite" => {
                 Ok(Self::WorkspaceWrite)
             }
@@ -91,11 +89,6 @@ pub struct CommandExecutionPolicy {
     pub forbidden_argv_prefixes: Vec<Vec<String>>,
     pub network_mode: CommandNetworkMode,
     read_only_allowlist: Vec<String>,
-    /// Deny EVERY command outright. The allowed-prefix gate treats an *empty*
-    /// `allowed_argv_prefixes` as "no gate" (allow-all), so a deny-all effective
-    /// scope (`Only(∅)` from the unified policy meet) cannot be expressed as an
-    /// empty list without inverting its meaning. This explicit sentinel carries
-    /// `Only(∅)` deny-all onto the executable validator (the `Only(∅) ≠ All` trap).
     deny_all_argv: bool,
 }
 
@@ -141,28 +134,20 @@ impl CommandExecutionPolicy {
         self
     }
 
-    /// Command heads permitted in read-only mode. Exposed so the unified
-    /// tool-policy resolver can carry the behavior's read-only allowlist into the
-    /// `ToolPolicyBash` policy factor (where the operator ceiling can narrow it).
     pub fn read_only_allowlist(&self) -> &[String] {
         &self.read_only_allowlist
     }
 
-    /// Replace the read-only allowlist (used by the tool-policy resolver to apply
-    /// the ceiling-narrowed read-only set onto the executable policy).
     pub fn with_read_only_allowlist(mut self, allowlist: Vec<String>) -> Self {
         self.read_only_allowlist = allowlist;
         self
     }
 
-    /// Mark the policy as deny-all (no command passes the allowed-prefix gate).
-    /// Carries an effective `Only(∅)` allowed scope onto the executable validator.
     pub fn with_deny_all_argv(mut self, deny_all_argv: bool) -> Self {
         self.deny_all_argv = deny_all_argv;
         self
     }
 
-    /// Whether every command is denied (effective `Only(∅)` allowed scope).
     pub fn deny_all_argv(&self) -> bool {
         self.deny_all_argv
     }
@@ -209,8 +194,6 @@ pub(crate) async fn run_command(
         cwd: cwd.clone(),
         deadline_at,
         cancellation_token,
-        // Preserve the existing command-output contract: the canonical
-        // truncator below owns the 16 KiB honest marker and byte accounting.
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
         environment: Some(build_shell_env()),
@@ -302,9 +285,6 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
-    // Deny-all: an effective `Only(∅)` allowed scope forbids every command. Must
-    // be checked explicitly — an empty `allowed_argv_prefixes` means "no gate"
-    // (allow-all), so the sentinel is the only faithful carrier of deny-all.
     if policy.deny_all_argv {
         return Err(policy_denial(
             policy,
@@ -312,12 +292,6 @@ pub(crate) fn validate_command_policy(
         ));
     }
 
-    // Allowed argv prefixes are a global gate when non-empty (every command
-    // must match). In ReadOnly mode a match also admits heads outside
-    // `read_only_allowlist` (subcommand-precise extension). That list is the
-    // *base* set of whole-executable heads and is replaced wholesale by
-    // ToolSelection.read_only_command_allowlist when configured — it is not an
-    // alternate spelling of this prefix field. See docs/macos-bash-sandbox.md.
     let allowed_prefix_matched =
         first_matching_prefix(&argv, &policy.allowed_argv_prefixes).is_some();
     if !policy.allowed_argv_prefixes.is_empty() && !allowed_prefix_matched {
@@ -1006,10 +980,6 @@ struct TruncatedStream {
     metadata: StreamTruncationMetadata,
 }
 
-/// Byte-cap a command stream via the canonical honest truncator
-/// (`crate::truncation`) and surface a machine-readable byte summary. Only a
-/// byte ceiling is applied (`max_lines` unbounded), preserving the prior
-/// "cap by size" behaviour while sharing the runtime-wide honest marker.
 fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
     let limits = TruncationLimits {
         max_bytes,

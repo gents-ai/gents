@@ -30,8 +30,6 @@ use crate::tool_surface::ToolSurface;
 const TITLE_GENERATION_SUFFIX: &str =
     "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
-/// Guidance appended to the preamble so the LLM knows how to discover and
-/// invoke data-service tools via the meta-tool workflow.
 const TOOL_DISCOVERY_GUIDANCE: &str = "\
 ## Tool Discovery
 
@@ -55,22 +53,14 @@ tool_name, and arguments object.
 Workflow: discover_tools -> describe_tool -> call_tool
 ";
 
-/// A fully constructed prompt ready for Rig's agent loop.
 #[derive(Debug, Clone)]
 pub struct BuiltPrompt {
-    /// Preamble (layers 1+2). Set once, passed to Rig's AgentBuilder.
-    /// Do NOT mutate after init — this is the cached prefix.
     pub preamble: String,
-    /// Conversation messages (layers 3+4).
     pub messages: Vec<Message>,
-    /// Estimated token count for the full prompt (preamble + messages).
     pub estimated_tokens: usize,
 }
 
-/// Builds prompts with a fixed prefix order for KV cache reuse.
 pub trait PromptBuilder: Send + Sync {
-    /// Build the message history for a turn.
-    /// The preamble is fixed at init — only messages change per turn.
     fn build(
         &self,
         messages: &[Message],
@@ -78,33 +68,15 @@ pub trait PromptBuilder: Send + Sync {
     ) -> impl std::future::Future<Output = Result<BuiltPrompt>> + Send;
 }
 
-/// Layered prompt builder backed by loaded behavior configuration.
-///
-/// Created once at daemon startup. The preamble is assembled from the
-/// config and frozen — all subsequent calls to `build()` only vary
-/// the message portion (layers 3+4).
 pub struct LayeredPromptBuilder {
-    /// Frozen preamble (layers 1+2). Set at init, never mutated.
     preamble: String,
-    /// Context window size for token budgeting.
     context_window: usize,
-    /// Max output tokens reserved for the response.
     max_output_tokens: usize,
-    /// The behavior's effective skills (D5) and the D3 tool ceiling, used to
-    /// render explicitly-selected skill bodies as per-turn system reminders.
-    /// Empty for non-behavior builders (e.g. title generation).
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
 }
 
 impl LayeredPromptBuilder {
-    /// Construct a builder from a loaded behavior and its resolved tool surface.
-    ///
-    /// `allowed_targets` is a list of `(name, description)` pairs for
-    /// subagent targets that the model is statically permitted to spawn.  Pass
-    /// an empty slice when the behavior has no spawn targets or when spawn is
-    /// disabled (the caller is responsible for filtering via
-    /// `tool_surface.subagent_targets()`).
     pub fn new(
         behavior: &AgentBehavior,
         tool_surface: &ToolSurface,
@@ -121,18 +93,10 @@ impl LayeredPromptBuilder {
             behavior.max_output_tokens,
             allowed_targets,
         );
-        // Progressive disclosure (D2): the behavior's effective skills (D5) go
-        // into the cached preamble as a CATALOG (name + description) only. The
-        // model loads a skill's full body on demand via the `load_skill` tool
-        // (registered in run_behavior). This keeps the always-present cost to
-        // one line per skill so a large skill library stays usable.
         if let Some(catalog) = crate::skills::render_skill_catalog(&behavior.skills) {
             builder.preamble.push_str("\n\n");
             builder.preamble.push_str(&catalog);
         }
-        // Retain the effective set + ceiling so an explicit skill selection (the
-        // Codex "pill", carried on the request) can be deterministically injected
-        // per turn via `selected_skill_reminders`.
         builder.skills = behavior.skills.clone();
         builder.skill_ceiling = crate::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
@@ -142,15 +106,6 @@ impl LayeredPromptBuilder {
         builder
     }
 
-    /// Render per-turn system reminders for explicitly-selected skills.
-    ///
-    /// Each id is resolved against this behavior's EFFECTIVE set (D5): a skill
-    /// not in the set — un-opted-in, excluded, disabled, or another principal's
-    /// — is silently skipped, so the explicit pick can never escalate beyond
-    /// what the behavior already has. The body is rendered with the real D3
-    /// ceiling, so the unavailable-tools degrade note is included (parity with
-    /// the model-driven `load_skill` path). This is the deterministic,
-    /// runtime-side activation of an explicit user selection.
     pub fn selected_skill_reminders(&self, selected_ids: &[String]) -> Vec<Message> {
         let mut seen = std::collections::HashSet::new();
         let mut reminders = Vec::new();
@@ -192,12 +147,10 @@ impl LayeredPromptBuilder {
         }
     }
 
-    /// Get the frozen preamble for Rig's AgentBuilder.
     pub fn preamble(&self) -> &str {
         &self.preamble
     }
 
-    /// Available tokens for messages (context window - preamble - output reserve).
     pub fn message_budget(&self) -> usize {
         let preamble_tokens = estimate_tokens(&self.preamble);
         self.context_window
@@ -205,14 +158,11 @@ impl LayeredPromptBuilder {
             .saturating_sub(self.max_output_tokens)
     }
 
-    /// Check whether the given messages would exceed the context budget.
     pub fn would_exceed_budget(&self, messages: &[Message]) -> bool {
         let msg_tokens = estimate_message_tokens(messages);
         msg_tokens > self.message_budget()
     }
 
-    /// Inject a system reminder into the message stream.
-    /// Used for behavior-context updates without mutating the preamble.
     pub fn system_reminder(text: &str) -> Message {
         Message::User {
             content: vec![UserContent::Text(Text {
@@ -230,7 +180,6 @@ impl PromptBuilder for LayeredPromptBuilder {
     ) -> Result<BuiltPrompt> {
         let mut assembled = Vec::new();
 
-        // Layer 3: Compaction summaries (injected as system reminders).
         if !compaction_summaries.is_empty() {
             let summary_text = compaction_summaries.join("\n\n---\n\n");
             assembled.push(Self::system_reminder(&format!(
@@ -239,7 +188,6 @@ impl PromptBuilder for LayeredPromptBuilder {
             )));
         }
 
-        // Layer 4: Conversation messages.
         assembled.extend_from_slice(messages);
 
         let preamble_tokens = estimate_tokens(&self.preamble);
@@ -253,11 +201,6 @@ impl PromptBuilder for LayeredPromptBuilder {
     }
 }
 
-/// Build a preamble with an optional subagent spawn-target guidance block.
-///
-/// When `allowed_targets` is non-empty a "## Spawnable Sub-Agents" section is
-/// appended that lists each `(name, description)` pair and reminds the
-/// model to use the `spawn_subagent` tool's `name` argument.
 pub(crate) fn build_preamble_with_targets(
     system_prompt: &str,
     behavior_name: &str,
@@ -333,7 +276,6 @@ fn direct_tool_guidance(tool_names: &[&str]) -> String {
     }
 }
 
-/// Rough token estimate: ~4 chars per token.
 fn estimate_tokens(text: &str) -> usize {
     text.len() / 4
 }

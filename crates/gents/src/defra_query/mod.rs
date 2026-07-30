@@ -1,14 +1,4 @@
 //! Read-only structured query tool over DefraDB collections.
-//!
-//! `defra_query` lets an agent (or, in future, an external management surface)
-//! read documents from DefraDB collections through a structured
-//! `{collection, filter, fields, limit}` contract instead of hand-rolling
-//! GraphQL. It is strictly read-only and renders all interpolated content
-//! through [`crate::graphql::escape_graphql_string`].
-//!
-//! The query core ([`query::execute_query`]) is intentionally decoupled from
-//! the [`crate::llm::tool::Tool`] integration so the same logic can later back an
-//! external (e.g. MCP/HTTP) management surface.
 
 use std::sync::Arc;
 
@@ -18,14 +8,8 @@ use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use serde_json::json;
 
-/// Maximum number of UTF-8 bytes kept per string field value in the query
-/// results. Longer values are replaced with a truncated copy + honest marker.
-/// This preserves JSON structure (the result stays parseable) while bounding
-/// the per-turn byte budget for large text or blob fields.
 pub(crate) const MAX_FIELD_STRING_BYTES: usize = 2_000;
 
-/// Marker appended to truncated string field values. Intentionally matches the
-/// style used by `crate::truncation::logic::truncate_text` (honest + totals).
 fn field_truncation_marker(original_bytes: usize) -> String {
     format!(
         " [truncated: showed {} of {} bytes]",
@@ -33,19 +17,11 @@ fn field_truncation_marker(original_bytes: usize) -> String {
     )
 }
 
-/// Walk a JSON `Value` (typically the array of result rows) and replace every
-/// string value that exceeds [`MAX_FIELD_STRING_BYTES`] with a truncated copy
-/// that ends with an honest marker. Returns `true` when at least one field was
-/// truncated, so the caller can surface `truncated: true` in the envelope.
-///
-/// Non-string values (numbers, booleans, nulls, nested objects/arrays) are
-/// passed through unchanged — JSON structure is never broken.
 pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(s) => {
             let original_bytes = s.len();
             if original_bytes > MAX_FIELD_STRING_BYTES {
-                // Truncate at a char boundary so the JSON string stays valid UTF-8.
                 let truncated: String = s
                     .chars()
                     .scan(0usize, |acc, c| {
@@ -87,11 +63,8 @@ pub use schema::{
     unknown_collection_message, CollectionSchema, SchemaField,
 };
 
-/// The model-facing tool name.
 pub const DEFRA_QUERY_TOOL_NAME: &str = "defra_query";
 
-/// Error wrapper mirroring the meta-tool convention: render the full anyhow
-/// chain to the model.
 #[derive(Debug)]
 pub struct DefraQueryError(anyhow::Error);
 
@@ -113,7 +86,6 @@ impl From<anyhow::Error> for DefraQueryError {
     }
 }
 
-/// Read-only structured query tool.
 #[derive(Clone)]
 pub struct DefraQueryTool {
     node: Arc<EmbeddedNode>,
@@ -198,12 +170,8 @@ impl Tool for DefraQueryTool {
         let mut rows = query::execute_query(&self.node, &args, &self.scope).await?;
         let count = rows.as_array().map(|a| a.len()).unwrap_or(0);
 
-        // Measure total bytes before any truncation so the model can see the
-        // unabridged size even when we trim individual fields.
         let total_bytes = serde_json::to_string(&rows).map(|s| s.len()).unwrap_or(0);
 
-        // Per-field string truncation: keeps the JSON structure valid/parseable
-        // while bounding large text/blob fields that could blow the context window.
         let truncated = truncate_field_strings(&mut rows);
 
         let mut payload = json!({
@@ -214,7 +182,6 @@ impl Tool for DefraQueryTool {
             "results": rows,
         });
 
-        // When fields were truncated, add a note so the model understands what happened.
         if truncated {
             payload["truncation_note"] = json!(format!(
                 "One or more string fields were truncated to {} bytes; total untruncated result size was {} bytes. \
@@ -228,7 +195,6 @@ impl Tool for DefraQueryTool {
     }
 }
 
-/// Build the `defra_query` tool as a boxed `ToolDyn` for the tool surface.
 pub fn build_defra_query_tool(node: Arc<EmbeddedNode>, scope: CollectionScope) -> Box<dyn ToolDyn> {
     Box::new(DefraQueryTool::new(node, scope))
 }

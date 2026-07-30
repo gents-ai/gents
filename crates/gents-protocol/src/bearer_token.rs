@@ -1,21 +1,6 @@
 //! Audience-unbound bearer pairing invite (`dabear1-`) and its claim record.
-//!
-//! A bearer invite is the scan-one-QR counterpart of the DID-bound `dapair1-`
-//! invite: it carries the issuer's identity, transport ticket, a single-use
 //! nonce, and a scope template — but **no membership grant**, because the
-//! claiming device's DID is unknown at mint. The claimant binds itself at
-//! claim time by writing a self-signed [`BearerClaimRecord`] that replicates
-//! to the issuer; the issuer's bearer-claim reconciler validates both
 //! signatures, burns the nonce in its own `ConsumedInviteNonce` ledger, and
-//! authors the `NetworkMembership` (plus the `ReciprocalConversationIntent`
-//! for `conversation` templates).
-//!
-//! Deliberately a distinct type and prefix rather than an `InviteToken`
-//! version bump: the DID-bound v5 join path is untouched, and consumers
-//! dispatch on the prefix. Mirrors the [`crate::network_token::NetworkPointer`]
-//! precedent ("carries no grant; the admin authors the actual membership").
-//!
-//! Modeled in `Proofs/PeerRegistryDiscovery/BearerClaim.lean`: admission
 //! requires the issuer signature over the token AND the claimant signature
 //! over the claim, token freshness, and the nonce not already bound to a
 //! different claimant. The nonce ledger lives on the **authority**, not the
@@ -32,54 +17,33 @@ use sha2::{Digest, Sha256};
 use crate::network_token::NetworkRecord;
 use crate::pairing_token::check_issued_at_freshness;
 
-/// Audience-unbound pairing invite. CBOR-encoded, bs58-encoded, prefixed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BearerInviteToken {
     pub v: u8,
     pub issuer_did: String,
     pub peer_id: String,
-    /// Issuer's dialable shareable address (the QR carries connectivity).
     pub ticket: String,
     /// Single-use claim nonce. Burned in the ISSUER's `ConsumedInviteNonce`
-    /// ledger at claim-processing time, bound to the admitted claimant DID.
     pub nonce: String,
     pub network_id: String,
     pub issued_at: String,
-    /// Scope template id (e.g. `"conversation"`). Determines the claim's
-    /// consequences: `conversation` claims also record a
-    /// `ReciprocalConversationIntent` for the claimant.
     pub template: String,
-    /// Signed routing hint for chat clients that intentionally do not receive
-    /// the agent's mutable configuration collections. Optional for backwards
-    /// compatibility with bearer invites minted before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_behavior_id: Option<String>,
-    /// Admin-signed network root record, so the claimant can TOFU-pin the
-    /// network identity it is joining before writing anything.
     pub network: NetworkRecord,
     /// Issuer DID's signature over [`bearer_signing_payload`].
     pub sig: Vec<u8>,
 }
 
-/// Prefix for all encoded bearer invite tokens.
 pub const BEARER_TOKEN_PREFIX: &str = "dabear1-";
-/// Current bearer-token version.
 pub const BEARER_TOKEN_VERSION: u8 = 1;
 
-/// Default maximum age of a bearer invite before claims on it are rejected.
-///
-/// Much tighter than the DID-bound invite's 1h window: a bearer QR is
-/// claimable by whoever scans it, so the replay window is the whole exposure.
-/// QR flows are interactive — mint, scan, claim within minutes.
 pub const BEARER_INVITE_MAX_AGE: Duration = Duration::minutes(5);
 
-/// Verify a bearer token's signed `issued_at` against the bearer replay
-/// window ([`BEARER_INVITE_MAX_AGE`]), evaluated at claim-processing time.
 pub fn check_bearer_freshness(token: &BearerInviteToken, now: DateTime<Utc>) -> Result<()> {
     check_issued_at_freshness(&token.issued_at, now, BEARER_INVITE_MAX_AGE)
 }
 
-/// Encode a bearer token as `BEARER_TOKEN_PREFIX` + base58(CBOR(token)).
 pub fn encode_bearer(token: &BearerInviteToken) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(token, &mut bytes).context("encoding bearer invite token")?;
@@ -89,8 +53,6 @@ pub fn encode_bearer(token: &BearerInviteToken) -> Result<String> {
     ))
 }
 
-/// Decode a `BEARER_TOKEN_PREFIX`-prefixed bearer token string. Rejects any
-/// version other than [`BEARER_TOKEN_VERSION`] with a re-issue hint.
 pub fn decode_bearer(raw: &str) -> Result<BearerInviteToken> {
     let encoded = raw
         .trim()
@@ -110,8 +72,6 @@ pub fn decode_bearer(raw: &str) -> Result<BearerInviteToken> {
     }
 }
 
-/// CBOR of the token with `sig` zeroed — the bytes the issuer signs and the
-/// claim processor verifies. Covers every field including `v` (downgrade
 /// guard), `nonce`, `network_id`, `template`, and `network`.
 pub fn bearer_signing_payload(token: &BearerInviteToken) -> Vec<u8> {
     let mut unsigned = token.clone();
@@ -122,19 +82,12 @@ pub fn bearer_signing_payload(token: &BearerInviteToken) -> Vec<u8> {
     bytes
 }
 
-/// Canonical signing form of a `PairingBearerClaim` row: the claimant's
-/// self-signed redemption of a bearer token. `sig` is the claimant DID's
 /// signature over [`signing_payload`](BearerClaimRecord::signing_payload).
-///
 /// The claim row grants nothing by itself (mirrors the Lean
-/// `unsigned_claim_grants_nothing` / `join_request_grants_nothing`
-/// obligations): authority lives in the issuer-side claim reconciler, which
 /// verifies the embedded token's issuer signature and this record's claimant
 /// signature before authoring any membership.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BearerClaimRecord {
-    /// The full encoded `dabear1-` token being redeemed. Embedding the token
-    /// keeps the issuer stateless at mint: the token is self-authenticating to
     /// its issuer, and revocation-before-claim is burning the nonce.
     pub token: String,
     pub claimant_did: String,
@@ -146,8 +99,6 @@ pub struct BearerClaimRecord {
 }
 
 impl BearerClaimRecord {
-    /// CBOR of this record with `sig` zeroed — the bytes signed/verified.
-    /// Mirrors [`crate::pairing_token::signing_payload`].
     pub fn signing_payload(&self) -> Vec<u8> {
         let mut unsigned = self.clone();
         unsigned.sig = Vec::new();
@@ -158,9 +109,6 @@ impl BearerClaimRecord {
     }
 }
 
-/// Deterministic key for the issuer's latest readiness acknowledgement for one
-/// claimant. The issuer and claimant are both included so acknowledgements
-/// from multiple paired agents can coexist in a client's replicated store.
 pub fn derive_bearer_readiness_key(issuer_did: &str, claimant_did: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(issuer_did.as_bytes());
@@ -170,9 +118,6 @@ pub fn derive_bearer_readiness_key(issuer_did: &str, claimant_did: &str) -> Stri
     format!("ready-{}", bs58::encode(&digest[..16]).into_string())
 }
 
-/// Issuer-signed evidence that the reciprocal conversation replicator for a
-/// bearer claimant was applied. This acknowledgement is necessary but not
-/// sufficient for Chat: the client also verifies its active signed membership.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BearerPairingReadyRecord {
     pub issuer_did: String,
