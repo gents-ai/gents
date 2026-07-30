@@ -71,6 +71,7 @@ async fn pick_backend() -> Result<BackendSelection> {
     }
     eprintln!("  3) custom URL");
     eprintln!("  4) ChatGPT / Codex subscription   (uses your ChatGPT plan; log in after init)");
+    eprintln!("  5) Grok subscription (SuperGrok / X Premium+)   (log in after init)");
     let choice = prompt_line("> ").await?;
     match choice.trim() {
         "1" | "" => {
@@ -143,6 +144,19 @@ async fn pick_backend() -> Result<BackendSelection> {
                 model_name: None,
                 api_key: None,
                 label: "ChatGPT / Codex subscription".to_string(),
+            })
+        }
+        "5" => {
+            eprintln!(
+                "\nAfter init, run `gents grok-login` to store the SuperGrok / X Premium+\n\
+                 OAuth credential for this agent. `gents init` only seeds the backend."
+            );
+            Ok(BackendSelection {
+                inference_url: None,
+                backend_preset: Some(BackendPresetArg::XaiGrokOAuth),
+                model_name: None,
+                api_key: None,
+                label: "Grok subscription (SuperGrok / X Premium+)".to_string(),
             })
         }
         other => bail!("unrecognized choice: {other}"),

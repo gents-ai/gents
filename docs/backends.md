@@ -17,6 +17,7 @@ agent loop itself.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `OpenAiCompatible` | OpenAI Responses by default; Chat Completions fallback for compatible local servers | API key or local/no-auth | SSE | Function tools through rig | Responses inherit the model default; local Chat Completions sends `chat_template_kwargs.enable_thinking` | Adds cache-scope `user` when available; does not assume every Responses model accepts `reasoning.effort` | Standard rig OpenAI handling | Planned by #545 |
 | `ChatGptCodex` | ChatGPT Codex Responses endpoint | `OAuthCredential` document, refreshed by owner runtime | SSE | Function tools, forced `strict: false` to match Codex CLI | `reasoning.effort` currently fixed at `medium` | Strips unsupported `max_output_tokens`, `temperature`, `top_p`; injects instructions/store/stream defaults; adds Codex `version` and `Accept` headers | Adds missing `Content-Type: text/event-stream` only when the backend omits it; synthesizes completion body from SSE for non-streaming probes | Unit-pinned in #530; replay corpus planned by #545 |
+| `XaiGrokOAuth` | Grok CLI subscription proxy Responses (`cli-chat-proxy.grok.com`) | `OAuthCredential` document (`provider=xai-oauth`), refreshed by owner runtime | SSE | Function tools through rig | Not forced (several Grok models reject `reasoning.effort`) | Sets `store: false` when absent; injects Grok-CLI identity headers (`x-xai-token-auth`, `x-grok-client-*`, User-Agent) + bearer | Adds missing SSE `Content-Type` when omitted | Unit tests for headers/bearer; live replay planned by #545 |
 | `OpenRouter` | Chat Completions | API key | SSE | Function tools through rig | Provider-dependent | Adds OpenRouter provider preference `require_parameters: true` | Standard rig OpenRouter handling | Planned by #545 |
 | local OpenAI-compatible servers | Responses or Chat Completions depending on server support | Usually none/local key | SSE varies by server | Function tools when server supports them | Reasoning parser support varies; Chat Completions sends `enable_thinking` for vLLM-style servers | Same as `OpenAiCompatible`; operators may need Chat Completions fallback for servers without `/v1/responses` | Standard rig OpenAI handling | Planned by #545 |
 
@@ -37,9 +38,10 @@ different places:
   10s timeout) probes the models endpoint of every enabled, probeable backend
   and keeps an in-memory `BackendHealthMap`. Hysteresis is K=3 consecutive
   failures to demote to `unhealthy`, one success to promote back (formal
-  model: `crates/gents/proofs/Proofs/BackendHealth/`). ChatGPT-Codex
-  backends are never probed (OAuthCredential is agent-scoped) and therefore
-  never demoted — the document status governs them.
+  model: `crates/gents/proofs/Proofs/BackendHealth/`). Agent-scoped OAuth
+  backends (`ChatGptCodex`, `XaiGrokOAuth`) are never fleet-probed
+  (`OAuthCredential` is per-agent) and therefore never demoted — the document
+  status governs them.
 
 Effective availability is `intent AND NOT measured-unhealthy`: a measured
 demotion removes the backend from admission and marks dependent behaviors
@@ -185,3 +187,61 @@ places. Regression tests pin these details:
 - `gents diagnose` reports `checks.chatgpt_auth` as structured JSON with
   `credential_id` and `expires_at`, or an actionable `gents codex-login`
   guidance string when the document is missing or expired.
+
+## Grok subscription (XaiGrokOAuth, OAuth)
+
+Use a SuperGrok or eligible X Premium+ subscription instead of minting a
+`console.x.ai` API key. The credential is an `OAuthCredential` document scoped
+by `agent_did` and provider (`xai-oauth`), parallel to ChatGPT Codex.
+
+Spike facts (auth endpoints, public client id, proxy headers) live in
+[`docs/design-notes/xai-grok-oauth-spike.md`](design-notes/xai-grok-oauth-spike.md).
+
+### Setup
+
+1. Configure a backend with `provider_kind = XaiGrokOAuth` (preset `xai-oauth`
+   / `grok-oauth`). Default endpoint:
+   `https://cli-chat-proxy.grok.com/v1`. Default model: `grok-4.5`.
+2. Sign in (device-code; works over SSH without a loopback callback):
+
+   ```sh
+   gents grok-login --agent-did did:key:...
+   ```
+
+   Aliases: `gents xai-login`. Use `--graphql` to write to a running node.
+3. Verify (read-only; does not refresh):
+
+   ```sh
+   gents grok-auth-probe --agent-did did:key:...
+   ```
+
+### Endpoint choice
+
+| Path | Base URL | Auth |
+| --- | --- | --- |
+| **Subscription OAuth (this provider)** | `https://cli-chat-proxy.grok.com/v1` | SuperGrok / X Premium+ OAuth bearer + Grok-CLI identity headers |
+| **API key (existing OpenAI-compatible)** | `https://api.x.ai/v1` | `XAI_API_KEY` on a generic `OpenAiCompatible` backend |
+
+Do **not** send a subscription OAuth bearer to `api.x.ai` expecting free quota —
+that surface commonly returns **402** spending-limit / **403** tier errors for
+subscription tokens. Use the CLI chat proxy for OAuth.
+
+### Failure modes
+
+| Symptom | Meaning | Fix |
+| --- | --- | --- |
+| Login succeeds, inference **401** | Expired / revoked grant | `gents grok-login` again |
+| Login succeeds, inference or refresh **403** tier / permission | Account not entitled to OAuth API | Not fixed by re-login; use `XAI_API_KEY` + `api.x.ai`, or check SuperGrok tier |
+| Inference **402** on `api.x.ai` with OAuth token | Wrong base URL for subscription | Point the backend at `cli-chat-proxy.grok.com` |
+| Proxy **402/426** without client headers | Client not recognized as CLI | Gents injects Grok-CLI identity headers automatically |
+
+### Credential storage & fleet
+
+Same document model and owner-only refresh rules as ChatGPT Codex
+(`OAuthCredential`, agent-scoped filter, rotating refresh token). ChatGPT-only
+fields (`chatgpt_plan_type`, `is_fedramp`) stay null/false for Grok.
+
+### Diagnostics
+
+- `gents grok-auth-probe` / `xai-auth-probe` is read-only.
+- `gents diagnose` reports `checks.xai_auth` parallel to `checks.chatgpt_auth`.
