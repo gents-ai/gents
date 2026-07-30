@@ -228,7 +228,7 @@ async fn drain_wakeups_never_interrupts_foreign_replica() {
 
 #[tokio::test]
 async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
-    background::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract().await;
+    background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
 }
 
 #[tokio::test]

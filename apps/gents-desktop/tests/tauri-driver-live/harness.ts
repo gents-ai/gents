@@ -8,8 +8,8 @@ import type {
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import { renderTauriAppDriverWithBridge } from "../tauri-driver";
 
-export const DEFAULT_LIVE_INFERENCE_URL = "http://100.69.4.79:8000/v1";
-export const DEFAULT_LIVE_MODEL_NAME = "baa-ai/GLM-5.1-RAM-420GB-MLX";
+export const DEFAULT_LIVE_INFERENCE_URL = "http://100.73.235.38:8000/v1";
+export const DEFAULT_LIVE_MODEL_NAME = "GLM-5.2";
 
 export type LiveDesktopDriver = ReturnType<typeof renderTauriAppDriverWithBridge>;
 
