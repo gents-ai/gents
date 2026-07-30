@@ -34,6 +34,26 @@ fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str
     escape_graphql_string(retry_root_request.unwrap_or(request_id))
 }
 
+fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| {
+            value
+                .get("_docID")
+                .and_then(|doc_id| doc_id.as_str())
+                .or_else(|| {
+                    value
+                        .as_array()
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("_docID"))
+                        .and_then(|doc_id| doc_id.as_str())
+                })
+                .map(ToOwned::to_owned)
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalLifecycleState {
     Pending,

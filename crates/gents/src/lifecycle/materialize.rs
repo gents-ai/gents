@@ -37,6 +37,38 @@ fn trigger_lineage_graphql_fields(trigger_lineage: &TriggerLineage) -> String {
     format!("{caused_by_trigger_id_field}{caused_by_trigger_kind_field}")
 }
 
+async fn resolve_created_agent_request_doc_id(
+    node: &EmbeddedNode,
+    mutation_response: &defra_node::QueryResponse,
+    mutation_field: &str,
+    escaped_request_id: &str,
+    lookup_error: &str,
+    missing_doc_id_error: &str,
+) -> Result<String> {
+    if let Some(doc_id) = extract_single_doc_id(mutation_response, mutation_field) {
+        return Ok(doc_id);
+    }
+
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
+    );
+    let query_resp = node.execute(&query).await;
+    if query_resp.has_errors() {
+        anyhow::bail!("{lookup_error}: {:?}", query_resp.errors);
+    }
+
+    query_resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| value.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|doc_id| doc_id.as_str())
+        .ok_or_else(|| anyhow::anyhow!("{missing_doc_id_error}"))
+        .map(str::to_string)
+}
+
 pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_title(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -116,48 +148,15 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         );
     }
 
-    let inline_doc_id = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("create_AgentRequest"))
-        .and_then(|value| {
-            value
-                .get("_docID")
-                .and_then(|doc_id| doc_id.as_str())
-                .or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                        .and_then(|doc_id| doc_id.as_str())
-                })
-                .map(|s| s.to_string())
-        });
-
-    let doc_id = if let Some(doc_id) = inline_doc_id {
-        doc_id
-    } else {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
-        );
-        let query_resp = node.execute(&query).await;
-        if query_resp.has_errors() {
-            anyhow::bail!(
-                "querying created pending AgentRequest doc id failed: {:?}",
-                query_resp.errors
-            );
-        }
-        query_resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("_docID"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("pending AgentRequest create returned no _docID"))?
-            .to_string()
-    };
+    let doc_id = resolve_created_agent_request_doc_id(
+        node,
+        &response,
+        "create_AgentRequest",
+        &escaped_request_id,
+        "querying created pending AgentRequest doc id failed",
+        "pending AgentRequest create returned no _docID",
+    )
+    .await?;
 
     if let Some(title) = conversation_title {
         let seed_result = async {
@@ -325,46 +324,15 @@ impl RequestLifecycle {
             anyhow::bail!("creating claimed AgentRequest failed: {:?}", resp.errors);
         }
 
-        let doc_id = if let Some(doc_id) = resp
-            .data
-            .as_ref()
-            .and_then(|data| data.get("add_AgentRequest"))
-            .and_then(|value| {
-                value
-                    .get("_docID")
-                    .and_then(|doc_id| doc_id.as_str())
-                    .or_else(|| {
-                        value
-                            .as_array()
-                            .and_then(|rows| rows.first())
-                            .and_then(|row| row.get("_docID"))
-                            .and_then(|doc_id| doc_id.as_str())
-                    })
-            }) {
-            doc_id.to_string()
-        } else {
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
-            );
-            let query_resp = node.execute(&query).await;
-            if query_resp.has_errors() {
-                anyhow::bail!(
-                    "querying created AgentRequest doc id failed: {:?}",
-                    query_resp.errors
-                );
-            }
-
-            query_resp
-                .data
-                .as_ref()
-                .and_then(|d| d.get("AgentRequest"))
-                .and_then(|v| v.as_array())
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("add_AgentRequest returned no _docID"))?
-                .to_string()
-        };
+        let doc_id = resolve_created_agent_request_doc_id(
+            node.as_ref(),
+            &resp,
+            "add_AgentRequest",
+            &escaped_request_id,
+            "querying created AgentRequest doc id failed",
+            "add_AgentRequest returned no _docID",
+        )
+        .await?;
 
         let lineage_mutation = format!(
             r#"mutation {{
