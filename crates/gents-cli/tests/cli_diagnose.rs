@@ -49,7 +49,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
     );
     assert_eq!(
         runtime_schema.get("ok").and_then(Value::as_bool),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         output.get("access_mode").and_then(Value::as_str),
