@@ -708,16 +708,13 @@ fn verify_one_collection(
     if let Some(root) = entry.expected_version {
         let has_root = non_ph.iter().any(|v| v.version_id == root);
         if !has_root {
-            return Err(Error::VersionPinMismatch {
+            return Err(Error::UnknownLineage {
                 collection: entry.name.to_string(),
-                expected: root.to_string(),
-                actual: format!(
-                    "root missing; versions={:?}",
-                    non_ph
-                        .iter()
-                        .map(|v| v.version_id.as_str())
-                        .collect::<Vec<_>>()
-                ),
+                versions: non_ph
+                    .iter()
+                    .map(|v| v.version_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
             });
         }
     }

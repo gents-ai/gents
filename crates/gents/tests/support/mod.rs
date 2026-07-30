@@ -176,10 +176,13 @@ type AgentConversation @branchable {
 }
 "#;
 
-/// A store whose `AgentConversation` collection lacks the unique `session_id`
-/// index, so duplicate rows can be seeded (#693). Registering the legacy SDL
-/// first makes `ensure_runtime_schemas`' own `add_schema` a no-op for that
-/// collection (it swallows "already exists"), exactly as on an upgraded host.
+/// A test-only store whose `AgentConversation` collection lacks the unique
+/// `session_id` index, so duplicate rows can be seeded (#693).
+///
+/// Production migration intentionally rejects this pre-baseline lineage.
+/// This focused recovery harness therefore installs an explicit alternate
+/// catalog directly instead of passing the legacy root through
+/// `ensure_runtime_schemas`.
 pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
@@ -192,12 +195,19 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
             .await
             .expect("embedded node"),
     );
-    node.add_schema(AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID)
-        .await
-        .expect("legacy AgentConversation schema");
-    ensure_runtime_schemas(&node)
-        .await
-        .expect("runtime schemas");
+    for schema in gents_protocol::schemas::RUNTIME_ALL
+        .iter()
+        .chain(gents_protocol::schemas::ALL.iter())
+    {
+        let fixture_schema = if *schema == gents_protocol::schemas::AGENT_CONVERSATION {
+            AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID
+        } else {
+            *schema
+        };
+        node.add_schema(fixture_schema)
+            .await
+            .expect("duplicate-tolerant fixture schema");
+    }
     TestDb {
         node,
         process_generation: 0,
