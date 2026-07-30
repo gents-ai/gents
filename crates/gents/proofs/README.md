@@ -690,6 +690,39 @@ Model → conformance → Rust bindings:
 - **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
   bridges, subagent liveness #465, terminal-parent owned tools #837) →
   `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
+- **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
+  three-way `read_tool_output` dispatch (terminal → persisted completion;
+  running + live snapshot → ring-buffer tail; running + no snapshot — the
+  post-restart shape — → empty), the retained-window paging contract
+  (contiguity, eviction detectability, progress, `has_more`), and ring tail
+  retention. The `r4c.read_tool_output.dispatch_by_state` witness values and
+  the `tool_output_paging_cases` rows are computed from `readDispatch` /
+  `readSlice`; the dispatch is driven against the real hook by
+  `conformance::generated_read_tool_output_witness_drives_hook_dispatch` and
+  the paging rows against `read_retained_output_slice` by
+  `background_tools::tests::generated_tool_output_paging_cases_match_slice_function`.
+  UTF-8 boundary snapping is a Rust representation detail below the byte
+  model.
+- **Executable bridge step (#937)** — `Proofs/Background/Executable.lean`
+  now executes the bridge-local events on the subagent leg
+  (`bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`) with a
+  non-vacuous `step_refines_transition`. The `bridge_step_cases` rows are
+  computed by running `step` on concrete fixtures (pinned at Lean build time
+  by `bridgeStepCases_pinned`) and driven by
+  `conformance::generated_bridge_step_cases_drive_bridge_lifecycle` through
+  `project_background_subagent_completion` (which owns the complete/failure
+  guards — Rust `bridge_complete` itself is a caller-trust boundary) and
+  `ToolCallLifecycle::bridge_cancel_cascade`.
+- **Native tool leg (boundary)** — the childless R6 row's lifecycle is the
+  single-row `ToolExecution` machine (executable via
+  `ToolExecution.Executable.step?`): Rust `bridge_complete` on a
+  `new_background_tool` row refines `ToolExecution.Transition.complete`,
+  `bridge_failure(Interrupted)` refines `cancelDuringRun`, and
+  `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
+  (`is_bridge()` admits both kinds). `SecondLeg.tool` in
+  `Proofs/Background/Bridge.lean` carries only the terminal-projection
+  vocabulary for that leg; the paired `BridgedState` transitions are
+  subagent-only by design.
 - **Wake coalescing** — `Proofs/Session/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
   queue-source rows in `r6_backgrounding_cases` and the R4c steering

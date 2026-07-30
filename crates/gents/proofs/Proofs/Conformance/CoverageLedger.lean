@@ -746,6 +746,21 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "r4c_background_work_cases"
+      "R4cBackgroundWorkCases"
+      "conformance::generated_read_tool_output_witness_drives_hook_dispatch")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "tool_output_paging_cases"
+      "ToolOutputPagingCases"
+      "background_tools::tests::generated_tool_output_paging_cases_match_slice_function")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "bridge_step_cases"
+      "BridgeStepCases"
+      "conformance::generated_bridge_step_cases_drive_bridge_lifecycle")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "codex_shim_projection_cases"
       "CodexShimProjectionCases"
       "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")

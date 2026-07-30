@@ -87,6 +87,10 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     #[serde(default)]
+    pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
+    #[serde(default)]
+    pub(crate) bridge_step_cases: Vec<LeanBridgeStepCase>,
+    #[serde(default)]
     pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
     #[serde(default)]
     pub(crate) codex_shim_subagent_tool_cases: Vec<LeanCodexShimSubagentToolCase>,
@@ -615,6 +619,14 @@ pub(crate) fn lean_restart_disposition_cases() -> &'static [LeanRestartDispositi
 
 pub(crate) fn lean_r4c_background_work_cases() -> &'static [LeanR4cBackgroundWorkCase] {
     &lean_contract_snapshot().r4c_background_work_cases
+}
+
+pub(crate) fn lean_tool_output_paging_cases() -> &'static [LeanToolOutputPagingCase] {
+    &lean_contract_snapshot().tool_output_paging_cases
+}
+
+pub(crate) fn lean_bridge_step_cases() -> &'static [LeanBridgeStepCase] {
+    &lean_contract_snapshot().bridge_step_cases
 }
 
 pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBackgroundWorkCase {

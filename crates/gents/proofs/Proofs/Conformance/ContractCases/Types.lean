@@ -327,6 +327,44 @@ structure RestartDispositionCase where
   theoremName : String
   deriving DecidableEq, Repr
 
+/-- Executable bridge-step witness (#937): one concrete subagent-bridge
+    fixture, one bridge event, and the outcome of
+    `Subagent.BridgedState.step` — `legal`, the bridge tool's post state, and
+    whether the child's interrupt flag was latched are all computed by
+    running the step, never hand-written. -/
+structure BridgeStepCase where
+  name : String
+  event : String
+  childState : String
+  parentState : String
+  cancelPolicy : String
+  bridgeCommitted : Bool
+  legal : Bool
+  postToolState : Option String
+  postChildInterruptSet : Bool
+  theoremName : String
+  deriving DecidableEq, Repr
+
+/-- Paging witness over the retained output window (#937): inputs plus the
+    slice outputs, computed from `Subagent.ToolOutput.readSlice` — never
+    hand-written. Consumed by the `background_tools` unit test against
+    `read_retained_output_slice`. -/
+structure ToolOutputPagingCase where
+  name : String
+  firstOffset : Nat
+  retainedLen : Nat
+  totalBytes : Nat
+  offset : Nat
+  maxBytes : Nat
+  start : Nat
+  sliceLen : Nat
+  nextOffset : Nat
+  firstAvailableOffset : Nat
+  totalBytesOut : Nat
+  hasMore : Bool
+  theoremName : String
+  deriving DecidableEq, Repr
+
 structure R6BackgroundingCase where
   name : String
   group : String
@@ -466,13 +504,24 @@ structure ReadTranscriptHidesBridgeRows where
   renderedTranscript : String
   deriving Repr
 
+/-- Three-way `read_tool_output` dispatch (#937): a running row with a live
+    ring-buffer snapshot serves the live tail; a running row with no
+    snapshot — the post-restart shape, since the registry is volatile —
+    serves empty output; a terminal row serves the persisted completion.
+    Sources and paging numbers are computed from
+    `Subagent.ToolOutput.readDispatch` / `readSlice`. -/
 structure ReadToolOutputDispatchesByState where
   toolCallId : String
   runningSource : String
+  runningNoBufferSource : String
   terminalSource : String
   runningPayload : String
-  staleRunningPayload : String
+  runningNoBufferPayload : String
   terminalPayload : String
+  runningNextOffset : Nat
+  runningTotalBytes : Nat
+  runningHasMore : Bool
+  terminalTotalBytes : Nat
   deriving Repr
 
 structure SteerAppendPreservesLineage where

@@ -38,32 +38,33 @@ use admission_slot_accounting::{
 use lean_vocab_test::{
     assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
     assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_cancel_propagation_cases, lean_client_shell_case,
-    lean_codex_shim_behavior_selection_cases, lean_codex_shim_binding_cases,
-    lean_codex_shim_compaction_projection_cases, lean_codex_shim_context_usage_cases,
-    lean_codex_shim_projection_case, lean_codex_shim_projection_cases,
-    lean_codex_shim_reasoning_projection_cases, lean_codex_shim_subagent_listing_cases,
-    lean_codex_shim_subagent_metadata_cases, lean_codex_shim_subagent_status_cases,
-    lean_codex_shim_subagent_thread_shape_cases, lean_codex_shim_subagent_tool_cases,
-    lean_codex_shim_subagent_visibility_cases, lean_codex_shim_thread_status_cases,
-    lean_codex_shim_tool_metadata_cases, lean_codex_shim_turn_lifecycle_cases,
-    lean_command_env_case, lean_command_policy_case, lean_command_sandbox_case,
-    lean_compaction_reducer_cases, lean_composed_invariant_witnesses, lean_contract_snapshot,
-    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
-    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
-    lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
-    lean_managed_exec_liveness_cases, lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases,
-    lean_process_transition_cases, lean_queue_deadline_case, lean_queue_deadline_cases,
-    lean_r4c_background_work_case, lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_backend_health_cases, lean_bridge_step_cases, lean_cancel_propagation_cases,
+    lean_client_shell_case, lean_codex_shim_behavior_selection_cases,
+    lean_codex_shim_binding_cases, lean_codex_shim_compaction_projection_cases,
+    lean_codex_shim_context_usage_cases, lean_codex_shim_projection_case,
+    lean_codex_shim_projection_cases, lean_codex_shim_reasoning_projection_cases,
+    lean_codex_shim_subagent_listing_cases, lean_codex_shim_subagent_metadata_cases,
+    lean_codex_shim_subagent_status_cases, lean_codex_shim_subagent_thread_shape_cases,
+    lean_codex_shim_subagent_tool_cases, lean_codex_shim_subagent_visibility_cases,
+    lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
+    lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
+    lean_command_sandbox_case, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
+    lean_contract_snapshot, lean_event_delivery_convergence_traces,
+    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
+    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
+    lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,
+    lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases, lean_process_transition_cases,
+    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
+    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_outcome_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
     lean_response_interrupt_flow_cases, lean_response_transition_cases,
     lean_restart_disposition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
     lean_session_recovery_case, lean_startup_readiness_cases, lean_state_machine_contract,
-    lean_subagent_delegation_graph_cases, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
-    LeanR4cBackgroundWorkCase,
+    lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
+    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
@@ -170,6 +171,16 @@ async fn generated_recovery_outcome_cases_fence_duplicate_tolerant_counting() {
 #[tokio::test]
 async fn generated_restart_disposition_cases_drive_recover_all() {
     recovery_sweeps::generated_restart_disposition_cases_drive_recover_all().await;
+}
+
+#[tokio::test]
+async fn generated_read_tool_output_witness_drives_hook_dispatch() {
+    background::generated_read_tool_output_witness_drives_hook_dispatch().await;
+}
+
+#[tokio::test]
+async fn generated_bridge_step_cases_drive_bridge_lifecycle() {
+    background::generated_bridge_step_cases_drive_bridge_lifecycle().await;
 }
 
 #[tokio::test]

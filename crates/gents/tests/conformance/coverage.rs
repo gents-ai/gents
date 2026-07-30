@@ -713,6 +713,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RestartDispositionCases".to_string(),
         ));
     }
+    if !lean_tool_output_paging_cases().is_empty() {
+        emitted.insert((
+            "tool_output_paging_cases".to_string(),
+            "ToolOutputPagingCases".to_string(),
+        ));
+    }
+    if !lean_bridge_step_cases().is_empty() {
+        emitted.insert((
+            "bridge_step_cases".to_string(),
+            "BridgeStepCases".to_string(),
+        ));
+    }
     if !lean_transcript_cases().is_empty() {
         emitted.insert((
             "transcript_cases".to_string(),
@@ -971,6 +983,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "recovery_outcome_cases",
         "recovery_equivalence_cases",
         "restart_disposition_cases",
+        "tool_output_paging_cases",
+        "bridge_step_cases",
         "transcript_cases",
         "compaction_reducer_cases",
         "streaming_response_cases",

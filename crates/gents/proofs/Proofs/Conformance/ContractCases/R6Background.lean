@@ -1,4 +1,5 @@
 import Proofs.Background.State
+import Proofs.Background.ToolOutput
 import Proofs.Conformance.ContractCases.Types
 
 /-!
@@ -105,6 +106,76 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (some "subagent_completion")
       (some "background_completion:900")
   ]
+
+/-! ## Tool output paging witnesses (#937)
+
+Outputs are computed from `Subagent.ToolOutput.readSlice`; the pinned tuple
+theorem below fails at Lean build time if the slice model drifts, and the
+Rust `background_tools` unit test fails if `read_retained_output_slice`
+drifts from the emitted rows. -/
+
+def toolOutputPagingCase
+    (name : String)
+    (firstOffset retainedLen totalBytes offset maxBytes : Nat)
+    (theoremName : String) : ToolOutputPagingCase :=
+  let window : Subagent.ToolOutput.RetainedWindow :=
+    { firstOffset := firstOffset
+    , retainedLen := retainedLen
+    , totalBytes := totalBytes
+    }
+  let slice := Subagent.ToolOutput.readSlice window offset maxBytes
+  { name := name
+  , firstOffset := firstOffset
+  , retainedLen := retainedLen
+  , totalBytes := totalBytes
+  , offset := offset
+  , maxBytes := maxBytes
+  , start := slice.start
+  , sliceLen := slice.sliceLen
+  , nextOffset := slice.nextOffset
+  , firstAvailableOffset := slice.firstAvailableOffset
+  , totalBytesOut := slice.totalBytes
+  , hasMore := slice.hasMore
+  , theoremName := theoremName
+  }
+
+def toolOutputPagingCases : List ToolOutputPagingCase :=
+  [ toolOutputPagingCase "paging_head_page" 0 8 8 0 4
+      "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
+  , toolOutputPagingCase "paging_continuation_no_gap" 0 8 8 4 4
+      "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
+  , toolOutputPagingCase "paging_evicted_prefix_detectable" 6 4 10 0 8
+      "Subagent.ToolOutput.readSlice_eviction_detectable"
+  , toolOutputPagingCase "paging_cursor_past_end_parks" 0 4 4 9 4
+      "Subagent.ToolOutput.readSlice_past_end_empty"
+  , toolOutputPagingCase "paging_mid_window_bounded_budget" 2 5 7 3 2
+      "Subagent.ToolOutput.readSlice_progress"
+  ]
+
+/-- Pinned expected outputs: fails at Lean build time if `readSlice` drifts,
+    keeping the emitted rows honest rather than self-referential. -/
+theorem toolOutputPagingCases_pinned :
+    toolOutputPagingCases.map
+        (fun witness =>
+          (witness.name, witness.start, witness.sliceLen, witness.nextOffset,
+            witness.firstAvailableOffset, witness.totalBytesOut,
+            witness.hasMore)) =
+      [ ("paging_head_page", 0, 4, 4, 0, 8, true)
+      , ("paging_continuation_no_gap", 4, 4, 8, 0, 8, false)
+      , ("paging_evicted_prefix_detectable", 6, 4, 10, 6, 10, false)
+      , ("paging_cursor_past_end_parks", 4, 0, 4, 0, 4, false)
+      , ("paging_mid_window_bounded_budget", 3, 2, 5, 2, 7, true)
+      ] := by
+  rfl
+
+/-- The two contiguous pages tile the window with no gap and no overlap. -/
+theorem toolOutputPagingCases_head_and_continuation_tile :
+    ∀ head ∈ toolOutputPagingCases.filter
+        (fun witness => witness.name = "paging_head_page"),
+      ∀ next ∈ toolOutputPagingCases.filter
+          (fun witness => witness.name = "paging_continuation_no_gap"),
+        head.nextOffset = next.offset ∧ head.nextOffset = next.start := by
+  native_decide
 
 def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
   [ { theoremName := "Subagent.BridgedState.backgrounded_budget_bounded"

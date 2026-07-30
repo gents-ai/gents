@@ -491,6 +491,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_restart_disposition_cases_drive_recover_all",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_read_tool_output_witness_drives_hook_dispatch",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_read_tool_output_witness_drives_hook_dispatch",
+        },
+        ConformanceConsumer::RustTest {
+            id: "background_tools::tests::generated_tool_output_paging_cases_match_slice_function",
+            package: "gents",
+            source_path: "crates/gents/src/background_tools.rs",
+            module_path: "background_tools::tests",
+            function: "generated_tool_output_paging_cases_match_slice_function",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::generated_bridge_step_cases_drive_bridge_lifecycle",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_bridge_step_cases_drive_bridge_lifecycle",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

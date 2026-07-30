@@ -1006,29 +1006,37 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
             tool_call_id,
             running_source,
+            running_no_buffer_source,
             terminal_source,
             running_payload,
-            stale_running_payload,
+            running_no_buffer_payload,
             terminal_payload,
+            running_next_offset,
+            running_total_bytes,
+            running_has_more,
+            terminal_total_bytes,
         } => {
             assert_eq!(tool_call_id, "r4c-w4-tool-call");
-            // Shipped behavior (gents#403): no live ring buffer was built,
-            // so a running read has no live source and returns empty output; the
-            // persisted completion is the only non-empty source, served at
-            // terminal. This mirrors `background_tools.rs` and is independently
-            // pinned by `read_tool_output_running_returns_empty_live_stream_without_ring_buffer`.
-            assert_eq!(running_source, "none");
+            // #937 realignment: the live ring buffer exists in production
+            // (`LiveToolOutputRegistry`), so a running read with a snapshot
+            // serves the live tail; a running read with NO snapshot — the
+            // post-restart shape, the registry is volatile — serves empty
+            // output; a terminal read serves the persisted completion. The
+            // full dispatch is driven against the real hook by
+            // `generated_read_tool_output_witness_drives_hook_dispatch`.
+            assert_eq!(running_source, "live_ring_buffer");
+            assert_eq!(running_no_buffer_source, "none");
             assert_eq!(terminal_source, "persisted_tool_completion");
-            assert_eq!(running_payload, "");
-            assert_eq!(stale_running_payload, "");
-            assert_eq!(terminal_payload, "persisted-completion-stdout");
-            assert!(
-                running_payload.is_empty(),
-                "running reads must return empty output: no live ring buffer is maintained"
-            );
+            assert_eq!(running_payload, "live");
+            assert_eq!(running_no_buffer_payload, "");
+            assert_eq!(terminal_payload, "livedone");
+            assert_eq!(*running_next_offset, 4);
+            assert_eq!(*running_total_bytes, 4);
+            assert!(!*running_has_more);
+            assert_eq!(*terminal_total_bytes, 8);
             assert_ne!(
-                terminal_payload, running_payload,
-                "terminal reads serve the persisted result, never the (empty) running payload"
+                terminal_payload, running_no_buffer_payload,
+                "terminal reads serve the persisted result, never the restart-empty payload"
             );
         }
         other => panic!("unexpected R4c witness variant: {other:?}"),
@@ -1130,4 +1138,583 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         }
         other => panic!("unexpected R4c witness variant: {other:?}"),
     }
+}
+
+/// Drives the Lean `r4c.read_tool_output.dispatch_by_state` witness (#937)
+/// through the real hook: a running native background tool serves its live
+/// ring-buffer tail; a second hook on the same session — the restart shape,
+/// since `LiveToolOutputRegistry` is volatile per-process state — serves
+/// empty output for the same running row; after completion both hooks serve
+/// the persisted result. Payloads and paging numbers are the Lean-computed
+/// witness values.
+pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
+    let LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
+        running_payload,
+        running_no_buffer_payload,
+        terminal_payload,
+        running_next_offset,
+        running_total_bytes,
+        running_has_more,
+        terminal_total_bytes,
+        ..
+    } = lean_r4c_background_work_case("r4c.read_tool_output.dispatch_by_state")
+    else {
+        panic!("read_tool_output witness variant drifted");
+    };
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let tools = gents::ToolSet::builder()
+        .bash_unrestricted(tempdir.path())
+        .build()
+        .build_native_tools()
+        .expect("native tools should build");
+    let (db, hook, session_id, request_id) = setup_background_tool_hook(
+        "r4c-read-dispatch-witness",
+        background_tool_registry(tools, &["bash_unrestricted"]),
+    )
+    .await;
+
+    let spawn = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "read-dispatch-spawn",
+            &json!({
+                "tool_name": "bash_unrestricted",
+                "args": {
+                    "command": format!(
+                        "printf {running_payload}; sleep 5; printf done"
+                    ),
+                    "args": [],
+                    "timeout_secs": 10
+                }
+            })
+            .to_string(),
+        )
+        .await,
+    );
+    let tool_call_id = spawn["tool_call_id"]
+        .as_str()
+        .expect("spawn receipt tool_call_id")
+        .to_string();
+
+    // Running + live snapshot → the ring-buffer tail, with the Lean-computed
+    // continuation cursor. Bounded poll: the payload lands as soon as the
+    // tool's first printf is flushed into the live writer.
+    let mut running = json!({});
+    for attempt in 0..80 {
+        running = skip_reason_json(
+            hook.on_tool_call(
+                "read_process",
+                None,
+                &format!("read-dispatch-running-{attempt}"),
+                &json!({ "tool_call_id": tool_call_id }).to_string(),
+            )
+            .await,
+        );
+        if running["output"].as_str() == Some(running_payload) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(running["status"].as_str(), Some("running"));
+    assert_eq!(running["output"].as_str(), Some(running_payload.as_str()));
+    assert_eq!(running["next_offset"].as_u64(), Some(*running_next_offset));
+    assert_eq!(running["total_bytes"].as_u64(), Some(*running_total_bytes));
+    assert_eq!(running["has_more"].as_bool(), Some(*running_has_more));
+    assert_eq!(running["exited"].as_bool(), Some(false));
+
+    // Running + NO snapshot: a second hook on the same session has a fresh
+    // (empty) live-output registry — exactly what a restarted daemon would
+    // observe for this still-running row before recovery interrupts it.
+    let restarted_hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        "r6-background-theorem",
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume restart-shaped hook");
+    restarted_hook
+        .set_active_request_id(Some(request_id.clone()))
+        .await;
+    restarted_hook
+        .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    let no_buffer = skip_reason_json(
+        restarted_hook
+            .on_tool_call(
+                "read_process",
+                None,
+                "read-dispatch-no-buffer",
+                &json!({ "tool_call_id": tool_call_id }).to_string(),
+            )
+            .await,
+    );
+    assert_eq!(
+        no_buffer["status"].as_str(),
+        Some("running"),
+        "restart-shaped read must still observe the durable running row"
+    );
+    assert_eq!(
+        no_buffer["output"].as_str(),
+        Some(running_no_buffer_payload.as_str()),
+        "a running row with no live snapshot must serve empty output"
+    );
+    assert_eq!(no_buffer["exited"].as_bool(), Some(false));
+
+    // Terminal → persisted completion, from BOTH hooks: the durable result
+    // does not depend on the volatile registry.
+    let waited = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "read-dispatch-wait",
+            &json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(waited["status"].as_str(), Some("completed"));
+    for (label, reader) in [("live", &hook), ("restarted", &restarted_hook)] {
+        let terminal = skip_reason_json(
+            reader
+                .on_tool_call(
+                    "read_process",
+                    None,
+                    &format!("read-dispatch-terminal-{label}"),
+                    &json!({ "tool_call_id": tool_call_id }).to_string(),
+                )
+                .await,
+        );
+        assert_eq!(terminal["status"].as_str(), Some("completed"), "{label}");
+        assert_eq!(
+            terminal["output"].as_str(),
+            Some(terminal_payload.as_str()),
+            "{label}: terminal reads serve the persisted completion"
+        );
+        assert_eq!(
+            terminal["total_bytes"].as_u64(),
+            Some(*terminal_total_bytes),
+            "{label}"
+        );
+        assert_eq!(terminal["exited"].as_bool(), Some(true), "{label}");
+    }
+}
+
+/// Drives the Lean `bridge_step_cases` (#937) — outcomes computed by running
+/// `Subagent.BridgedState.step` — through the production seams: child
+/// terminals project through `project_background_subagent_completion` (the
+/// chokepoint that owns the complete/failure guards) and cascade decisions
+/// through `ToolCallLifecycle::bridge_cancel_cascade`.
+pub(super) async fn generated_bridge_step_cases_drive_bridge_lifecycle() {
+    let cases = lean_bridge_step_cases();
+    assert_eq!(cases.len(), 10, "Lean bridge-step case family drifted");
+
+    let mut driven = 0usize;
+    let mut model_only = 0usize;
+    for case in cases {
+        match case.event.as_str() {
+            "bridge_complete" | "bridge_failure" => {
+                if !case.bridge_committed {
+                    // Model-only guard: at this seam a persisted bridge row is
+                    // committed by construction (`start_running` persisted it),
+                    // so the uncommitted shape cannot be seeded. Pin its
+                    // contract shape instead of silently skipping.
+                    assert!(!case.legal, "{}", case.name);
+                    assert_eq!(case.post_tool_state, None, "{}", case.name);
+                    model_only += 1;
+                    continue;
+                }
+                drive_bridge_step_projection_case(case).await;
+                driven += 1;
+            }
+            "bridge_cancel_cascade" => {
+                drive_bridge_step_cascade_case(case).await;
+                driven += 1;
+            }
+            other => panic!("unhandled bridge step event {other}"),
+        }
+    }
+    assert_eq!(driven, 9, "every seedable bridge-step row must be driven");
+    assert_eq!(
+        model_only, 1,
+        "exactly the uncommitted-bridge row is model-only"
+    );
+}
+
+async fn seed_bridge_step_fixture(
+    case: &lean_vocab_test::LeanBridgeStepCase,
+) -> (support::TestDb, ToolCallLifecycle, String, String, String) {
+    let db = test_db(&format!("bridge-step-{}", case.name)).await;
+    let parent_request_id = format!("{}-parent", case.name);
+    let parent_session_id = format!("{}-parent-session", case.name);
+    let tool_call_id = format!("{}-tool", case.name);
+    let child_request_id = format!("{}-child", case.name);
+
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehaviorDocument {
+            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
+            agent_did: AGENT_DID.to_string(),
+            display_name: Some("bridge step parent".to_string()),
+            description: None,
+            summary: None,
+            system_prompt: None,
+            request_context_template: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
+            enabled: true,
+            created_at: Some("2026-05-19T00:00:00Z".to_string()),
+        },
+    )
+    .await
+    .expect("upsert bridge step parent behavior");
+    create_background_theorem_parent_request(
+        db.node.as_ref(),
+        &parent_request_id,
+        &parent_session_id,
+        0,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    if case.parent_state == "interrupted" {
+        set_request_status_lifecycle_by_request_id(
+            db.node.as_ref(),
+            &parent_request_id,
+            "interrupted",
+            "interrupted",
+        )
+        .await;
+    }
+
+    gents::tool_call_lifecycle::create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.clone(),
+        tool_call_id.clone(),
+        0,
+        AGENT_DID.to_string(),
+        "bridge-step-child".to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .expect("create bridged child request");
+
+    let cancel_policy = match case.cancel_policy.as_str() {
+        "cascade" => CancelPolicy::Cascade,
+        "detach" => CancelPolicy::Detach,
+        other => panic!("unhandled cancel policy {other}"),
+    };
+    let mut lifecycle = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.clone(),
+        parent_session_id.clone(),
+        "did:test:test".to_string(),
+        tool_call_id.clone(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Background,
+        cancel_policy,
+        child_request_id.clone(),
+        "did:test:target".to_string(),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    (
+        db,
+        lifecycle,
+        tool_call_id,
+        child_request_id,
+        parent_session_id,
+    )
+}
+
+async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeStepCase) {
+    use gents::background_completion::{
+        project_background_subagent_completion, BackgroundCompletionOutcome,
+    };
+
+    let (db, _lifecycle, tool_call_id, child_request_id, _parent_session_id) =
+        seed_bridge_step_fixture(case).await;
+    let child_session_id = fetch_child_session_id(db.node.as_ref(), &child_request_id).await;
+
+    match case.child_state.as_str() {
+        "completed" => {
+            persist_bridge_step_child_completion(
+                db.node.as_ref(),
+                &child_request_id,
+                &child_session_id,
+            )
+            .await;
+        }
+        "processing" => {
+            set_request_status_lifecycle_by_request_id(
+                db.node.as_ref(),
+                &child_request_id,
+                "processing",
+                "processing",
+            )
+            .await;
+        }
+        "interrupted" => {
+            set_request_status_lifecycle_by_request_id(
+                db.node.as_ref(),
+                &child_request_id,
+                "interrupted",
+                "interrupted",
+            )
+            .await;
+        }
+        "failed" => {
+            set_request_status_lifecycle_by_request_id(
+                db.node.as_ref(),
+                &child_request_id,
+                "error",
+                "failed",
+            )
+            .await;
+        }
+        "dead" => {
+            set_request_status_lifecycle_by_request_id(
+                db.node.as_ref(),
+                &child_request_id,
+                "dead",
+                "dead",
+            )
+            .await;
+        }
+        other => panic!("unhandled child state {other}"),
+    }
+
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .expect("project background completion");
+    let row_state = fetch_bridge_step_tool_state(db.node.as_ref(), &tool_call_id).await;
+
+    if case.legal {
+        assert!(
+            matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
+            "{}: durable child terminal must project, got {outcome:?}",
+            case.name
+        );
+        assert_eq!(
+            row_state.as_deref(),
+            case.post_tool_state.as_deref(),
+            "{}: projected bridge state drifted from the Lean step",
+            case.name
+        );
+    } else if case.child_state == "processing" {
+        assert!(
+            matches!(outcome, BackgroundCompletionOutcome::NotTerminal),
+            "{}: a live child must not project, got {outcome:?}",
+            case.name
+        );
+        assert_eq!(
+            row_state.as_deref(),
+            Some("running"),
+            "{}: rejected step must leave the bridge running",
+            case.name
+        );
+    } else {
+        // bridge_failure with a completed child: the failure projection can
+        // never fire — the projection dispatches on the actual durable
+        // terminal, so the bridge completes instead of failing.
+        assert_eq!(case.child_state, "completed", "{}", case.name);
+        assert!(
+            matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
+            "{}: completed child projects completion, got {outcome:?}",
+            case.name
+        );
+        assert_eq!(
+            row_state.as_deref(),
+            Some("completed"),
+            "{}: a completed child must never project a failure state",
+            case.name
+        );
+    }
+}
+
+async fn drive_bridge_step_cascade_case(case: &lean_vocab_test::LeanBridgeStepCase) {
+    let (db, mut lifecycle, _tool_call_id, child_request_id, _parent_session_id) =
+        seed_bridge_step_fixture(case).await;
+    set_request_status_lifecycle_by_request_id(
+        db.node.as_ref(),
+        &child_request_id,
+        "processing",
+        "processing",
+    )
+    .await;
+
+    if case.parent_state == "processing" {
+        // Rejected shape: the bridge is still running (and the parent live),
+        // so the cascade decision is illegal at the Rust seam too.
+        assert!(!case.legal, "{}", case.name);
+        assert!(
+            lifecycle.bridge_cancel_cascade().await.is_err(),
+            "{}: cascade on a running bridge must be rejected",
+            case.name
+        );
+        return;
+    }
+
+    lifecycle
+        .cancel_during_run(CancelCause::Interrupted)
+        .await
+        .expect("cancel bridge before cascade decision");
+    let intent = lifecycle
+        .bridge_cancel_cascade()
+        .await
+        .expect("cascade decision");
+    if case.post_child_interrupt_set {
+        assert!(case.legal, "{}", case.name);
+        let intent = intent.expect("cascade policy must produce a cascade intent");
+        assert_eq!(
+            intent.child_request_id, child_request_id,
+            "{}: cascade intent must target the bridged child",
+            case.name
+        );
+    } else {
+        assert!(!case.legal, "{}", case.name);
+        assert!(
+            intent.is_none(),
+            "{}: detach must not produce a cascade intent",
+            case.name
+        );
+    }
+}
+
+async fn set_request_status_lifecycle_by_request_id(
+    node: &EmbeddedNode,
+    request_id: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let status = escape_graphql_string(status);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set request status/lifecycle failed: {:?}",
+        response.errors
+    );
+}
+
+async fn fetch_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
+    #[derive(Deserialize)]
+    struct SessionRow {
+        session_id: String,
+    }
+    let child_request_id = escape_graphql_string(child_request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }},
+                limit: 1
+            ) {{ session_id }}
+        }}"#
+    );
+    first_row::<SessionRow>(&node.execute(&query).await, "AgentRequest").session_id
+}
+
+async fn fetch_bridge_step_tool_state(node: &EmbeddedNode, tool_call_id: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct StateRow {
+        lifecycle_state: Option<String>,
+    }
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }},
+                limit: 1
+            ) {{ lifecycle_state }}
+        }}"#
+    );
+    first_row::<StateRow>(&node.execute(&query).await, "AgentToolCall").lifecycle_state
+}
+
+async fn persist_bridge_step_child_completion(
+    node: &EmbeddedNode,
+    child_request_id: &str,
+    child_session_id: &str,
+) {
+    set_request_status_lifecycle_by_request_id(node, child_request_id, "completed", "completed")
+        .await;
+
+    let assistant = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Text(Text {
+            text: "bridge step child final".to_string(),
+        })],
+    };
+    let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
+    let escaped_child_session_id = escape_graphql_string(child_session_id);
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let now = chrono::Utc::now().to_rfc3339();
+    let create_message = format!(
+        r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "{escaped_child_session_id}:1",
+                session_id: "{escaped_child_session_id}",
+                sequence: 1,
+                role: "assistant",
+                content: "{escaped_message}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&create_message).await;
+    assert!(
+        !response.has_errors(),
+        "create bridge-step child AgentMessage failed: {:?}",
+        response.errors
+    );
+
+    let create_response = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{escaped_child_request_id}",
+                request_id: "{escaped_child_request_id}",
+                agent_did: "{AGENT_DID}",
+                behavior_id: "bridge-step-child",
+                session_id: "{escaped_child_session_id}",
+                content: "",
+                reasoning: "",
+                status: "completed",
+                error_message: "",
+                token_count: 0,
+                progress_seq: 0,
+                materialized_message_sequence: 1,
+                materialized_at: "{now}",
+                created_at: "{now}",
+                completed_at: "{now}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&create_response).await;
+    assert!(
+        !response.has_errors(),
+        "create bridge-step child AgentResponse failed: {:?}",
+        response.errors
+    );
 }
