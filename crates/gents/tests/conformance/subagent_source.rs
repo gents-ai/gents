@@ -4,6 +4,7 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::interrupt::{fetch_interrupt_requested_at, interrupt_request};
+use gents::retry::execute_graphql_with_conflict_retry;
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
@@ -1938,7 +1939,8 @@ async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "mark test request dead").await;
     assert!(
         !response.has_errors(),
         "mark_request_dead failed: {:?}",
@@ -1959,7 +1961,8 @@ async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response =
+        execute_graphql_with_conflict_retry(node, &mutation, "mark test request completed").await;
     assert!(
         !response.has_errors(),
         "mark_request_completed failed: {:?}",
