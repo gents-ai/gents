@@ -62,10 +62,10 @@ struct WorkflowToolCallRow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_WORKFLOW=1 and pass --ignored"]
 async fn fan_out_and_synthesize_barrier_live() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_WORKFLOW != 1; skipping workflow orchestration e2e");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_WORKFLOW=1 and pass --ignored to run the workflow orchestration e2e"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();

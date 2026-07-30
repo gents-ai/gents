@@ -4,8 +4,8 @@
 //! delegates work to a subagent behavior via `spawn_subagent`, the subagent
 //! runs (live model), and the result flows back to the orchestrator.
 //!
-//! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
-//! unless `GENTS_LIVE_SUBAGENT=1`). To run locally:
+//! Normal test runs skip these because they are `#[ignore]`-gated. Explicit
+//! runs fail unless `GENTS_LIVE_SUBAGENT=1`. To run locally:
 //!
 //! ```bash
 //! GENTS_LIVE_SUBAGENT=1 \
@@ -74,10 +74,10 @@ fn live_model() -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_local_subagent_delegation() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live local subagent delegation");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live local subagent delegation"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
@@ -242,10 +242,10 @@ async fn live_local_subagent_delegation() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_cross_node_subagent_delegation() -> Result<()> {
-    if !live_enabled() {
-        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation");
-        return Ok(());
-    }
+    assert!(
+        live_enabled(),
+        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live cross-node subagent delegation"
+    );
 
     let endpoint = live_endpoint();
     let model = live_model();
