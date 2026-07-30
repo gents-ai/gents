@@ -5,6 +5,32 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 use gents_migration::{ensure_migrations, ensure_migrations_with_registry, Error, Registry};
 
+#[test]
+fn default_baseline_matches_ordered_protocol_catalog() {
+    let actual = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .map(|entry| (entry.name, entry.sdl))
+        .collect::<Vec<_>>();
+    let expected = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .copied()
+        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .zip(gents_protocol::schemas::ALL.iter().copied()),
+        )
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "ordered baseline catalog length mismatch"
+    );
+    assert_eq!(actual, expected);
+}
+
 async fn fresh_node() -> Arc<EmbeddedNode> {
     let dir = tempfile::tempdir().expect("tempdir");
     let node = EmbeddedNode::builder()
