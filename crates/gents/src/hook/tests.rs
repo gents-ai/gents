@@ -1851,16 +1851,19 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
             })],
         })],
     };
+    let session_id = hook.session_id().await.expect("session id");
+    let first_result_sequence = crate::session::max_sequence(&node, &session_id)
+        .await
+        .expect("first tool-result sequence");
     let reused_sequence = hook
         .persist_message(&duplicate_tool_result_message)
         .await
         .unwrap();
     assert_eq!(
-        reused_sequence, 3,
+        reused_sequence, first_result_sequence,
         "a duplicate observation must reuse the first tool-result message sequence"
     );
 
-    let session_id = hook.session_id().await.expect("session id");
     let history = crate::session::load_history(&node, &session_id)
         .await
         .unwrap();

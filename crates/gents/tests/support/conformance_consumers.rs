@@ -519,11 +519,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract",
+            id: "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
-            function: "generated_r6_backgrounding_cases_pin_tool_backgrounding_contract",
+            function: "generated_r6_backgrounding_cases_drive_tool_backgrounding_contract",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::generated_r5_cross_deployment_cases_drive_production_dispatch",

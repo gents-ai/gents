@@ -32,6 +32,9 @@ def toolCallActions : List (String × ToolExecution.ToolCallContext.Action) :=
   , ("complete", .complete)
   , ("fail_external", .fail .external)
   , ("timeout", .timeout)
+  , ("background", .background)
+  , ("foreground", .foreground)
+  , ("detach", .detach)
   , ("holdForApproval", .holdForApproval)
   , ("recordApproval_approved", .recordApproval .approved)
   , ("recordApproval_denied", .recordApproval .denied)
@@ -60,6 +63,12 @@ def toolCallApprovalSamples : List ToolExecution.ToolCallContext :=
   [ { toolCallWithState .awaitingApproval with approval := some .approved }
   , { toolCallWithState .awaitingApproval with approval := some .denied }
   ]
+
+/-- Mode evidence for the executable `foreground` arm. The ordinary running
+sample starts in foreground/cascade and already exercises `background` and
+`detach`; this sample closes the inverse mode-flip row. -/
+def toolCallModeSamples : List ToolExecution.ToolCallContext :=
+  [ { toolCallWithState .running with awaitMode := .background } ]
 
 /-- Named transition rows for the ToolCall machine.
 
@@ -142,7 +151,8 @@ def toolCallMachine : StateMachineContract :=
       (terminalNames toolCallStates ToolExecution.ToolCallState.toDefraDB)
       (actionNames toolCallActions)
       (transitionPairsFromSamples
-        (toolCallStates.map toolCallWithState ++ toolCallApprovalSamples)
+        (toolCallStates.map toolCallWithState ++ toolCallApprovalSamples ++
+          toolCallModeSamples)
         toolCallActions
         ToolExecution.ToolCallContext.step?
         (fun call => call.state.toDefraDB))

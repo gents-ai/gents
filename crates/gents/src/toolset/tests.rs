@@ -137,13 +137,13 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
-            READ_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
+    assert!(!names.contains(&"read_subagent".to_string()));
     assert!(!names.contains(&"steer_subagent".to_string()));
 
-    let steering_disabled = SubagentToolConfig {
+    let background_without_steering = SubagentToolConfig {
         targets: subagent_targets("worker"),
         spawn_enabled: true,
         steering_enabled: false,
@@ -152,11 +152,12 @@ fn subagent_tool_names_are_gated_by_spawn_and_targets() {
         allow_cross_deployment: false,
     };
     assert_eq!(
-        subagent_tool_names(&steering_disabled),
+        subagent_tool_names(&background_without_steering),
         vec![
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
+            READ_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );
@@ -396,7 +397,6 @@ async fn subagent_tool_definitions_register_expected_surface() {
             SPAWN_SUBAGENT_TOOL_NAME.to_string(),
             WAIT_SUBAGENT_TOOL_NAME.to_string(),
             LIST_SUBAGENTS_TOOL_NAME.to_string(),
-            READ_SUBAGENT_TOOL_NAME.to_string(),
             CANCEL_SUBAGENT_TOOL_NAME.to_string()
         ]
     );

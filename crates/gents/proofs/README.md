@@ -166,7 +166,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
-| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
+| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, and per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
@@ -715,7 +715,8 @@ Model → conformance → Rust bindings:
   `ToolCallLifecycle::bridge_cancel_cascade`.
 - **Native tool leg (boundary)** — the childless R6 row's lifecycle is the
   single-row `ToolExecution` machine (executable via
-  `ToolExecution.Executable.step?`): Rust `bridge_complete` on a
+  `ToolExecution.Executable.step?`, including `background`, `foreground`, and
+  `detach` mode/policy actions): Rust `bridge_complete` on a
   `new_background_tool` row refines `ToolExecution.Transition.complete`,
   `bridge_failure(Interrupted)` refines `cancelDuringRun`, and
   `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
@@ -723,6 +724,19 @@ Model → conformance → Rust bindings:
   `Proofs/Background/Bridge.lean` carries only the terminal-projection
   vocabulary for that leg; the paired `BridgedState` transitions are
   subagent-only by design.
+- **Terminal completion → next agent turn (#937)** —
+  `Proofs/Background/CompletionContinuation.lean` composes the terminal
+  parent-visible tool state, ordinary user-role transcript append, canonical
+  `background_completion:<session>` coalesced wake, and FIFO claim. Its
+  `claimed_continuation_sees_terminal_notification` theorem makes the
+  provider-facing acceptance property explicit: a continuation can only be
+  built after notification persistence, and claiming it retains that message
+  in the parent transcript. The executable canonical path emits
+  `terminal_completion_message_precedes_claimed_continuation` in
+  `r6_backgrounding_cases`; the Rust consumer projects a real background
+  subagent completion, verifies the message and wake, releases the active
+  parent, claims the wake through `DefraWatcher`, and verifies the message is
+  still present.
 - **Wake coalescing** — `Proofs/Session/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
   queue-source rows in `r6_backgrounding_cases` and the R4c steering

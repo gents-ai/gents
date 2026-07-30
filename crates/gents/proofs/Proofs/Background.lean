@@ -4,6 +4,7 @@ import Proofs.Background.Transition
 import Proofs.Background.Properties
 import Proofs.Background.Executable
 import Proofs.Background.ToolOutput
+import Proofs.Background.CompletionContinuation
 
 /-!
 # Subagent

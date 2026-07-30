@@ -34,6 +34,8 @@ struct BackgroundTheoremToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    lifecycle_state: Option<String>,
+    result: Option<String>,
     cancel_cause: Option<String>,
     cancel_cascade_intent_at: Option<String>,
 }
@@ -327,6 +329,8 @@ async fn fetch_background_theorem_tool_call(
                 await_mode
                 cancel_policy
                 child_request_id
+                lifecycle_state
+                result
                 cancel_cause
                 cancel_cascade_intent_at
             }}
@@ -510,9 +514,9 @@ async fn wait_for_background_theorem_child_lifecycle_state(
     }
 }
 
-pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
+pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 9);
 
     let names = cases
         .iter()
@@ -523,10 +527,12 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
         [
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
+            "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
             "tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
+            "terminal_completion_message_precedes_claimed_continuation",
             "legacy_subagent_completion_source_aliases_canonical_key",
         ]
         .into_iter()
@@ -563,6 +569,11 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
     assert_eq!(cancelled.terminal_state.as_str(), "cancelled");
     assert_eq!(cancelled.reason.as_deref(), Some("parent_cancelled"));
 
+    let backgrounded = lean_r6_backgrounding_case("tool_kind_background_mode_executes");
+    assert!(backgrounded.legal);
+    assert_eq!(backgrounded.action.as_str(), "background");
+    assert_eq!(backgrounded.terminal_state.as_str(), "running");
+
     let recovered =
         lean_r6_backgrounding_case("background_recovery_running_live_parent_to_cancelled");
     assert_eq!(
@@ -571,6 +582,14 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
     );
     assert_eq!(recovered.terminal_state.as_str(), "cancelled");
     assert_eq!(recovered.reason.as_deref(), Some("interrupted_on_restart"));
+    assert_eq!(
+        recovered.queue_source.as_deref(),
+        Some("background_completion")
+    );
+    assert_eq!(
+        recovered.queue_key.as_deref(),
+        Some("background_completion:900")
+    );
 
     let canonical = lean_r6_backgrounding_case("background_completion_source_writes_canonical_key");
     assert_eq!(
@@ -586,6 +605,301 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
     assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+
+    for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
+        drive_r6_native_lifecycle_case(case).await;
+    }
+
+    let continuation =
+        lean_r6_backgrounding_case("terminal_completion_message_precedes_claimed_continuation");
+    drive_r6_completion_continuation_case(continuation).await;
+}
+
+#[derive(Debug, Deserialize)]
+struct CompletionWakeRow {
+    request_id: String,
+    lifecycle_state: Option<String>,
+    metadata: Option<String>,
+}
+
+async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<CompletionWakeRow> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }}
+                    execution_origin: {{ _eq: "scheduled" }}
+                }}
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                lifecycle_state
+                metadata
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch completion wakes failed: {:?}",
+        response.errors
+    );
+    let data = response.data.expect("completion wake query data");
+    serde_json::from_value(data["AgentRequest"].clone()).expect("parse completion wake rows")
+}
+
+async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
+    use gents::background_completion::{
+        project_background_subagent_completion, BackgroundCompletionOutcome,
+    };
+
+    assert!(case.legal, "composed Lean acceptance path must execute");
+    assert_eq!(case.action, "terminalize_append_notification_enqueue_claim");
+    assert_eq!(case.terminal_state, "completed");
+    assert_eq!(
+        case.result.as_deref(),
+        Some("assistant_wait_precedes_notification")
+    );
+    assert_eq!(case.reason.as_deref(), Some("continuation_claimed"));
+    assert_eq!(case.queue_source.as_deref(), Some("background_completion"));
+
+    let bridge_case = lean_bridge_step_cases()
+        .iter()
+        .find(|candidate| candidate.name == "bridge_step_complete_child_completed")
+        .expect("generated completed bridge case");
+    let (db, _lifecycle, _tool_call_id, child_request_id, parent_session_id) =
+        seed_bridge_step_fixture(bridge_case).await;
+    let parent_request_id = format!("{}-parent", bridge_case.name);
+    let child_session_id = fetch_child_session_id(db.node.as_ref(), &child_request_id).await;
+
+    // Materialize the model-visible wait call before the child terminalizes.
+    // This is the durable sequence reservation represented by the composed
+    // Lean witness.
+    let wait_message = serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "r6-wait-result".to_string(),
+            call_id: Some("r6-wait-call".to_string()),
+            function: ToolFunction {
+                name: "wait_subagent".to_string(),
+                arguments: json!({ "child_request_id": child_request_id }),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .expect("serialize wait assistant message");
+    let escaped_session_id = escape_graphql_string(&parent_session_id);
+    let escaped_request_id = escape_graphql_string(&parent_request_id);
+    let escaped_wait_message = escape_graphql_string(&wait_message);
+    let reserve = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{escaped_session_id}:1"
+                    session_id: "{escaped_session_id}"
+                    agent_did: "{AGENT_DID}"
+                    request_id: "{escaped_request_id}"
+                    sequence: 1
+                    role: "assistant"
+                    content: "{escaped_wait_message}"
+                    reasoning: ""
+                    timestamp: "2026-05-19T00:00:02Z"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !reserve.has_errors(),
+        "reserve assistant wait row failed: {:?}",
+        reserve.errors
+    );
+
+    persist_bridge_step_child_completion(db.node.as_ref(), &child_request_id, &child_session_id)
+        .await;
+
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .expect("project terminal background completion");
+    assert!(
+        matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
+        "terminal bridge must project before continuation: {outcome:?}"
+    );
+
+    let messages_before_claim =
+        fetch_message_snapshots_for_session(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(
+        messages_before_claim.len(),
+        2,
+        "reserved assistant wait and terminal notification must both remain durable"
+    );
+    assert_eq!(messages_before_claim[0].role, "assistant");
+    assert!(
+        messages_before_claim[0]
+            .content
+            .contains("\"wait_subagent\""),
+        "model-visible wait envelope missing: {:?}",
+        messages_before_claim[0].content
+    );
+    assert_eq!(messages_before_claim[1].role, "user");
+    assert!(
+        messages_before_claim[1]
+            .content
+            .contains("<subagent-notification"),
+        "model-visible completion envelope missing: {:?}",
+        messages_before_claim[1].content
+    );
+    assert!(
+        messages_before_claim[0].sequence < messages_before_claim[1].sequence,
+        "assistant wait must precede its terminal notification: {messages_before_claim:#?}"
+    );
+
+    let wakes = fetch_completion_wakes(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(wakes.len(), 1, "one completion must enqueue one wake");
+    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
+    let metadata: Value =
+        serde_json::from_str(wakes[0].metadata.as_deref().expect("wake metadata"))
+            .expect("wake metadata JSON");
+    assert_eq!(metadata["queue"]["source"], "background_completion");
+    assert_eq!(metadata["queue"]["policy"], "coalesce");
+    assert_eq!(
+        metadata["queue"]["key"],
+        format!("background_completion:{parent_session_id}")
+    );
+    assert_eq!(
+        case.queue_key.as_deref(),
+        Some("background_completion:900"),
+        "Lean uses opaque session 900 as the canonical runtime-key representative"
+    );
+
+    // The foreground parent owns the session until terminal. Its completion
+    // releases the FIFO head, after which the normal watcher claims the
+    // generated wake as the next agent turn.
+    set_request_status_lifecycle_by_request_id(
+        db.node.as_ref(),
+        &parent_request_id,
+        "completed",
+        "completed",
+    )
+    .await;
+    let mut watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+        .await
+        .expect("completion wake should become claimable")
+        .expect("watcher should remain open")
+        .expect("completion wake should load");
+    assert_eq!(claimed.request_id, wakes[0].request_id);
+    assert_eq!(claimed.session_id, parent_session_id);
+
+    let messages_after_claim =
+        fetch_message_snapshots_for_session(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(
+        messages_after_claim, messages_before_claim,
+        "claiming the continuation must retain the notification provider history"
+    );
+}
+
+async fn drive_r6_native_lifecycle_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
+    let db = test_db(&format!("r6-native-lifecycle-{}", case.name)).await;
+    let request_id = format!("{}-request", case.name);
+    let session_id = format!("{}-session", case.name);
+    let tool_call_id = format!("{}-tool", case.name);
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    let mut lifecycle = if case.action == "background" {
+        ToolCallLifecycle::new(
+            db.node.clone(),
+            request_id,
+            session_id.clone(),
+            AGENT_DID.to_string(),
+            tool_call_id.clone(),
+            1,
+            "bash_unrestricted".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    } else {
+        ToolCallLifecycle::new_background_tool(
+            db.node.clone(),
+            request_id,
+            session_id.clone(),
+            AGENT_DID.to_string(),
+            tool_call_id.clone(),
+            1,
+            "bash_unrestricted".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    };
+    lifecycle
+        .start_running()
+        .await
+        .unwrap_or_else(|error| panic!("{} start_running failed: {error:#}", case.name));
+
+    match case.action.as_str() {
+        "background" => lifecycle.background().await.unwrap(),
+        "bridge_complete" => {
+            assert!(
+                lifecycle
+                    .bridge_complete(case.result.clone().unwrap_or_default())
+                    .await
+                    .unwrap(),
+                "{} must win the running-state compare",
+                case.name
+            );
+        }
+        "bridge_failure" => {
+            assert!(
+                lifecycle
+                    .bridge_failure(gents::tool_call_lifecycle::ChildTerminal::Interrupted)
+                    .await
+                    .unwrap(),
+                "{} must win the running-state compare",
+                case.name
+            );
+        }
+        other => panic!("unhandled native lifecycle action {other}"),
+    }
+
+    let row =
+        fetch_background_theorem_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(
+        row.await_mode.as_deref(),
+        Some(case.await_mode.as_str()),
+        "{} await mode drifted",
+        case.name
+    );
+    assert_eq!(
+        row.cancel_policy.as_deref(),
+        Some(case.cancel_policy.as_str()),
+        "{} cancel policy drifted",
+        case.name
+    );
+    assert_eq!(
+        row.child_request_id.as_deref(),
+        case.child_request_id.as_deref(),
+        "{} child-link kind drifted",
+        case.name
+    );
+    assert_eq!(
+        row.lifecycle_state.as_deref(),
+        Some(case.terminal_state.as_str()),
+        "{} lifecycle projection drifted",
+        case.name
+    );
+    if let Some(expected) = case.result.as_deref() {
+        assert_eq!(row.result.as_deref(), Some(expected), "{}", case.name);
+    }
+    if case.action == "bridge_failure" {
+        assert_eq!(
+            row.cancel_cause.as_deref(),
+            Some("interrupted"),
+            "{} cancellation cause drifted",
+            case.name
+        );
+    }
 }
 
 pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {

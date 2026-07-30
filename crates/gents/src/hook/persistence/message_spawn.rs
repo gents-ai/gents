@@ -1,8 +1,84 @@
 use super::*;
 
 impl DefraSessionHook {
+    /// Persist the assistant tool-call envelope before inline execution can
+    /// block. Background completion is appended by an independent task that
+    /// allocates from durable transcript state; without this row it can reuse
+    /// the hook's in-memory assistant sequence and the later upsert overwrites
+    /// the notification (#945).
+    ///
+    /// Repeated snapshots in one assistant turn update the same row so
+    /// providers that emit several tool calls still materialize one assistant
+    /// message containing the accumulated calls.
+    pub(crate) async fn persist_inflight_assistant_turn(
+        &self,
+        message: &Message,
+    ) -> anyhow::Result<u32> {
+        if !matches!(message, Message::Assistant { .. }) {
+            anyhow::bail!("in-flight assistant persistence requires an assistant message");
+        }
+
+        let content = serde_json::to_string(message)?;
+        let reasoning = gents_protocol::transcript::extract_message_reasoning(message);
+        let (session_id, building_sequence, current_request_id, current_requester_did) = {
+            let state = self.state.lock().await;
+            let session_id = state
+                .session_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            let building_sequence = match state.transcript_turn {
+                TranscriptTurnState::AssistantBuilding { sequence } => Some(sequence),
+                TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => None,
+            };
+            (
+                session_id,
+                building_sequence,
+                state.current_request_id.clone(),
+                state.current_requester_did.clone(),
+            )
+        };
+
+        let sequence = match building_sequence {
+            Some(sequence) => {
+                session::save_message_with_requester_did(
+                    &self.node,
+                    &session_id,
+                    &self.agent_did,
+                    current_requester_did.as_deref(),
+                    sequence,
+                    "assistant",
+                    &content,
+                    reasoning.as_deref(),
+                )
+                .await?;
+                sequence
+            }
+            None => {
+                session::append_message_with_requester_did(
+                    &self.node,
+                    &session_id,
+                    &self.agent_did,
+                    current_requester_did.as_deref(),
+                    "assistant",
+                    &content,
+                    reasoning.as_deref(),
+                    current_request_id.as_deref(),
+                )
+                .await?
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        if state.session_id.as_deref() == Some(session_id.as_str()) {
+            state.sequence = state.sequence.max(sequence);
+            state.transcript_turn = TranscriptTurnState::AssistantBuilding { sequence };
+        }
+        Ok(sequence)
+    }
+
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
         let content = serde_json::to_string(message)?;
+        let tool_result_aliases = persisted_tool_result_message_aliases(message);
         // #492: durably persist the assistant turn's chain-of-thought reasoning
         // into `AgentMessage.reasoning` at materialize time. The reasoning is
         // already embedded in the serialized `content` blob, but we extract a
@@ -19,6 +95,7 @@ impl DefraSessionHook {
             existing_sequence,
             current_request_id,
             current_requester_did,
+            preferred_sequence,
         ) = {
             let state = self.state.lock().await;
             let session_id = state
@@ -29,6 +106,11 @@ impl DefraSessionHook {
             let existing_sequence = message_key
                 .as_ref()
                 .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
+                .or_else(|| {
+                    tool_result_aliases
+                        .iter()
+                        .find_map(|alias| state.persisted_tool_result_message_sequences.get(alias))
+                })
                 .copied();
             (
                 session_id,
@@ -37,6 +119,7 @@ impl DefraSessionHook {
                 existing_sequence,
                 state.current_request_id.clone(),
                 state.current_requester_did.clone(),
+                state.sequence.checked_add(1),
             )
         };
 
@@ -65,7 +148,46 @@ impl DefraSessionHook {
             }
         }
 
-        if matches!(turn_state, TranscriptTurnState::Idle) {
+        // Tool-result rows have a stable logical key, but their sequence must
+        // still be allocated from the durable transcript. An in-memory
+        // `state.sequence += 1` can race an independently appended background
+        // notification and create duplicate sequence numbers.
+        if let Some(message_key) = message_key.as_ref() {
+            if !matches!(message, Message::User { .. }) {
+                anyhow::bail!("only user tool-result messages may carry a message key");
+            }
+            let sequence = session::append_message_with_key_and_requester_did(
+                &self.node,
+                &session_id,
+                &self.agent_did,
+                current_requester_did.as_deref(),
+                "user",
+                &content,
+                reasoning,
+                current_request_id.as_deref(),
+                message_key,
+                preferred_sequence,
+            )
+            .await?;
+            let mut state = self.state.lock().await;
+            if state.session_id.as_deref() == Some(session_id.as_str()) {
+                state.sequence = state.sequence.max(sequence);
+                state
+                    .persisted_tool_result_message_sequences
+                    .insert(message_key.clone(), sequence);
+                for alias in &tool_result_aliases {
+                    state
+                        .persisted_tool_result_message_sequences
+                        .insert(alias.clone(), sequence);
+                }
+            }
+            return Ok(sequence);
+        }
+
+        let append_unreserved = matches!(turn_state, TranscriptTurnState::Idle)
+            || (matches!(message, Message::Assistant { .. })
+                && matches!(turn_state, TranscriptTurnState::AssistantPersisted { .. }));
+        if append_unreserved {
             let role = match message {
                 Message::User { .. } => "user",
                 Message::Assistant { .. } => "assistant",
@@ -87,17 +209,8 @@ impl DefraSessionHook {
             let mut state = self.state.lock().await;
             if state.session_id.as_deref() == Some(session_id.as_str()) {
                 state.sequence = state.sequence.max(sequence);
-                let is_tool_result_message = message_key.is_some();
-                if let Some(key) = message_key {
-                    state
-                        .persisted_tool_result_message_sequences
-                        .insert(key, sequence);
-                }
                 match message {
-                    Message::User { .. } if !is_tool_result_message => {
-                        state.reset_after_user_message()
-                    }
-                    Message::User { .. } => {}
+                    Message::User { .. } => state.reset_after_user_message(),
                     Message::Assistant { .. } => {
                         state.transcript_turn =
                             TranscriptTurnState::AssistantPersisted { sequence };
@@ -108,36 +221,23 @@ impl DefraSessionHook {
             return Ok(sequence);
         }
 
-        let (session_id, sequence, role, message_key) = {
+        let (session_id, sequence, role) = {
             let mut state = self.state.lock().await;
             let session_id = state
                 .session_id
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-            if let Some(existing_sequence) = message_key
-                .as_ref()
-                .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
-            {
-                return Ok(*existing_sequence);
-            }
 
             match message {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
-                    if message_key.is_none() {
-                        state.reset_after_user_message();
-                    }
-                    if let Some(key) = message_key.as_ref() {
-                        state
-                            .persisted_tool_result_message_sequences
-                            .insert(key.clone(), sequence);
-                    }
-                    (session_id, sequence, "user", message_key)
+                    state.reset_after_user_message();
+                    (session_id, sequence, "user")
                 }
                 Message::Assistant { .. } => {
                     let sequence = state.persist_assistant_turn();
-                    (session_id, sequence, "assistant", None)
+                    (session_id, sequence, "assistant")
                 }
                 Message::System { .. } => {
                     anyhow::bail!("system messages are not persisted in session history");
@@ -145,35 +245,17 @@ impl DefraSessionHook {
             }
         };
 
-        match message_key {
-            Some(message_key) => {
-                session::save_message_with_key_and_requester_did(
-                    &self.node,
-                    &session_id,
-                    &self.agent_did,
-                    current_requester_did.as_deref(),
-                    sequence,
-                    role,
-                    &content,
-                    reasoning,
-                    &message_key,
-                )
-                .await?;
-            }
-            None => {
-                session::save_message_with_requester_did(
-                    &self.node,
-                    &session_id,
-                    &self.agent_did,
-                    current_requester_did.as_deref(),
-                    sequence,
-                    role,
-                    &content,
-                    reasoning,
-                )
-                .await?;
-            }
-        }
+        session::save_message_with_requester_did(
+            &self.node,
+            &session_id,
+            &self.agent_did,
+            current_requester_did.as_deref(),
+            sequence,
+            role,
+            &content,
+            reasoning,
+        )
+        .await?;
         Ok(sequence)
     }
 
@@ -760,6 +842,30 @@ impl DefraSessionHook {
             SubagentTargetHost::Remote
         }
     }
+}
+
+fn persisted_tool_result_message_aliases(message: &Message) -> Vec<String> {
+    let Message::User { content } = message else {
+        return Vec::new();
+    };
+    if content.len() != 1 {
+        return Vec::new();
+    }
+    let Some(UserContent::ToolResult(tool_result)) = content.first() else {
+        return Vec::new();
+    };
+
+    let mut aliases = Vec::new();
+    if !tool_result.id.is_empty() {
+        aliases.push(format!("result:{}", tool_result.id));
+    }
+    if let Some(call_id) = tool_result.call_id.as_deref().filter(|id| !id.is_empty()) {
+        let alias = format!("call:{call_id}");
+        if !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    aliases
 }
 
 fn is_missing_tool_call_result(error: &anyhow::Error) -> bool {

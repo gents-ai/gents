@@ -693,7 +693,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")
+      "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r5_cross_deployment_cases"

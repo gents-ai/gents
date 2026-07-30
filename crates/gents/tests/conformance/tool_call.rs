@@ -190,6 +190,12 @@ fn lean_emits_approval_actions_in_tool_call_machine() {
 #[test]
 fn lean_emits_bridge_transitions_in_tool_call_machine() {
     let machine = lean_state_machine_contract("ToolCall");
+    for action in ["background", "foreground", "detach"] {
+        assert!(
+            machine.actions.iter().any(|candidate| candidate == action),
+            "Lean executable ToolCall actions must include {action:?}"
+        );
+    }
     let bridge_names: Vec<&str> = vec![
         "background",
         "foreground",

@@ -21,7 +21,8 @@ use gents::tool_call_lifecycle::{
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
     write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
-    DefraStreamWriter, FailurePolicy, InferenceCall, RequestLifecycle, ToolSelectionDocument,
+    DefraStreamWriter, DefraWatcher, FailurePolicy, InferenceCall, RequestLifecycle,
+    ToolSelectionDocument, Watcher,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -225,9 +226,9 @@ async fn drain_wakeups_never_interrupts_foreign_replica() {
     replicated_request_convergence::drain_wakeups_never_interrupts_foreign_replica().await;
 }
 
-#[test]
-fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
-    background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
+#[tokio::test]
+async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
+    background::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract().await;
 }
 
 #[tokio::test]
