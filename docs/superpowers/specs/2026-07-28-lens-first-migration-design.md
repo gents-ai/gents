@@ -327,8 +327,8 @@ that any bypass creates a divergent lineage:
   out-of-band `ensure_agent_behavior_migrations` inside
   `Gents::from_default_behavior_documents` (`agent.rs:163`).
 - The entry point tolerates databases where target collections don't yet
-  exist (the CLI runs migrations even when `ensure_local_schemas` is false) —
-  absent collections are bootstrapped, never `UnknownLineage`.
+  exist (the CLI runs migrations on every embedded-node access path) — absent
+  collections are bootstrapped, never `UnknownLineage`.
 - Test helpers (~246 `ensure_*schemas` call sites, mostly `#[cfg(test)]`)
   route through the same entry point via one shared test-support function.
 - `gents init`'s six-collection `CONFIG_BOOTSTRAP` subset is replaced by the
