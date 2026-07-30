@@ -45,6 +45,8 @@ const COMMANDS: &[&str] = &[
     "desktop_probe_inference_endpoint",
     "desktop_codex_login",
     "desktop_codex_login_cancel",
+    "desktop_grok_login",
+    "desktop_grok_login_cancel",
     "desktop_task_save",
     "desktop_schedule_save",
     "desktop_schedule_run",

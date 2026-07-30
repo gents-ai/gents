@@ -255,3 +255,145 @@ pub(crate) fn desktop_codex_login_cancel(
     }
     Ok(())
 }
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GrokLoginRequest {
+    pub agent_did: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
+/// Redacted credential metadata for the webview (tokens never cross the bridge).
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GrokLoginResult {
+    pub doc_id: String,
+    pub credential_id: String,
+    pub agent_did: String,
+    pub provider: String,
+    pub access_token_expires_at: String,
+    pub enabled: bool,
+}
+
+impl GrokLoginResult {
+    fn redacted(doc_id: String, credential: &OAuthCredential) -> Self {
+        Self {
+            doc_id,
+            credential_id: credential.credential_id.clone(),
+            agent_did: credential.agent_did.clone(),
+            provider: credential.provider.clone(),
+            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
+            enabled: credential.enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GrokLoginUrl {
+    pub url: String,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_grok_login<R: Runtime>(
+    app: AppHandle<R>,
+    request: GrokLoginRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<GrokLoginResult, BridgeError> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use gents::oauth_credential::upsert_oauth_credential;
+    use gents::xai_grok_oauth::normalize_provider as normalize_xai_provider;
+    use gents::xai_oauth_login::{
+        credential_from_login_tokens, run_device_code_login_with_url_callback,
+    };
+
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::from_legacy_message(
+            "desktop client is not running",
+        ));
+    };
+    let agent_did = request.agent_did.trim().to_string();
+    if agent_did.is_empty() {
+        return Err(BridgeError::from_legacy_message("agent_did is required"));
+    }
+    let provider = normalize_xai_provider(request.provider.as_deref().unwrap_or_default());
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.grok_login_cancel = Some(cancel.clone());
+    }
+
+    let http = reqwest::Client::new();
+    let app_for_url = app.clone();
+    let login = tokio::time::timeout(
+        CODEX_LOGIN_TIMEOUT,
+        run_device_code_login_with_url_callback(&http, Some(cancel.clone()), move |url| {
+            let _ = app_for_url.emit(
+                "desktop://grok-login-url",
+                GrokLoginUrl {
+                    url: url.to_string(),
+                },
+            );
+        }),
+    )
+    .await;
+
+    {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.grok_login_cancel = None;
+    }
+
+    let tokens = match login {
+        Ok(Ok(tokens)) => tokens,
+        Ok(Err(error)) => {
+            return Err(BridgeError::from_legacy_message(format!(
+                "Grok device-code login failed: {error}"
+            )));
+        }
+        Err(_elapsed) => {
+            cancel.store(true, Ordering::SeqCst);
+            return Err(BridgeError::from_legacy_message(
+                "Grok sign-in timed out waiting for browser approval",
+            ));
+        }
+    };
+
+    let credential =
+        credential_from_login_tokens(&agent_did, &provider, &tokens, chrono::Utc::now());
+    let node = core.node_arc();
+    let doc_id = upsert_oauth_credential(&node, &credential)
+        .await
+        .map_err(|error| {
+            BridgeError::from_legacy_message(format!("storing Grok credential: {error}"))
+        })?;
+
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent { reason: "config" },
+    );
+
+    Ok(GrokLoginResult::redacted(doc_id, &credential))
+}
+
+#[tauri::command]
+pub(crate) fn desktop_grok_login_cancel(
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    use std::sync::atomic::Ordering;
+
+    let flag = {
+        let mut bridge = state
+            .bridge
+            .lock()
+            .map_err(|_| BridgeError::from_legacy_message("desktop bridge lock poisoned"))?;
+        bridge.grok_login_cancel.take()
+    };
+    if let Some(flag) = flag {
+        flag.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}

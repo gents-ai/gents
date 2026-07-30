@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-grok-login"
+description = "Enables the desktop_grok_login command without any pre-configured scope."
+commands.allow = ["desktop_grok_login"]
+
+[[permission]]
+identifier = "deny-desktop-grok-login"
+description = "Denies the desktop_grok_login command without any pre-configured scope."
+commands.deny = ["desktop_grok_login"]

@@ -487,6 +487,30 @@
           "markdownDescription": "Denies the desktop_event_trigger_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_grok_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-grok-login",
+          "markdownDescription": "Enables the desktop_grok_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_grok_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-grok-login",
+          "markdownDescription": "Denies the desktop_grok_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_grok_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-grok-login-cancel",
+          "markdownDescription": "Enables the desktop_grok_login_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_grok_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-grok-login-cancel",
+          "markdownDescription": "Denies the desktop_grok_login_cancel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_inference_profile_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-inference-profile-delete",

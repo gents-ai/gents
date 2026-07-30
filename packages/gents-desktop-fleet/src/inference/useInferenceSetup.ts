@@ -5,16 +5,20 @@ import type {
   BehaviorSaveRequest,
   CodexLoginResult,
   DeploymentView,
+  GrokLoginResult,
   InferenceProbeResult,
 } from "@source-inc/gents-desktop-client";
 import {
   CODEX_DEFAULT_MODEL,
   CODEX_ENDPOINT,
+  GROK_DEFAULT_MODEL,
+  GROK_ENDPOINT,
   LOCAL_PROBE_URLS,
   OLLAMA_DEFAULT_URL,
   OPENAI_DEFAULT_MODEL,
   OPENAI_ENDPOINT,
   PROVIDER_CODEX,
+  PROVIDER_GROK,
   PROVIDER_OPENAI,
   WIRE_CHAT_COMPLETIONS,
   WIRE_RESPONSES,
@@ -39,6 +43,11 @@ export type InferenceSetupOptions = {
   onCodexLoginUrl?: (
     onUrl: (url: string | null) => void,
   ) => Promise<() => void>;
+  onGrokLogin?: (agentDid: string) => Promise<GrokLoginResult>;
+  onCancelGrokLogin?: () => Promise<unknown>;
+  onGrokLoginUrl?: (
+    onUrl: (url: string | null) => void,
+  ) => Promise<() => void>;
 };
 
 export function useInferenceSetup({
@@ -50,6 +59,9 @@ export function useInferenceSetup({
   onCodexLogin,
   onCancelCodexLogin,
   onCodexLoginUrl,
+  onGrokLogin,
+  onCancelGrokLogin,
+  onGrokLoginUrl,
 }: InferenceSetupOptions) {
   const targets = resolveTargets(deployment);
   const [step, setStep] = useState<WizardStep>("choose");
@@ -101,13 +113,18 @@ export function useInferenceSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [grokAuthUrl, setGrokAuthUrl] = useState<string | null>(null);
+  const [grokResult, setGrokResult] = useState<GrokLoginResult | null>(null);
+
   const cancelAndClose = useCallback(() => {
     if (signingIn) {
       void Promise.resolve(onCancelCodexLogin?.()).catch(() => {
       });
+      void Promise.resolve(onCancelGrokLogin?.()).catch(() => {
+      });
     }
     onClose();
-  }, [signingIn, onCancelCodexLogin, onClose]);
+  }, [signingIn, onCancelCodexLogin, onCancelGrokLogin, onClose]);
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -243,6 +260,38 @@ export function useInferenceSetup({
     }
   }
 
+  async function signInWithGrok() {
+    if (!onGrokLogin) {
+      setError("Grok login is not available in this build");
+      return;
+    }
+    setSubmitting(true);
+    setSigningIn(true);
+    setError(null);
+    setGrokAuthUrl(null);
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await onGrokLoginUrl?.(setGrokAuthUrl);
+      const result = await onGrokLogin(deployment.agentDid);
+      setGrokResult(result);
+      await persistBackend({
+        name: backendName("Grok subscription"),
+        providerKind: PROVIDER_GROK,
+        endpoint: GROK_ENDPOINT,
+        models: [GROK_DEFAULT_MODEL],
+        clearApiKey: true,
+      });
+      setDone(`Grok · ${GROK_DEFAULT_MODEL}`);
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      unlisten?.();
+      setGrokAuthUrl(null);
+      setSigningIn(false);
+      setSubmitting(false);
+    }
+  }
+
   function backToOptions() {
     setError(null);
     setStep("choose");
@@ -257,6 +306,8 @@ export function useInferenceSetup({
     detection,
     done,
     error,
+    grokAuthUrl,
+    grokResult,
     localModel,
     localUrl,
     openaiKey,
@@ -276,6 +327,7 @@ export function useInferenceSetup({
     setOpenaiModel,
     setStep,
     signInWithChatGpt,
+    signInWithGrok,
     submitCustom,
     submitLocal,
     submitOpenai,

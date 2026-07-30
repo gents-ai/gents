@@ -15,6 +15,8 @@ const inferenceProps = {
   onProbeInferenceEndpoint: vi.fn(async () => ({ reachable: false, models: [] })),
   onCodexLogin: vi.fn(),
   onCancelCodexLogin: vi.fn(async () => undefined),
+  onGrokLogin: vi.fn(),
+  onCancelGrokLogin: vi.fn(async () => undefined),
 };
 
 const bootstrap: BootstrapSummary = {

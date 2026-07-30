@@ -440,6 +440,58 @@ Denies the desktop_event_trigger_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-grok-login`
+
+</td>
+<td>
+
+Enables the desktop_grok_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-grok-login`
+
+</td>
+<td>
+
+Denies the desktop_grok_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-grok-login-cancel`
+
+</td>
+<td>
+
+Enables the desktop_grok_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-grok-login-cancel`
+
+</td>
+<td>
+
+Denies the desktop_grok_login_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-inference-profile-delete`
 
 </td>
