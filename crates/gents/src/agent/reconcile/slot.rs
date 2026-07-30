@@ -322,6 +322,7 @@ async fn run_slot_loop<F, Fut>(
         if *shutdown.borrow() || *state_rx.borrow() == BehaviorSlotState::Retiring {
             return;
         }
+        // A sibling worker may have spent the budget already; a demoted slot
         // must not keep rebuilding against a verdict that is already final.
         if standing
             .lock()

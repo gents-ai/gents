@@ -1,4 +1,3 @@
-// Soft-cap justified: six filesystem tool structs (list, read, write, edit,
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -21,7 +20,15 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// Per-path serialization for FILE MUTATORS — edit_file's read →
+/// hash-check → match → write sequence AND write_file's overwrite share it:
+/// without it, a concurrent mutation can land inside edit_file's validated
+/// window and be silently overwritten (lost update). Scope: WITHIN this
+/// process, keyed by canonical path (falling back to the resolved path for
+/// not-yet-existing files). External writers are outside the lock — they
+/// are caught by the expected_content_hash check at entry and otherwise
 /// race as ordinary last-writer-wins POSIX writes (#724 documents the
+/// optimistic-concurrency boundary; there is no OS-level file lock).
 static FILE_MUTATION_LOCKS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -582,6 +589,7 @@ impl Tool for EditFileTool {
         };
 
         // Strict UTF-8: a lossy conversion followed by a full-file rewrite
+        // would silently replace every invalid byte with U+FFFD.
         let raw_text = String::from_utf8(raw).map_err(|error| {
             anyhow!(
                 "{display} is not valid UTF-8 (first invalid byte at offset {}); edit_file only edits UTF-8 text files",

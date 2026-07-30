@@ -61,7 +61,10 @@ pub trait PairingStateStore: Send + Sync {
         Ok(())
     }
 
+    /// Called once at the start of each sweep, before the per-peer loop. Lets a
+    /// store amortize per-sweep work (e.g. computing the membership-materializable
     /// set once instead of re-verifying every signature for every peer — the
+    /// O(N²) the naive per-peer gate would do). Default is a no-op.
     async fn begin_sweep(&self) -> Result<()> {
         Ok(())
     }
@@ -213,7 +216,15 @@ async fn reconcile_prepared_peer(
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
+    // #664 residual convergence: a subagent peer can be partitioned longer
     // than the persisted per-request redrive cap. DefraDB's idempotent
+    // add_replicator path deliberately skips initial replay for an existing
+    // identity, so after a real reconnect force-reinstall every otherwise-
+    // converged subagent replicator. This replays current owner-authored DAG
+    // heads (including arbitrarily old terminal requests) and does not create
+    // any new same-value request history. If the desired identity itself
+    // changed, the ordinary diff already contains teardown+install and is the
+    // replay; avoid doing it twice.
     if (reconnected || force_replay) && desired_state.uses_subagent_template() {
         for address in desired_state
             .replicator_addresses
@@ -306,7 +317,12 @@ async fn run_pairing_reconciler_loop(
     let mut replay_connections = BTreeMap::new();
     let mut failing_peers = BTreeSet::<String>::new();
 
+    // A transient top-level read failure during the first sweep is no more
+    // terminal than one during a recurring sweep. The interval's first tick is
+    // immediately ready, so logging here preserves the prompt startup retry
     // without introducing a separate backoff path. Unlike the registry and
+    // endpoint heartbeat daemons, do not consume that first tick before this
+    // sweep: it is the retry fence if startup hits a transient store error.
     if !sweep_pairings_logged_until_cancelled(
         admin,
         store,
@@ -371,7 +387,10 @@ async fn sweep_pairings_logged_until_cancelled(
     }
 }
 
+/// Run a sweep, logging (not propagating) a transient failure. A failed sweep —
 /// e.g. a momentary `list_peer_ids` read error — must not tear down the whole
+/// reconciler; the next tick retries. Mirrors the discovery / heartbeat daemons,
+/// which also log-and-continue rather than aborting the runtime task.
 async fn sweep_pairings_logged(
     admin: &dyn RemoteP2pAdmin,
     store: &dyn PairingStateStore,
@@ -389,7 +408,9 @@ async fn sweep_pairings(
     replay_connections: &mut BTreeMap<String, bool>,
     failing_peers: &mut BTreeSet<String>,
 ) -> Result<()> {
+    // Amortize the membership-materializable computation across the whole sweep
     // (avoids re-verifying every signature per peer). Non-fatal on failure: the
+    // per-peer gate falls back to a live read.
     store.begin_sweep().await?;
     let preparation_inputs = store
         .list_peer_ids()
@@ -682,7 +703,11 @@ async fn persist_applied(
 pub struct GraphqlPairingStateStore {
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn AgentIdentity>,
+    /// Per-sweep cache of the membership-materializable entries, refreshed by
+    /// [`begin_sweep`](PairingStateStore::begin_sweep). `Some` during a sweep so
     /// the Layer-2 gate verifies every signature ONCE per sweep instead of once
+    /// per peer (avoids O(N²) crypto). `None` ⇒ no cached set, fall back to a
+    /// live read (also the path for the very first read or a refresh failure).
     materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
     reciprocal_materializable_cache: Arc<Mutex<Option<Vec<NetworkEndpointEntry>>>>,
 }
@@ -1008,7 +1033,11 @@ impl PairingStateStore for GraphqlPairingStateStore {
     }
 
     async fn begin_sweep(&self) -> Result<()> {
+        // Compute the membership-materializable set ONCE for this sweep so the
+        // per-peer Layer-2 gate (`data_plane_peer_is_materializable`) reuses it
         // instead of re-verifying every membership/endpoint signature for every
+        // peer (the O(N²) the review flagged). A refresh failure is non-fatal:
+        // clear the cache so the per-peer path falls back to a live read.
         let network = GraphqlNetworkStore::new(self.node.clone(), self.identity.clone());
         let refreshed = match network.load_materializable_entries().await {
             Ok(entries) => Some(entries),

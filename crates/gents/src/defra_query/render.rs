@@ -1,4 +1,7 @@
 //! Rendering and validation of the structured query contract into DefraDB
+//! GraphQL syntax. All field/operator names are validated as identifiers and
+//! all string literals are escaped via [`escape_graphql_string`], so untrusted
+//! input cannot break out of the query.
 
 use anyhow::{bail, Result};
 use serde_json::Value;

@@ -144,6 +144,11 @@ struct SessionState {
 
 impl SessionState {
     /// Reset on a genuine user message only. Tool-result messages must NOT
+    /// reset the turn state: with several parallel tool calls accumulated in
+    /// one persisted assistant turn, the first streamed result's user message
+    /// would otherwise revoke the persisted-turn gate the remaining results
+    /// still need (Lean: `Transcript.parallel_results_complete_independently`;
+    /// `completeToolWithResult` never removes a persisted reservation).
     fn reset_after_user_message(&mut self) {
         self.transcript_turn = TranscriptTurnState::Idle;
     }
@@ -665,6 +670,7 @@ impl DefraSessionHook {
                 format!(", {}", datetime_fields.join(", "))
             };
             // CAS on running: a straggler tick must never stamp telemetry
+            // onto a terminal row.
             let mutation = format!(
                 r#"mutation {{
                     update_AgentToolCall(

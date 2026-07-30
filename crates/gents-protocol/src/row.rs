@@ -1,4 +1,10 @@
 //! Serde mirrors for replicated collection rows.
+//!
+//! These types are deliberately permissive: stable identity keys remain
+//! required, while other nullable scalars are wrapped in `Option<T>` because
+//! DefraDB may omit unpopulated fields from GraphQL responses. Collection/list
+//! fields use a custom deserializer so both missing arrays and explicit `null`
+//! values deserialize as empty vectors. Callers should treat these as the wire
 //! shape, not a runtime invariant.
 
 use std::fmt;
@@ -821,7 +827,14 @@ pub struct ToolServiceRegistryRow {
     pub updated_at: Option<String>,
 }
 
+/// Persisted snapshot of one MCP service's health, written by the agent's
+/// `health_checker` on every probe cycle. `status` carries the precise
+/// `HealthStateInternal` projection ("healthy" / "stale" / "evicted" /
+/// "reconnecting") so the operator UI can distinguish back-off from
+/// in-flight retry without going through the collapsed three-state
 /// `HealthStatus`. `failure_count` / `k_max` / `backoff_until` give the
+/// K-model context per the design in
+/// `Proofs/MCPHealth/{State,Transition}.lean`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,

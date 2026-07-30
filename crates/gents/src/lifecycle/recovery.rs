@@ -24,9 +24,39 @@ impl RequestLifecycle {
         })
     }
 
+    /// Owner-scoped terminal-convergence re-drive (#664).
+    ///
+    /// Under `subagent-host` replication a routed `AgentRequest` is replicated
     /// to its `requester_did` peer. Safety already holds (the watcher
+    /// `agent_did` filter never lets that peer claim a foreign replica), but
+    /// liveness does not: when the owner terminalizes, the terminal delta
+    /// reaches the requester via a single one-shot PushLog that can drop, and
+    /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
+    /// re-request it. This re-drive is the owner side of the fix — periodically
+    /// re-asserting the current terminal value of recently-terminalized routed
+    /// requests. Local-only requests are excluded because no peer consumes
+    /// their request state (#683). A same-value re-write is a genuine
+    /// higher-priority CRDT delta (it does not no-op), so it flows through the
+    /// normal PushLog path and a lagging requester accepts it (LWW, higher
+    /// priority ⇒ applied).
+    ///
+    /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
     /// it whether a peer caught up. Each successful re-assert atomically advances
+    /// the persisted `terminal_redrive_attempts` counter, and eligibility stops
     /// at [`TERMINAL_REDRIVE_CAP`] across process restarts. Candidate ordering is
+    /// `terminalized_at ASC`, not request creation time; exhausted rows leave the
+    /// query, so bounded batches eventually cover an arbitrarily old request that
+    /// terminalized late. A peer unavailable through the whole budget is repaired
+    /// by a bounded full replicator replay when the pairing reconnects; that path
+    /// authors no same-value request delta and therefore grows no request history.
+    ///
+    /// `agent_did` MUST be the runtime's own DID: only the owner re-asserts its
+    /// own documents; peers stay passive (a peer-authored delta to a foreign doc
+    /// would fork the CRDT, not converge it). `agent_did` itself is never
+    /// written (it is `@immutable`); only the mutable terminal `status`,
+    /// `lifecycle_state`, and bounded attempt counter are written together in
+    /// one document update.
+    ///
     pub async fn redrive_terminal_convergence(
         node: &EmbeddedNode,
         agent_did: &str,
@@ -102,6 +132,8 @@ impl RequestLifecycle {
             let escaped_doc_id = escape_graphql_string(doc_id);
             let escaped_status = escape_graphql_string(status);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+            // Defense-in-depth: the candidate query is already `agent_did == self`
+            // scoped, but keep the mutation itself owner-scoped too, matching the
             // queue.rs seam guards — a re-drive must never touch a foreign replica.
             let mutation = format!(
                 r#"mutation {{
@@ -165,7 +197,10 @@ impl RequestLifecycle {
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<TerminalRepairReport> {
+        // Key the stale predicate on `lifecycle_state ∈ {claimed, processing}` to
         // mirror the Lean `Recovery.requestRecoveryStale` model exactly, rather than
+        // on the coarser `status = "processing"`. A stuck `claimed` own-request is
+        // now recovered even if its `status` is not `"processing"`.
         let stale_states = crate::lifecycle::stuck_request_lifecycle_state_graphql_list();
         let escaped_agent_did = escape_graphql_string(agent_did);
         let query = format!(
@@ -218,7 +253,11 @@ impl RequestLifecycle {
                 .error_message
                 .as_deref()
                 .unwrap_or_default();
+            // `interrupted_at` is the sole durable interrupt marker: the
             // interrupt flow stamps it standalone and again atomically inside
+            // the response finalize. The human-readable error text is never
+            // consulted, so a provider error whose message happens to be
+            // "interrupted" still repairs to failed.
             let response_was_interrupted = terminal_response
                 .interrupted_at
                 .as_deref()
@@ -511,8 +550,30 @@ struct ConversationRecoveryOutcome {
     duplicate_sessions: usize,
 }
 
+/// Terminalize conversations left mid-flight by a daemon restart.
+///
 /// Mirrors the Lean sweep `Recovery.conversationRecoverySweep`
+/// (proofs/Proofs/Recovery/Sweeps/Conversation.lean), whose row is the
+/// *duplicate group* — every doc sharing a `session_id` — not a single doc.
+/// Two properties are load-bearing (#693):
+///
+/// 1. **Duplicate-tolerant.** Stores whose `AgentConversation` collection was
+///    created before `session_id` was unique-indexed carry duplicate rows
 ///    permanently (DefraDB cannot add an index to an existing collection), and
+///    replication can mint them. Every doc is therefore written by its own
+///    `_docID`: a `session_id`-filtered upsert matches them all and is refused
+///    (`cannot upsert multiple matching documents`), which failed the sweep.
+///    The canonical doc is picked by an explicit total order — DefraDB returns
+///    duplicates in docID order, not recency order — and Lean's
+///    `canonical_perm_invariant` proves that pick is independent of scan order.
+///    Duplicates are converged to the same terminal status rather than deleted:
+///    the collection is replicated, so a delete can be resurrected by a peer or
+///    fork the CRDT.
+///
+/// 2. **Counts successes, never attempts.** `recovered` is the number of
+///    sessions whose write actually landed. Counting attempts made a fully
+///    failed pass log as healthy; `Recovery.Step.all_failed_reports_zero` pins
+///    the honest behavior.
 async fn recover_stuck_conversations(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -563,6 +624,7 @@ async fn recover_stuck_conversations(
 
     let mut outcome = ConversationRecoveryOutcome::default();
     for (session_id, mut docs) in sessions {
+        // Canonical first: newest `updated_at`, then richest, then greatest
         // `_docID` (mirrors Lean `docRank`).
         docs.sort_by(|left, right| right.rank().cmp(&left.rank()));
         let Some(canonical) = docs.first().cloned() else {
@@ -671,6 +733,7 @@ impl StuckConversationRow {
     }
 
     /// Ranking key mirroring Lean `Recovery.docRank`: newest, then richest, then
+    /// greatest docID (the primary key, so distinct docs never tie).
     fn rank(&self) -> (String, usize, String) {
         let richness = [
             self.title.trim(),

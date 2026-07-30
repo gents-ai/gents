@@ -1,4 +1,3 @@
-// Soft-cap justified: agent startup sequence with strong ordering constraints
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -237,7 +236,11 @@ pub(in crate::agent) async fn run_agent(
     let trigger_engine_materializer_snapshot_rx = active_snapshot_rx.clone();
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
+    // Construct the `ManualSource` up-front so the `ManualTriggerHandle` can
+    // be published to in-process callers (via the `OnceCell` on
+    // `Gents`) before `run()` awaits shutdown. Deferring construction
     // into the spawned task would race the callers that cloned `Gents`
+    // and are polling for the handle.
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
@@ -292,6 +295,9 @@ pub(in crate::agent) async fn run_agent(
         engine.run(sources, trigger_engine_cancel).await;
     });
 
+    // DefraDB's event bus is live-only: updates published before a subscriber
+    // exists cannot be replayed. Establish the control subscription before
+    // the readiness task can publish `Ready`, so callers that wait for Ready
     // cannot race the watcher startup and lose their first config mutation.
     let control_subscription = agent
         .document_runtime_context()
@@ -699,6 +705,8 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
                 );
             }
             // Failures are the OPPOSITE of a recovery and must never be folded
+            // into the recovered count (#693): a fully failed pass used to log
+            // "recovered stuck conversations count=2" and read as healthy.
             if report.conversations_failed > 0 {
                 recovered_any = true;
                 tracing::warn!(

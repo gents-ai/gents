@@ -1,4 +1,9 @@
 //! Downstream contract for DefraDB P2P sync diagnostics.
+//!
+//! DefraDB owns the sync implementation and its wire snapshot. This module is
+//! the deliberately small adapter seam where the agent binds that upstream
+//! contract into operator-facing status and metrics. Keeping a typed snapshot
+//! here prevents those surfaces from reaching into untyped JSON independently.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

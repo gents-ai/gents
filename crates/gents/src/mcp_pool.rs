@@ -265,7 +265,12 @@ pub struct McpPool {
     park: Arc<std::sync::Mutex<HashMap<ParkKey, ParkState>>>,
 }
 
+/// Parking is scoped by service, endpoint, and bound agent DID. A service can
 /// move between LAN/Tailscale/registry endpoints; a bad endpoint must not park
+/// a later healthy endpoint for the same logical service. Agent DID is included
+/// because MCP services may authorize per principal. Trace headers are
+/// intentionally excluded: they are per-call correlation context, not a useful
+/// failure partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParkKey {
     service_id: String,
@@ -470,7 +475,15 @@ impl McpPool {
         .await
     }
 
+    /// Call a tool on the MCP server at `endpoint`.
+    ///
+    /// Connects lazily, same as [`list_tools`](Self::list_tools). Unlike
+    /// `list_tools`, this does not retry after a dispatch failure: repeating an
+    /// MCP tool call can repeat side effects until services advertise
     /// idempotency metadata that `Proofs.ToolExecution` can model.
+    /// A dead cached connection can therefore keep failing `call_tool` until
+    /// `list_tools` or explicit removal evicts it; this keeps recovery from
+    /// retransmitting a possibly mutating call.
     pub async fn call_tool(
         &self,
         service_id: &str,
@@ -521,7 +534,9 @@ impl McpPool {
     }
 
     async fn list_tools_once(&self, service_id: &str) -> Result<ListToolsResult> {
+        // The closure's future owns an Arc of the client, so it can be
         // awaited after the guard drops — a slow list call must not hold the
+        // pool lock and block unrelated services (#622).
         let list_tools = {
             let guard = self.inner.read().await;
             let conn = guard
@@ -546,6 +561,7 @@ impl McpPool {
     ) -> Result<CallToolResult> {
         // No pool-level timeout here — tool calls are bounded by the caller's
         // health-keyed budget (meta_tools/call.rs). The guard still must not
+        // be held across the await (#622).
         let call_tool = {
             let guard = self.inner.read().await;
             let conn = guard
@@ -580,7 +596,9 @@ impl McpPool {
             }
         }
 
+        // Slow path — re-check under the lock, but connect OUTSIDE it: a hung
         // or slow connect (blackholed endpoint, #622) must not wedge every
+        // other service in the pool.
         let mut poison_detected_for_key = None;
         {
             let mut guard = self.inner.write().await;

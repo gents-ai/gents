@@ -89,6 +89,7 @@ fn run_lake_build_unlocked(proofs_dir: &Path) -> Result<()> {
             .args(["build", CONTRACT_TARGET])
             .current_dir(proofs_dir)
             // Match `Command::output`: Lake must never inherit an interactive
+            // stdin while this process holds the proofs-directory lock.
             .stdin(Stdio::null());
         let output = run_with_visible_output(&mut command, io::stdout(), io::stderr())
             .with_context(|| {
@@ -195,7 +196,11 @@ fn spawn_output_task(
         .spawn(move || forward_and_capture(source, destination))
 }
 
+/// Best-effort termination followed by an unconditional reap and task joins.
+///
+/// The original setup/wait error remains the reported error; cleanup failures
 /// must not replace it or make a Lake invocation eligible for different retry
+/// behavior.
 fn terminate_and_reap_child(child: &mut Child, tasks: Vec<OutputTask>) {
     let _ = child.kill();
     let _ = child.wait();
@@ -219,6 +224,7 @@ fn forward_and_capture(mut source: impl Read, mut destination: impl Write) -> io
         let chunk = &buffer[..read];
         captured.extend_from_slice(chunk);
         // Observability must not change command success semantics if a caller
+        // closes its output stream early (for example, a piped test command).
         let _ = destination.write_all(chunk);
         let _ = destination.flush();
     }

@@ -1,5 +1,12 @@
 //! Client turn observation protocol.
+//!
+//! Pure-function projection from agent document snapshots to client-visible
+//! turn states. Source of truth: `crates/gents/proofs/Proofs/Client.lean`.
+//!
+//! The derivation checks server terminal states first, then falls through to
 //! response status for non-terminal request states. This ordering prevents
+//! stale streaming responses from demoting a failed/completed request, and
+//! preserves the monotonicity property proven in the Lean model.
 
 use std::collections::HashSet;
 use std::error::Error;
@@ -172,7 +179,9 @@ fn resolve_tip(attempts: &[AttemptView]) -> Option<&AttemptView> {
         .filter(|attempt| !referenced_request_ids.contains(attempt.request.request_id.as_str()))
         .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))
         .or_else(|| {
+            // Malformed observations can contain cycles or multiple disconnected
             // attempts. Fall back to a deterministic request_id ordering rather
+            // than reintroducing slice-order dependence.
             attempts
                 .iter()
                 .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))

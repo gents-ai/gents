@@ -1,5 +1,3 @@
-//! Helper for out-of-engine manual runs — used by CLI `config task run`
-
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;

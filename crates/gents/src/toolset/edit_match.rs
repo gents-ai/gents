@@ -1,5 +1,14 @@
 //! The `edit_file` matcher — Rust half of the Lean `EditMatch` model
+//! (`proofs/Proofs/EditMatch/`, #738/#724).
+//!
+//! One pure decision function drives both dry-run and apply: a deterministic
+//! relaxation ladder over lines (exact → trailing-whitespace → trim with
+//! replacement re-indent → unicode-normalized), an ambiguity gate, and
+//! convenience-operation desugaring. Similarity scoring exists ONLY for
+//! diagnostics (closest-match error hints) — it never selects an edit site.
+//! The stale-content precondition (#724) is enforced by the caller against
 //! raw bytes before this module runs; gate ordering is fenced in
+//! `tests/conformance/edit_match.rs`.
 
 use std::fmt::Write as _;
 
@@ -250,6 +259,11 @@ fn decide_ladder(
         return finish(content, result, Strategy::Exact, exact.len());
     }
 
+    // Passes 2-4 — line-window matching with progressively coarser keys. A
+    // pattern ending in a newline splits into a trailing empty line that
+    // would force the NEXT content line to be empty; drop it. Replacement
+    // semantics must match the exact pass: the pattern's trailing newline is
+    // CONSUMED, so a replacement that does not end in a newline merges with
     // the following line (drift must not decide newline preservation).
     let content_lines: Vec<&str> = content.split('\n').collect();
     let mut pattern_lines: Vec<&str> = pattern.split('\n').collect();

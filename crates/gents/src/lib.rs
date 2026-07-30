@@ -1,4 +1,7 @@
 //! Core DefraDB-backed agent runtime for Gents.
+//!
+//! This crate owns request execution, lifecycle enforcement, persistence,
+//! identity, tools, networking, and provider-input assembly.
 
 pub mod adapter_projection;
 pub(crate) mod admission;

@@ -243,6 +243,22 @@ impl DefraSessionHook {
         Ok(())
     }
 
+    /// Reconcile completed-but-unmessaged tool calls for the active request so
+    /// the persisted transcript stays pair-closed on the abort path (#442).
+    ///
+    /// The owned loop runs each tool inline: `on_tool_result` marks the
+    /// `AgentToolCall` row `.completed` (recording its result) before the
+    /// result MESSAGE is yielded, which `StreamProcessor` persists only when it
+    /// observes the streamed `ToolResult`. On a provider stall that streamed
+    /// item never arrives, so a liveness/interrupt abort persists the assistant
+    /// turn (via `persist_partial_turn`) but no result message — leaving a
+    /// `completed` tool call with no paired result, violating
+    /// `Transcript.CompletedToolCallsPaired`. This replays the existing streamed
+    /// result-message persistence for each completed tool call (which loads the
+    /// recorded result from the row and dedupes), restoring pairing. It is the
+    /// `complete_tool_with_result` transition applied late.
+    ///
+    /// Must run after the assistant turn is persisted (so the message-sequence
     /// gate is satisfied); a no-op otherwise. Idempotent via tool-result dedup.
     pub(crate) async fn backfill_completed_tool_results(&self) -> anyhow::Result<usize> {
         let (session_id, request_id) = {

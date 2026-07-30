@@ -1,4 +1,26 @@
 //! Owned multi-turn completion→tool loop (issue #400, decision D6).
+//!
+//! This replaces rig's `Agent::stream_prompt` *producer* with our own stream
+//! generator, while keeping rig as the provider/streaming *client*
+//! (`CompletionModel::stream`, the `Message` family, and the streaming decode
+//! types). The generator mirrors rig's `agent::prompt_request::streaming::send`:
+//! build a request from the running message history, stream one completion,
+//! accumulate assistant content, and — when the turn produced tool calls —
+//! execute them, thread their results back into the history, and loop. When a
+//! turn produces no tool calls, it yields a terminal `FinalResponse`.
+//!
+//! The generator yields a native `LoopStreamItem` envelope around rig's
+//! `MultiTurnStreamItem`, keeping provider payloads at the rig boundary while
+//! giving the runtime a place to carry retry-control events.
+//!
+//! Tool side-effects (lifecycle tracking, truncation/spill, persistence) are
+//! NOT reimplemented here: the generator calls the existing
+//! `DefraSessionHook::on_tool_call` / `on_tool_result` methods directly (the
+//! former `PromptHook` callbacks). The generator owns only the orchestration:
+//! request construction, turn iteration, deadline/cancellation-aware dispatch,
+//! native result bounding, and message threading. Because the bounded result is
+//! threaded into the conversation by construction, the in-loop truncation gap
+//! (#401) is closed natively without the recorder shim.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -56,7 +78,9 @@ pub(crate) enum LoopStreamItem<R> {
         turn: usize,
         attempt: u32,
         /// Backoff the generator sleeps before the resample. Carried so the
+        /// daemon can extend the next poll's liveness budget by it, exactly as
         /// for `AttemptFailed` — otherwise a retract backoff longer than the
+        /// liveness timeout is misread as a dead stream (#648).
         backoff: std::time::Duration,
     },
     AttemptFailed {
@@ -82,7 +106,12 @@ pub(crate) struct LoopConfig {
     pub(crate) max_turns: usize,
 }
 
+/// Assemble the per-request message tail: the optional `<context>` message rides
+/// immediately before the prompt, which is always last (rig prompt semantics).
+///
 /// This mirrors Lean `PromptAssembly.Template.assembleWithContext`, whose
+/// `assembleWithContext_tail` theorem fixes the order as `... contextPreamble,
+/// prompt`. Fenced by `tests` (`assembles_context_immediately_before_prompt`);
 /// reordering here breaks that test and contradicts the proof.
 pub(crate) fn assemble_new_messages(
     context_message: Option<Message>,
@@ -121,11 +150,23 @@ where
 {
     try_stream! {
         let history = crate::compaction::sanitize_history_for_provider(history);
+        // #497: prior requests' per-request `<context>` messages are durably
         // persisted (training capture), but must NOT be replayed to the provider:
+        // they carry stale `ctx.now` / collection summaries and would accumulate
+        // unboundedly across a multi-request session, inflating tokens and
+        // presenting stale context as current. Strip them from the provider-bound
+        // history; the CURRENT request's context rides in `new_messages` below.
+        // Persistence is untouched (it already happened upstream).
+        // `mut` because the completion-retry Repair directive rewrites the
+        // assembled input in place — loaded history included (#652).
         let mut history: Vec<Message> = history
             .into_iter()
             .filter(|message| !is_request_context_message(message))
             .collect();
+        // The running set of messages produced this request. The last element
+        // is always the "prompt" for the next turn (rig semantics): initially
+        // the user message, later the trailing tool-result user message. The
+        // optional per-request context message rides immediately before the
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<Message> =
             assemble_new_messages(config.context_message.clone(), prompt);
@@ -271,7 +312,13 @@ where
                     }
                 };
 
+            // Accumulate assistant content twice over: `accumulator` builds the
+            // assistant message we thread back into `new_messages` for the next
             // turn (reasoning/tool-call/text ordering handled there), while the
+            // yielded items drive the consumer's own accumulation/persistence.
+            // `pending_results` holds each tool call's bounded result, executed
+            // inline as its ToolCall arrives (see below) and threaded/yielded only
+            // once the turn's stream has drained.
             let mut accumulator = AssistantTurnAccumulator::default();
             let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
             let mut turn_text = String::new();
@@ -580,7 +627,12 @@ fn close_streaming_turn<R>(
     message_id: Option<String>,
     pending_results: Vec<(ToolCall, String, String)>,
 ) -> Vec<LoopStreamItem<R>> {
+    // Thread the assistant turn (text + reasoning + tool calls) ahead of its
     // tool results, matching rig's history ordering. Carry the provider
+    // message id (captured into `stream.message_id` from the stream's
+    // `MessageId` event) onto the threaded message — rig threads this same id,
+    // and OpenAI Responses / ChatGPT Codex follow-up requests reference prior
+    // `msg_` ids, so dropping it breaks them.
     if let Some(mut assistant_message) = accumulator.take_message() {
         if let Message::Assistant { id, .. } = &mut assistant_message {
             *id = message_id;
@@ -634,10 +686,27 @@ fn terminal_pre_stream_retry_reason(
     }
 }
 
+/// Repair the ASSEMBLED provider input — loaded history and run-threaded
+/// messages alike (#652).
+///
+/// This runs only after the provider has already REJECTED the request (the
+/// completion-retry `Repair` directive). It is deliberately more aggressive
 /// than the egress normalizer: on top of the shape coercion it runs a LOSSY
+/// leaf sanitizer over every JSON string in a tool call's arguments. That
+/// lossiness is exactly why it cannot live at egress — it would corrupt
+/// legitimate multi-line tool arguments on every request.
+///
+/// It used to rewrite only `new_messages`. But the motivating failure (the vLLM
 /// parse-signature 400) originates from tool-call arguments in the INPUT
+/// TRANSCRIPT — i.e. the loaded history it skipped — so repair re-issued the
+/// same poisoned input and failed identically. The fence described a transform
+/// that did not exist.
+///
+/// Widening it to history is licensed by `PromptAssembly.repair_is_payload_only`
+/// (repair rewrites argument payloads only — never rows, roles, call ids, or
 /// ordering, so the row-granular assembly theorems T1–T5 hold verbatim) and by
 /// `PromptAssembly.repair_idempotent` (a second pass is a no-op, so re-entering
+/// the path cannot keep re-escaping its own escapes).
 pub(crate) fn repair_provider_input(history: &mut Vec<Message>, new_messages: &mut Vec<Message>) {
     repair_messages(history);
     repair_messages(new_messages);

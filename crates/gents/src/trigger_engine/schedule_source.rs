@@ -49,7 +49,13 @@ impl ScheduleSource {
 impl TriggerSource for ScheduleSource {
     fn next_fire(&mut self) -> Pin<Box<dyn Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
+            // Loop until either (a) some schedule becomes due and we return
+            // `Some(intent)`, or (b) the cancellation token fires and we
+            // return `None`. The contract of this method: `None` means
+            // "source is permanently done, drop it" — an idle tick (no due
             // schedule) must NOT exit. The engine's outer loop treats `None`
+            // as source exhaustion and breaks, so a premature `None` here
+            // used to kill the schedule driver after the first idle tick.
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(self.tick_every) => {}

@@ -1,4 +1,22 @@
 //! Production `MaterializerHandle` used by the `TriggerEngine` at runtime.
+//!
+//! Bridges the engine's trigger-neutral materialize/concurrency API to the
+//! concrete lifecycle + DefraDB surface:
+//!
+//! * `materialize` enqueues a pending `AgentRequest` with populated
+//!   `TriggerLineage` so the normal watcher/router/daemon path claims and
+//!   executes it while preserving `caused_by_trigger_id` /
+//!   `caused_by_trigger_kind`.
+//! * `has_active_runtime_request_for_trigger` performs a GraphQL query against
+//!   `AgentRequest`, filtering on the `(trigger_id, trigger_kind)` tuple and
+//!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
+//! * `supersede_active_runtime_requests_for_trigger` transitions every matching
+//!   active runtime request to `lifecycle_state = superseded` /
+//!   `status = superseded`.
+//!
+//! Behavior lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
+//! so the materializer always sees the latest resolved snapshot without
+//! needing to re-query the DB at fire time.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -159,9 +177,23 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_kind_str = trigger_kind.as_str();
         let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
         Box::pin(async move {
+            // Strict tuple match on `(agent_did, caused_by_trigger_id,
+            // caused_by_trigger_kind)` + active runtime `lifecycle_state`.
+            // The DID scope is load-bearing (#605): the replicated store also
+            // holds other agents' requests for the same human-chosen trigger
             // id, and those must never gate this agent's fires.
+            //
+            // Rows are fetched (not just existence-checked) because a claimed
+            // or processing row past its persisted claim deadline is
             // terminal-in-effect and must not gate: the owning loop enforces
+            // the same deadline in-memory (`await_with_request_deadline`
+            // aborts the attempt), so only a wedged orphan — e.g. an owner
+            // whose store was rebuilt — can sit past-deadline in an active
+            // state, and such a row would otherwise gate forever. Expiry is
+            // evaluated here rather than in the filter to avoid relying on
+            // lexicographic string comparison over RFC3339 in the store. Do
             // not cap this result: a pile-up of expired orphan rows must not
+            // hide a later live row and let Serial double-fire.
             let query = format!(
                 r#"query {{
                     AgentRequest(

@@ -23,7 +23,10 @@ pub(crate) struct SubagentToolConfig {
     pub steering_enabled: bool,
     pub background_enabled: bool,
     pub default_await_mode: AwaitMode,
+    /// When false (default), cross-deployment (remote-DID) subagent delegation is
+    /// disabled: remote-DID targets are not surfaced to the model and remote spawns
     /// are rejected at runtime. Cross-deployment is deferred pending ACP; only
+    /// trusted-fleet deployments should opt in.
     pub allow_cross_deployment: bool,
 }
 

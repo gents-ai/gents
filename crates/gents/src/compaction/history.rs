@@ -128,7 +128,17 @@ pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message>
     kept_messages
 }
 
+/// Normalize assistant content to the canonical provider order — text, then
+/// reasoning (and any other non-call content), then tool calls — at the
+/// provider-send boundary.
+///
+/// `AssistantTurnAccumulator::build_message` writes this order for newly
 /// persisted turns, but transcripts persisted before the ordering fix can carry
+/// text *after* tool calls, which strict providers reject on reload. Like
+/// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
+/// provider format at the request-build boundary; the stored messages and the
+/// conformance-fenced reducers are untouched. Relative order within each
+/// category is preserved.
 pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()

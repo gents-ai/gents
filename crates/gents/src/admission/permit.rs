@@ -69,7 +69,12 @@ impl AdmissionPermit {
         self.finish().await;
     }
 
+    /// Mark this permit as cancelled due to user-initiated interrupt.
+    /// On `finish()` or `Drop`, the controller persists the InferenceCall
+    /// with `call_state = "cancelled"` and `failure_reason = "Cancelled"`.
     /// Idempotent with the existing `finished` guard — callers should not
+    /// invoke `finish_*` after `mark_interrupted` and instead rely on the
+    /// Drop path (or explicit `finish_success`/`finish_failure`) to persist.
     pub(crate) fn mark_interrupted(&mut self) {
         if self.finished {
             return;

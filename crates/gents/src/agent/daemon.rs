@@ -136,6 +136,8 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         self.startup_barrier
             .mark_behavior_ready(&self.behavior.behavior_id)
             .await;
+        // A successful start supersedes any demotion that raced it: the
+        // behavior is serving, so the ledger entry (which would make the
         // router reject its requests) must not survive.
         self.startup_demotions.clear(&self.behavior.behavior_id);
         tracing::info!(

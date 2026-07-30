@@ -1,4 +1,6 @@
 //! Backend registry — DefraDB lookups for inference backend documents.
+//!
+//! The runtime uses this to resolve a behavior's backend and check health.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -114,7 +116,10 @@ impl InferenceBackend {
     }
 }
 
+/// Pure function backing [`InferenceBackend::display_state`]. Lives outside
+/// the impl so the Tauri bridge can call it on raw `(enabled, probe_status)`
 /// pairs from the Lean witness fixtures without constructing a full
+/// `InferenceBackend`.
 pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     if !enabled {
         return "disabled";

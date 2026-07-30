@@ -123,8 +123,20 @@ impl HealthStateInternal {
         }
     }
 
+    /// String form persisted to the `ToolServiceHealthState` DefraDB
+    /// collection. Mirrors `HealthState.toDefraDB` in
+    /// `Proofs/MCPHealth/State.lean` exactly — including `degraded` rather
+    /// than the public `HealthStatus::Stale` projection name. Operators read
+    /// the precise internal-state vocabulary so the panel can distinguish
+    /// the staleness flavor of degraded (heartbeat lag, `failure_count = 0`)
+    /// from the failure-count flavor (`1 <= failure_count < K`).
+    ///
     /// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in
+    /// the Lean model; the production cycle does not emit that event today
     /// (the loop skips while backoff is active, then probes directly), so
+    /// rows with `status: "reconnecting"` will only appear once the cycle
+    /// is extended to bridge the gap. The persisted vocabulary covers it
+    /// so future production emission needs no schema change.
     fn to_defradb(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -174,7 +186,13 @@ enum ProbeEvent {
     RegistryAbsent,
 }
 
+/// Full MCP service health snapshot exposed to operators (CLI table, desktop
+/// panel, and the persisted `ToolServiceHealthState` DefraDB row).
+///
 /// Carries the K-model fields (`failure_count`, `k_max`, `backoff_until`)
+/// that the public `HealthStatus` projection collapses. `status` is the
+/// internal `HealthStateInternal` projected to its DefraDB string
+/// vocabulary (`healthy` / `stale` / `evicted` / `reconnecting`).
 #[derive(Debug, Clone, Serialize)]
 pub struct MCPServiceHealthSnapshot {
     pub service_id: String,
@@ -218,7 +236,10 @@ impl ServiceHealthMap {
             .collect()
     }
 
+    /// Full per-service snapshot including the K-model fields. The
     /// `snapshot()` projection drops `failure_count` / `backoff_until` /
+    /// the internal `HealthState`; this one preserves them for operator
+    /// surfaces (the desktop panel, the persisted DefraDB row).
     pub async fn snapshot_full(&self, k_max: u32) -> Vec<MCPServiceHealthSnapshot> {
         let k_max = k_max.max(1);
         self.inner
@@ -440,8 +461,15 @@ pub async fn run_health_check_cycle(
         let previous_endpoint = previous.as_ref().and_then(|entry| entry.endpoint.clone());
         let previous_tool_count = previous.as_ref().and_then(|entry| entry.tool_count);
 
+        // The Lean model (`Proofs/MCPHealth/Transition.lean`) reaches the
         // `Reconnecting` state via `ProbeEvent::BackoffExpiry` between an
+        // `Evicted` cycle and the next probe. The production loop does not
         // emit that event today — it skips while backoff is active, then
+        // probes directly into `Healthy` / `Degraded` / back into `Evicted`.
+        // So persisted rows never carry `status: "reconnecting"` until the
+        // cycle is extended to bridge that gap (a future task; tracked
+        // alongside the K≥2 design pass in #303). The persisted vocabulary
+        // and the desktop panel already cover the state for that point.
         if backoff_is_active(&previous_model, now, options) {
             continue;
         }

@@ -286,9 +286,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                         let mut stream_error = None;
                         // A retry's backoff sleep runs *inside* the loop
+                        // generator, spanning the next `stream.next()` poll. The
                         // liveness timeout wraps that poll, so a backoff longer
+                        // than `liveness_timeout` would otherwise be misread as a
+                        // dead stream and turned into a spurious terminal
                         // "stream liveness timeout", defeating the retry (#648).
                         // Carry the pending backoff forward and add it to the
+                        // next poll's liveness budget.
                         let mut pending_backoff = std::time::Duration::ZERO;
 
                         loop {
@@ -399,6 +403,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 }
                             };
                             // The generator sleeps this backoff before its next
+                            // yield, so extend the *next* poll's liveness budget
+                            // by it (reset to zero for any non-retry item).
                             pending_backoff = match &item {
                                 Ok(crate::agent::loop_stream::LoopStreamItem::AttemptFailed {
                                     backoff,

@@ -1,5 +1,34 @@
 //! Declarative, schema-bounded single-collection write tool.
+//!
+//! `defra_write` is the write-side sibling of [`crate::defra_query`]. Where
+//! `DefraQueryTool` is one read tool that can read any (in-scope) collection, a
+//! [`BoundedWriteTool`] is the opposite shape: each instance is locked to a
+//! single [`WriteToolDecl`] — one collection and one fixed field set — and
+//! writes exactly one validated document per call. The agent never names the
+//! collection or invents fields; the declaration is the contract.
+//!
+//! ## Dynamic per-instance tool name
+//!
+//! Unlike `DefraQueryTool` (a single tool with a shared
+//! `const NAME: &str = "defra_query"`), bounded write tools are *named per
+//! declaration*: a `request_action` decl and a `record_finding` decl are
+//! distinct tools backed by the same type. The native [`crate::llm::tool::Tool`] trait
+//! supports this directly: it requires a `const NAME` but also exposes a
+//! `fn name(&self) -> String` that defaults to that const — and which we
+//! override here to return `self.decl.tool_name`. The blanket
+//! `impl<T: Tool> ToolDyn for T` in `crate::llm::tool` forwards `name()`, so dynamic dispatch
+//! (B4's job) sees the per-instance name with no extra machinery.
+//!
+//! The `const NAME` on this impl is therefore a *placeholder* that is never the
+//! advertised identity; per-instance identity always comes from
+//! [`Tool::name`]/[`Tool::definition`]'s `name`.
+//!
+//! The alternative — implementing `ToolDyn` by hand like
+//! `toolset::cli_tool::CliTool` — also yields a runtime `name()`, but its
 //! `call(&self, args: String)` signature is the wrong shape for the typed,
+//! directly-callable contract this task's tests drive. Overriding `Tool::name`
+//! gives both the typed `call(Args)` and the dynamic name, so it is the better
+//! fit.
 
 use std::sync::Arc;
 

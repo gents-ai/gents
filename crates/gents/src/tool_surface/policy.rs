@@ -129,9 +129,14 @@ pub struct ToolPolicyBash {
     pub network_mode: CommandNetworkMode,
     pub sandbox: bool,
     pub allowed_argv_prefixes: EndpointScope<Vec<String>, ()>,
+    /// Argv prefixes forbidden in any mode. A plain set with a **union** meet:
+    /// a prefix forbidden by either the behavior or the ceiling is forbidden in
     /// the effective policy (top = ∅ = nothing forbidden). Mirrors Lean
+    /// `BashPolicy.forbidden` (`bash_meet_forbidden_superset`).
     pub forbidden_argv_prefixes: BTreeSet<Vec<String>>,
+    /// Command heads permitted in read-only mode, an `EndpointScope` with an
     /// **intersection** meet (top = `All`). Mirrors Lean `BashPolicy.readOnly`
+    /// (`bash_meet_readonly_*`).
     pub read_only_allowlist: EndpointScope<String, ()>,
 }
 

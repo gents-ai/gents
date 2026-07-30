@@ -1,6 +1,30 @@
 //! Service-discovery reconciler: read `PeerRegistry`, materialize
+//! **registry-owned** `PeerPairingDesired` rows, and let the (unchanged)
+//! pairing reconciler wire them.
+//!
+//! This sits *above* the proven `PairingReconcile` machine. It is the Rust
 //! mirror of the Lean model `Proofs/PeerRegistryDiscovery/`. The binding
+//! ownership decision from that model: desired rows are a disjoint partition of
+//! **operator-owned** and **registry-owned** rows, and the discovery step only
+//! ever writes or deletes registry-owned rows — it never reads, writes, or
+//! deletes operator-owned rows. We carry that partition as a `source`
+//! discriminator field on `PeerPairingDesired`. Direct operator rows use
+//! `"operator"`; config-managed rows use the operator subpartition
+//! `"manifest:<owner-did>"`; registry rows use `"registry"`. Registry writes
+//! and deletes are still queried as an exact partition
+//! (`filter: { source: { _eq: "registry" } }`).
+//! The manifest owner DID is a stable part of that partition key: rotating a
+//! principal DID does not transfer existing manifest rows. Such rows remain in
+//! the old owner's partition and require explicit migration or deletion.
+//!
 //! Mirrored Lean properties:
+//! - `deriveRegistryDesired(self, registry)` = live, non-self registry entries
+//!   → desired peers. Mirrored by [`derive_registry_desired`].
+//! - `ownership_safe`: the discovery step never mutates an operator-owned row.
+//!   Mirrored by only ever touching `source = "registry"` rows.
+//! - `retraction_sound`: removing/staling an entry removes exactly its
+//!   registry-owned row. Mirrored by deleting the registry-owned row for any
+//!   peer no longer derived.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -31,7 +55,12 @@ pub const SOURCE_REGISTRY: &str = "registry";
 pub const REGISTRY_STALE_AFTER: Duration =
     Duration::from_secs(REGISTRY_HEARTBEAT_INTERVAL.as_secs() * 3);
 
+/// Whether a heartbeat timestamp `ts` is fresh relative to `now`: within
+/// `stale_after` in the past, OR within `stale_after` in the future. A timestamp
+/// further than `stale_after` ahead of `now` is treated as NOT fresh — a
+/// far-future stamp is more likely a bad clock or a bogus row than a live peer,
 /// and must not pin a dead peer alive indefinitely. Small future skew (clocks
+/// slightly out of sync) is still tolerated as fresh.
 pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
     match now.signed_duration_since(ts).to_std() {
         Ok(age) => age <= stale_after,
@@ -51,7 +80,9 @@ pub struct RegistryMemberRow {
 }
 
 /// Outcome of the signed-invite membership gate — the Rust mirror of the Lean
+/// `signedByMember` registry/TOFU arms (`Proofs/PeerRegistryDiscovery`). Token
 /// signature validity (`sigValid`) is enforced separately at token decode; this
+/// decides only the registry-membership half.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinAdmission {
     TofuBootstrap,
@@ -59,7 +90,11 @@ pub enum JoinAdmission {
     Rejected,
 }
 
+/// Decide whether a join invite from `issuer_did` is admissible against the
 /// loaded registry rows. Pure mirror of Lean `isMember` / `signedByMember`'s
+/// registry arm: a peer is a live member iff its row is `status == "online"` and
+/// its heartbeat is within `stale_after`. `self_did`'s own self-registration row
+/// never counts (a registry holding only ourselves is still TOFU bootstrap).
 pub fn decide_join_admission(
     issuer_did: &str,
     self_did: &str,
@@ -108,7 +143,9 @@ pub struct DiscoveredEntry {
 }
 
 impl DiscoveredEntry {
+    /// Resolve effective liveness from a raw registry row's `status` and
     /// `updated_at`, relative to `now`. Mirrors the Lean model's single `live`
+    /// bit: the reader computes it; the derivation takes it as given.
     pub fn from_row(
         peer_id: String,
         agent_did: String,
@@ -162,8 +199,16 @@ impl DiscoveredEntry {
 }
 
 /// Pure derivation `registry → desiredₘ`, mirroring Lean `deriveRegistryDesired`:
+/// the registry-owned desired peer set is exactly the live entries whose peer is
+/// not self.
+///
+/// This is a function of the registry alone, which is what makes convergence
 /// immediate (idempotent, stable across ticks for a stable registry). Whether a
+/// derived peer is actually *materialized* is a separate, downstream concern:
+/// the tick skips materializing a derived peer that offers no resolvable scope
+/// template (see [`reconcile_discovery_tick`]). The derivation deliberately
 /// stays the pure live∧¬self predicate so it remains a 1:1 mirror of the Lean
+/// model.
 pub fn derive_registry_desired(self_peer: &str, registry: &[DiscoveredEntry]) -> BTreeSet<String> {
     registry
         .iter()
@@ -178,6 +223,8 @@ pub struct DiscoveryTickOutcome {
     pub retracted: BTreeSet<String>,
 }
 
+/// Store seam for the discovery reconciler. **Every method here operates only on
+/// the registry-owned partition** (`source = "registry"`). The discovery step
 /// must never read, write, or delete operator-owned rows; that invariant is the
 /// whole point (mirrors Lean `ownership_safe`).
 #[async_trait]
@@ -195,10 +242,18 @@ pub trait DiscoveryStore: Send + Sync {
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()>;
 
     /// Delete the **registry-owned** desired row for `peer_id`. Must not touch
+    /// an operator-owned row for the same peer.
     async fn delete_registry_desired(&self, peer_id: &str) -> Result<()>;
 }
 
+/// Run one discovery tick: derive the registry-owned desired set, upsert rows
+/// for newly-derived peers, and retract registry-owned rows whose peer is no
+/// longer derived.
+///
 /// Ownership invariant (mirrors Lean `ownership_safe` / `retraction_sound`):
+/// the diff is computed against the **registry-owned** desired set only, so an
+/// operator-owned row for the same peer is never created, mutated, or deleted by
+/// this step.
 pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<DiscoveryTickOutcome> {
     let self_peer = store.self_peer_id().await.context("read self peer id")?;
     let registry = store.load_registry().await.context("load registry")?;
@@ -258,7 +313,15 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
     Ok(outcome)
 }
 
+/// Environment variable gating the discovery reconciler. Default OFF: when
+/// unset (or not a truthy value), the registry still replicates and `p2p network
+/// list` can show peers, but no auto-pairing happens.
+///
+/// TRUST: enabling this makes the node auto-materialize pairings (and thus
+/// replication) from `PeerRegistry` rows, which are replicated, self-asserted,
 /// and NOT signature-bound to their claimed `agent_did`. It is therefore a
+/// trusted-fleet / TOFU switch: turn it on only when every node that can write
+/// the replicated registry is trusted (see #490 review H4).
 pub const DISCOVERY_AUTO_PAIR_ENV: &str = "GENTS_DISCOVERY_AUTO_PAIR";
 
 pub fn discovery_auto_pair_enabled() -> bool {
@@ -301,6 +364,8 @@ pub async fn run_discovery_reconciler(
         }
     };
 
+    // Auto-pair is active: surface the trust assumption once. The registry rows
+    // that will drive pairing/replication are replicated and self-asserted (no
     // per-row signature binding agent_did to a key), so this is a trusted-fleet
     // decision, not cryptographic authorization (see #490 review H4).
     tracing::warn!(
@@ -483,7 +548,45 @@ fn source_is_operator_owned(source: Option<&str>) -> bool {
     source == SOURCE_OPERATOR || source.starts_with(SOURCE_MANIFEST_PREFIX)
 }
 
+/// Upsert a registry-owned `PeerPairingDesired` row, populated from the registry
+/// `entry` the peer advertised. The `source` field pins it to the registry
+/// partition so the discovery step never blends with operator intent.
+///
+/// The row carries:
+/// - `template`: the scope template the peer offered (chosen by
+///   [`DiscoveredEntry::chosen_template`]); the reconciler resolves the
+///   collection set, scope filter, and delivery mode from it,
+/// - `collections`: the template's collection set (passed in, guaranteed
+///   non-empty — see [`DiscoveredEntry::desired_collections`]); satisfies the
+///   non-nullable column and matches what the reconciler re-resolves,
+/// - `replicator_addresses`: the entry's advertised addresses,
+/// - `agent_did`: copied from the entry (the scope-filter value),
+///
+/// so the pairing reconciler downstream has a concrete, scoped pairing to
+/// install (without this, auto-pair produced an inert row).
+///
+/// Genuinely-empty lists are emitted as `null` (never `[]`, which corrupts the
+/// nillable array columns).
+///
 /// Ownership safety: the match filter is scoped to
+/// `peer_id ∧ source = "registry"` (mirroring [`delete_registry_desired_mutation`]
+/// and Lean `ownership_safe`), so the `update` branch can only ever name a
+/// registry-owned row. The convergence case still holds: a registry-owned row
+/// for the peer carries `source = "registry"`, so it matches and is updated in
+/// place on subsequent ticks (no duplicate registry rows — `peer_id` is the
+/// unique index). When no registry row matches, the upsert CREATES one from the
+/// `add` branch.
+///
+/// TOCTOU is now fail-safe rather than silently corrupting. Within a single
+/// tick, [`reconcile_discovery_tick`] reads operator-owned peers first,
+/// subtracts them from the derived set, then upserts the remaining
+/// registry-derived peers. If an operator writes a desired row for the *same*
+/// peer between that read and this upsert, the scoped filter matches no row, so
+/// the upsert attempts a CREATE — which the unique index on `peer_id` rejects
+/// (the operator row already occupies it). The tick errors loudly and retries;
+/// the next tick excludes the now-operator-owned peer. The previous
+/// `peer_id`-only filter would instead have flipped the operator row's `source`
+/// to `"registry"`, silently reassigning ownership.
 pub fn upsert_registry_desired_mutation(
     entry: &DiscoveredEntry,
     template_id: &str,
@@ -525,6 +628,8 @@ pub fn upsert_registry_desired_mutation(
     )
 }
 
+/// Delete the registry-owned `PeerPairingDesired` row for `peer_id`. The
+/// `source = "registry"` predicate guarantees an operator-owned row for the same
 /// peer is never deleted (mirrors Lean `retraction_sound`).
 pub fn delete_registry_desired_mutation(peer_id: &str) -> String {
     let peer_id = escape_graphql_string(peer_id);

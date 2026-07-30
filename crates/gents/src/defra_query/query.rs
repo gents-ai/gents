@@ -1,4 +1,5 @@
 //! The structured query contract and its translation into a read-only DefraDB
+//! GraphQL query.
 
 use anyhow::{anyhow, bail, Result};
 use defra_node::EmbeddedNode;
@@ -11,6 +12,9 @@ pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 1000;
 
 /// Sensitive `(collection, field)` pairs that `defra_query` must never expose,
+/// regardless of the configured collection scope. Selecting or filtering on one
+/// of these is rejected — this is an always-on guard against leaking
+/// credentials (e.g. inference backend API keys) through the read surface.
 const RESTRICTED_FIELDS: &[(&str, &str)] = &[
     ("InferenceBackend", "api_key"),
     ("InferenceBackend", "api_key_env_var"),
@@ -143,6 +147,10 @@ impl CollectionScope {
     }
 }
 
+/// Build the read-only GraphQL query string from the structured contract.
+///
+/// The collection name and every field name are validated as identifiers, and
+/// the filter is rendered through [`render_filter`] (which escapes all string
 /// literals), so untrusted input cannot inject GraphQL.
 pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result<String> {
     validate_identifier(&params.collection).map_err(|e| anyhow!("invalid collection name: {e}"))?;

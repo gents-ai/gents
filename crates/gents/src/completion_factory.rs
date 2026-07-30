@@ -136,7 +136,22 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
 }
 
 /// Provider defaults that turn reasoning capture on where the wire contract
+/// supports it without assuming every OpenAI-compatible model can reason.
+///
+/// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
+/// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
+/// the response `message.reasoning` field when the request carries
+/// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
+/// defaults thinking OFF and the `reasoning` field is empty, so our harvest
 /// trajectories lose the model's reasoning. That local-only toggle must not be
+/// sent to hosted Responses or OpenRouter endpoints, which reject unknown
+/// parameters. ChatGPT Codex has a known Responses contract and retains its
+/// current `medium` reasoning default; generic Responses models use their own
+/// default until reasoning effort becomes explicit profile configuration (#540).
+///
+/// The key is serialized flat into the OpenAI completion body (rig flattens
+/// `additional_params`), so it reaches vLLM as a top-level `chat_template_kwargs`
+/// object — exactly where the server reads it.
 fn thinking_default_params(
     kind: BackendProviderKind,
     wire_api: OpenAiWireApi,

@@ -126,7 +126,11 @@ impl DefraSessionHook {
         }
 
         lifecycle.start_running().await?;
+        // Register the outer composite in the cancel-visible map so parent
+        // interrupt can terminalize it promptly (#837). The workflow future
         // must not hold exclusive ownership across await points; completion
+        // re-takes (or reloads) the lifecycle and uses CAS terminalization so
+        // a concurrent interrupt wins cleanly.
         self.in_flight_lifecycles
             .lock()
             .await
@@ -499,6 +503,14 @@ impl DefraSessionHook {
 
         // Idempotent adoption (reclaim safety): a parent reclaim mid-barrier
         // must not double-spawn the group. Adopt any bridges already persisted
+        // under this `workflow_group_id`; spawn only the missing slots.
+        //
+        // Cut-1 limitations (accepted, fail-safe): adopted fan-out rows are
+        // aligned to specs positionally over an `started_at ASC` order — ties are
+        // impossible today because spawns are sequential round-trips, and the
+        // downstream barrier gate count-check (`fan_out_barrier_satisfied`) fails
+        // closed on any misalignment, so a wrong alignment cannot admit synthesis.
+        // A persisted slot index (deterministic key) is a cut-2 hardening.
         let existing =
             load_workflow_group_bridges(&self.node, &parent_context.session_id, workflow_group_id)
                 .await?;
@@ -531,6 +543,7 @@ impl DefraSessionHook {
                     Ok(bridge) => bridge,
                     Err(error) => {
                         // A spawn failure mid-fan-out must not orphan the bridges
+                        // already spawned this call; terminalize them before bailing.
                         self.cancel_workflow_bridges(parent_context, &fan_out_bridges)
                             .await;
                         return Err(error);
@@ -744,7 +757,10 @@ impl DefraSessionHook {
         )
         .with_requester_did(self.active_requester_did().await);
         lifecycle.set_workflow_group(workflow_group_id, workflow_role);
+        // A background (cross-deployment) child that is never CLAIMED by its
         // remote node must not hold the barrier open until the whole parent
+        // request deadline — it goes dead at the spawn timeout, mirroring the
+        // regular background-subagent path.
         let unclaimed_deadline_at = if await_mode == AwaitMode::Background {
             let deadline = chrono::Utc::now()
                 + chrono::Duration::seconds(

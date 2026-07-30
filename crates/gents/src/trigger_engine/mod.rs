@@ -96,6 +96,12 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         rendered_prompt: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
+    /// Check whether any active runtime `AgentRequest` of `agent_did` is
+    /// currently bound to this trigger. Used by the concurrency gate to
+    /// decide whether a new fire should skip or supersede.
+    ///
+    /// The DID scope is load-bearing: on a replicated fleet the store also
+    /// holds OTHER agents' requests for the same human-chosen trigger id, and
     /// those must never gate this agent's fires (#605).
     fn has_active_runtime_request_for_trigger(
         &self,
@@ -112,6 +118,12 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
 }
 
+/// Scaffolding for the trigger engine.
+///
+/// The engine owns a read handle onto the active runtime snapshot (to look up
+/// behaviors / concurrency / enabled gates at fire time) and a materializer
+/// handle (to create requests). Per-trigger mutexes serialize dispatches that
+/// share a trigger id so the concurrency gate and request materialization
 /// land atomically with respect to each other.
 pub(crate) struct TriggerEngine {
     #[allow(dead_code)]
@@ -157,7 +169,10 @@ impl TriggerEngine {
                 }
             });
         }
+        // Wait for all source drivers to terminate (either via cancel or
+        // their source returning `None`). Any panic in a driver task is
         // logged — individual source failures must not bring down the
+        // entire engine.
         while let Some(joined) = join_set.join_next().await {
             if let Err(error) = joined {
                 if !error.is_cancelled() {

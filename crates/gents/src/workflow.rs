@@ -57,6 +57,8 @@ pub fn workflow_barrier_projection_legal<'a>(
             .all(|state| WORKFLOW_TERMINAL_TOOL_STATES.contains(state))
 }
 
+/// A persisted workflow bridge row, read back from `AgentToolCall` by
+/// `workflow_group_id`. This is the durable projection the barrier is proven
 /// over and the source for idempotent adoption on a parent reclaim mid-barrier.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowBridgeRow {

@@ -506,13 +506,17 @@ impl SubagentSource {
         let parent = self.load_parent_request(&parent_request_id).await?;
         let snapshot = self.snapshot_rx.borrow().clone();
         // SECURITY (#377): under the current replication-trust posture this
+        // self-declared bridge DID is trusted once it names a configured paired
         // peer; ACP signing must eventually bind it to the actual remote author.
         let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
         if let (Some(bridge_did), Some(parent_did)) = (
             bridge_authoring_did.as_deref(),
             parent.as_ref().map(|parent| parent.agent_did.as_str()),
         ) {
+            // A paired-peer bridge is a remote authority boundary, so its DID
+            // must agree with any legacy parent replica still present. Local
             // legacy rows predate that invariant and keep using the parent row
+            // as their authority.
             if bridge_did != parent_did
                 && (snapshot.paired_peer_dids.contains(bridge_did)
                     || snapshot.paired_peer_dids.contains(parent_did))
@@ -735,6 +739,22 @@ impl SubagentSource {
         };
 
         // Orphan-child-escapes-cancel race (audit Finding 1). The parent may have
+        // been cancelled/interrupted in the window between the spawn hook writing
+        // the `running` bridge and this child create. The cascade's
+        // `interrupt_request(child_request_id)` would have no-oped because the
+        // child did not exist yet, so we re-check AFTER the create and interrupt
+        // the just-created child if a genuine cancel signal is present.
+        //
+        // CRUCIALLY, this re-check must be consistent with the live cascade
+        // (`transition/bridge.rs::bridge_cancel_cascade`) and the recovery cascade
+        // (`recovery.rs::cascade_child_request_id`): BOTH gate the child interrupt
+        // on `cancel_policy == Cascade` and refuse to cascade for detached
+        // children (`if self.cancel_policy != CancelPolicy::Cascade { return None }`
+        // / `cascade_child_request_id` returns `None` unless Cascade). A
+        // DETACHED/background-detached child outlives its parent. So we ONLY
+        // interrupt when the bridge policy is Cascade AND a real cancel signal is
+        // present. A parent that completed NORMALLY is NOT a cancel signal — a
+        // cleanly-completed parent never cascade-cancels its tools anywhere else.
         let bridge_cancel_policy = row.cancel_policy();
         if bridge_cancel_policy != CancelPolicy::Cascade {
             tracing::debug!(

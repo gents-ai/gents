@@ -1,6 +1,21 @@
 //! Audience-unbound bearer pairing invite (`dabear1-`) and its claim record.
+//!
+//! A bearer invite is the scan-one-QR counterpart of the DID-bound `dapair1-`
+//! invite: it carries the issuer's identity, transport ticket, a single-use
 //! nonce, and a scope template — but **no membership grant**, because the
+//! claiming device's DID is unknown at mint. The claimant binds itself at
+//! claim time by writing a self-signed [`BearerClaimRecord`] that replicates
+//! to the issuer; the issuer's bearer-claim reconciler validates both
 //! signatures, burns the nonce in its own `ConsumedInviteNonce` ledger, and
+//! authors the `NetworkMembership` (plus the `ReciprocalConversationIntent`
+//! for `conversation` templates).
+//!
+//! Deliberately a distinct type and prefix rather than an `InviteToken`
+//! version bump: the DID-bound v5 join path is untouched, and consumers
+//! dispatch on the prefix. Mirrors the [`crate::network_token::NetworkPointer`]
+//! precedent ("carries no grant; the admin authors the actual membership").
+//!
+//! Modeled in `Proofs/PeerRegistryDiscovery/BearerClaim.lean`: admission
 //! requires the issuer signature over the token AND the claimant signature
 //! over the claim, token freshness, and the nonce not already bound to a
 //! different claimant. The nonce ledger lives on the **authority**, not the
@@ -24,6 +39,7 @@ pub struct BearerInviteToken {
     pub peer_id: String,
     pub ticket: String,
     /// Single-use claim nonce. Burned in the ISSUER's `ConsumedInviteNonce`
+    /// ledger at claim-processing time, bound to the admitted claimant DID.
     pub nonce: String,
     pub network_id: String,
     pub issued_at: String,
@@ -72,6 +88,8 @@ pub fn decode_bearer(raw: &str) -> Result<BearerInviteToken> {
     }
 }
 
+/// CBOR of the token with `sig` zeroed — the bytes the issuer signs and the
+/// claim processor verifies. Covers every field including `v` (downgrade
 /// guard), `nonce`, `network_id`, `template`, and `network`.
 pub fn bearer_signing_payload(token: &BearerInviteToken) -> Vec<u8> {
     let mut unsigned = token.clone();
@@ -82,12 +100,19 @@ pub fn bearer_signing_payload(token: &BearerInviteToken) -> Vec<u8> {
     bytes
 }
 
+/// Canonical signing form of a `PairingBearerClaim` row: the claimant's
+/// self-signed redemption of a bearer token. `sig` is the claimant DID's
 /// signature over [`signing_payload`](BearerClaimRecord::signing_payload).
+///
 /// The claim row grants nothing by itself (mirrors the Lean
+/// `unsigned_claim_grants_nothing` / `join_request_grants_nothing`
+/// obligations): authority lives in the issuer-side claim reconciler, which
 /// verifies the embedded token's issuer signature and this record's claimant
 /// signature before authoring any membership.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BearerClaimRecord {
+    /// The full encoded `dabear1-` token being redeemed. Embedding the token
+    /// keeps the issuer stateless at mint: the token is self-authenticating to
     /// its issuer, and revocation-before-claim is burning the nonce.
     pub token: String,
     pub claimant_did: String,

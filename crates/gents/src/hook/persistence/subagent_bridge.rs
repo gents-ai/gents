@@ -123,6 +123,9 @@ impl DefraSessionHook {
             else {
                 if now >= parent_deadline_at {
                     // Terminalize the bridge as dead (parent deadline exceeded
+                    // before the child was ever materialized), mirroring the
+                    // running-edge deadline path so the bridge does not leak in
+                    // a `running` state.
                     if let Some(mut lifecycle) =
                         self.take_owned_in_flight_lifecycle(internal_call_id).await
                     {

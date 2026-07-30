@@ -1,5 +1,3 @@
-//! Shared substrate for any DefraDB peer participating in a `gents`
-
 pub mod bearer_token;
 pub mod client_protocol;
 pub mod graphql;

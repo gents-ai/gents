@@ -6,7 +6,15 @@ use serde::{Deserialize, Serialize};
 
 use super::templates::PairingFilters;
 
+/// Operator-set desired pairing for one peer.
+///
+/// `replicator_filter` is the per-pairing scope filter resolved from the
+/// pairing's scope template (empty == unfiltered). It is part of the
+/// *replicator identity*: every replicator in this pairing carries this
+/// per-collection filter map, so a changed map makes the `(address, filters)`
 /// identity distinct and forces a teardown+install — mirroring the Lean
+/// `PairingReconcile.ReplicatorId = (address, ReplicatorFilter)` and
+/// `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
     pub collections: BTreeSet<String>,
@@ -108,7 +116,15 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::TeardownCollection(c.clone()));
     }
+    // Replicator identity is (address, filter, collections). A managed
+    // replicator whose desired filter differs from the applied filter, or
+    // whose remotely-observed collection set differs from the desired set, is
+    // a *distinct* identity (Lean `filter_change_distinct_identity`,
+    // `collections_change_distinct_identity`): tear down the old identity and
+    // install the new one, even though the address is unchanged. The
     // collections comparison fences the layer-order race where a replicator
+    // installed from the data-plane layer alone silently kept its narrow
+    // collection set after the control-plane layer merged in.
     let filter_changed = desired.replicator_filter != applied.replicator_filter;
     let desired_replicator_collections = desired.effective_replicator_collections();
     for r in desired

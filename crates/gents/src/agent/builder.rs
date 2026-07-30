@@ -1,4 +1,3 @@
-// Soft-cap justified: single builder type with a linear fluent API; splitting
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;

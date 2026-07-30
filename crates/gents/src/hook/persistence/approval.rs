@@ -1,4 +1,14 @@
 //! Held-tool-call approval watcher.
+//!
+//! A tool named in `ToolSelection.approval_required_tools` persists its
+//! `AgentToolCall` row in `awaitingApproval` (the Lean `holdForApproval`
+//! transition) instead of dispatching. This module drives the held call to
+//! its verdict: it polls for the first matching `AgentToolApproval` document
+//! (first decision wins; later documents are ignored) and follows the
+//! Lean-fenced edges — `approve` (→ running, tool dispatches), `deny`
+//! (→ failed, `approvalDenied`), `cancelWhileHeld` (interrupt), or
+//! `timeoutWhileHeld` (the call keeps aging against `deadline_at`; an
+//! unanswered approval times out like any other stall).
 
 use std::time::Duration;
 
@@ -141,6 +151,7 @@ impl DefraSessionHook {
                 }
             }
 
+            // Held calls keep aging against deadline_at: an unanswered
             // approval must not become a zombie.
             if Utc::now() >= deadline_at {
                 let mut map = self.in_flight_lifecycles.lock().await;

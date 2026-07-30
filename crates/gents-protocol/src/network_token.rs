@@ -1,5 +1,19 @@
 //! Canonical signing payloads for the network control-plane records, plus the
+//! `danet1-` network-bootstrap pointer token.
+//!
+//! The four control-plane DefraDB collections (`AgentNetwork`,
+//! `NetworkMembership`, `PeerEndpoint`, `NetworkJoinRequest`) each carry a
 //! signature over their content. The records here are the *canonical signing
+//! form* of those rows: the content fields plus a `sig` field that is zeroed
+//! when computing the bytes to sign/verify. CLI, runtime, and tests construct
+//! the same struct and therefore sign identical bytes — mirroring
+//! [`crate::pairing_token::signing_payload`].
+//!
+//! The `danet1-` [`NetworkPointer`] is the network-bootstrap analogue of the
+//! pairwise `dapair1-` invite: it identifies a network and how to reach its
+//! admin, but carries **no membership grant** (membership is authored by the
+//! admin as a `NetworkMembership` row). Encoding mirrors the invite token:
+//! CBOR (ciborium) → base58 → `"danet1-"` prefix.
 
 use std::io::Cursor;
 
@@ -25,6 +39,7 @@ fn digest16_base58(left: &str, right: &str) -> String {
     bs58::encode(&digest[..16]).into_string()
 }
 
+/// Canonical signing form of an `AgentNetwork` row. `sig` is the admin DID's
 /// signature over [`signing_payload`](NetworkRecord::signing_payload).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkRecord {
@@ -37,6 +52,7 @@ pub struct NetworkRecord {
     pub sig: Vec<u8>,
 }
 
+/// Canonical signing form of a `NetworkMembership` row. `sig` is the admin DID's
 /// signature over [`signing_payload`](MembershipRecord::signing_payload).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembershipRecord {
@@ -49,6 +65,7 @@ pub struct MembershipRecord {
     pub sig: Vec<u8>,
 }
 
+/// Canonical signing form of a `PeerEndpoint` row. `sig` is the member DID's
 /// signature over [`signing_payload`](EndpointRecord::signing_payload).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointRecord {
@@ -60,6 +77,7 @@ pub struct EndpointRecord {
     pub sig: Vec<u8>,
 }
 
+/// Canonical signing form of a `NetworkJoinRequest` row. `sig` is the candidate
 /// DID's signature over [`signing_payload`](JoinRequestRecord::signing_payload).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinRequestRecord {
@@ -107,6 +125,8 @@ pub const NETWORK_POINTER_PREFIX: &str = "danet1-";
 pub const NETWORK_POINTER_VERSION: u8 = 1;
 
 impl NetworkPointer {
+    /// CBOR of this pointer with `sig` zeroed — the bytes signed/verified.
+    /// Covers `v` (downgrade guard), `network_id`, `admin_did`, `admin_ticket`,
     /// `issued_at`, and `nonce`. Mirrors [`crate::pairing_token::signing_payload`].
     pub fn signing_payload(&self) -> Vec<u8> {
         let mut unsigned = self.clone();

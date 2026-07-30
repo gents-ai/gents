@@ -1,4 +1,8 @@
 //! Signed `PeerEndpoint` heartbeat.
+//!
+//! `PeerRegistry` is self-asserted discovery state. The network-membership
+//! substrate uses this signed endpoint row instead: the member DID signs its
+//! current `(did, node_id, address, updated_at)` binding so peers can materialize
 //! network-derived pairings from cryptographically bound reachability.
 
 use std::sync::Arc;

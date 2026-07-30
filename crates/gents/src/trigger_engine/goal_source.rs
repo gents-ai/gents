@@ -1,4 +1,9 @@
 //! Durable-goal trigger source.
+//!
+//! The source wakes on DefraDB updates and periodically rescans. It only
+//! continues the canonical goal for a session after the whole session is idle,
+//! and it claims a durable parent-request latch before creating a deterministic
+//! same-session child request.
 
 use std::sync::Arc;
 use std::time::Duration;

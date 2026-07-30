@@ -117,6 +117,10 @@ impl Tool for DiscoverToolsTool {
         let query_lower = args.query.as_deref().map(|q| q.to_lowercase());
 
         // Contact services concurrently — one dead or slow endpoint must not
+        // serialize the rest (#622). Unreachable services are not contacted
+        // at all: the same preflight decision `call_tool` enforces (Lean
+        // MCPHealth coupling C1/C2); their registry row still renders below
+        // so the model can see them and why they list no tools.
         let fetches = services.iter().map(|svc| async {
             let sid = svc
                 .get("service_id")

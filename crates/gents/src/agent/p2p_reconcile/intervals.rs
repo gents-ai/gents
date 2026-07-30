@@ -1,4 +1,7 @@
 //! Env-overridable reconciler intervals.
+//!
+//! Production defaults match the historic constants; tests and live e2e runs can
+//! compress convergence by setting the env vars. Lean-neutral: no transition,
 //! invariant, or provider-input depends on these wall-clock values.
 
 use std::time::Duration;
@@ -7,6 +10,9 @@ pub const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(30);
 pub const DEFAULT_SWEEP: Duration = Duration::from_secs(30);
 pub const DEFAULT_STALE_MULTIPLE: u32 = 3;
 
+/// Parse a millisecond override. A non-positive (`0`) or unparsable value is
+/// rejected (returns `None`, so the default applies): `Duration::ZERO` would
+/// panic `tokio::time::interval`, and a zero interval is never a meaningful
 /// cadence — an operator typo must not crash the reconciler daemons.
 fn parse_ms(raw: &str) -> Option<Duration> {
     raw.trim()

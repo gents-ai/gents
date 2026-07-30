@@ -701,7 +701,10 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
         .is_some_and(mutation_returned_rows))
 }
 
+/// Delete every replicated twin for an agent/session goal. Goal identity is
 /// intentionally not unique at the schema layer because DefraDB unique indexes
+/// do not provide a distributed P2P uniqueness guarantee; clear must therefore
+/// sweep the complete ownership scope rather than delete only the canonical row.
 pub async fn delete_goals_for_session(
     node: &EmbeddedNode,
     agent_did: &str,

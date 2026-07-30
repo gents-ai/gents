@@ -1,4 +1,3 @@
-// Soft-cap justified: StreamWriter trait + its only production impl
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -319,7 +318,13 @@ impl DefraStreamWriter {
         .await
     }
 
+    /// Complete the response-side interrupt edge without rewriting
+    /// `AgentRequest`, which is terminalized separately as `interrupted`.
+    ///
+    /// `interrupted_at` — not the human-readable error text — is the durable
+    /// marker request repair classifies on, so this finalize stamps it
     /// atomically whenever the earlier standalone `write_interrupted_at` did
+    /// not survive.
     pub async fn finalize_interrupted_response(&self, doc_id: &str) -> Result<StreamResult> {
         self.finalize_inner(
             doc_id,

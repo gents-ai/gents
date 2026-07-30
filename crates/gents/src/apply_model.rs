@@ -1,5 +1,16 @@
 //! Reference implementation of the apply model mirroring
+//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`.
+//!
+//! This is test-only scaffolding: property tests and conformance tests
+//! exercise it, but production apply lives in `gents-cli`.
+//! Conformance cases (`tests/apply_conformance.rs`) anchor the production
+//! code to the semantics pinned here; property tests (`tests/apply_property.rs`)
+//! exercise `diff`, `apply_one`, `apply_prefix`, `retry_after_prefix`, and
+//! `apply_all` at generator scale.
+//!
 //! Variants, apply-order ranks, and `diff` ordering MUST agree with
+//! both the Lean `ApplyReconcile` module and the Rust
+//! `gents::Collection` enum.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,6 +23,9 @@ pub struct DocRef {
 }
 
 /// Mirrors the Lean `ApplyReconcile.DesiredFields` structure.
+/// `content` is the opaque payload; `refs` holds cross-document
+/// references that must point to strictly-lower-rank DocRefs for the
+/// manifest to be WellFormed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DesiredFields {
     pub content: String,
@@ -87,12 +101,14 @@ impl DiffReport {
     }
 }
 
+/// References declared by a desired-fields payload. Projects `.refs` from the
 /// `DesiredFields` struct, mirroring the Lean `referencesOf` function.
 pub fn references_of(payload: &DesiredFields) -> Vec<DocRef> {
     payload.refs.clone()
 }
 
 /// Default convergence diff. Mirrors Lean `diffManaged`: writes manifest rows
+/// and retracts absent rows only for manifest-authoritative collections.
 pub fn diff(m: &Manifest, l: &LiveState) -> DiffReport {
     diff_inner(m, l, false)
 }
@@ -199,6 +215,7 @@ pub fn retry_after_prune_prefix(m: &Manifest, l: &LiveState, prefix_len: usize) 
 }
 
 /// Manifest-realized predicate mirrored from Lean:
+/// every manifest document is present with the requested desired payload.
 pub fn manifest_realized(m: &Manifest, l: &LiveState) -> bool {
     m.docs
         .iter()

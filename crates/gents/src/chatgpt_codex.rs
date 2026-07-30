@@ -181,6 +181,8 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     let add_input = render_oauth_input(&fields, &[]);
     // `agent_did` is `@immutable` and `credential_id` is the unique key. On this DefraDB pin the
     // immutability check rejects re-sending an immutable field on a pre-existing document, so the
+    // `update` branch (re-login and per-request token rotation both land here) must omit it.
+    // `credential_id` is likewise only ever written in `add`. Mirrors session/conversation.rs.
     let update_input = render_oauth_input(&fields, &["agent_did"]);
     let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
     format!(

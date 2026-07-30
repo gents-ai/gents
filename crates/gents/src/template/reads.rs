@@ -23,7 +23,10 @@ pub fn validate_system_template(template: &str, cat: &Catalog) -> Result<(), Tem
         match cat.volatility(r) {
             Some(Volatility::RunConstant) => {
                 // Cache-safety is about volatility, but the catalog also models
+                // per-site availability; a run-constant var that is not declared
                 // available in the system preamble must not silently enter the
+                // cacheable prefix. Bind the guard to the catalog's own model so
+                // it stays correct as the catalog grows (fail-closed by default).
                 if !cat.is_available_at(r, Site::System) {
                     return Err(TemplateError::Render(format!(
                         "system template references `{r}`, which is run-constant but not \

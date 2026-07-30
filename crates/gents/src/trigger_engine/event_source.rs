@@ -1,4 +1,19 @@
 //! Event-trigger `TriggerSource`.
+//!
+//! Subscribes to DefraDB document events and emits `FireIntent`s whenever an
+//! event from a `source_collection` referenced by the active runtime
+//! snapshot's `active_event_triggers` lands. The subscription set is kept in
+//! sync with the snapshot generation — see `reconcile_subscriptions` (Task 19).
+//!
+//! This file lands in staged tasks:
+//! - Task 18: skeleton only — struct, constructor, no-op `next_fire` stub.
+//! - Task 19: `reconcile_subscriptions` drives the desired-collections set
+//!   from the snapshot at each generation bump.
+//! - Task 20: full `next_fire` loop (poll subscription, filter by desired
+//!   collections, build `FireIntent`).
+//! - Task 21 (this file): filter probe + doc-var hydration via an
+//!   introspected source-doc projection cached per source collection.
+//! - Task 22: `on_result` callback body for bookkeeping writes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -17,7 +32,14 @@ use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
 
+/// Cap for the one-shot existing-docs seed query run when a collection is
+/// newly admitted to `desired_collections`. The goal of the seed is to
+/// enforce spec's forward-only semantic: pre-existing docs in the source
 /// collection must not fire as "created" when the first event arrives.
+/// Collections larger than the cap are still safe (we just log a warning
+/// and accept that docs beyond the cap may appear as "first-seen" on their
+/// next event); v1 doesn't target catalog-scale source collections, so a
+/// conservative limit is fine.
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
 const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -36,6 +58,8 @@ pub struct EventSource {
     seen_docs: HashMap<String, HashSet<String>>,
     pending_intents: Mutex<VecDeque<FireIntent>>,
     /// Periodic live rescan that closes the lossy-subscription gap. The
+    /// interval is stored on the source so a busy stream of `next_fire()` calls
+    /// does not reset the cadence.
     rescan_tick: tokio::time::Interval,
 }
 
@@ -45,7 +69,24 @@ struct SourceDocIdRow {
     doc_id: String,
 }
 
+/// Per-source-collection schema cache.
+///
+/// `fields_for(collection, node)` runs a one-shot GraphQL introspection
+/// (`__type(name: "<collection>") { fields { name } }`) the first time a
+/// given source collection is seen, then memoizes the resulting projectable
+/// field list. Subsequent hydrations for the same collection are a pure
+/// cache hit. Entries are never invalidated — the active schema for a
+/// collection is stable across the runtime's lifetime, and any schema
+/// migration produces a new collection version whose identity the fire
+/// path treats as a distinct source.
+///
+/// Filtering: DefraDB's GraphQL introspection exposes several auto-
 /// generated fields on every collection (aggregates like `_count`,
+/// `_sum`, and per-field wrappers). These are not direct scalars and
+/// cannot be included in a plain projection — selecting them without
+/// required arguments produces a parse error. We filter aggressively:
+/// drop anything starting with `_` (GraphQL meta / DefraDB aggregate) and
+/// anything whose name is an upper-case aggregate keyword.
 #[derive(Default)]
 pub(crate) struct SourceSchemaCache {
     by_collection: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
@@ -336,8 +377,21 @@ impl EventSource {
         self.collection_id_to_name.get(collection_id).cloned()
     }
 
+    /// Run the trigger's `filter` against the source doc, narrowed by
+    /// `_docID`, via a `limit: 1` probe. Returns `Ok(true)` when the doc
+    /// matches (so the fire should proceed), `Ok(false)` when it doesn't
+    /// (so the dispatch loop should skip), and `Err` when the probe query
+    /// itself errored — the caller treats errors as "skip this fire" so a
+    /// transient GraphQL failure doesn't brick the source.
+    ///
     /// Trust boundary: `trigger.filter` is operator-authored and validated
+    /// at apply time (the apply path rejects ill-formed filter objects
+    /// before the trigger ever lands in `active_event_triggers`). It's
+    /// interpolated directly as a filter-object fragment — we do NOT run
     /// it through `escape_graphql_string`, because that helper escapes
+    /// scalar string literals and would break the object syntax. The
+    /// `_docID` value, which comes from the event payload (external
+    /// input), IS escaped.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
@@ -474,7 +528,22 @@ impl EventSource {
         });
     }
 
+    /// Build a `FireIntent` for every active `EventTrigger` whose
+    /// `source_collection` matches `collection_name` AND `event_kind` matches
+    /// `kind`. Each candidate's operator-authored filter is probed against
+    /// `source_doc_id`; candidates that miss the filter or whose probe errors
+    /// are skipped (those failures are isolated to the one candidate — they
     /// must not prevent the other matching triggers from firing). A
+    /// successful candidate is hydrated via `fetch_source_doc` and wrapped in
+    /// a `FireIntent` with a bookkeeping `on_result` callback identical to
+    /// the single-trigger path.
+    ///
+    /// Candidates are ordered by `trigger_id` for determinism so tests and
+    /// dispatch order are stable across ticks.
+    ///
+    /// Replaces the former `first_matching_trigger` helper, which silently
+    /// dropped all but one matching trigger per event (and, worse, dropped
+    /// the whole event when that one trigger's filter missed).
     async fn build_intents_for_all_matching(
         &self,
         snapshot: &ActiveRuntimeSnapshot,
@@ -648,7 +717,11 @@ impl TriggerSource for EventSource {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>> {
         Box::pin(async move {
             // Outer loop: reconcile-on-generation-bump, then race subscription
+            // vs. snapshot-change vs. cancel. `None` here means "source is
+            // permanently done, drop it" — an idle tick or an unmatched event
             // must not exit. Return `None` only on cancel or subscription
+            // channel closure; keep looping otherwise so the engine's outer
+            // driver doesn't teardown the source on the first miss.
             loop {
                 if let Some(intent) = self
                     .pending_intents
@@ -678,6 +751,8 @@ impl TriggerSource for EventSource {
                 }
 
                 // Step 3: race the subscription against snapshot changes and
+                // cancel. Subscription is guaranteed Some here by the check
+                // above, so we can take a &mut borrow for the recv poll.
                 let mut message = None;
                 let mut dropped = 0;
                 let rescan_due = {
@@ -726,6 +801,7 @@ impl TriggerSource for EventSource {
 
                 if dropped > 0 {
                     // Dropped events are a correctness hazard. The periodic
+                    // rescan closes the gap for created docs, and this log
                     // keeps the lossy event visible operationally.
                     tracing::warn!(
                         dropped = dropped,

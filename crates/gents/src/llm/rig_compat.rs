@@ -1,5 +1,3 @@
-//! Converters between Gents-native [`crate::llm`] types and rig's, used only at
-
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -511,6 +509,9 @@ pub(crate) fn from_rig_user_content(
         R::ToolResult(result) => message::UserContent::ToolResult(from_rig_tool_result(result)),
         R::Image(image) => message::UserContent::Image(from_rig_image(image)),
         // Audio/Video/Document inbound conversions are lossy-stubbed: nothing
+        // upstream produces them on the consume seam today, and the native
+        // variants exist for outbound fidelity. Extend when a provider sends
+        // them.
         R::Audio(_) => {
             tracing::warn!("audio content discarded at the inbound rig seam (lossy stub)");
             message::UserContent::Audio(message::Audio::default())

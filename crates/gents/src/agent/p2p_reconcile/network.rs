@@ -1,4 +1,10 @@
 //! Network-membership materializer.
+//!
+//! This is the signed control-plane analogue of registry discovery. It derives
+//! `source="network"` `PeerPairingDesired` rows from:
+//! - one admin-signed `AgentNetwork`;
+//! - active admin-signed `NetworkMembership` rows;
+//! - fresh member-signed `PeerEndpoint` rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -40,8 +46,20 @@ pub fn derive_network_desired(
         .collect()
 }
 
+/// The network-membership materialization gate, factored out of
+/// [`GraphqlNetworkStore::load_materializable_entries`] so it is testable
+/// directly against signed records (the GraphQL store only adds the query +
+/// row→record parsing on top).
+///
+/// Returns the materializable endpoints: each backed by a valid admin-signed
+/// `AgentNetwork`, an **active** admin-signed `NetworkMembership`, and a fresh
+/// member-signed `PeerEndpoint`. This is the executable embodiment of Lean
+/// `decideMaterializable` / `admittedMember` / `memberSignedEndpoint`
+/// (`Proofs/PeerRegistryDiscovery/NetworkMembership.lean`): an invalid network
 /// signature yields the empty set; a revoked (`status != "active"`) or forged
+/// membership, or a forged/stale endpoint, each drops that member. `verify_record`
 /// is the signature check; `now`/`stale_after` parameterize freshness so callers
+/// (and conformance) control the clock.
 pub async fn select_materializable_entries(
     identity: &dyn AgentIdentity,
     network: &NetworkRecord,
@@ -51,6 +69,7 @@ pub async fn select_materializable_entries(
     stale_after: Duration,
 ) -> Result<Vec<NetworkEndpointEntry>> {
     // Forged/invalid network root → nothing is materializable (mirrors the Lean
+    // `validNetwork` precondition of `admittedMember`).
     if !verify_record(
         identity,
         &network.admin_did,
@@ -126,6 +145,11 @@ pub async fn select_materializable_entries(
     Ok(out)
 }
 
+/// Return DIDs carrying an explicit, valid admin-signed revocation.
+///
+/// Absence is deliberately not revocation: reciprocal conversation pairing
+/// does not require positive network membership. This negative gate only
+/// honors `status="revoked"` rows from the selected network after verifying
 /// both the network root and membership signature.
 pub async fn select_revoked_member_dids(
     identity: &dyn AgentIdentity,
@@ -177,7 +201,10 @@ pub async fn select_revoked_member_dids(
     Ok(revoked)
 }
 
+/// Return the signed materialized endpoint for a Layer-2 data-plane peer. The
 /// endpoint set has already passed the network/membership/signature/freshness
+/// gate in [`select_materializable_entries`], so callers must use the returned
+/// address as the authoritative dial target instead of trusting a data-plane row.
 pub fn materializable_entry_for_peer<'a>(
     entries: &'a [NetworkEndpointEntry],
     peer_id: &str,
@@ -222,7 +249,10 @@ impl V5Rejection {
     }
 }
 
+/// Resolved inputs to the v5 join-admission decision. The caller (the CLI join
 /// path) performs the async signature verifications and the deterministic
+/// network-id recompute and passes the resolved booleans here, so the decision
+/// itself stays a pure, conformance-testable function.
 pub struct V5AdmissionClaim<'a> {
     pub issuer_did: &'a str,
     pub joiner_did: &'a str,
@@ -237,7 +267,15 @@ pub struct V5AdmissionClaim<'a> {
 }
 
 /// Pure v5 join-admission decision — the executable mirror of Lean
+/// `admitsV5Join`. Admit iff: the issuer is the network admin (admin-issued
+/// only); the signed network root verifies; the network id is consistent; the
+/// carried grant is an active admin-signed membership for THIS network
+/// (`admittedMember`); and it names the joiner as its member. Single-use /
 /// replay of the invite nonce is enforced separately by the caller
+/// (`consume_invite_nonce`; Lean `replay_rejected`).
+///
+/// The check order matches the Lean conjunction so the rejection reasons line up
+/// with the model's negative theorems.
 pub fn decide_v5_admission(claim: &V5AdmissionClaim) -> Result<(), V5Rejection> {
     if claim.issuer_did != claim.network_admin_did {
         return Err(V5Rejection::IssuerNotAdmin);
@@ -625,8 +663,15 @@ pub fn delete_network_desired_mutation(peer_id: &str) -> String {
 }
 
 /// Verify a signed control-plane record. A signature that is cryptographically
+/// invalid OR malformed (wrong length, garbage bytes) is **not verified**: we
+/// return `Ok(false)` so the caller skips that single row, rather than
+/// propagating an error that would fail the whole materialization tick. A
 /// forged/corrupt row replicated into the control plane must not be able to halt
+/// the entire mesh — it is simply not materialized (fail-closed, per-row). The
 /// underlying `verify` returns `Err` for malformed signatures, so this mapping
+/// is what makes the call sites' warn-and-skip behavior actually hold for
+/// forged input (the executable embodiment of `unsigned_membership_not_materialized`
+/// / `forged_endpoint_not_materializable`).
 async fn verify_record(
     identity: &dyn AgentIdentity,
     signer_did: &str,

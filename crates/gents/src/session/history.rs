@@ -137,6 +137,7 @@ async fn save_message_inner(
     let escaped_role = escape_graphql_string(role);
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
 
+    // `agent_did` is only written in the `add` branch: it is the immutable scope
     // key, stamped once at create. The `update` branch must not rewrite it.
     let mutation = format!(
         r#"mutation {{

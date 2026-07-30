@@ -11,10 +11,36 @@ use tokio::sync::watch;
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queue};
 
+/// Request a soft interrupt by latching `interrupt_requested_at` on the
 /// AgentRequest document. Idempotent: if the field is already set, the
+/// current timestamp is preserved and this call is a no-op.
+///
+/// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
+/// polls this field and signals the daemon to cancel in-flight inference and
+/// transition the request to `interrupted`. Writing this field on a terminal
+/// request is harmless — the lifecycle state machine filters terminal statuses.
+///
+/// # Concurrent callers
+///
+/// Under two concurrent `interrupt_request` callers both observing an empty
+/// field, both will write; the last mutation wins. The latched value under
+/// contention is therefore "interrupt requested near T" rather than "at
+/// exactly T" — acceptable for audit semantics but weaker than a strict
+/// first-writer-wins contract. S7 (`interrupt_monotonicity`) holds on the
+/// ideal state machine as-stated (the field is never unset once set); the
 /// physical race only affects which timestamp gets persisted, not whether
+/// a timestamp is persisted.
+///
+/// In P2P-replicated deployments, independent writers on different nodes
+/// may each stamp, and CRDT merge will pick whichever timestamp sorts
+/// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
 /// preserved; microsecond-exact ordering is not.
 pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+    // Combined existence + latch-status check. We distinguish "no row" from
+    // "row with empty field" so that interrupting a bogus request id reports
+    // an error instead of silently succeeding with a no-op mutation.
+    //
+    // Pre-check is also an optimization: the submitter latches on first write,
     // and subsequent writers must not clobber the timestamp. DefraDB's update
     // mutation does not have an atomic "set-if-null" so we read-then-write.
     let escaped_request_id = escape_graphql_string(request_id);
@@ -72,6 +98,9 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
         }}"#
     );
     // The latch mutation is idempotent and can race the source-spawn observer
+    // or another interrupt caller. DefraDB reports those overlapping commits
+    // as transient transaction conflicts, so use the runtime's bounded retry
+    // seam instead of surfacing a flaky operator failure.
     let resp = crate::retry::execute_graphql_with_conflict_retry(
         node,
         &mutation,
@@ -88,6 +117,8 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
                 .join("; ")
         );
     }
+    // Defensive: confirm at least one row was updated. Zero rows would mean
+    // either the row was deleted between lookup and mutation, or another
     // writer raced us (idempotent). Treat as success, log for observability.
     let updated = resp
         .data
@@ -275,8 +306,16 @@ pub struct InterruptIntent {
 
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Spawn an observer task that polls `interrupt_requested_at` for a single
+/// request and signals the channel when the field flips to non-null.
+///
 /// Polls rather than subscribes because DefraDB lacks per-field watchpoints;
+/// the 2s interval is a compromise between Esc UX latency and DB load.
+///
+/// The task exits when:
 ///   - the channel has been signaled once (idempotent latch), OR
+///   - the shutdown receiver changes, OR
+///   - the returned `JoinHandle` is aborted.
 pub fn spawn_request_interrupt_observer(
     node: Arc<EmbeddedNode>,
     request_doc_id: String,

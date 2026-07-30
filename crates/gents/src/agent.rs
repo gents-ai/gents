@@ -131,7 +131,10 @@ impl Gents {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
+        // Run the AgentBehavior migration before any behavior read so that
+        // desktops, embedders, and CLI serve paths all see description/summary
         // even when the DB was created before branch #377. This is idempotent
+        // (field-presence-checked) and cheap on already-migrated DBs.
         migration::ensure_agent_behavior_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let document_runtime_context = DocumentResolveContext {
@@ -197,6 +200,8 @@ impl Gents {
         })
     }
 
+    /// The local prober's measured backend health — the truthful signal
+    /// behind effective availability. Exposed for embedders and for the
     /// completion-retry path (#631) to make fail-fast-vs-backoff decisions.
     pub fn backend_health(&self) -> BackendHealthMap {
         self.backend_health.clone()
@@ -206,7 +211,13 @@ impl Gents {
         &self.behaviors
     }
 
+    /// Returns the deployment principal record.
+    ///
+    /// All DefraDB ops issued by this `Gents` are signed by
+    /// `self.principal.identity`. Two `AgentBehavior`s on the same
+    /// `Gents` share this Arc by construction (single-principal
     /// per snapshot invariant), so any DID-keyed permission decision
+    /// returns identical results for behaviors on this deployment.
     pub fn principal(&self) -> &AgentPrincipal {
         &self.principal
     }

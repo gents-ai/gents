@@ -1,5 +1,8 @@
 // Soft-cap justified: single impl block on RequestLifecycle; all methods are
 // atomic DB mutations that must stay together to preserve the Lean-spec
+// transition invariants (S1, S3, S6). Splitting by transition direction
+// (complete/fail/supersede) would require re-exporting private helpers across
+// submodules with no readability gain.
 use anyhow::Context;
 
 use super::rows::{RequestStatusTransition, RequestViewRow};
@@ -23,6 +26,7 @@ fn request_view_is_terminal(view: &RequestViewRow) -> bool {
 impl RequestLifecycle {
     pub async fn record_failure_reason(&mut self, reason: &str) -> Result<()> {
         // Latch before I/O so the subsequent atomic terminal mutation still
+        // carries the reason if this best-effort standalone write fails.
         self.failure_reason = Some(reason.to_string());
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
@@ -339,6 +343,8 @@ impl RequestLifecycle {
     }
 
     /// Atomically persist the failure reason with the request's terminal edge.
+    /// The reason is latched in memory before any storage attempt, so callers do
+    /// not depend on a separate `failure_reason` mutation succeeding first.
     pub async fn fail_with_reason(&mut self, reason: &str) -> Result<()> {
         self.failure_reason = Some(reason.to_string());
         self.fail().await

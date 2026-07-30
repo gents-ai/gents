@@ -1,5 +1,17 @@
 //! Presentation-neutral timeline ordering (#608 parity).
+//!
+//! Every client shell — desktop today, mobile next — must render a session's
+//! transcript in the **same order**, interleaving assistant/user messages with
+//! their tool groups, placing the pending turn, appending orphan tool groups,
+//! and the live-assistant overlay last. The *order and the message↔tool-group
+//! partition* are semantics; only the pixels are presentation.
+//!
 //! That ordering used to live only in the desktop Tauri bridge
+//! (`build_rendered_timeline`), unshared and unfenced — the single biggest
+//! parity risk, because a second shell that re-interleaves will drift on order
+//! and on which tool group is an orphan. This module is the shared, Lean-fenced
+//! skeleton (`proofs/Proofs/ClientShell/Timeline.lean`): shells compute the slot
+//! order here, then map each neutral slot to their own rich item.
 
 /// A message's role, reduced to what the ordering cares about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,11 +20,11 @@ pub enum TimelineRole {
     Assistant,
 }
 
-/// The ordering-relevant projection of one transcript message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessageInput {
     pub key: String,
     /// Ordering key and tool-group attach key. `None` sorts first, matching the
+    /// `BTreeMap<Option<i64>, _>` grouping the desktop bridge uses.
     pub sequence: Option<i64>,
     pub role: TimelineRole,
     pub emits_item: bool,
@@ -22,6 +34,7 @@ pub struct TimelineMessageInput {
 /// The live-assistant overlay's ordering-relevant state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayInput {
+    /// True when the overlay's content equals the trailing assistant message
     /// already in the timeline — in which case it must NOT be re-emitted.
     pub matches_trailing_assistant: bool,
 }
@@ -42,6 +55,7 @@ pub enum TimelineSlot {
 
 /// The BTreeMap ordering the desktop bridge relies on: `None` first, then
 /// ascending. Kept explicit so the ordering is a stated contract, not an
+/// accident of a collection type.
 fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     match (left, right) {
         (None, None) => false,

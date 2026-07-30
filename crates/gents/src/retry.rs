@@ -1,4 +1,9 @@
 //! Inference retry with exponential backoff and jitter.
+//!
+//! Wraps the streaming inference call with configurable retry behavior.
+//! Only retries when the error is classified as transient (connection
+//! failures, rate limits, timeouts) — permanent errors (auth, context
+//! length) fail immediately.
 
 use std::time::Duration;
 
@@ -32,6 +37,7 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// Compute delay for a given attempt (0-indexed) with exponential
     /// backoff and +/-25% jitter.
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let base = self.base_delay_ms;
@@ -124,7 +130,12 @@ pub async fn execute_graphql_with_conflict_retry(
     }
 }
 
+/// Retry a terminal persistence operation on every storage error, not only a
+/// recognized transaction-conflict string. Terminal request/response writes
 /// are idempotent and guarded by source state, so retrying an ambiguous or
+/// transient local-storage failure is safe. The bound prevents one request
+/// from monopolizing its behavior executor; durable live/startup repair takes
+/// over after exhaustion.
 pub(crate) async fn retry_terminal_persistence_operation<T, F, Fut>(
     operation: &str,
     max_retries: u32,

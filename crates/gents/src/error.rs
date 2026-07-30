@@ -1,4 +1,6 @@
 //! Domain-specific error types for the Gents runtime.
+//!
+//! Replaces bare `anyhow::Result` on public boundaries with typed errors
 //! so callers can distinguish retryable failures from permanent ones.
 
 use thiserror::Error;
@@ -210,8 +212,14 @@ fn provider_message_has_any_status(message: &str, statuses: &[u16]) -> bool {
         .any(|status| error_message_has_status(message, *status))
 }
 
+/// Detects vLLM's intermittent 400 raised when its tool-call parser cannot
+/// `json.loads` the model's streamed tool arguments. The response body carries a
+/// Python `json.decoder.JSONDecodeError`, which always renders with the positional
 /// signature `"... line L column C (char N)"`, wrapped in a `"BadRequestError"`
 /// envelope. We key off that signature rather than the variable leading phrase
+/// (`Expecting ',' delimiter`, `Invalid \escape`, `Expecting property name`, ...) so
+/// every decode variant is covered without depending on backslash escaping in the
+/// wire body. Genuine request-shape 400s (e.g. `duplicate field max_tokens`) lack the
 /// JSONDecodeError signature and stay permanent.
 pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) -> bool {
     message.contains("BadRequestError")

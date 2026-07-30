@@ -130,7 +130,13 @@ pub(super) fn sorted_children(
     Ok(children)
 }
 
+/// Stack of `.gitignore` matchers accumulated while descending, checked
+/// nearest-directory-first so deeper files override shallower ones
+/// (including `!` whitelists). Applied to any `.gitignore` encountered in
+/// the walked tree — nested repos under a home-directory tool root get
 /// their generated junk filtered before it consumes walk budget. Note:
+/// `.gitignore` files ABOVE the walk root (e.g. a repo root above a pruned
+/// glob prefix) are not consulted; walks are filtered by what they can see.
 pub(crate) struct GitignoreStack {
     stack: Vec<ignore::gitignore::Gitignore>,
 }

@@ -1,9 +1,14 @@
 //! Typed discriminator for the set of operator-controlled collections.
+//!
 //! Mirrors the Lean inductive `ApplyReconcile.Collection` in
+//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`. Any change
+//! to the set of variants, their GraphQL names, or their apply-order
+//! ranks must be reflected in the Lean module.
 
 use std::fmt;
 
 // PartialOrd/Ord derived for BTreeMap<DocRef, _> use in apply_model; ordering
+// is declaration order, NOT apply_order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Collection {
     AgentPrincipal,
@@ -95,6 +100,8 @@ impl Collection {
     }
 
     /// Apply ordering rank: lower ranks are written first so referenced
+    /// documents exist before referrers. Mirrors
+    /// `ApplyReconcile.Collection.applyOrder` in Lean.
     pub fn apply_order(self) -> u8 {
         match self {
             Collection::InferenceBackend

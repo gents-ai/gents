@@ -1,4 +1,9 @@
 //! Registry for recovery sweeps that must run on the live daemon tick.
+//!
+//! Lean owns the sweep vocabulary (`RecoverySweep.sweepId`, cadence, and
+//! `rustFunction`). Rust owns the executable registry the daemon iterates.
+//! Keeping the mapping explicit here makes new periodic sweeps discoverable by
+//! conformance tests instead of burying them as ad hoc calls in the observer.
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;

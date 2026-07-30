@@ -61,7 +61,17 @@ impl ConversationFields<'_> {
     }
 }
 
+/// Write a conversation: update the doc addressed by `doc_id`, or create one
+/// when the session has no doc yet.
+///
+/// **Never upsert by a `session_id` filter (#693).** `session_id` is unique in
 /// the current schema, but DefraDB cannot add an index to an already-created
+/// collection, so stores whose `AgentConversation` predates the unique index
+/// carry duplicate rows permanently (replication can mint them too). A
+/// `filter: { session_id }` upsert matches every duplicate and DefraDB refuses
+/// it with `cannot upsert multiple matching documents` — which bricked both
+/// startup recovery *and* ordinary request handling on the affected hosts.
+/// Addressing one `_docID` is what makes the write total on those stores; the
 /// Lean sweep contract pins the selector (`targetSelector = "_docID"`).
 async fn write_conversation_doc(
     node: &EmbeddedNode,
@@ -211,6 +221,7 @@ pub(crate) async fn update_conversation_status_if_latest_with_identity(
 ) -> Result<ConversationUpdateOutcome> {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped_agent_name = escape_graphql_string(agent_name);
+    // `agent_did` is intentionally not interpolated: it is the immutable scope
     // key and must never appear in an update mutation. The parameter is retained
     // for signature symmetry with the create-path identity helpers.
     let _ = agent_did;

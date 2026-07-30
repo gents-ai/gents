@@ -1,6 +1,19 @@
 //! Scheduled inference-backend prober (#640).
+//!
+//! Measures per-runtime reachability of enabled backends and keeps an
+//! in-memory [`BackendHealthMap`] that the admission/reconcile layer merges
+//! into effective availability. Reachability is observer-relative — each
+//! runtime's opinion governs only its own routing — so measured state is
+//! deliberately NOT persisted to the fleet-replicated `InferenceBackend`
+//! document. The shared document's `probe_status` stays the operator/bootstrap
+//! intent knob; the prober's only doc write is the recurring
+//! `unknown → healthy` promotion (closing the dead-at-startup gap the
+//! startup-only ratchet left open).
+//!
 //! The state machine mirrors `Proofs/BackendHealth/Transition.lean` exactly
 //! and is fenced by the generated `backend_health_cases`: K consecutive
+//! failures demote to `Unhealthy` (vetoing routing), a single success
+//! promotes back to `Healthy`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -34,6 +47,7 @@ impl Default for BackendProberOptions {
     }
 }
 
+/// Measured health of one backend as observed by THIS runtime.
 /// Mirrors `Proofs.BackendHealth.HealthState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendHealthState {
@@ -59,6 +73,7 @@ impl BackendHealthState {
 }
 
 /// Probe outcome vocabulary — mirrors `Proofs.BackendHealth.Event`.
+/// `ProbeFail` folds connect failure, non-2xx, and timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeEvent {
     ProbeSuccess,
@@ -73,6 +88,7 @@ struct BackendHealthEntry {
     last_error: Option<String>,
 }
 
+/// Public per-backend snapshot — the #631 signal surface (completion retry
 /// consults this for fail-fast-vs-backoff) and the metrics overlay source.
 #[derive(Debug, Clone)]
 pub struct BackendHealthSnapshot {

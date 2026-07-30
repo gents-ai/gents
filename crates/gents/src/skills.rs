@@ -1,4 +1,17 @@
 //! Runtime skill resolution — the executable realization of the privilege
+//! algebra proved in `proofs/Proofs/Skills.lean`.
+//!
+//! A [`Skill`] declares the tools it *depends on* (`tool_refs`); it never
+//! *grants* them (decision D3, Codex-faithful). [`effective_skills`] computes
+//! the per-behavior candidate set (decision D5: scope-on-skill inheritance +
+//! `skill_refs`/`skill_excludes`). [`skill_tools`] intersects a skill's
+//! declared refs with the behavior's resolved tool ceiling and degrades when a
+//! dep is missing, so activation can never widen the tool surface beyond the
+//! ceiling — the executable counterpart of `Skills.activation_subset_ceiling`.
+//!
+//! This module is pure (no DB / request plumbing). The runtime wiring that
+//! loads `Skill` documents and feeds these results into `prompt.rs` and
+//! `tool_surface` is layered on top of it.
 
 use std::collections::BTreeSet;
 

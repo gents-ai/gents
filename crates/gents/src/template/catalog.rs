@@ -1,5 +1,4 @@
 //! Runtime-owned variable catalog for prompt templating (#497).
-//! site availability. Behavior documents can reference variables, but cannot
 
 use std::collections::BTreeMap;
 

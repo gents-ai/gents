@@ -1,5 +1,3 @@
-//! Self-registration and heartbeat daemon for the `PeerRegistry` collection.
-
 use std::sync::Arc;
 use std::time::Duration;
 

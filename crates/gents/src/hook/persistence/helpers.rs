@@ -374,7 +374,16 @@ pub(super) fn json_string(value: serde_json::Value) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
 }
 
+/// Build a model-facing JSON envelope that embeds a potentially oversized
+/// result while staying inside the hook's truncation limits.
+///
+/// Skip reasons are bounded by `skip_tool_result` with no JSON awareness: if an
+/// embedded result pushes the envelope past the limits, the outer truncation
+/// slices the envelope mid-structure and the model receives corrupt JSON. So
+/// bound the embedded copy first at half the byte budget (headroom for JSON
 /// string escaping), and if escaping inflation still overflows the limits,
+/// fall back to a stub — the envelope must always survive the outer bound
+/// intact. The full output stays on the durable AgentToolCall row.
 pub(super) fn json_envelope_with_bounded_result(
     mut envelope: serde_json::Value,
     result_key: &str,

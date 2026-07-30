@@ -1,4 +1,14 @@
 //! Read-only structured query tool over DefraDB collections.
+//!
+//! `defra_query` lets an agent (or, in future, an external management surface)
+//! read documents from DefraDB collections through a structured
+//! `{collection, filter, fields, limit}` contract instead of hand-rolling
+//! GraphQL. It is strictly read-only and renders all interpolated content
+//! through [`crate::graphql::escape_graphql_string`].
+//!
+//! The query core ([`query::execute_query`]) is intentionally decoupled from
+//! the [`crate::llm::tool::Tool`] integration so the same logic can later back an
+//! external (e.g. MCP/HTTP) management surface.
 
 use std::sync::Arc;
 
