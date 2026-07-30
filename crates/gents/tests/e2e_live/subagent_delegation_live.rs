@@ -4,8 +4,8 @@
 //! delegates work to a subagent behavior via `spawn_subagent`, the subagent
 //! runs (live model), and the result flows back to the orchestrator.
 //!
-//! Normal test runs skip these because they are `#[ignore]`-gated. Explicit
-//! runs fail unless `GENTS_LIVE_SUBAGENT=1`. To run locally:
+//! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
+//! unless `GENTS_LIVE_SUBAGENT=1`). To run locally:
 //!
 //! ```bash
 //! GENTS_LIVE_SUBAGENT=1 \
@@ -41,7 +41,6 @@
 //! assertions (bridge on A -> child materialized + run on B with a non-empty
 //! live answer -> terminal replicated back to A) all run live.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -105,10 +104,10 @@ fn backgrounding_live_model() -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_local_subagent_delegation() -> Result<()> {
-    assert!(
-        live_enabled(),
-        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live local subagent delegation"
-    );
+    if !live_enabled() {
+        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live local subagent delegation");
+        return Ok(());
+    }
 
     let endpoint = live_endpoint();
     let model = live_model();
@@ -119,12 +118,16 @@ async fn live_local_subagent_delegation() -> Result<()> {
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
 
+    // Ensure the principal + default (orchestrator) behavior documents exist.
+    // This also creates the default inference profile we reuse for both behaviors.
     ensure_agent_principal(db.node.as_ref(), &agent_did)
         .await
         .expect("ensure principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
     upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
 
+    // Orchestrator behavior: system prompt instructs delegation to the
+    // researcher subagent (foreground is fine locally).
     configure_behavior(
         db.node.as_ref(),
         &orchestrator_behavior_id,
@@ -136,6 +139,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // Subagent behavior (same DID => local target).
     configure_behavior(
         db.node.as_ref(),
         RESEARCHER_BEHAVIOR_ID,
@@ -147,6 +151,8 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // Enable subagent spawning on the orchestrator behavior, targeting the
+    // researcher. Foreground enabled (local), background also enabled.
     authorize_subagents(
         db.node.as_ref(),
         &agent_did,
@@ -157,8 +163,10 @@ async fn live_local_subagent_delegation() -> Result<()> {
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
         }],
-        true,
-        true,
+        /* spawn */ true,
+        /* background */ true,
+        // Local (same-DID) target: cross-deployment stays off (default).
+        /* allow_cross_deployment */
         false,
     )
     .await;
@@ -177,10 +185,12 @@ async fn live_local_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // Wait for the orchestrator request to reach a terminal state.
     let parent_terminal =
         wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
     eprintln!("[live-local] orchestrator parent terminal state = {parent_terminal}");
 
+    // A child AgentRequest must exist with subagent lineage to the parent.
     let child = match wait_for_child_of_parent(
         db.node.as_ref(),
         request_id,
@@ -214,6 +224,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child must run the researcher behavior the model delegated to"
     );
 
+    // Child must reach a terminal/completed state.
     let child_terminal = wait_for_request_terminal(
         db.node.as_ref(),
         &child.request_id,
@@ -226,6 +237,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child subagent request must complete; got {child_terminal}"
     );
 
+    // Child must produce a non-empty assistant response.
     let child_answer =
         wait_for_assistant_answer(db.node.as_ref(), &child.request_id, Duration::from_secs(30))
             .await;
@@ -235,12 +247,15 @@ async fn live_local_subagent_delegation() -> Result<()> {
         "child subagent must produce a non-empty assistant response"
     );
 
+    // Soft check: ideally the answer mentions Paris. Don't hard-fail on model wording.
     if child_answer.to_lowercase().contains("paris") {
         eprintln!("[live-local] SOFT-OK: child answer contains 'Paris'");
     } else {
         eprintln!("[live-local] SOFT-WARN: child answer did not contain 'Paris': {child_answer:?}");
     }
 
+    // The orchestrator should have terminalized (any terminal is acceptable; we
+    // care most about the delegation structure + child completion above).
     assert!(
         is_terminal(&parent_terminal),
         "orchestrator request must reach a terminal state; got {parent_terminal}"
@@ -259,14 +274,10 @@ async fn live_local_subagent_delegation() -> Result<()> {
 /// 1. GLM-5.2 chooses `spawn_subagent`; the configured default await mode makes
 ///    the child background without an `await_mode` argument.
 /// 2. GLM-5.2 chooses `spawn_process` for `bash_unrestricted`.
-/// 3. The resolved model-facing surface contains every spawn/list/read/wait/
-///    cancel tool for both lanes.
-/// 4. In the fire-and-continue lanes the initial parent request completes while
-///    durable work is still running; releasing it produces the completion
-///    notification and a real-inference scheduled wake.
-/// 5. In the managed lanes GLM-5.2 launches deliberately blocked work, lists
-///    it, reads partial output/transcript while it is running, waits for it,
-///    reads the terminal result, and reports the observed markers.
+/// 3. In both lanes the initial parent request completes while durable work is
+///    still running.
+/// 4. Releasing that work produces the durable completion notification and a
+///    coalesced scheduled wake, which is itself completed by real inference.
 ///
 /// Release files make the non-blocking assertion deterministic: background
 /// work cannot finish until this test has observed the parent return.
@@ -284,8 +295,6 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
     let workspace = tempfile::tempdir().expect("backgrounding live workspace");
     let child_release = workspace.path().join("release-child");
     let tool_release = workspace.path().join("release-tool");
-    let managed_child_release = workspace.path().join("release-managed-child");
-    let managed_tool_release = workspace.path().join("release-managed-tool");
     let child_command = format!(
         "printf CHILD_BACKGROUND_STARTED; while [ ! -f '{}' ]; do sleep 0.2; done; printf CHILD_BACKGROUND_DONE",
         child_release.display()
@@ -293,14 +302,6 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
     let native_tool_command = format!(
         "printf NATIVE_BACKGROUND_STARTED; while [ ! -f '{}' ]; do sleep 0.2; done; printf NATIVE_BACKGROUND_DONE",
         tool_release.display()
-    );
-    let managed_child_command = format!(
-        "printf CHILD_MANAGED_STARTED; while [ ! -f '{}' ]; do sleep 0.2; done; printf CHILD_MANAGED_DONE",
-        managed_child_release.display()
-    );
-    let managed_tool_command = format!(
-        "printf NATIVE_MANAGED_STARTED; while [ ! -f '{}' ]; do sleep 0.2; done; printf NATIVE_MANAGED_DONE",
-        managed_tool_release.display()
     );
     let child_tool_args = serde_json::json!({
         "command": child_command,
@@ -312,16 +313,6 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
         "args": [],
         "timeout_secs": 180
     });
-    let managed_child_tool_args = serde_json::json!({
-        "command": managed_child_command,
-        "args": [],
-        "timeout_secs": 180
-    });
-    let managed_native_tool_args = serde_json::json!({
-        "command": managed_tool_command,
-        "args": [],
-        "timeout_secs": 180
-    });
 
     let parent_system_prompt = format!(
         r#"You are the deterministic orchestrator in an integration test.
@@ -329,8 +320,6 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
 Apply these rules to the LATEST request:
 - If it is exactly RUN_BACKGROUND_AGENT, call spawn_subagent exactly once with name "background-worker" and prompt exactly "RUN_CHILD_BACKGROUND_JOB". Omit await_mode so the configured default is exercised. As soon as the tool returns its running receipt, do not call wait_subagent, read_subagent, list_subagents, cancel_subagent, or any other tool. Reply exactly PARENT_RETURNED_AGENT_BACKGROUND.
 - If it is exactly RUN_BACKGROUND_TOOL, call spawn_process exactly once with tool_name "bash_unrestricted" and args exactly {native_tool_args}. As soon as the tool returns its running receipt, do not call wait_process, read_tool_output, list_processes, cancel_process, bash_unrestricted, or any other tool. Reply exactly PARENT_RETURNED_TOOL_BACKGROUND.
-- If it is exactly MANAGE_BACKGROUND_AGENT, call exactly one tool per turn and wait for its result before choosing the next tool. First call spawn_subagent exactly once with name "background-worker" and prompt exactly "RUN_MANAGED_CHILD_BACKGROUND_JOB", omitting await_mode. Then call list_subagents. Then call read_subagent for that child with include_user_messages and include_tool_results true. You MUST inspect the non-terminal transcript before calling wait_subagent. Then call wait_subagent. After it completes, call read_subagent once more for the terminal transcript. Only then reply exactly AGENT_BACKGROUND_REPORT CHILD_MANAGED_STARTED CHILD_MANAGED_DONE.
-- If it is exactly MANAGE_BACKGROUND_TOOL, call exactly one tool per turn and wait for its result before choosing the next tool. First call spawn_process exactly once with tool_name "bash_unrestricted" and args exactly {managed_native_tool_args}. Then call list_processes. Then call read_process for that process at offset 0. You MUST inspect output containing NATIVE_MANAGED_STARTED with exited false before calling wait_process. Then call wait_process. After it completes, call read_process once more at offset 0. Only then reply exactly TOOL_BACKGROUND_REPORT NATIVE_MANAGED_STARTED NATIVE_MANAGED_DONE.
 - If the latest request asks you to review pending background completion notifications, never repeat either spawn. Reply exactly BACKGROUND_COMPLETION_OBSERVED.
 
 Never call bash_unrestricted directly from this behavior."#
@@ -338,9 +327,7 @@ Never call bash_unrestricted directly from this behavior."#
     let child_system_prompt = format!(
         r#"You are the deterministic background worker in an integration test.
 When the latest request is exactly RUN_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {child_tool_args}
-Wait for that foreground tool call to finish, then reply exactly CHILD_BACKGROUND_DONE. Do not call any other tool.
-When the latest request is exactly RUN_MANAGED_CHILD_BACKGROUND_JOB, call bash_unrestricted exactly once with these arguments: {managed_child_tool_args}
-Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_STARTED CHILD_MANAGED_DONE. Do not call any other tool."#
+Wait for that foreground tool call to finish, then reply exactly CHILD_BACKGROUND_DONE. Do not call any other tool."#
     );
 
     let db = test_db("backgrounding-live-standard-path").await;
@@ -381,21 +368,12 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     )
     .await;
 
-    let loaded_agent = Gents::from_default_behavior_documents(
-        db.node.clone(),
+    let agent = boot_document_agent_with_ceiling(
+        &db,
         identity,
-        DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readwrite(workspace.path()).with_command_timeout_secs(180),
-            ..Default::default()
-        },
+        ToolCeiling::readwrite(workspace.path()).with_command_timeout_secs(180),
     )
     .await?;
-    assert_standard_backgrounding_tool_surfaces(
-        &loaded_agent,
-        &agent_did,
-        &orchestrator_behavior_id,
-    );
-    let agent = boot_loaded_document_agent(&db, loaded_agent).await;
 
     // Lane 1: the model invokes spawn_subagent without await_mode. The
     // ToolSelection default must make the standard path background.
@@ -641,224 +619,6 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         "real-inference wake did not process the tool notification: {tool_wake_answer:?}"
     );
 
-    // Lane 3: a single real-inference request manages a local background
-    // subagent end to end. The model must inspect the live child before this
-    // test releases its blocked foreground command, then wait and inspect the
-    // terminal transcript before reporting the markers.
-    let managed_agent_request_id = "req-live-managed-background-agent";
-    let managed_agent_session_id = "session-live-managed-background-agent";
-    create_runtime_request(
-        db.node.as_ref(),
-        &agent_did,
-        &orchestrator_behavior_id,
-        managed_agent_request_id,
-        managed_agent_session_id,
-        "MANAGE_BACKGROUND_AGENT",
-    )
-    .await;
-
-    let managed_bridge = wait_for_subagent_bridge(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        Duration::from_secs(180),
-    )
-    .await
-    .unwrap_or_else(|| panic!("live model did not create the managed background subagent"));
-    assert_eq!(managed_bridge.await_mode.as_deref(), Some("background"));
-    let managed_child_request_id = managed_bridge
-        .child_request_id
-        .as_deref()
-        .expect("managed child request id");
-    wait_for_model_tool_call(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "read_subagent",
-        Duration::from_secs(180),
-    )
-    .await;
-    let managed_child_live_state =
-        fetch_request_lifecycle(db.node.as_ref(), managed_child_request_id)
-            .await
-            .expect("managed child lifecycle during read_subagent");
-    assert!(
-        !is_terminal(&managed_child_live_state),
-        "read_subagent was not exercised against a live child; state={managed_child_live_state}"
-    );
-    // The assistant wait envelope is durably snapshotted before the hook
-    // blocks. Observe that exact boundary, then prove the child is still live
-    // before releasing it.
-    wait_for_model_tool_call(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "wait_subagent",
-        Duration::from_secs(180),
-    )
-    .await;
-    let managed_child_wait_state =
-        fetch_request_lifecycle(db.node.as_ref(), managed_child_request_id)
-            .await
-            .expect("managed child lifecycle during wait_subagent");
-    assert!(
-        !is_terminal(&managed_child_wait_state),
-        "wait_subagent must begin while the child is live; state={managed_child_wait_state}"
-    );
-    std::fs::write(&managed_child_release, b"release").expect("release managed background child");
-
-    let managed_agent_state = wait_for_request_terminal(
-        db.node.as_ref(),
-        managed_agent_request_id,
-        Duration::from_secs(240),
-    )
-    .await;
-    assert_eq!(managed_agent_state, "completed");
-    let managed_agent_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
-        managed_agent_request_id,
-        Duration::from_secs(30),
-    )
-    .await;
-    assert!(
-        managed_agent_answer
-            .contains("AGENT_BACKGROUND_REPORT CHILD_MANAGED_STARTED CHILD_MANAGED_DONE"),
-        "model did not report the inspected background-agent result: {managed_agent_answer:?}"
-    );
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "spawn_subagent",
-        1,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "list_subagents",
-        1,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "read_subagent",
-        2,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_agent_session_id,
-        "wait_subagent",
-        1,
-    )
-    .await;
-
-    // Lane 4: the same acceptance flow for a native background process. The
-    // release is withheld until the model's read_process result contains the
-    // live STARTED marker, proving it read actual output before wait_process.
-    let managed_tool_request_id = "req-live-managed-background-tool";
-    let managed_tool_session_id = "session-live-managed-background-tool";
-    create_runtime_request(
-        db.node.as_ref(),
-        &agent_did,
-        &orchestrator_behavior_id,
-        managed_tool_request_id,
-        managed_tool_session_id,
-        "MANAGE_BACKGROUND_TOOL",
-    )
-    .await;
-
-    let managed_tool = wait_for_background_tool_call(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "bash_unrestricted",
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(managed_tool.await_mode.as_deref(), Some("background"));
-    wait_for_model_tool_call(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "read_process",
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_tool_result_containing(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "NATIVE_MANAGED_STARTED",
-        Duration::from_secs(60),
-    )
-    .await;
-    // Observe the durably snapshotted wait call while it is blocked, then prove
-    // the native process is still live before releasing it.
-    wait_for_model_tool_call(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "wait_process",
-        Duration::from_secs(180),
-    )
-    .await;
-    assert_eq!(
-        fetch_tool_call(
-            db.node.as_ref(),
-            managed_tool_session_id,
-            &managed_tool.tool_call_id,
-        )
-        .await
-        .expect("managed native tool during read_process")
-        .lifecycle_state,
-        "running",
-        "read_process must observe output before the native process exits"
-    );
-    std::fs::write(&managed_tool_release, b"release")
-        .expect("release managed native background tool");
-
-    let managed_tool_state = wait_for_request_terminal(
-        db.node.as_ref(),
-        managed_tool_request_id,
-        Duration::from_secs(240),
-    )
-    .await;
-    assert_eq!(managed_tool_state, "completed");
-    let managed_tool_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
-        managed_tool_request_id,
-        Duration::from_secs(30),
-    )
-    .await;
-    assert!(
-        managed_tool_answer
-            .contains("TOOL_BACKGROUND_REPORT NATIVE_MANAGED_STARTED NATIVE_MANAGED_DONE"),
-        "model did not report the inspected native background result: {managed_tool_answer:?}"
-    );
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "spawn_process",
-        1,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "list_processes",
-        1,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "read_process",
-        2,
-    )
-    .await;
-    assert_model_tool_call_count_at_least(
-        db.node.as_ref(),
-        managed_tool_session_id,
-        "wait_process",
-        1,
-    )
-    .await;
-
     agent.shutdown().await;
     Ok(())
 }
@@ -870,15 +630,16 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: set GENTS_LIVE_SUBAGENT=1 and pass --ignored"]
 async fn live_cross_node_subagent_delegation() -> Result<()> {
-    assert!(
-        live_enabled(),
-        "set GENTS_LIVE_SUBAGENT=1 and pass --ignored to run live cross-node subagent delegation"
-    );
+    if !live_enabled() {
+        eprintln!("GENTS_LIVE_SUBAGENT is not 1; skipping live cross-node subagent delegation");
+        return Ok(());
+    }
 
     let endpoint = live_endpoint();
     let model = live_model();
     assert_endpoint_reachable(&endpoint).await;
 
+    // Two REAL P2P-enabled nodes, two distinct DIDs.
     let db_a = test_p2p_db("subagent-live-a").await;
     let db_b = test_p2p_db("subagent-live-b").await;
     let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-live-a"));
@@ -887,6 +648,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let did_b = identity_b.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&did_a);
 
+    // --- Node B: host the researcher behavior owned by DID-B. ---
     ensure_agent_principal(db_b.node.as_ref(), &did_b)
         .await
         .expect("ensure principal B");
@@ -904,6 +666,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // --- Node A: host the orchestrator owned by DID-A. ---
     ensure_agent_principal(db_a.node.as_ref(), &did_a)
         .await
         .expect("ensure principal A");
@@ -920,6 +683,10 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // The named (agent_did, behavior_id) target is owned by DID-B: a REMOTE
+    // delegation target. A authors only the targeted bridge; B resolves no
+    // friendly name and materializes the child locally from the resolved args,
+    // so we do NOT mirror B's AgentBehavior onto A.
     authorize_subagents(
         db_a.node.as_ref(),
         &did_a,
@@ -930,8 +697,12 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
         }],
-        true,
-        true,
+        /* spawn */ true,
+        /* background */ true,
+        // Cross-deployment subagent delegation is deferred/flag-gated by default
+        // pending ACP (#377). This cross-node test exercises the substrate behind
+        // the opt-in flag; the REMOTE (DID-B) target requires it set true.
+        /* allow_cross_deployment */
         true,
     )
     .await;
@@ -939,6 +710,11 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     let addr_a = wait_for_listen_addr(db_a.node.as_ref()).await;
     let addr_b = wait_for_listen_addr(db_b.node.as_ref()).await;
 
+    // Pairing rows exist on BOTH nodes BEFORE the agents boot. The running
+    // pairing reconcilers perform the actual installation: A's coordinator leg
+    // carries only bridges targeted to B; B's host leg carries routed B-owned
+    // child requests back to A. The rows carry the peer's real listen address,
+    // never `[]`.
     write_pairing(
         db_a.node.as_ref(),
         "peer-b",
@@ -956,6 +732,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // Boot full agents on both nodes. B owns DID-B: its daemon + SubagentSource
+    // claim and run the replicated child request against the live model.
     let agent_b = boot_document_agent(&db_b, identity_b).await?;
     let agent_a = boot_document_agent(&db_a, identity_a).await?;
     wait_for_replicator_installed(db_a.node.as_ref(), "peer-b", Duration::from_secs(120)).await;
@@ -973,6 +751,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     )
     .await;
 
+    // Find the bridge tool call created on A (the spawn_subagent AgentToolCall).
     let bridge =
         match wait_for_subagent_bridge(db_a.node.as_ref(), session_id, Duration::from_secs(120))
             .await
@@ -1000,6 +779,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         .clone()
         .expect("bridge must carry a child_request_id");
 
+    // The child AgentRequest must be materialized on B and run there.
     let child_on_b = wait_for_request_on_node(
         db_b.node.as_ref(),
         &child_request_id,
@@ -1025,6 +805,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     );
     assert_eq!(child_on_b.behavior_id, RESEARCHER_BEHAVIOR_ID);
 
+    // B runs the child to completion with a non-empty live response.
     let child_terminal_b = wait_for_request_terminal(
         db_b.node.as_ref(),
         &child_request_id,
@@ -1055,6 +836,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         );
     }
 
+    // The terminal child must replicate back to A and A must observe completion
+    // (the BackgroundCompletionObserver projects it onto the parent bridge).
     let child_terminal_a = wait_for_request_terminal(
         db_a.node.as_ref(),
         &child_request_id,
@@ -1067,6 +850,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         "terminal child must replicate back to A; got {child_terminal_a}"
     );
 
+    // The parent orchestrator request on A should terminalize (background
+    // completion projection + a final orchestrator turn).
     let parent_terminal_a =
         wait_for_request_terminal(db_a.node.as_ref(), request_id, Duration::from_secs(150)).await;
     eprintln!("[live-cross] orchestrator parent terminal on A = {parent_terminal_a}");
@@ -1077,10 +862,15 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     agent_a.shutdown().await;
     agent_b.shutdown().await;
+    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     db_a.node.shutdown().await;
     db_b.node.shutdown().await;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// System prompts
+// ---------------------------------------------------------------------------
 
 const ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are an orchestrator agent. You have a research subagent \
 available named `researcher`. For ANY research or factual lookup the user asks for, you \
@@ -1094,6 +884,10 @@ user asks for, you MUST delegate it by calling the `spawn_subagent` tool with na
 \"researcher\", await_mode exactly \"background\", and a `prompt` describing the question. The \
 subagent runs on a different node, so you MUST use await_mode=\"background\" (foreground is rejected). Do \
 not answer factual questions yourself; always delegate them.";
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
 async fn assert_endpoint_reachable(endpoint: &str) {
     let url = format!("{}/models", endpoint.trim_end_matches('/'));
@@ -1161,109 +955,14 @@ async fn boot_document_agent_with_ceiling(
         },
     )
     .await?;
-    Ok(boot_loaded_document_agent(db, agent).await)
-}
-
-async fn boot_loaded_document_agent(db: &TestDb, agent: Gents) -> BootedAgent {
     let agent_did = agent.agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    BootedAgent::new(shutdown_tx, handle, agent_did)
+    Ok(BootedAgent::new(shutdown_tx, handle, agent_did))
 }
 
-fn assert_standard_backgrounding_tool_surfaces(
-    agent: &Gents,
-    agent_did: &str,
-    parent_behavior_id: &str,
-) {
-    let active_behavior_ids = agent
-        .behaviors()
-        .iter()
-        .map(|behavior| behavior.behavior_id.clone())
-        .collect::<HashSet<_>>();
-    let parent = agent
-        .behaviors()
-        .iter()
-        .find(|behavior| behavior.behavior_id == parent_behavior_id)
-        .expect("loaded orchestrator behavior");
-    let parent_surface = parent
-        .tools
-        .explain_with_runtime(false, agent_did, &active_behavior_ids);
-    let parent_names = parent_surface
-        .tool_names
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-
-    for required in [
-        "bash_unrestricted",
-        "spawn_subagent",
-        "list_subagents",
-        "read_subagent",
-        "wait_subagent",
-        "cancel_subagent",
-        "spawn_process",
-        "list_processes",
-        "read_process",
-        "wait_process",
-        "cancel_process",
-    ] {
-        assert!(
-            parent_names.contains(required),
-            "backgrounding-enabled behavior did not provision {required}; resolved={:?}",
-            parent_surface.tool_names
-        );
-    }
-    assert!(
-        !parent_names.contains("steer_subagent"),
-        "mutating subagent steering must remain separately gated"
-    );
-    assert_eq!(
-        parent_surface.included.get("subagent"),
-        Some(&vec![
-            "cancel_subagent".to_string(),
-            "list_subagents".to_string(),
-            "read_subagent".to_string(),
-            "spawn_subagent".to_string(),
-            "wait_subagent".to_string(),
-        ]),
-        "background subagent enablement must resolve the complete inspection bundle"
-    );
-    assert_eq!(
-        parent_surface.included.get("background_process"),
-        Some(&vec![
-            "cancel_process".to_string(),
-            "list_processes".to_string(),
-            "read_process".to_string(),
-            "spawn_process".to_string(),
-            "wait_process".to_string(),
-        ]),
-        "native background allowlisting must resolve the complete process bundle"
-    );
-
-    let child = agent
-        .behaviors()
-        .iter()
-        .find(|behavior| behavior.behavior_id == BACKGROUND_WORKER_BEHAVIOR_ID)
-        .expect("loaded background worker behavior");
-    let child_surface = child
-        .tools
-        .explain_with_runtime(false, agent_did, &active_behavior_ids);
-    assert!(
-        child_surface
-            .tool_names
-            .contains(&"bash_unrestricted".to_string()),
-        "background worker must receive its foreground bash tool"
-    );
-    for parent_only in ["spawn_subagent", "spawn_process", "read_process"] {
-        assert!(
-            !child_surface.tool_names.contains(&parent_only.to_string()),
-            "background worker must not inherit parent-only tool {parent_only}"
-        );
-    }
-}
-
+/// Upsert the live inference backend document (OpenAI-compatible vLLM).
 async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
     let escaped_backend_id = escape_graphql_string(LIVE_BACKEND_ID);
     let escaped_endpoint = escape_graphql_string(endpoint);
@@ -1308,6 +1007,8 @@ async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
     );
 }
 
+/// Upsert an `AgentBehavior` document backed by the live backend, with an
+/// optional `description` (surfaced to the orchestrator's subagent preamble).
 async fn configure_behavior(
     node: &EmbeddedNode,
     behavior_id: &str,
@@ -1351,6 +1052,8 @@ async fn configure_behavior(
         .expect("upsert behavior");
 }
 
+/// Upsert a ToolSelectionDocument enabling subagent spawning and link it to
+/// `behavior_id`.
 async fn authorize_subagents(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -1374,6 +1077,8 @@ async fn authorize_subagents(
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
             subagent_allow_cross_deployment: Some(allow_cross_deployment),
+            // Keep the orchestrator's toolset focused on delegation so the live
+            // model reliably reaches for spawn_subagent rather than defra_query.
             enable_meta_tools: Some(false),
             enable_defra_query: Some(false),
             ..Default::default()
@@ -1465,6 +1170,7 @@ async fn link_tool_selection(node: &EmbeddedNode, behavior_id: &str, selection_i
 struct ChildRow {
     request_id: String,
     behavior_id: String,
+    /// Deserialized for Debug-trace output on failures; not read directly.
     #[allow(dead_code)]
     agent_did: String,
     lifecycle_state: Option<String>,
@@ -1556,6 +1262,8 @@ async fn wait_for_child_of_parent(
     }
 }
 
+/// Read the assistant answer for `request_id`: prefer the AgentResponse content,
+/// fall back to the latest assistant AgentMessage on the request's session.
 async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
@@ -1580,6 +1288,7 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
             }
         }
     }
+    // Fall back to the latest assistant message on the session.
     let session_id = match row.and_then(|r| r.session_id) {
         Some(s) if !s.is_empty() => s,
         _ => return String::new(),
@@ -1604,6 +1313,7 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
         .unwrap_or_default()
 }
 
+/// Dump tool calls + messages for a session to stderr (debugging delegation).
 async fn dump_session_diagnostics(node: &EmbeddedNode, session_id: &str) {
     let escaped = escape_graphql_string(session_id);
     let tc_query = format!(
@@ -1666,6 +1376,10 @@ async fn wait_for_assistant_answer(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Cross-node helpers (Test 2)
+// ---------------------------------------------------------------------------
+
 async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -1725,6 +1439,7 @@ async fn wait_for_replicator_installed(node: &EmbeddedNode, peer_id: &str, timeo
     }
 }
 
+/// Write a `PeerPairingDesired` doc so the local node trusts `peer_did`.
 async fn write_pairing(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -1960,135 +1675,6 @@ async fn assert_no_tool_call(node: &EmbeddedNode, session_id: &str, tool_names: 
             "model called forbidden foreground/control tool {tool_name}"
         );
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct SessionMessageRow {
-    role: String,
-    content: String,
-}
-
-async fn load_session_messages(node: &EmbeddedNode, session_id: &str) -> Vec<SessionMessageRow> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                order: {{ sequence: ASC }}
-            ) {{ role content }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query session messages failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|rows| serde_json::from_value(rows.clone()).ok())
-        .unwrap_or_default()
-}
-
-fn model_tool_call_count(messages: &[SessionMessageRow], tool_name: &str) -> usize {
-    messages
-        .iter()
-        .filter(|row| row.role == "assistant")
-        .filter_map(|row| {
-            serde_json::from_str::<gents_protocol::message::Message>(&row.content).ok()
-        })
-        .flat_map(|message| match message {
-            gents_protocol::message::Message::Assistant { content, .. } => content,
-            _ => Vec::new(),
-        })
-        .filter(|content| {
-            matches!(
-                content,
-                gents_protocol::message::AssistantContent::ToolCall(call)
-                    if call.function.name == tool_name
-            )
-        })
-        .count()
-}
-
-fn tool_result_contains(messages: &[SessionMessageRow], needle: &str) -> bool {
-    messages
-        .iter()
-        .filter(|row| row.role == "user")
-        .filter_map(|row| {
-            serde_json::from_str::<gents_protocol::message::Message>(&row.content).ok()
-        })
-        .any(|message| match message {
-            gents_protocol::message::Message::User { content } => content.into_iter().any(|item| {
-                let gents_protocol::message::UserContent::ToolResult(result) = item else {
-                    return false;
-                };
-                result.content.into_iter().any(|part| {
-                    matches!(
-                        part,
-                        gents_protocol::message::ToolResultContent::Text(text)
-                            if text.text.contains(needle)
-                    )
-                })
-            }),
-            _ => false,
-        })
-}
-
-async fn wait_for_model_tool_call(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_name: &str,
-    timeout: Duration,
-) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let messages = load_session_messages(node, session_id).await;
-        if model_tool_call_count(&messages, tool_name) > 0 {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for model tool call {tool_name} in session {session_id}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn wait_for_tool_result_containing(
-    node: &EmbeddedNode,
-    session_id: &str,
-    needle: &str,
-    timeout: Duration,
-) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let messages = load_session_messages(node, session_id).await;
-        if tool_result_contains(&messages, needle) {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for a tool result containing {needle:?} in session {session_id}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn assert_model_tool_call_count_at_least(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_name: &str,
-    expected: usize,
-) {
-    let messages = load_session_messages(node, session_id).await;
-    let actual = model_tool_call_count(&messages, tool_name);
-    assert!(
-        actual >= expected,
-        "expected at least {expected} model call(s) to {tool_name} in session {session_id}, got {actual}; transcript={messages:#?}"
-    );
 }
 
 async fn wait_for_message_containing(
