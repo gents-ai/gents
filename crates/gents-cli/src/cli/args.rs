@@ -911,6 +911,10 @@ impl BackendPresetArg {
         }
     }
 
+    /// Default model for presets whose endpoint implies a model source. The
+    /// shared DEFAULT_INIT_MODEL_NAME is an HF GGUF repo path: valid for
+    /// llama-server (`-hf`) but not an Ollama tag, so the ollama preset pulls
+    /// the same model through Ollama's `hf.co/` form instead.
     pub(crate) fn default_model_name(self) -> Option<&'static str> {
         match self {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
@@ -1374,14 +1378,20 @@ pub(crate) struct SkillAddArgs {
     pub(crate) skill_id: String,
     #[arg(long)]
     pub(crate) name: Option<String>,
+    /// Activation scope: "principal" (inherited by all the agent's behaviors)
+    /// or "behavior" (only where a behavior opts in via skill_refs).
     #[arg(long, default_value = "behavior")]
     pub(crate) scope: String,
     #[arg(long)]
     pub(crate) description: Option<String>,
+    /// Inline skill instructions (the body composed into the prompt).
     #[arg(long)]
     pub(crate) instructions: Option<String>,
+    /// Read instructions from a file (takes precedence over --instructions).
     #[arg(long)]
     pub(crate) instructions_file: Option<PathBuf>,
+    /// Declared tool dependency (repeatable). Intersected with the behavior
+    /// tool ceiling at activation; never grants a tool.
     #[arg(long = "tool-ref")]
     pub(crate) tool_refs: Vec<String>,
     #[arg(long)]
@@ -1396,12 +1406,17 @@ pub(crate) struct SkillImportArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) agent_did: String,
+    /// Directory tree to scan for `SKILL.md` files (Codex skill layout:
+    /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
     #[arg(value_name = "DIR")]
     pub(crate) dir: PathBuf,
+    /// Scope applied to every imported skill: "principal" or "behavior".
     #[arg(long, default_value = "behavior")]
     pub(crate) scope: String,
+    /// Import skills as disabled.
     #[arg(long)]
     pub(crate) disabled: bool,
+    /// Parse and report what would be imported without writing.
     #[arg(long)]
     pub(crate) dry_run: bool,
 }
@@ -1412,6 +1427,8 @@ pub(crate) struct SkillExportArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) agent_did: String,
+    /// Output directory. Each skill is written to `<dir>/<skill_id>/SKILL.md`
+    /// (plus `agents/openai.yaml` when it has tool_refs or a display name).
     #[arg(value_name = "DIR")]
     pub(crate) dir: PathBuf,
 }
@@ -1432,6 +1449,7 @@ pub(crate) struct SkillShowArgs {
     pub(crate) skill_id: String,
 }
 
+/// Shared args for skill commands that target a single skill by id.
 #[derive(clap::Args)]
 pub(crate) struct SkillRefArgs {
     #[arg(long)]
@@ -1718,51 +1736,69 @@ pub(crate) enum TaskCommand {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TaskListArgs {
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct TaskShowArgs {
+    /// The task_id of the task to show.
     #[arg(long = "task-id")]
     pub(crate) task_id_flag: Option<String>,
 
+    /// The task_id of the task to show.
     #[arg(value_name = "TASK_ID")]
     pub(crate) task_id: Option<String>,
 
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct ConfigTaskRunArgs {
+    /// The task_id of the task to run.
     #[arg(long = "task-id")]
     pub(crate) task_id_flag: Option<String>,
 
+    /// The task_id of the task to run.
     #[arg(value_name = "TASK_ID")]
     pub(crate) task_id: Option<String>,
 
+    /// JSON object of arguments bound as the `args.*` template scope.
+    /// Example: `--args '{"name": "Amy"}'`.
     #[arg(long, default_value = "{}")]
     pub(crate) args: String,
 
+    /// GraphQL endpoint of the running agent's DefraDB. Defaults to local.
     #[arg(long)]
     pub(crate) graphql: Option<String>,
 
+    /// Path to the agent home. Used to resolve GraphQL endpoint when
+    /// `--graphql` is not set.
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
 
+    /// Wait for the created AgentRequest to reach a terminal response.
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
 
+    /// Idle timeout while waiting for a terminal response.
     #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
 
+    /// Poll interval while waiting for a terminal response.
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
 }
@@ -1783,6 +1819,8 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) max_turns: Option<i64>,
     #[arg(long)]
     pub(crate) temperature: Option<f64>,
+    /// Sampling knobs beyond temperature (#649). Unset leaves the served
+    /// model's `generation_config.json` default in force.
     #[arg(long)]
     pub(crate) top_p: Option<f64>,
     #[arg(long)]
@@ -2087,6 +2125,7 @@ PeerPairingDesired rows."
     },
 }
 
+/// Subcommands for `p2p network` — the peer-registry front door.
 #[derive(Subcommand)]
 pub(crate) enum P2pNetworkCommand {
     #[command(about = "Register this node into the peer discovery registry (idempotent upsert)")]
@@ -2113,10 +2152,16 @@ pub(crate) struct P2pNetworkRegisterArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// Human-readable display name for this node in the registry.
     #[arg(long, value_name = "NAME")]
     pub(crate) display_name: Option<String>,
+    /// Scope template this node offers (repeatable). A node advertises the
+    /// templates it is willing to replicate; a discovering peer materializes a
+    /// scoped pairing from one of them. Defaults to `conversation` (filtered
+    /// push of the peer's conversation slice) when none are given.
     #[arg(long = "template", value_name = "TEMPLATE")]
     pub(crate) templates: Vec<String>,
+    /// Network / fleet id. Defaults to "default".
     #[arg(long = "network", value_name = "NETWORK_ID")]
     pub(crate) network_id: Option<String>,
 }
@@ -2133,6 +2178,7 @@ pub(crate) struct P2pNetworkListArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct P2pNetworkCreateArgs {
+    /// Human-readable network name; network_id is derived from (admin_did, name).
     #[arg(long)]
     pub(crate) name: String,
     #[arg(long)]
@@ -2145,6 +2191,7 @@ pub(crate) struct P2pNetworkCreateArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct P2pNetworkGrantArgs {
+    /// The member DID to admit.
     pub(crate) member_did: String,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -2156,6 +2203,7 @@ pub(crate) struct P2pNetworkGrantArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct P2pNetworkRevokeArgs {
+    /// The member DID to revoke.
     pub(crate) member_did: String,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
@@ -2165,6 +2213,7 @@ pub(crate) struct P2pNetworkRevokeArgs {
     pub(crate) output: OutputFormat,
 }
 
+/// Subcommands for `p2p templates`.
 #[derive(Subcommand)]
 pub(crate) enum P2pTemplatesCommand {
     #[command(about = "List all built-in scope templates")]
@@ -2177,6 +2226,7 @@ pub(crate) struct P2pTemplatesListArgs {
     pub(crate) output: OutputFormat,
 }
 
+/// Low-level live P2P admin commands. Escape hatch beneath `p2p pairings`.
 #[derive(Subcommand)]
 pub(crate) enum P2pAdminCommand {
     #[command(about = "Connect the running runtime to another peer")]
@@ -2306,20 +2356,30 @@ pub(crate) struct P2pPairingSetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// Remote peer ID. Optional when a --address is a shareable ticket or
+    /// multiaddr the peer id can be derived from.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
     pub(crate) peer_id: Option<String>,
+    /// Agent DID expected for the remote peer. Required: the DID is the trust boundary.
     #[arg(long = "did", alias = "agent-did", value_name = "AGENT_DID")]
     pub(crate) agent_did: String,
+    /// Replicator address (shareable ticket or multiaddr) to install during
+    /// reconcile. Repeat for multiple addresses.
     #[arg(long = "address", value_name = "ADDRESS")]
     pub(crate) addresses: Vec<String>,
+    /// Scope template id driving the pairing (collections + scope + delivery).
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
     #[arg(
         long = "template",
         value_name = "TEMPLATE",
         default_value = "conversation"
     )]
     pub(crate) template: String,
+    /// Wait for the runtime to observe the peer as connected.
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
     #[arg(long, default_value = "30s")]
     pub(crate) timeout: String,
 }
@@ -2330,6 +2390,7 @@ pub(crate) struct P2pPairingRefArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// Remote peer ID stored in PeerPairingDesired.peer_id.
     #[arg(long = "peer", alias = "peer-id", value_name = "PEER_ID")]
     pub(crate) peer_id: String,
 }
@@ -2350,20 +2411,33 @@ pub(crate) struct P2pInviteArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// Scope template id for this invite (e.g. `conversation`, `agent-config`, `backup`).
+    /// The template is encoded in the invite token and read by `p2p pairings join`.
+    /// Defaults to `conversation` (filtered push of the peer's conversation slice).
+    /// Use `p2p templates list` to see all available templates.
     #[arg(
         long = "template",
         value_name = "TEMPLATE",
         default_value = "conversation"
     )]
     pub(crate) template: String,
+    /// Member DID this invite admits. The DID must already have an active
+    /// admin-signed NetworkMembership grant on the issuer.
     #[arg(long = "member-did", value_name = "DID")]
     pub(crate) member_did: Option<String>,
+    /// Mint an audience-unbound bearer invite (`dabear1-`) instead of a
+    /// DID-bound one. The claiming device binds itself at claim time with
+    /// `p2p pairings claim`; the running issuer daemon authors the membership
+    /// grant (and, for conversation invites, the reciprocal intent) when the
+    /// claim replicates in. Bearer invites are single-use and expire after
+    /// 5 minutes.
     #[arg(
         long = "bearer",
         default_value_t = false,
         conflicts_with = "member_did"
     )]
     pub(crate) bearer: bool,
+    /// Render the minted token as a scannable QR code on stdout (bearer only).
     #[arg(long = "qr", default_value_t = false, requires = "bearer")]
     pub(crate) qr: bool,
 }
@@ -2374,6 +2448,7 @@ pub(crate) struct P2pClaimArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// The `dabear1-` bearer invite token to claim.
     #[arg(value_name = "TOKEN")]
     pub(crate) token: String,
 }
@@ -2384,14 +2459,22 @@ pub(crate) struct P2pJoinArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    /// Invite token produced by `gents p2p pairings invite`.
     #[arg(value_name = "TOKEN")]
     pub(crate) token: String,
+    /// Override the scope template from the token. When both `--template` and a
+    /// token template are present, `--template` wins. Omit to use the token's
+    /// template (the normal path).
     #[arg(long = "template", value_name = "TEMPLATE")]
     pub(crate) template: Option<String>,
+    /// Deprecated compatibility flag accepted by older scripts. v5 joins always
+    /// verify the token's admin-signed network root and membership grant.
     #[arg(long, default_value_t = false)]
     pub(crate) reciprocal: bool,
+    /// Wait for the runtime to observe the peer as connected.
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
+    /// Wait timeout such as 30s, 5m, or 1h. Only used with --wait.
     #[arg(long, default_value = "30s")]
     pub(crate) timeout: String,
 }
@@ -2440,6 +2523,11 @@ pub(crate) struct P2pReplicatorAddArgs {
     pub(crate) collections: Vec<String>,
     #[arg(long = "profile", value_enum, value_name = "PROFILE")]
     pub(crate) profiles: Vec<P2pCollectionProfileArg>,
+    /// Per-collection field-equality filter for filtered replication (repeatable).
+    /// Format: `<collection>:<field>=<value>`, e.g.
+    /// `AgentRequest:agent_did=did:key:alice`. Forwarded to the node as the
+    /// replicator's `Filters`, which installs a filtered (push-only) replicator
+    /// that sends only matching documents. The filter field must be `@immutable`.
     #[arg(long = "filter", value_name = "COLLECTION:FIELD=VALUE")]
     pub(crate) filters: Vec<String>,
 }

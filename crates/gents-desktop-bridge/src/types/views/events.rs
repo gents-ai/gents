@@ -43,6 +43,7 @@ pub struct ChatSendResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientUpdateEvent {
+    /// Coarse ping reason: store | health | lifecycle | config.
     #[ts(type = "string")]
     pub reason: &'static str,
 }

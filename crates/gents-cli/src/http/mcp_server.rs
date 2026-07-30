@@ -14,13 +14,20 @@ use serde_json::Value;
 
 use crate::commands::query::run_defra_query;
 
+/// MCP-facing arguments for the `defra_query` tool. Mirrors `DefraQueryParams`
+/// but derives `JsonSchema` so the MCP tool advertises a typed input contract.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct McpQueryArgs {
+    /// Collection (GraphQL type) to read, e.g. "AgentRequest".
     collection: String,
+    /// Field names to return; at least one is required. Pass ["*"] to list the
+    /// collection's queryable fields instead of documents.
     #[serde(default)]
     fields: Vec<String>,
+    /// Optional DefraDB filter object, e.g. {"status": {"_eq": "completed"}}.
     #[serde(default)]
     filter: Option<Value>,
+    /// Maximum rows to return (default 50, capped at 1000).
     #[serde(default)]
     limit: Option<u32>,
 }

@@ -30,6 +30,7 @@ pub struct CommandContract {
 #[serde(rename_all = "camelCase")]
 pub struct PermissionSetContract {
     pub name: String,
+    /// `"read"` or `"mutate"` — never mixed within one set.
     pub kind: String,
 }
 

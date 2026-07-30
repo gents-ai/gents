@@ -96,6 +96,8 @@ pub(crate) struct CodexLoginRequest {
     pub provider: Option<String>,
 }
 
+/// A redacted view of a stored credential. Tokens never cross the bridge into
+/// the webview — only the metadata the UI needs to confirm the login worked.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexLoginResult {
