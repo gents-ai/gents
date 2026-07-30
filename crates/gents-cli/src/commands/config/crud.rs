@@ -67,7 +67,7 @@ pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false)
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} list", spec.noun))?;
     let mut rows = query_collection(&access, spec, None, None).await?;
@@ -92,7 +92,7 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
 
 pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) -> Result<()> {
     let id = resolve_config_id(spec, &args)?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false)
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} show", spec.noun))?;
     let row = load_one(&access, spec, &id).await?;
@@ -111,7 +111,7 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let output = args
         .output
         .ensure_supported(&format!("config {} rm", spec.noun), &[OutputFormat::Json])?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true)
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} rm", spec.noun))?;
     let live = live_manifest_for_delete(

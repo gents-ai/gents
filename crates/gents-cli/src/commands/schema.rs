@@ -68,7 +68,7 @@ pub(crate) async fn schema_apply(args: SchemaApplyArgs) -> Result<()> {
     }
 
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let graphql = match &access {
         ConfigAccess::Graphql(endpoint) => Some(endpoint.clone()),
         ConfigAccess::Local(_) => None,

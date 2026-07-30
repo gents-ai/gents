@@ -13,8 +13,7 @@ use crate::{
 };
 
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
         home: args.home.as_deref(),

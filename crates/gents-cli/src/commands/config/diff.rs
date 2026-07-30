@@ -8,8 +8,7 @@ use crate::print_json;
 use crate::{build_desired_state_live_bundle, live_manifest_from_bundle, resolve_config_access};
 
 pub(super) async fn config_diff(args: ConfigDiffArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
         home: args.home.as_deref(),

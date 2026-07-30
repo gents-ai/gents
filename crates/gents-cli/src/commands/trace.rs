@@ -50,7 +50,7 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
 
 async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
     let (access, _home_dir) =
-        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let timeline = load_run_timeline(&access, &args.request_id).await?;
     let value = serde_json::to_value(&timeline)?;
     if let Some(path) = args.output_file.as_deref() {
@@ -63,7 +63,7 @@ async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
 
 async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let (access, _home_dir) =
-        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let actor_did = args.actor_did;
     let projection_kind = adapter_projection_kind(args.projection);
     let scope = ProjectionDocumentScope {
@@ -831,7 +831,7 @@ fn projection_redaction_mode(arg: TraceProjectionRedactionArg) -> ProjectionReda
 
 async fn trace_export(args: TraceExportArgs) -> Result<()> {
     let (access, _home_dir) =
-        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let requested_request = match args.request_id.as_deref() {
         Some(request_id) => Some(load_request_by_id(&access, request_id).await?),
         None => None,

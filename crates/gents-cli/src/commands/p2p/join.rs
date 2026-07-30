@@ -72,7 +72,7 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let addresses = vec![remote.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // v5 admission is membership-gated by two admin-signed records carried in
     // the token: the AgentNetwork root and an active NetworkMembership grant for
