@@ -7,8 +7,6 @@ test.describe("desktop code experience", () => {
     await gotoHarness(page, "coding");
     await openChat(page);
 
-    // Code-aware transcript rendering (applies in chat too): the agent's file
-    // edit becomes a diff and its bash call becomes a terminal block.
     const fileEdit = page.getByTestId("code-file-edit");
     await expect(fileEdit).toContainText("src/parser.rs");
     await expect(fileEdit).not.toHaveAttribute("open", "");
@@ -37,11 +35,9 @@ test.describe("desktop code experience", () => {
       "/tmp/gents-bombadil/workspace",
     );
     await expect(page.getByTestId("code-context-files")).toHaveText("read-only");
-    // The code-aware diff renders inside Code mode as well.
     await page.getByTestId("code-file-edit").locator("summary").click();
     await expect(page.getByTestId("code-diff")).toBeVisible();
 
-    // Back to Chat returns to the plain chat surface (header gone, composer live).
     await page.getByTestId("code-back-to-chat").click();
     await expect(page.getByTestId("code-context-header")).toHaveCount(0);
     await expect(page.getByTestId("composer-input")).toBeVisible();

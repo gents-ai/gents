@@ -1,6 +1,3 @@
-//! CompletionRetry conformance home: consumes Lean-emitted witness rows and
-//! checks the public Rust decision mirror used by the owned loop.
-
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -242,27 +239,17 @@ fn assert_deterministic_400_repairs(case: &LeanCompletionRetryCase) {
     );
 }
 
-/// #653: the resample budget is independent of the transport ladder.
-///
-/// With a one-step ladder and a three-resample budget, Rust used to draw the
-/// delay from `ladder[resampleUsed]`, get `None` on the second resample, and
-/// hard-fail with "resample retry budget exhausted" — a lie (the budget had two
-/// left) that also skipped repair. The ladder is pacing, not budget: it now
-/// saturates at its last step and the budget is honored in full.
 fn assert_resample_budget_outlives_ladder(case: &LeanCompletionRetryCase) {
     assert_common(case, "pre_stream_fail", Some("parse_bad_request"), true);
     assert_eq!(case.expected_phase.as_deref(), Some("backing_off"));
     assert_eq!(case.expected_resample_used, Some(2));
 
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
-        // Ladder shorter than the resample budget — the #653 config.
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 3,
         allow_repair: true,
     });
 
-    // Three distinct parse errors: every one must resample, even though the
-    // ladder only has a single step to offer.
     for attempt in 0..3 {
         let text = parse_400_text(&format!("json-parse-{attempt}"));
         match state.on_pre_stream_failure(&transient("parse"), &text, now(), None) {
@@ -270,7 +257,6 @@ fn assert_resample_budget_outlives_ladder(case: &LeanCompletionRetryCase) {
                 kind: RetryKind::Resample,
                 delay,
             } => {
-                // Saturated at the ladder's only (and therefore last) step.
                 assert!(
                     delay <= Duration::from_secs(10),
                     "resample delay must pace from the ladder's last step, got {delay:?}"
@@ -285,8 +271,6 @@ fn assert_resample_budget_outlives_ladder(case: &LeanCompletionRetryCase) {
     assert_eq!(state.retry_count(), 3);
 }
 
-/// The flip side: once the resample budget is genuinely spent, the next
-/// parse-400 goes to repair — not to a hard fail.
 fn assert_resample_exhausts_on_its_own_budget(case: &LeanCompletionRetryCase) {
     assert_common(case, "pre_stream_fail", Some("parse_bad_request"), true);
     assert_eq!(case.expected_phase.as_deref(), Some("repairing"));
@@ -311,7 +295,6 @@ fn assert_resample_exhausts_on_its_own_budget(case: &LeanCompletionRetryCase) {
         );
     }
 
-    // Budget spent: repair is the recourse.
     let text = parse_400_text("json-parse-final");
     assert_eq!(
         state.on_pre_stream_failure(&transient("parse"), &text, now(), None),

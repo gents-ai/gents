@@ -8,10 +8,6 @@ import { useOperationsApi } from "../../apiContext.js";
 import { McpHealthPanelView } from "./McpHealthPanelView.js";
 import type { McpProbeOutcome } from "./mcpHealthModel.js";
 
-/// Poll the persisted health collection every 10 s. The agent rewrites
-/// every cycle (default 30 s) so 10 s polling gives a 10-40 s update
-/// window without burning Tauri-bridge calls. Stops on unmount via
-/// AbortController + a generation guard against stale fetches.
 const POLL_INTERVAL_MS = 10_000;
 
 export function McpHealthPanel({
@@ -56,7 +52,6 @@ export function McpHealthPanel({
     }, POLL_INTERVAL_MS);
     return () => {
       window.clearInterval(handle);
-      // Bumping generation forces any in-flight fetch result to be ignored.
       generationRef.current += 1;
     };
   }, [refresh]);
@@ -77,7 +72,6 @@ export function McpHealthPanel({
         }));
         await refresh();
       } catch (caught) {
-        // Probe failures belong to the row that asked, not the panel banner.
         setProbeOutcomes((prev) => ({
           ...prev,
           [serviceId]: {

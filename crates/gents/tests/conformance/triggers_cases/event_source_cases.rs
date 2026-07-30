@@ -1,8 +1,5 @@
 use super::*;
 
-/// A filter-less EventTrigger fires for any source doc create on its
-/// `source_collection`, producing an `AgentRequest` with
-/// `caused_by_trigger_kind = "event"`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fires_on_matching_source_doc_create() {
     let db = test_db("trigger-conformance-fires").await;
@@ -33,8 +30,6 @@ async fn fires_on_matching_source_doc_create() {
     )
     .await;
 
-    // Wait for the control-watcher debounce + reload so the trigger is resolved
-    // and the EventSource subscription is active.
     wait_for_runtime_snapshot(db.node.as_ref(), &agent.agent_did, |snap| {
         snap.active_generation > initial_gen && snap.last_reconcile_result == "applied"
     })
@@ -62,8 +57,6 @@ async fn fires_on_matching_source_doc_create() {
     agent.shutdown().await;
 }
 
-/// Source doc does NOT match the trigger's filter → no request materializes
-/// and no runtime writeback on the trigger row happens.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn does_not_fire_when_source_doc_fails_filter() {
     let db = test_db("trigger-conformance-filter-miss").await;
@@ -114,8 +107,6 @@ async fn does_not_fire_when_source_doc_fails_filter() {
     let row = fetch_event_trigger_row(db.node.as_ref(), "trigger-filter-miss")
         .await
         .expect("EventTrigger doc present");
-    // Runtime writeback fields stay untouched — the engine never called
-    // on_result for a filter-miss.
     assert_eq!(row.last_status, None);
     assert_eq!(row.last_error, None);
     assert_eq!(row.fire_count.unwrap_or(0), 0);
@@ -124,7 +115,6 @@ async fn does_not_fire_when_source_doc_fails_filter() {
     agent.shutdown().await;
 }
 
-/// `enabled: false` EventTriggers must not fire even on matching source docs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enabled_false_does_not_fire() {
     let db = test_db("trigger-conformance-disabled").await;
@@ -151,9 +141,6 @@ async fn enabled_false_does_not_fire() {
     )
     .await;
 
-    // Give the control watcher a chance to observe the insert (even though
-    // the trigger is disabled, inserting it still produces a doc-update event
-    // + reconcile pass that classifies it as unavailable).
     tokio::time::sleep(Duration::from_secs(7)).await;
 
     let _ = write_webhook_event(db.node.as_ref(), "ext-disabled", "any").await;
@@ -176,22 +163,15 @@ async fn enabled_false_does_not_fire() {
     agent.shutdown().await;
 }
 
-/// **Highest-signal test**: backfill is forward-only. Pre-existing source
-/// docs are not replayed when an EventTrigger activates; only NEW doc-create
-/// events trigger a fire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn backfill_is_forward_only() {
     let db = test_db("trigger-conformance-backfill").await;
     register_webhook_event_schema(db.node.as_ref()).await;
 
-    // Step 1: seed 3 source docs BEFORE booting the agent or creating the
-    // trigger. Await each write to completion so they are durable.
     let _ = write_dynamic_event(db.node.as_ref(), "WebhookEvent", "pre-1", "signup").await;
     let _ = write_dynamic_event(db.node.as_ref(), "WebhookEvent", "pre-2", "signup").await;
     let _ = write_dynamic_event(db.node.as_ref(), "WebhookEvent", "pre-3", "signup").await;
 
-    // Step 2: boot the agent and create the trigger — `enabled: true` so it
-    // joins the active set on the first reconcile after insert.
     let agent = boot_agent(&db, "trigger-conformance-backfill", "backend-backfill").await;
     let initial_gen = fetch_runtime_snapshot(db.node.as_ref(), &agent.agent_did)
         .await
@@ -217,14 +197,11 @@ async fn backfill_is_forward_only() {
     )
     .await;
 
-    // Step 3: wait for reconcile so the subscription is live.
     wait_for_runtime_snapshot(db.node.as_ref(), &agent.agent_did, |snap| {
         snap.active_generation > initial_gen && snap.last_reconcile_result == "applied"
     })
     .await;
 
-    // Step 4: sleep 2 seconds, then assert ZERO fires — backfill must not
-    // replay the 3 pre-seeded docs.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "trigger-backfill", "event").await,
@@ -232,7 +209,6 @@ async fn backfill_is_forward_only() {
         "backfill must not replay pre-existing source docs"
     );
 
-    // Step 5: write ONE new doc; assert EXACTLY ONE AgentRequest.
     let _ = write_webhook_event(db.node.as_ref(), "post-1", "signup").await;
     wait_for_request_count(
         db.node.as_ref(),
@@ -293,8 +269,6 @@ async fn subscription_reconciles_on_generation_bump() {
         .unwrap()
         .active_generation;
 
-    // Step 1: create the trigger pointing at WebhookEvent. Observable: gen
-    // bump + `applied`.
     create_task(
         db.node.as_ref(),
         "task-reconcile",
@@ -322,9 +296,6 @@ async fn subscription_reconciles_on_generation_bump() {
         "active_generation must bump after EventTrigger insert"
     );
 
-    // Step 2: re-point the trigger to AuditEvent. Observable: another gen
-    // bump + `applied`. This is the signal the EventSource receives to
-    // reconcile its subscription set (Task 19 / Task 20).
     update_event_trigger_source_collection(db.node.as_ref(), "trigger-reconcile", "AuditEvent")
         .await;
     let post_flip_snap = wait_for_runtime_snapshot(db.node.as_ref(), &agent.agent_did, |snap| {
@@ -337,9 +308,6 @@ async fn subscription_reconciles_on_generation_bump() {
         "active_generation must bump again after source_collection flip"
     );
 
-    // Step 3: the post-flip apply path must have swapped the resolved
-    // `source_collection` on disk. Assert this through the observable
-    // EventTrigger row.
     let row = fetch_event_trigger_row(db.node.as_ref(), "trigger-reconcile")
         .await
         .expect("EventTrigger doc present");
@@ -349,8 +317,6 @@ async fn subscription_reconciles_on_generation_bump() {
         "post-flip source_collection must be AuditEvent: {row:?}"
     );
 
-    // Step 4: WebhookEvent creates after the flip must NOT produce a new
-    // fire — WebhookEvent is no longer in the desired collection set.
     let before_flip =
         count_agent_requests_for_trigger(db.node.as_ref(), "trigger-reconcile", "event").await;
     let _ = write_webhook_event(db.node.as_ref(), "post-flip-webhook", "any").await;
@@ -366,12 +332,6 @@ async fn subscription_reconciles_on_generation_bump() {
     agent.shutdown().await;
 }
 
-/// Template render failure: a trigger whose Task references an undefined
-/// template variable fires into `FireResult::Errored` — `last_status = "error"`
-/// / `last_error` populated on the EventTrigger doc, and NO `AgentRequest`
-/// materializes. Drive this end to end via the live engine so both sides of
-/// the contract (the on_result writeback + the no-materialize invariant) are
-/// pinned together.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn template_render_failure_records_error_status() {
     let db = test_db("trigger-conformance-render-err").await;
@@ -433,8 +393,6 @@ async fn template_render_failure_records_error_status() {
     agent.shutdown().await;
 }
 
-/// Two EventTriggers on the same `source_collection` with different filters:
-/// a source doc matching only one filter fires only that trigger.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_triggers_same_source_collection_each_evaluate_filter_independently() {
     let db = test_db("trigger-conformance-two-filters").await;
@@ -492,10 +450,8 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
     })
     .await;
 
-    // Write a doc matching only A's filter.
     let _ = write_webhook_event(db.node.as_ref(), "ext-signup", "signup").await;
 
-    // A fires.
     wait_for_request_count(
         db.node.as_ref(),
         "trigger-two-a",
@@ -503,10 +459,8 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
         Duration::from_secs(10),
     )
     .await;
-    // B does not fire within the settle window.
     assert_no_request_within(db.node.as_ref(), "trigger-two-b", Duration::from_secs(2)).await;
 
-    // Runtime-writeback sanity.
     let a = wait_for_last_status(
         db.node.as_ref(),
         "trigger-two-a",

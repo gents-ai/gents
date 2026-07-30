@@ -43,10 +43,6 @@ pub fn normalize_markdown_text(text: &str) -> String {
     normalized.trim().to_string()
 }
 
-/// Decoded message content must be non-empty: rig's `OneOrMany` rejected
-/// empty arrays at deserialization, so a corrupt `content: []` blob always
-/// fell through to the plain-text fallback (keeping the raw string visible).
-/// `Vec` accepts `[]`, so the guard re-establishes that behavior explicitly.
 fn message_has_content(message: &Message) -> bool {
     match message {
         Message::System { .. } => true,

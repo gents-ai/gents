@@ -1,12 +1,8 @@
 import Proofs.Recovery.Sweeps.ToolCalls
 
-/-! Detached bridge tool-call startup-recovery sweep contracts. -/
-
 namespace Recovery
 
 open ToolExecution
-
-/-! ## Detached bridge recovery obligation -/
 
 inductive DetachedBridgeRecoveryCause where
   | deadlineExceeded

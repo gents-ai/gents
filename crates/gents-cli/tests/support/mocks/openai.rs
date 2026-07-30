@@ -1,8 +1,3 @@
-//! `MockOpenAIEndpoint`: a thin wrapper over the shared robust [`FakeLlm`] fake
-//! that drives a two-turn tool loop — it answers the first chat request with a
-//! `read_file` tool call and, once the conversation carries a tool result, with
-//! a final text completion. Public API is unchanged.
-
 use std::sync::Arc;
 
 use anyhow::Result;

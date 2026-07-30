@@ -1,7 +1,5 @@
 import Proofs.ApplyReconcile.ContractCases.Diff
 
-/-! Concrete apply/reconcile scenarios grouped as executable contract fixtures. -/
-
 namespace ApplyReconcile.ContractCases
 
 open Conformance.Contracts

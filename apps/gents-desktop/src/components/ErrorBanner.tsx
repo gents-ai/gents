@@ -1,8 +1,5 @@
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 
-/// The one global failure surface: shell-level errors (bridge, snapshot,
-/// action fallbacks) land here. Editor-local failures render next to their
-/// forms; this banner is for everything without a nearer home.
 export function ErrorBanner({
   message,
   onDismiss,

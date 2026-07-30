@@ -1,13 +1,9 @@
 import Proofs.Recovery.Sweeps.RequestResponse
 import Proofs.ToolExecution
 
-/-! Regular tool-call startup-recovery sweep contracts and shared predicates. -/
-
 namespace Recovery
 
 open ToolExecution
-
-/-! ## Tool-call recovery -/
 
 def isDetachedBridgeCall (call : ToolCallContext) : Prop :=
   call.childRequestId.isSome ∧ call.cancelPolicy = .detach
@@ -146,25 +142,13 @@ def toolCallRecoveryEquivalence : RecoveryEquivalence toolCallRecoverySweep :=
   , h_recover_eq_uninterrupted := toolCallRecover_matches_uninterrupted
   }
 
-/-! ## Live terminal-parent owned tool cleanup (#837)
-
-Periodic (not restart-only) counterpart of the parent-interrupted /
-parent-terminal arms of `toolCallRecoverySweep`. Does **not** apply the
-restart-only `terminalizeBackgroundedAsInterrupted` path.
--/
-
 structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
   parentInterrupted : Bool
-  /-- Exclusive clean completion: parent shows completed evidence and **no**
-      cancel-worthy field. Must be false whenever `parentInterrupted` (or any
-      other cancel-worthy terminal) is true — mirrors Rust where cancel-worthy
-      evidence takes precedence over a divergent `completed` sibling field. -/
   parentCleanCompleted : Bool
   deriving Repr
 
-/-- Linked subagent bridge (has a child request id). -/
 def isChildLinkedBridge (call : ToolCallContext) : Prop :=
   call.childRequestId.isSome
 
@@ -172,7 +156,6 @@ instance (call : ToolCallContext) : Decidable (isChildLinkedBridge call) := by
   unfold isChildLinkedBridge
   infer_instance
 
-/-- Exclusive clean completion: completed without interrupt evidence. -/
 def exclusiveCleanCompleted (row : TerminalParentToolRow) : Prop :=
   row.parentCleanCompleted = true ∧ row.parentInterrupted = false
 
@@ -180,16 +163,6 @@ instance (row : TerminalParentToolRow) : Decidable (exclusiveCleanCompleted row)
   unfold exclusiveCleanCompleted
   infer_instance
 
-/-- Matches Rust live + startup product rule for this sweep:
-
-    * running, and
-    * parent is interrupted **or** otherwise terminal, and
-    * **not** (detached bridge ∧ parent interrupted) — detached may outlive an
-      interrupted parent, and
-    * **not** (child-linked bridge ∧ *exclusive* clean completion) — clean
-      completion does not cancel background cascade children, but any interrupt
-      evidence cancels the exemption (cancel-worthy takes precedence).
--/
 def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
@@ -231,7 +204,7 @@ theorem terminalParentToolRecover_terminal :
   by_cases h_int : row.parentInterrupted
   · simp [h_int, ToolRecoveryCause.terminalState,
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
-  · -- not interrupted: parentTerminal must hold for staleness
+  ·
     have h_term : row.parentTerminal = true := by
       rcases h_stale with ⟨_, h_parent, _, _⟩
       cases h_parent with

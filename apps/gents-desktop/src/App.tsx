@@ -36,8 +36,6 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const bridge = explicitBridge ?? defaultBridge;
   const shell = useDesktopShell(bridge);
 
-  // Boot lives here, not in App: the boundary test inspects App() as a
-  // plain hook-free function, and the e2e harness mounts App directly.
   useEffect(() => {
     applyTheme(loadTheme());
     applyShellPlatform();

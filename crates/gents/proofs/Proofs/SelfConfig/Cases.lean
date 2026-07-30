@@ -1,23 +1,9 @@
 import Proofs.SelfConfig.Theorems
 
-/-!
-# Self-Configuration Contract Cases
-
-Executable witnesses for the SelfConfig model. Each case carries a stored
-document, a typed patch, the validation/guard oracle verdicts, and the
-Lean-computed outcome plus theorem-witness booleans. The Rust conformance
-test replays the same patch through the production merge
-(`config_client::patch`) and asserts identical outcomes and witnesses.
-
-Fixtures cover every target, both rejection classes (inadmissible field /
-failed validation), the clear operation, and the opt-in no-lockout guard.
--/
-
 namespace SelfConfig.ContractCases
 
 open SelfConfig
 
-/-- Patch entries encoded for fixtures: `some v` = set, `none` = clear. -/
 structure CaseRow where
   name : String
   target : Target
@@ -37,7 +23,6 @@ def rowPatch (r : CaseRow) : Patch :=
 def caseGuard (r : CaseRow) : Doc → Bool :=
   if r.guarded then gateOn else fun _ => true
 
-/-- Deterministic projection of a document over the target's schema fields. -/
 def project (t : Target) (doc : Doc) : List (FieldKey × FieldValue) :=
   (allFields t).filterMap (fun k => (doc k).map (fun v => (k, v)))
 
@@ -207,20 +192,12 @@ def scenarios : List CaseRow :=
 def selfConfigCases : List CaseWitness :=
   scenarios.map buildWitness
 
-/-- Every fixture satisfies the theorem witnesses: protected fields preserved,
-    containment holds, rejection leaves the store unchanged, and guarded
-    acceptance keeps the gate on. The theorems prove these universally; this
-    check keeps the emitted witnesses honest (a fixture typo cannot emit a
-    false witness). -/
 theorem self_config_cases_witness_theorems :
     selfConfigCases.all (fun w =>
       w.protectedPreserved && w.containmentHolds && w.unchangedOnReject
         && w.gateOnAfterAccept) = true := by
   native_decide
 
-/-- The two rejection classes are exercised: at least one inadmissible fixture
-    and one validation-failure fixture reject, and both leave state
-    unchanged. -/
 theorem self_config_cases_cover_rejections :
     (selfConfigCases.any (fun w => !w.admissiblePatch && !w.accepted))
       && (selfConfigCases.any (fun w =>
@@ -230,7 +207,6 @@ theorem self_config_cases_cover_rejections :
               && w.row.validates)) = true := by
   native_decide
 
-/-- Every target appears in at least one fixture. -/
 theorem self_config_cases_cover_all_targets :
     allTargets.all (fun t =>
       selfConfigCases.any (fun w => decide (w.row.target = t))) = true := by

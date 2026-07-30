@@ -11,9 +11,6 @@ use super::shared::{
     enforce_health_gate, lookup_service, MetaToolContext, MetaToolError, StructuredToolError,
 };
 
-/// Maximum size of the raw JSON schema block returned to the model.
-/// Compact mode is already per-field bounded; this caps only the `raw_schema:
-/// true` path that emits the full `to_string_pretty` output.
 const RAW_SCHEMA_MAX_BYTES: usize = 16_000;
 const RAW_SCHEMA_MAX_LINES: usize = 2_000;
 

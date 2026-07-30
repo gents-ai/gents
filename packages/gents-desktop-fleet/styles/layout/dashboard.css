@@ -48,8 +48,6 @@
     flex: 0 0 auto;
     border: 1px solid rgb(var(--color-accent-rgb) / 0.2);
     border-radius: var(--radius-sm);
-    /* Theme-stable dark tile: the brand glyph is white and must stay
-       visible on the light theme. */
     background: var(--color-surface);
     object-fit: contain;
     padding: var(--space-2);

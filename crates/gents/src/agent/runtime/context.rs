@@ -25,11 +25,7 @@ pub(super) struct RuntimeContext {
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
-    /// Startup readiness knobs (#559): the per-attempt build timeout below and
-    /// the failure budget consumed by the slot loop's demotion policy.
     pub(super) startup_readiness: crate::startup_readiness::StartupReadinessOptions,
-    /// Demotion ledger, cleared by the daemon on a successful start so a
-    /// demotion racing a late success self-heals.
     pub(super) startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
 
@@ -40,11 +36,6 @@ pub(super) struct BehaviorResolution {
 
 pub struct StartupBarrier {
     pending_behaviors: Mutex<HashSet<String>>,
-    /// The pending count as a watch channel rather than a `Notify`: the old
-    /// check-then-`notified()` loop could miss a final `notify_waiters` fired
-    /// between the check and the registration, hanging `wait_ready` on an
-    /// empty set. A watch receiver observes the latest value by construction,
-    /// so the release can never be lost.
     pending_count_tx: watch::Sender<usize>,
 }
 
@@ -64,9 +55,6 @@ impl StartupBarrier {
     async fn release(&self, behavior_id: &str) {
         let mut pending = self.pending_behaviors.lock().await;
         if pending.remove(behavior_id) {
-            // send_replace, not send: a release that lands before any waiter
-            // subscribes must still be stored, or the count freezes at its
-            // seeded value and wait_ready never observes zero.
             let _ = self.pending_count_tx.send_replace(pending.len());
         }
     }
@@ -80,35 +68,18 @@ impl StartupBarrier {
         self.release(behavior_id).await;
     }
 
-    /// Release a behavior from the barrier WITHOUT claiming it healthy (#559).
-    ///
-    /// The demotion accounting (reason, counts, router rejection) lives in
-    /// `StartupDemotions`; the barrier's only job is to stop waiting so one
-    /// persistently un-buildable behavior cannot wedge `Ready` and the trigger
-    /// engine forever. The distinction from readiness is carried by the
-    /// ledger, exactly as the Lean model separates `ready` from `demoted`
-    /// while `released` covers both.
     pub async fn mark_behavior_demoted(&self, behavior_id: &str) {
         self.release(behavior_id).await;
     }
 
-    /// Release a behavior whose slot reconcile retired before it ever started
-    /// (config change or removal mid-startup). Without this, retirement
-    /// orphaned the pending entry — the second #559 hang path. Mirrors
-    /// `RuntimeReconcile.StartupReadiness.retire`.
     pub async fn mark_behavior_superseded(&self, behavior_id: &str) {
         self.release(behavior_id).await;
     }
 
-    /// Whether the barrier is still waiting on this behavior — i.e. it has
-    /// neither started once, been demoted, nor been superseded. The slot
-    /// failure policy uses this to tell a build failure (pending) from a
-    /// post-start crash (released), which keeps today's restart behavior.
     pub async fn is_pending(&self, behavior_id: &str) -> bool {
         self.pending_behaviors.lock().await.contains(behavior_id)
     }
 
-    /// The behaviors the barrier is still waiting on, for watchdog logging.
     pub async fn pending_behaviors(&self) -> Vec<String> {
         let mut pending: Vec<String> = self
             .pending_behaviors
@@ -123,8 +94,6 @@ impl StartupBarrier {
 
     pub(super) async fn wait_ready(&self) {
         let mut rx = self.pending_count_tx.subscribe();
-        // `wait_for` inspects the current value first, so a barrier that is
-        // already (or was seeded) empty returns immediately.
         let _ = rx.wait_for(|count| *count == 0).await;
     }
 }
@@ -144,18 +113,7 @@ impl RuntimeContext {
         let prompt_builder =
             LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
         let preamble = prompt_builder.preamble().to_string();
-        // Build the inference tool surface (host/MCP/meta/subagent/etc plus, when
-        // the behavior has skills, the progressive-disclosure `load_skill` tool —
-        // scoped to this behavior's effective skill set + tool ceiling so it never
-        // reveals a foreign skill or widens the surface).
-        //
-        // The owned completion loop (#400) applies its own deadline/cancellation
-        // envelope, so these are unwrapped (not `RuntimeManagedTool`).
         let mut loop_tools = tool_surface.build_tools(&self.tool_runtime)?;
-        // Gate skills on the effective `skills` capability, not just the presence
-        // of configured skills: an operator ceiling that denies skills must drop
-        // `load_skill` even when the behavior declares skills (the capability is
-        // governed, mirroring meta/defra_query).
         if tool_surface.includes_skills() && !behavior.skills.is_empty() {
             let ceiling = crate::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
@@ -190,8 +148,6 @@ impl RuntimeContext {
                     "building OpenAI-compatible completion client for behavior {} against {}",
                     behavior.behavior_id, behavior.backend_endpoint
                 );
-                // The owned loop is identical for Responses and Chat Completions;
-                // this branch only chooses the OpenAI-compatible wire API.
                 if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                     let client: rig::providers::openai::CompletionsClient<
                         crate::inference_http::SessionTaggingHttpClient,
@@ -266,10 +222,6 @@ impl RuntimeContext {
                 .await
             }
             BackendProviderKind::ChatGptCodex => {
-                // The only async client build (DB + network): a hang here would
-                // produce no outcome for the slot's build budget, so bound it —
-                // the timeout converts a hang into a failed attempt and the
-                // demotion machinery covers it (#559).
                 let client = tokio::time::timeout(
                     self.startup_readiness.build_timeout,
                     crate::chatgpt_codex::build_responses_client(

@@ -135,10 +135,6 @@ pub(super) async fn handle_thread_request(
                     .and_then(|link| link.model.as_deref()),
                 resolved_child_model.as_deref(),
             );
-            // Stop the prior loaded-child watcher before acknowledging a
-            // repeated resume. The replacement is installed below after the
-            // response, so a runtime update racing the response cannot be
-            // projected once by both generations of the watcher.
             if record.is_subagent() {
                 connection.stop_child_stream(&record.session_id).await;
             }

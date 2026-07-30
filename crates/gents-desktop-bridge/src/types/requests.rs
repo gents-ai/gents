@@ -236,11 +236,6 @@ pub struct ToolSelectionSaveRequest {
     pub subagent_default_await_mode: Option<String>,
     #[serde(default)]
     pub orchestration_enabled: Option<bool>,
-    // NOTE: `write_tools` and `tool_policy_version` are intentionally NOT in the
-    // save request. write_tools is apply-managed and editing raw WriteToolDecl
-    // JSON through the UI would risk bricking the fail-closed runtime loader;
-    // tool_policy_version is backfill-owned. Both are preserved from the loaded
-    // row (the read query now fetches them), never set from the UI.
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -333,8 +328,6 @@ pub struct EventTriggerSaveRequest {
     pub enabled: Option<bool>,
     pub concurrency: Option<String>,
 }
-
-// --- operator-surfaces request params (issue #302) ---
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

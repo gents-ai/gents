@@ -17,19 +17,13 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 export type CascadeCancelDialogProps = {
-  /** When true, dialog is rendered. When transitioning false → true, fetches preview. */
   open: boolean;
   rootRequestId: string;
   agentDid?: string | null;
-  /** Called when user clicks Cancel, presses ESC, or clicks backdrop. */
   onClose: () => void;
-  /** Called when bridge accepts the interrupt. Parent typically marks the request as Cancelled. */
   onAccepted: (interruptRequestedAt: string | null) => void;
-  /** Called when bridge reports another caller latched first. */
   onAlreadyInterrupted: () => void;
-  /** Optional: called on preview fetch error. Parent decides how to surface. */
   onError?: (message: string) => void;
-  /** Optional operation adapters for non-Tauri hosts and focused tests. */
   previewInterrupt?: typeof previewChatInterruptCascade;
   interrupt?: typeof interruptChatRequest;
 };
@@ -61,7 +55,6 @@ export function CascadeCancelDialog(
   const cancelRef = useRef<HTMLButtonElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
 
-  // Fetch preview on open transition
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -89,14 +82,12 @@ export function CascadeCancelDialog(
     };
   }, [open, rootRequestId, agentDid, onClose, onError, previewInterrupt]);
 
-  // Focus Cancel button when preview is ready
   useEffect(() => {
     if (open && phase === "showing") {
       cancelRef.current?.focus();
     }
   }, [open, phase]);
 
-  // ESC handler — registered globally while dialog is open
   useEffect(() => {
     if (!open) return;
     const handler = (e: globalThis.KeyboardEvent) => {
@@ -126,7 +117,6 @@ export function CascadeCancelDialog(
             "Cascade preview has changed — please re-confirm before proceeding.",
           );
           setPhase("showing");
-          // Re-focus confirm so re-press is one keystroke away
           setTimeout(() => confirmRef.current?.focus(), 0);
           return;
         }
@@ -135,7 +125,6 @@ export function CascadeCancelDialog(
           onClose();
           return;
         }
-        // accepted (default)
         onAccepted(r.interruptRequestedAt ?? null);
         onClose();
       })
@@ -205,7 +194,7 @@ export function CascadeCancelDialog(
               </span>
             ) : null}
           </div>
-          {/* Visually hidden live region for screen reader announcements */}
+          { }
           <div
             role="status"
             aria-live="polite"

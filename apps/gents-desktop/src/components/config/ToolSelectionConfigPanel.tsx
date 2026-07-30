@@ -153,9 +153,7 @@ export function ToolSelectionConfigEditor({
         agentDid: toolSelection.agentDid ?? agentDid,
       });
       onDeleted();
-    } catch {
-      // Surfaced by the shell error banner; the editor stays put.
-    }
+    } catch {}
   }
   const [selectionId, setSelectionId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -195,10 +193,6 @@ export function ToolSelectionConfigEditor({
         .join("\n"),
     [toolServiceRegistries],
   );
-  // Service registrations are a derived input used only when a document is
-  // hydrated. Keep that input stable for the selected document: replicated
-  // service-list churn must not reset the rest of an in-progress form or move
-  // legacy delegates behind the operator's back.
   const hydrationToolServiceIdKey = useRef(toolServiceIdKey);
 
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -271,9 +265,6 @@ export function ToolSelectionConfigEditor({
         commandForbiddenArgvPrefixes: linesToArray(commandForbiddenArgvPrefixes),
         commandNetworkMode,
         cliToolNames: linesToArray(cliToolNames),
-        // defra_query read-scope allowlist; an empty list clears it (the bridge
-        // emits null). write_tools and tool_policy_version are preserve-only and
-        // are deliberately never sent — see lib/types/requests.ts.
         defraQueryCollections: linesToArray(defraQueryCollections),
         enableMetaTools,
         allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
@@ -674,9 +665,6 @@ export function ToolSelectionConfigEditor({
   );
 }
 
-// Each `writeTools` entry is a JSON-serialized `WriteToolDecl`
-// ({ tool_name, collection, ... }); render a friendly `name → collection`
-// instead of the raw blob. Falls back to the raw string for legacy/plain decls.
 function describeWriteTool(decl: string): string {
   try {
     const parsed = JSON.parse(decl) as {
@@ -689,9 +677,7 @@ function describeWriteTool(decl: string): string {
     if (name) {
       return collection ? `${name} → ${collection}` : name;
     }
-  } catch {
-    // Not JSON — a legacy/plain decl; show it verbatim.
-  }
+  } catch {}
   return decl;
 }
 
@@ -759,7 +745,6 @@ function displayToolCeiling(value: ReturnType<typeof normalizeToolCeiling>) {
   }
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function toolSelectionFormValues(
   toolSelection: ToolSelectionView | null,
   toolServiceIdKey: string,

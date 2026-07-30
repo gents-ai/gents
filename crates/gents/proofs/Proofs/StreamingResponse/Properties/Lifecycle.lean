@@ -1,7 +1,5 @@
 import Proofs.StreamingResponse.Transition
 
-/-! Lifecycle safety, bridge completion, uniqueness, and idempotent-finalize properties for streaming responses. -/
-
 namespace StreamingResponse
 
 theorem terminal_irreversibility

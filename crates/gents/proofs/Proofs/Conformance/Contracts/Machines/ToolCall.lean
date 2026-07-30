@@ -1,10 +1,6 @@
 import Proofs.ToolExecution
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Tool Call Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def toolCallStates : List ToolExecution.ToolCallState :=
@@ -52,48 +48,13 @@ def toolCallWithState (state : ToolExecution.ToolCallState) : ToolExecution.Tool
   , persistence := .committed
   }
 
-/-- Evidence-bearing samples: `approve`/`deny` require recorded approval
-evidence, which the plain per-state samples (approval = none) never carry.
-Without these the derived pair set would silently drop the
-`awaitingApproval → running/failed` edges. -/
 def toolCallApprovalSamples : List ToolExecution.ToolCallContext :=
   [ { toolCallWithState .awaitingApproval with approval := some .approved }
   , { toolCallWithState .awaitingApproval with approval := some .denied }
   ]
 
-/-- Named transition rows for the ToolCall machine.
-
-Bucket 2 of the R2 Rust subagent data plane consumes these to assert that
-the Rust runtime's transition matrix matches Lean. They cover three new
-classes of edge that the plain `(source, target)` pairs in
-`legalTransitions` cannot express on their own:
-
-* native-only edges: `complete` and `fail` on a tool whose
-  `childRequestId = none`. The relational `Transition.complete` constructor
-  carries `pre.childRequestId = none` as a precondition (and `step?` mirrors
-  it); `requires_native: true` lets the Rust matrix test reject calling
-  these on a subagent-typed tool.
-* mode-flip edges: `background`, `foreground`, `detach_running`,
-  `detach_pending` are state-preserving on `ToolCallState` and so don't
-  appear in the pair-based `legalTransitions` list. They live in
-  `ToolCallContext.Transition` (subagent extensions in `State.lean`) and
-  flip `awaitMode`/`cancelPolicy` while leaving `state` unchanged.
-  `detach` is split into two rows (`detach_running`, `detach_pending`)
-  mirroring the `bridge_failure` split pattern, because its
-  `h_live` precondition permits both `.pending` and `.running`.
-* bridge edges: `bridge_complete`, `bridge_failure`,
-  `bridge_cancel_cascade`. These are defined relationally on
-  `Subagent.BridgedState.Transition`, not on `ToolCallContext.Transition`,
-  but their effect on the bridge tool's inner state is what Bucket 2 needs
-  to enforce in Rust. `bridge_complete` advances the bridge tool from
-  `running → completed` (with `requires_child = true`); `bridge_failure`
-  drives `running → failed` or `running → cancelled` (per the disjunction in
-  `BridgedState.Transition.bridge_failure`); `bridge_cancel_cascade` is
-  state-preserving on the parent's bridge tool (it sets the child's
-  `interruptRequestedAt`) so its row uses `running → running`. -/
 def toolCallNamedTransitions : List NamedTransition :=
-  [ -- native-only inner transitions: subagent-typed tools (with a child) take
-    -- the bridge_* path instead.
+  [
     { name := "complete_native"
     , source := "running"
     , target := "completed"
@@ -102,7 +63,6 @@ def toolCallNamedTransitions : List NamedTransition :=
     , source := "running"
     , target := "failed"
     , requiresNative := true }
-    -- mode flips (state-preserving on ToolCallState):
   , { name := "background"
     , source := "running"
     , target := "running" }
@@ -115,7 +75,6 @@ def toolCallNamedTransitions : List NamedTransition :=
   , { name := "detach_pending"
     , source := "pending"
     , target := "pending" }
-    -- bridge edges (subagent-typed tools only):
   , { name := "bridge_complete"
     , source := "running"
     , target := "completed"

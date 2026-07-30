@@ -1,9 +1,3 @@
-//! In-memory `UpdateSubscriptionSource` for conformance tests.
-//!
-//! Backed by an `events::ChannelBus`. Tests push `events::Message`s via
-//! `publish_update(collection_id, doc_id)`; the source receives them through
-//! the real `events::Subscription` returned by `subscribe_updates()`.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,12 +22,6 @@ impl MockUpdateSubscriptionSource {
         }
     }
 
-    /// Push a synthetic Update event into the in-memory bus.
-    ///
-    /// Production update messages carry a CID, block bytes, retry flag, and
-    /// relay flag. The conformance driver only consumes collection/doc IDs and
-    /// relay-ness today, so the CID and block are deterministic synthetic
-    /// placeholders while `is_relay` defaults to true.
     pub fn publish_update(&self, collection_id: impl Into<String>, doc_id: impl Into<String>) {
         let collection_id = collection_id.into();
         let doc_id = doc_id.into();

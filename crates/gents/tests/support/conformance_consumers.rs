@@ -53,13 +53,6 @@ impl ConformanceConsumer {
     }
 }
 
-/// Registry for `CoverageLedger.lean` consumer ids.
-///
-/// When a generated Lean contract gets a new Rust or TypeScript consumer, add
-/// the test here in the same change as the Lean ledger entry. Rust entries
-/// resolve to a real `#[test]` or `#[tokio::test]` function at the named module
-/// path in the named source file; TypeScript entries resolve to a concrete test
-/// in the named suite.
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {

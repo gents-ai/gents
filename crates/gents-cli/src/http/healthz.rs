@@ -30,9 +30,6 @@ pub(crate) fn render_healthz_payload(
                 .iter()
                 .any(|backend| backend.enabled && backend.probe_status != "healthy");
             let liveness_degraded = data.liveness.expired_processing_count > 0;
-            // A closed shim port used to be invisible here, so a node reported
-            // ok:true while nothing could reach its operator UI (#699). It stays
-            // `ok` (the runtime really is serving) but must be visible.
             let codex_shim = state
                 .codex_shim_health
                 .as_ref()
@@ -279,9 +276,6 @@ mod tests {
         }
     }
 
-    /// #699: a node reported `ok: true` while the shim's advertised port was
-    /// closed, so a fleet-wide bring-up looked healthy with every operator UI
-    /// unreachable. A shim that is not serving must be visible.
     #[test]
     fn healthz_reports_a_pending_shim_as_degraded() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
@@ -340,7 +334,6 @@ mod tests {
         assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
     }
 
-    /// `--no-codex-shim` is a deliberate operator choice, not a degradation.
     #[test]
     fn healthz_does_not_degrade_when_the_shim_is_switched_off() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Off);

@@ -8,9 +8,7 @@ use serde_json::Value;
 
 use super::render::{render_filter, validate_identifier};
 
-/// Rows returned when the caller does not specify a `limit`.
 pub const DEFAULT_LIMIT: u32 = 50;
-/// Hard ceiling on `limit` to keep a single read bounded.
 pub const MAX_LIMIT: u32 = 1000;
 
 /// Sensitive `(collection, field)` pairs that `defra_query` must never expose,
@@ -31,10 +29,6 @@ pub(crate) fn is_restricted_field(collection: &str, field: &str) -> bool {
         .any(|(c, f)| *c == collection && *f == field)
 }
 
-/// Recursively collect the field-reference keys in a DefraDB filter object —
-/// object keys that are not operators (operators start with `_`, e.g. `_eq`,
-/// `_and`). Used to block filtering on restricted fields (which would otherwise
-/// allow probing a secret value with boolean/`_like` predicates).
 pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
@@ -52,65 +46,39 @@ pub(crate) fn collect_filter_field_keys(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// The structured query contract: `{collection, filter, fields, limit}`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DefraQueryParams {
-    /// Collection (GraphQL type) name to read, e.g. `AgentRequest`.
     pub collection: String,
     /// Optional DefraDB filter object. `null`/absent means "no filter".
     #[serde(default)]
     pub filter: Option<Value>,
-    /// Field names to return. Must be non-empty.
     #[serde(default)]
     pub fields: Vec<String>,
-    /// Maximum rows to return (defaults to [`DEFAULT_LIMIT`], capped at [`MAX_LIMIT`]).
     #[serde(default)]
     pub limit: Option<u32>,
 }
 
 impl DefraQueryParams {
-    /// True when the caller asked for discovery mode (`fields: ["*"]`): return
-    /// the collection's queryable field inventory instead of documents.
     pub fn is_discovery(&self) -> bool {
         self.fields.len() == 1 && self.fields[0] == "*"
     }
 }
 
-/// Alias accepted in `ToolSelection.defra_query_collections` that expands to
-/// [`AGENT_CONFIG_QUERY_COLLECTIONS`]. Lets an operator (or a preset) grant
-/// the configuration read surface without enumerating collection names.
 pub const AGENT_CONFIG_SCOPE_ALIAS: &str = "agent-config";
 
-/// The configuration read surface: every collection an agent needs to explain
-/// its own setup and help diagnose config issues ("how am I configured?",
-/// "why doesn't X fire?", "which peers am I paired with?").
-///
-/// Deliberately excludes conversation content (`AgentRequest`/`AgentResponse`/
-/// `AgentMessage`/…), memory, telemetry (`InferenceCall`), and secret-bearing
-/// collections (`OAuthCredential`) — this is the agent's operating manual,
-/// not its mailbox. `InferenceBackend` rows are included but their key fields
-/// are already redacted by the schema's visible-field projection.
 pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
-    // Identity + behavior/tool configuration.
     "AgentPrincipal",
     "AgentBehavior",
     "ToolSelection",
     "Skill",
-    // Inference configuration (api_key fields are redacted at the schema
-    // projection; the raw column never reaches the model).
     "InferenceBackend",
     "InferenceProfile",
-    // Tool services + their health, for "why is my MCP tool failing?".
     "ToolServiceRegistry",
     "ToolServiceHealthState",
-    // Automation configuration.
     "Task",
     "Schedule",
     "EventTrigger",
-    // Runtime reconcile state — the diagnosis anchor (generation, phase).
     "AgentRuntime",
-    // Operator-visible P2P control plane, for pairing diagnosis. Addresses
-    // here are shareable multiaddrs by design; no key material.
     "AgentNetwork",
     "NetworkMembership",
     "PeerEndpoint",
@@ -120,10 +88,6 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "DataPlanePairingDesired",
 ];
 
-/// Expand scope aliases in a raw `defra_query_collections` list: each
-/// [`AGENT_CONFIG_SCOPE_ALIAS`] entry becomes the full
-/// [`AGENT_CONFIG_QUERY_COLLECTIONS`] set; literal collection names pass
-/// through unchanged. Callers dedupe via their scope-set types.
 pub fn expand_collection_scope_aliases<'a>(
     collections: impl IntoIterator<Item = &'a str>,
 ) -> Vec<String> {
@@ -143,46 +107,31 @@ pub fn expand_collection_scope_aliases<'a>(
     expanded
 }
 
-/// Which collections a query surface is permitted to read.
-///
-/// An explicit tristate so the deny-all case cannot be confused with allow-all
-/// at this projection boundary (the `Only(∅) ≠ All` trap): `None` and an empty
-/// `Only` both DENY, only `All` permits everything. `restricted([])` therefore
-/// means deny-all, NOT allow-all — callers wanting allow-all must use `all()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum CollectionScope {
-    /// No collection is readable.
     #[default]
     None,
-    /// Only the listed collections are readable. An empty set denies everything.
     Only(std::collections::BTreeSet<String>),
-    /// Every collection is readable.
     All,
 }
 
 impl CollectionScope {
-    /// Allow every collection.
     pub fn all() -> Self {
         Self::All
     }
 
-    /// Deny every collection.
     pub fn none() -> Self {
         Self::None
     }
 
-    /// Restrict reads to the given collections. An EMPTY list denies all (it is
-    /// `Only(∅)`), never allow-all — use [`CollectionScope::all`] for allow-all.
     pub fn restricted(collections: Vec<String>) -> Self {
         Self::Only(collections.into_iter().collect())
     }
 
-    /// True only when every collection is readable (`All`).
     pub fn is_unrestricted(&self) -> bool {
         matches!(self, Self::All)
     }
 
-    /// Error unless `collection` is readable under this scope.
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
         match self {
             Self::All => Ok(()),
@@ -255,8 +204,6 @@ pub fn build_query(params: &DefraQueryParams, scope: &CollectionScope) -> Result
     ))
 }
 
-/// Introspect a collection's field set. `Ok(None)` means the collection
-/// (GraphQL type) does not exist on the node.
 pub(crate) async fn fetch_collection_schema(
     node: &EmbeddedNode,
     collection: &str,
@@ -272,13 +219,6 @@ pub(crate) async fn fetch_collection_schema(
     Ok(super::schema::parse_collection_schema(resp.data.as_ref()))
 }
 
-/// Execute the structured query against `node` and return the result rows
-/// (a JSON array) for the requested collection.
-///
-/// On a GraphQL failure the collection is introspected and the error is
-/// enriched into an agent-usable diagnostic (invalid fields, the allowed
-/// inventory, close-match suggestions); if introspection itself fails, the raw
-/// GraphQL errors are surfaced unchanged.
 pub(crate) async fn execute_query(
     node: &EmbeddedNode,
     params: &DefraQueryParams,

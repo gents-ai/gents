@@ -1,18 +1,5 @@
 import type { CommandDenialView as GeneratedCommandDenialView } from "./generated/CommandDenialView.js";
 
-/*
- * Command-policy denial presentation helpers and legacy result parsing.
- *
- * Runtime snapshots now carry structured DenialReason fields on
- * AgentToolCall. The regex parser below is intentionally kept only as a
- * compatibility fallback for rows written before those fields existed.
- *
- * Sentinel coverage matches the bail! messages in command.rs at the time
- * this branch was authored. If a new bail!  string is introduced or an
- * existing one is reworded, the corresponding regex below stops matching
- * and the denial silently falls back to the generic tool-failure render.
- * Tests in tests/command-denial.test.tsx assert the full set.
- */
 
 export type DenialCategory =
   | "read-only-guard"
@@ -22,9 +9,6 @@ export type DenialCategory =
   | "allowed-prefix-required"
   | "policy-config";
 
-// Stable rule ids mirror Lean DenialReason.toContract
-// (Proofs/CommandPolicy/Types.lean:80-90). When the structured persistence
-// lands these will come directly from the row's `denial_reason` field.
 export type DenialRuleId =
   | "forbiddenPrefix"
   | "allowedPrefixRequired"
@@ -44,11 +28,8 @@ type Rule = {
   build: (match: RegExpMatchArray, diagnostic: string) => CommandDenialView;
 };
 
-// Order matters: rules with attached parameters (capturing groups) come
-// before broader category-level rules so a specific match wins.
 const RULES: Rule[] = [
   {
-    // command.rs:290 — read-only allowlist
     pattern: /^command is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -61,7 +42,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:301 — sed in-place (the canonical Lean case)
     pattern: /^sed in-place edits are not allowed$/,
     build: (_m, diagnostic) => ({
       category: "read-only-guard",
@@ -74,7 +54,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:319 — find write/execute args
     pattern: /^find arguments that can write or execute are not allowed$/,
     build: (_m, diagnostic) => ({
       category: "read-only-guard",
@@ -86,7 +65,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:392 — disabled network on unrestricted
     pattern:
       /^command_network_mode=disabled cannot be enforced for unrestricted bash$/,
     build: (_m, diagnostic) => ({
@@ -99,7 +77,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:401 — curl + disabled network
     pattern: /^curl is not allowed when command_network_mode=disabled$/,
     build: (_m, diagnostic) => ({
       category: "network-denied",
@@ -112,7 +89,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:404 — tailscale ping/netcheck + disabled network
     pattern:
       /^tailscale network probes are not allowed when command_network_mode=disabled$/,
     build: (_m, diagnostic) => ({
@@ -126,7 +102,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:424 — workspace_write sandbox unavailable (macOS sandbox-exec missing)
     pattern:
       /^macOS sandbox-exec is required for workspace_write bash but was not found$/,
     build: (_m, diagnostic) => ({
@@ -139,7 +114,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:426 + :492 — workspace_write needs seatbelt enforcement
     pattern:
       /^workspace_write bash requires macOS seatbelt sandbox enforcement on this build$/,
     build: (_m, diagnostic) => ({
@@ -152,7 +126,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:529 — launchctl subcommand
     pattern:
       /^launchctl subcommand is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
@@ -167,7 +140,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:541 — tailscale subcommand
     pattern:
       /^tailscale subcommand is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
@@ -182,7 +154,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:586 — curl arg
     pattern: /^curl argument is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -196,7 +167,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:591 — curl missing http(s) URL
     pattern:
       /^curl requires an http:\/\/ or https:\/\/ URL in the read-only bash tool$/,
     build: (_m, diagnostic) => ({
@@ -210,7 +180,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:610 — sudo path mismatch for launchctl
     pattern: /^sudo launchctl must use the absolute \/bin\/launchctl path$/,
     build: (_m, diagnostic) => ({
       category: "read-only-guard",
@@ -222,7 +191,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:612 — sudo subcommand other than launchctl
     pattern: /^sudo command is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -235,7 +203,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:622 — git global options
     pattern:
       /^git global options that redirect config or helper lookup are not allowed$/,
     build: (_m, diagnostic) => ({
@@ -249,7 +216,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:633 — git subcommand
     pattern: /^git subcommand is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -263,7 +229,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:646 — rg arg
     pattern: /^rg argument is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -277,7 +242,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:714 — git subcommand arg
     pattern: /^git argument is not allowed by the read-only bash tool: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -291,7 +255,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:730 — git branch arg
     pattern: /^git branch argument is not read-only: (.+)$/,
     build: (m, diagnostic) => ({
       category: "read-only-guard",
@@ -305,7 +268,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:219 — forbidden prefix. Format: "...prefix: <argv>"
     pattern: /^command is forbidden by command execution policy prefix: (.+)$/,
     build: (m, diagnostic) => ({
       category: "forbidden-prefix",
@@ -318,7 +280,6 @@ const RULES: Rule[] = [
     }),
   },
   {
-    // command.rs:228 — allowed prefix required. Format: "...prefixes: <argv>"
     pattern:
       /^command is not allowed by command execution policy prefixes: (.+)$/,
     build: (m, diagnostic) => ({
@@ -333,22 +294,12 @@ const RULES: Rule[] = [
   },
 ];
 
-/**
- * Parse a denial from a tool-call error string.
- *
- * Returns null when the input doesn't match a known command-policy
- * sentinel — including the empty / null case, runtime errors, MCP
- * failures, and arbitrary tool output. Null means "render as a normal
- * tool failure"; the caller never panics on this returning null.
- */
 export function parseCommandDenial(
   raw: string | null | undefined,
 ): CommandDenialView | null {
   if (!raw) {
     return null;
   }
-  // Tool outputs sometimes wrap the error in framing — strip leading
-  // "error: " / "Error: " prefixes if present so the regex anchors hit.
   const stripped = raw.replace(/^(?:error|Error|ERROR):\s*/, "").trim();
   for (const rule of RULES) {
     const match = stripped.match(rule.pattern);
@@ -359,7 +310,6 @@ export function parseCommandDenial(
   return null;
 }
 
-/** All rule patterns, for tests / drift detection. */
 export const COMMAND_DENIAL_RULES: ReadonlyArray<RegExp> = RULES.map(
   (r) => r.pattern,
 );

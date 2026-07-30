@@ -15,15 +15,10 @@ import { useOperationsSnapshot } from "./useOperationsSnapshot.js";
 export type BackgroundedToolsPanelProps = {
   agentDid?: string | null;
   rootRequestId?: string | null;
-  /** Selected deployment's runtime doc — carries real executor slot data. */
   runtime?: RuntimeView | null;
-  /** Focus the lineage view on this row's parent request. */
   onOpenLineage?: (requestId: string) => void;
-  /** Begin the interrupt (preview + cascade dialog) flow for this row's parent request. */
   onInterruptParent?: (requestId: string) => void;
-  /** Resubmit a stale/expired request as a fresh one. */
   onResendRequest?: (requestId: string) => void;
-  /** Injectable hook for non-native hosts and deterministic component tests. */
   useSnapshot?: typeof useOperationsSnapshot;
 };
 
@@ -36,8 +31,6 @@ export function BackgroundedToolsPanel({
   onResendRequest,
   useSnapshot = useOperationsSnapshot,
 }: BackgroundedToolsPanelProps = {}) {
-  // Nullable on purpose: the panel also renders outside the operations rail
-  // (tests, future standalone surfaces), where tab switching is a no-op.
   const rail = useContext(OperationsRailContext);
   const request = useMemo<DesktopOperationsSnapshotRequest>(
     () => ({
@@ -49,7 +42,6 @@ export function BackgroundedToolsPanel({
   const { snapshot, error, isLoading } = useSnapshot(request);
   const model = useBackgroundedToolsModel(snapshot);
 
-  // A failed poll only replaces the panel when there is no prior snapshot.
   if (error && !snapshot) {
     return (
       <section className="background-tools-panel" aria-label="Background tools">

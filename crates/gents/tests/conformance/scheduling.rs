@@ -79,10 +79,6 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-// -----------------------------------------------------------------------------
-// Shared DB helpers
-// -----------------------------------------------------------------------------
-
 async fn create_task(
     node: &gents::defra_node::EmbeddedNode,
     task_id: &str,
@@ -166,11 +162,6 @@ async fn set_schedule_enabled(
     );
 }
 
-/// Mirrors the runtime writeback path `ScheduleSource::on_result` takes on a
-/// successful fire: advances `next_run_at` by `interval_secs`, writes
-/// `last_attempt_at`, sets `last_status = "fired"`, and bumps `fire_count` by
-/// 1. Apply-owned fields (`enabled`, `interval_secs`, `task_id`,
-///    `concurrency`) must NOT be touched.
 async fn schedule_writeback_fired(
     node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
@@ -202,8 +193,6 @@ async fn schedule_writeback_fired(
     );
 }
 
-/// Mirrors the runtime writeback path on `Skipped`: advance `next_run_at`,
-/// set `last_status = "skipped"`, do NOT bump `fire_count`.
 async fn schedule_writeback_skipped(
     node: &gents::defra_node::EmbeddedNode,
     schedule_id: &str,
@@ -354,11 +343,6 @@ async fn fetch_schedule_row(
     })
 }
 
-/// Query the same shape `ProductionMaterializer::has_active_runtime_request_for_trigger`
-/// uses — filters by `(agent_did, caused_by_trigger_id, caused_by_trigger_kind)`
-/// and the active runtime lifecycle state set, then applies the gate's expiry
-/// rule: claimed/processing rows whose persisted claim `deadline` is more than
-/// the grace past are terminal-in-effect and do not gate (#605).
 async fn has_active_runtime_request_for_trigger(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
@@ -395,9 +379,6 @@ async fn has_active_runtime_request_for_trigger(
         .unwrap_or(false)
 }
 
-/// Mirrors `production_materializer::row_gates_serial_fire`: pending rows
-/// always gate; claimed/processing rows gate unless their claim `deadline`
-/// plus the 60s grace has passed; missing/unparseable deadlines gate.
 fn row_gates_serial_fire(row: &Value, now: DateTime<Utc>) -> bool {
     let state = row
         .get("lifecycle_state")
@@ -420,10 +401,6 @@ fn row_gates_serial_fire(row: &Value, now: DateTime<Utc>) -> bool {
     }
 }
 
-/// Mirrors `ProductionMaterializer::supersede_active_runtime_requests_for_trigger`:
-/// transitions every active runtime request bound to `(trigger_id, trigger_kind)`
-/// to `lifecycle_state = superseded` / `status = superseded`. Returns the
-/// number of documents updated.
 async fn supersede_active_runtime_requests_for_trigger(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
@@ -494,9 +471,6 @@ async fn count_agent_requests_for_trigger(
         .unwrap_or(0)
 }
 
-/// Fetch `(lifecycle_state, status)` for a specific `AgentRequest` by
-/// `request_id`. Used by the supersede test to confirm the specific seeded
-/// request transitioned to `superseded`.
 async fn fetch_request_state(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
@@ -544,10 +518,6 @@ fn parse_rfc3339(value: &str) -> DateTime<Utc> {
         .unwrap_or_else(|err| panic!("failed to parse RFC3339 {value:?}: {err}"))
         .with_timezone(&Utc)
 }
-
-// -----------------------------------------------------------------------------
-// Full-agent helpers (used only by the generation-bump test)
-// -----------------------------------------------------------------------------
 
 struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -622,15 +592,6 @@ async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &s
     }
 }
 
-// -----------------------------------------------------------------------------
-// Task 47 conformance cases
-// -----------------------------------------------------------------------------
-
-/// A due Schedule fire materializes an `AgentRequest` carrying the correct
-/// trigger lineage, `execution_origin = scheduled`, and
-/// `lifecycle_state = claimed`. Mirrors what the engine's
-/// `ProductionMaterializer` writes on a successful fire — asserted here
-/// against the direct lifecycle entry point it invokes.
 #[tokio::test]
 async fn fires_at_next_run_at() {
     let db = test_db("schedule-conformance-fires").await;
@@ -703,11 +664,6 @@ async fn fires_at_next_run_at() {
         "rendered prompt template must land in AgentRequest.content: {row}"
     );
 
-    // The schedule's runtime writeback path now advances `next_run_at` and
-    // records `last_status = "fired"`. We simulate the writeback as the
-    // ScheduleSource::on_result callback would, so the persistence contract
-    // is pinned end-to-end even though the engine loop is exercised by the
-    // in-crate test.
     create_task(
         db.node.as_ref(),
         "task-fires",
@@ -760,13 +716,6 @@ async fn fires_at_next_run_at() {
     );
 }
 
-/// Disabling a Schedule via the apply-owned `enabled` field must cause the
-/// resolve step to classify it as `unavailable` (not in the engine's active
-/// set). The engine tests cover the same contract at the in-crate boundary
-/// (`dispatch_skips_when_schedule_not_in_active_schedules`); here we pin the
-/// persistence-side invariant: a Schedule with `enabled = false` is recorded
-/// on disk exactly as the apply layer sees it, and the read shape matches
-/// what `resolve_schedules` in `document_view::snapshot` filters on.
 #[tokio::test]
 async fn enabled_false_does_not_fire() {
     let db = test_db("schedule-conformance-disabled").await;
@@ -789,27 +738,17 @@ async fn enabled_false_does_not_fire() {
         !sched.enabled,
         "disabled Schedule must persist enabled=false on disk: {sched:?}"
     );
-    // No AgentRequest should exist for the trigger tuple when the Schedule is
-    // disabled (the engine never materializes a fire for it).
     let count =
         count_agent_requests_for_trigger(db.node.as_ref(), "sched-disabled", "schedule").await;
     assert_eq!(
         count, 0,
         "disabled Schedule must not have any associated AgentRequest"
     );
-    // Runtime writeback fields stay null — the engine's on_result callback
-    // never runs for a disabled schedule.
     assert_eq!(sched.last_status, None);
     assert_eq!(sched.last_error, None);
     assert_eq!(sched.fire_count, None);
 }
 
-/// A template render failure routes through
-/// `ScheduleSource::on_result(FireResult::Errored {..})`, which writes
-/// `last_status = "error"` and `last_error = <reason>` WITHOUT advancing
-/// `next_run_at` and WITHOUT materializing an `AgentRequest`. This test pins
-/// the persistence contract that the ScheduleSource writeback produces on
-/// render failure.
 #[tokio::test]
 async fn template_render_failure_records_error_status() {
     let db = test_db("schedule-conformance-render-err").await;
@@ -859,7 +798,6 @@ async fn template_render_failure_records_error_status() {
         "last_error should carry the template: prefix from the engine; got {:?}",
         sched.last_error
     );
-    // fire_count MUST NOT advance on a render error.
     assert_eq!(sched.fire_count.unwrap_or(0), 0);
     // `next_run_at` MUST NOT advance — the engine contract is that errored
     // fires retry on the next tick using the same due time. DefraDB may
@@ -876,7 +814,6 @@ async fn template_render_failure_records_error_status() {
         "next_run_at must NOT advance on Errored writeback; expected {past}, got {:?}",
         sched.next_run_at
     );
-    // And crucially no AgentRequest should have been created.
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "sched-render-err", "schedule").await,
         0,
@@ -915,12 +852,10 @@ async fn serial_skips_when_prior_active_runtime() {
     .await
     .unwrap();
 
-    // Exactly one in-flight request exists.
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule",).await,
         1
     );
-    // The engine's gating query must see it.
     assert!(
         has_active_runtime_request_for_trigger(
             db.node.as_ref(),
@@ -932,8 +867,6 @@ async fn serial_skips_when_prior_active_runtime() {
         "gating query must see the in-flight request"
     );
 
-    // Seed the Schedule + Task; simulate the Skipped writeback the source
-    // would run after the engine returns FireResult::Skipped.
     let past = (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339();
     create_task(
         db.node.as_ref(),
@@ -968,10 +901,7 @@ async fn serial_skips_when_prior_active_runtime() {
         .await
         .expect("Schedule doc exists");
     assert_eq!(sched.last_status.as_deref(), Some("skipped"));
-    // fire_count MUST NOT advance on Skipped.
     assert_eq!(sched.fire_count.unwrap_or(0), 0);
-    // The seed request still exists; no second AgentRequest was added for
-    // this trigger tuple.
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "sched-serial-skip", "schedule",).await,
         1,
@@ -979,9 +909,6 @@ async fn serial_skips_when_prior_active_runtime() {
     );
 }
 
-/// On a Skipped writeback, `next_run_at` must advance by `interval_secs` while
-/// apply-owned fields stay untouched. Mirrors the exact writeback
-/// `ScheduleSource` produces on `FireResult::Skipped`.
 #[tokio::test]
 async fn serial_advances_next_run_at_on_skip() {
     let db = test_db("schedule-conformance-skip-advance").await;
@@ -1028,21 +955,12 @@ async fn serial_advances_next_run_at_on_skip() {
         next >= past_parsed + ChronoDuration::seconds(60),
         "next_run_at must advance by >= interval_secs on Skipped writeback"
     );
-    // Apply-owned fields untouched.
     assert!(sched.enabled);
     assert_eq!(sched.interval_secs, Some(60));
     assert_eq!(sched.concurrency.as_deref(), Some("serial"));
     assert_eq!(sched.task_id.as_deref(), Some("task-skip-advance"));
 }
 
-/// `LatestOnly` concurrency must supersede any in-flight request for the
-/// same `(trigger_id, trigger_kind)` tuple before materializing the new fire.
-/// We pin both sides:
-///   1. The supersede mutation (same shape as the engine's) transitions the
-///      prior request to `lifecycle_state = superseded` /
-///      `status = superseded`.
-///   2. A new `materialize_claimed_with_execution_binding` call then produces
-///      a second `AgentRequest` sharing the same trigger tuple.
 #[tokio::test]
 async fn latest_only_supersedes_prior_fire() {
     let db = test_db("schedule-conformance-latest-only").await;
@@ -1065,7 +983,6 @@ async fn latest_only_supersedes_prior_fire() {
     .unwrap();
     let prior_request_id = prior.request().request_id.clone();
 
-    // Step 1: supersede (what the LatestOnly path does before materializing).
     let superseded_count = supersede_active_runtime_requests_for_trigger(
         db.node.as_ref(),
         AGENT_DID,
@@ -1086,7 +1003,6 @@ async fn latest_only_supersedes_prior_fire() {
         "prior AgentRequest must be in (lifecycle_state=superseded, status=superseded)"
     );
 
-    // Step 2: materialize the new fire — same trigger tuple, new request_id.
     let new_lineage = TriggerLineage {
         trigger_id: Some("sched-latest-only".to_string()),
         trigger_kind: Some("schedule".to_string()),
@@ -1109,14 +1025,10 @@ async fn latest_only_supersedes_prior_fire() {
         "new fire must have a fresh request_id"
     );
 
-    // There must now be exactly two AgentRequests for the tuple: the
-    // superseded prior + the newly claimed current fire.
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "sched-latest-only", "schedule",).await,
         2
     );
-    // The gating query must NOT see the superseded prior (it's terminal);
-    // it DOES see the newly claimed fire.
     assert!(
         has_active_runtime_request_for_trigger(
             db.node.as_ref(),
@@ -1138,15 +1050,6 @@ async fn latest_only_supersedes_prior_fire() {
     );
 }
 
-/// Inserting a Schedule post-startup must drive the snapshot reload pipeline,
-/// and editing the `enabled` field afterwards must drive another reload.
-/// This pins the apply→reconcile→activate path the engine depends on to (a)
-/// start firing a new Schedule and (b) stop firing one that gets disabled.
-///
-/// The end-to-end fire assertion is covered by the in-crate test
-/// `trigger_engine_materializes_agent_request_for_due_schedule_e2e`; here
-/// we pin the observable that the engine's snapshot receiver sees new
-/// snapshots on edit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn generation_bump_reconfigures_active_schedules() {
     let db = test_db("schedule-conformance-genbump").await;
@@ -1157,7 +1060,6 @@ async fn generation_bump_reconfigures_active_schedules() {
         .unwrap()
         .active_generation;
 
-    // Step 1: post-startup Schedule insert → first gen bump.
     create_task(
         db.node.as_ref(),
         "task-genbump",
@@ -1196,7 +1098,6 @@ async fn generation_bump_reconfigures_active_schedules() {
         "post-insert active_generation must exceed startup generation"
     );
 
-    // Step 2: toggle enabled=false → another gen bump.
     set_schedule_enabled(db.node.as_ref(), "sched-genbump", false).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -1221,9 +1122,6 @@ async fn generation_bump_reconfigures_active_schedules() {
     agent.shutdown().await;
 }
 
-/// #605 projection soundness: the serial gate is scoped by `agent_did`. A
-/// replicated foreign agent's in-flight request for the SAME human-chosen
-/// trigger id must not gate the local agent — and must still gate its own.
 #[tokio::test]
 async fn serial_gate_is_scoped_by_agent_did() {
     let db = test_db("schedule-conformance-serial-did-scope").await;
@@ -1233,7 +1131,6 @@ async fn serial_gate_is_scoped_by_agent_did() {
         trigger_id: Some("host-check".to_string()),
         trigger_kind: Some("schedule".to_string()),
     };
-    // The foreign steward's in-flight run, as replication would deliver it.
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
         "foreign-steward",
@@ -1269,10 +1166,6 @@ async fn serial_gate_is_scoped_by_agent_did() {
     );
 }
 
-/// #605 liveness relaxation: a claimed request whose persisted claim
-/// `deadline` (+grace) has passed is terminal-in-effect — the owning loop
-/// enforces the same deadline in-memory, so only a wedged orphan can look
-/// like this, and it must not gate the schedule forever.
 #[tokio::test]
 async fn serial_gate_ignores_expired_claims() {
     let db = test_db("schedule-conformance-serial-expired-claim").await;
@@ -1295,7 +1188,6 @@ async fn serial_gate_ignores_expired_claims() {
     .unwrap();
     let orphan_request_id = orphan.request().request_id.clone();
 
-    // A fresh claim (deadline in the future) gates.
     assert!(
         has_active_runtime_request_for_trigger(
             db.node.as_ref(),
@@ -1307,8 +1199,6 @@ async fn serial_gate_ignores_expired_claims() {
         "an in-deadline claim must gate"
     );
 
-    // Backdate the claim deadline beyond the 60s grace: the orphan shape from
-    // the incident (owner's store rebuilt, nothing will ever finish it).
     let expired = (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339();
     let escaped_request_id = escape_graphql_string(&orphan_request_id);
     let escaped_expired = escape_graphql_string(&expired);
@@ -1339,8 +1229,6 @@ async fn serial_gate_ignores_expired_claims() {
     );
 }
 
-/// #605: LatestOnly supersede must only rewrite the firing agent's own
-/// requests — never a replicated foreign agent's rows.
 #[tokio::test]
 async fn supersede_only_touches_own_agent_requests() {
     let db = test_db("schedule-conformance-supersede-did-scope").await;
@@ -1380,7 +1268,6 @@ async fn supersede_only_touches_own_agent_requests() {
         "supersede must transition exactly the own-agent row"
     );
 
-    // The foreign row is untouched and still gates its own agent.
     assert!(
         has_active_runtime_request_for_trigger(
             db.node.as_ref(),

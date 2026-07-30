@@ -203,11 +203,6 @@ async fn submit_request_writes_request_and_updates_conversation_summary() -> Res
     Ok(())
 }
 
-/// Regression test for the "resend drops overrides" bug. Previously,
-/// `fetch_request_view` only queried routing/content state fields, so
-/// `resend_request` silently rebuilt the new row without the original sampling
-/// overrides or metadata. Resend must preserve submitter intent across the
-/// retry chain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
@@ -221,7 +216,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
         .create_conversation("did:test:amy", Some("amy-code"))
         .await?;
 
-    // Submit with explicit sampling overrides + metadata.
     let metadata_value = r#"{"key":"preserve-me"}"#.to_string();
     let options = SubmitRequestOptions {
         temperature: Some(0.7),
@@ -241,8 +235,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
         )
         .await?;
 
-    // Force the row to a stale-terminal state (dead + Stale) directly via the
-    // embedded node. `resend_request` only accepts rows in that exact shape.
     let force_stale = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -259,10 +251,8 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
         resp.errors
     );
 
-    // Resend — this is what we're testing.
     let resent = core.resend_request(&original.request_id).await?;
 
-    // The new row must carry identical sampling overrides + metadata.
     let new_row: RequestWithOverridesRow = query_single(
         core.node(),
         &format!(
@@ -288,7 +278,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     assert_eq!(new_row.session_id, resent.session_id);
     assert_ne!(new_row.session_id, original.session_id);
     assert_eq!(new_row.retry_parent_request, original.request_id);
-    // Root should chain back to the original (this was the root of its own chain).
     assert_eq!(new_row.retry_root_request, original.request_id);
     assert_eq!(new_row.temperature, Some(0.7));
     assert_eq!(new_row.top_p, Some(0.95));

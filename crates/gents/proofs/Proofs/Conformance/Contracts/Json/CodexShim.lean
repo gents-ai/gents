@@ -3,13 +3,6 @@ import Proofs.Conformance.ContractCases
 import Proofs.CodexShim.LocalInterrupt
 import Proofs.CodexShim.Binding
 
-/-!
-# Codex Shim Contract JSON
-
-Finite adapter projection vectors for the stock Codex app-server surface
-exposed by the GENTS Codex shim.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
@@ -1256,13 +1249,6 @@ def codexShimTurnLifecycleCases : List CodexShimTurnLifecycleCase :=
 def codexShimTurnLifecycleCasesJson : String :=
   jsonArray (codexShimTurnLifecycleCases.map codexShimTurnLifecycleCaseJson)
 
-/-- Binding vectors for the runnable-gated Codex shim (gents#699).
-
-`preState`/`postState` are the shim's binding before and after it observes one
-published generation. `boundBehaviorRunnable` says whether the generation carries
-the shim's bound behavior as runnable. `requiresRestart` is pinned `false`
-everywhere on purpose: convergence is a consequence of `publish`, and no vector
-may be satisfied by restarting the process. -/
 structure CodexShimBindingCase where
   witness : String
   leanTheorems : List String
@@ -1290,7 +1276,7 @@ def codexShimBindingCaseJson (witness : CodexShimBindingCase) : String :=
     ++ "}"
 
 def codexShimBindingCases : List CodexShimBindingCase :=
-  [ -- gents#699 itself: boot on an empty store, behavior applied later.
+  [
     { witness := "codex_shim.binding.dependency_supplied_binds_without_restart"
     , leanTheorems :=
         [ "CodexShim.Binding.Shim.converges_when_dependency_published"
@@ -1304,7 +1290,6 @@ def codexShimBindingCases : List CodexShimBindingCase :=
     , postUnboundReason := none
     , requiresRestart := false
     }
-    -- The behavior still is not runnable: stay unbound, keep waiting.
   , { witness := "codex_shim.binding.dependency_still_missing_stays_unbound"
     , leanTheorems :=
         [ "CodexShim.Binding.Shim.never_binds_unrunnable"
@@ -1317,8 +1302,6 @@ def codexShimBindingCases : List CodexShimBindingCase :=
     , postUnboundReason := some "dependencyMissing"
     , requiresRestart := false
     }
-    -- The dependency arrived, but the port is gone. That is not a document, so
-    -- it degrades to the non-converging class rather than spinning.
   , { witness := "codex_shim.binding.listen_failure_degrades_to_host_resource"
     , leanTheorems :=
         [ "CodexShim.Binding.Shim.listen_failure_degrades_to_host_resource"
@@ -1332,8 +1315,6 @@ def codexShimBindingCases : List CodexShimBindingCase :=
     , postUnboundReason := some "hostResource"
     , requiresRestart := false
     }
-    -- A taken port is not a document. No generation resurrects it, so the
-    -- runtime must not spin retrying it.
   , { witness := "codex_shim.binding.host_resource_is_nonconverging_fixpoint"
     , leanTheorems :=
         [ "CodexShim.Binding.Shim.host_resource_is_fixpoint"
@@ -1346,7 +1327,6 @@ def codexShimBindingCases : List CodexShimBindingCase :=
     , postUnboundReason := some "hostResource"
     , requiresRestart := false
     }
-    -- A live listener is never torn down by a later generation.
   , { witness := "codex_shim.binding.bound_never_unbinds_on_republish"
     , leanTheorems :=
         [ "CodexShim.Binding.Shim.bound_never_unbinds"

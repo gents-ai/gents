@@ -1,17 +1,6 @@
 ---- MODULE SubagentCompletion ----
 EXTENDS Naturals, FiniteSets, TLC
 
-(***************************************************************************)
-(* Cross-deployment background subagent completion projection.              *)
-(*                                                                         *)
-(* Spec design:                                                            *)
-(*   docs/superpowers/specs/2026-05-12-subagent-completion-cross-          *)
-(*   deployment-tla-design.md (removed from the tree; see git history)     *)
-(*                                                                         *)
-(* Parent bridge rows live on deployment A; child request terminal state   *)
-(* is durable on deployment B; A learns through document-gossip delivery.  *)
-(***************************************************************************)
-
 CONSTANTS
   Deployment,
   ParentDeployment,
@@ -130,10 +119,6 @@ Init ==
   /\ crashCount                = [deployment \in Deployment |-> 0]
   /\ cancelRequested           = [child \in Child |-> FALSE]
 
-(***************************************************************************)
-(* B-side durable child terminal writes.                                   *)
-(***************************************************************************)
-
 PersistChildTerminal(child, terminal) ==
   /\ child \in Child
   /\ terminal \in TerminalKind
@@ -157,10 +142,6 @@ PersistChildTerminal(child, terminal) ==
        crashCount,
        cancelRequested
      >>
-
-(***************************************************************************)
-(* Document-gossip delivery from B to A.                                   *)
-(***************************************************************************)
 
 FreshEventIds(k) ==
   Cardinality(EventId \ eventIdsUsed) >= k
@@ -258,10 +239,6 @@ PersistObservationOnA(obs) ==
        cancelRequested
      >>
 
-(***************************************************************************)
-(* A-side parent bridge projection.                                        *)
-(***************************************************************************)
-
 ProjectedBridgeState(terminal) ==
   IF terminal = "Completed" THEN "Completed" ELSE "Failed"
 
@@ -291,10 +268,6 @@ ProjectTerminal(child) ==
        cancelRequested
      >>
 
-(***************************************************************************)
-(* Durable transcript notification append on A.                            *)
-(***************************************************************************)
-
 AppendNotification(child) ==
   /\ child \in Child
   /\ terminalSource[child] = "ChildProjection"
@@ -317,10 +290,6 @@ AppendNotification(child) ==
        crashCount,
        cancelRequested
      >>
-
-(***************************************************************************)
-(* Coalesced same-session wake-up enqueue on A.                            *)
-(***************************************************************************)
 
 FreshQueueIds(k) ==
   Cardinality(QueueId \ queueIdsUsed) >= k
@@ -446,10 +415,6 @@ CancelDrain ==
        cancelRequested
      >>
 
-(***************************************************************************)
-(* Parent cancellation winning a completion race.                          *)
-(***************************************************************************)
-
 CancelParent(child) ==
   /\ child \in Child
   /\ bridgeState[child] = "Running"
@@ -471,10 +436,6 @@ CancelParent(child) ==
        dropCount,
        crashCount
      >>
-
-(***************************************************************************)
-(* Crash/recovery abstraction.                                             *)
-(***************************************************************************)
 
 CrashA ==
   /\ crashCount[ParentDeployment] < MaxCrashes
@@ -517,10 +478,6 @@ CrashB ==
        dropCount,
        cancelRequested
      >>
-
-(***************************************************************************)
-(* Safety invariants.                                                      *)
-(***************************************************************************)
 
 DurableChildTerminalOK ==
   \A child \in Child :
@@ -623,10 +580,6 @@ Next ==
   \/ \E child \in Child : CancelParent(child)
   \/ CrashA
   \/ CrashB
-
-(***************************************************************************)
-(* Fairness and liveness.                                                  *)
-(***************************************************************************)
 
 Fairness ==
   /\ \A child \in Child : WF_vars(EmitTerminalObservation(child))

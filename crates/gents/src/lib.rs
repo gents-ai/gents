@@ -222,18 +222,6 @@ pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
-/// Test-internal surface for driving production helpers directly from
-/// integration tests.
-///
-/// `assemble_principal_and_behaviors` is `pub(crate)` in production.
-/// Exposing it here (under `#[doc(hidden)]`) lets the loader-dedup
-/// proptest (`tests/identity_conformance_proptest.rs`) call the same
-/// helper that both production snapshot paths funnel through, without
-/// widening the public API.
-///
-/// `handle_list_subagents` and its arg/response types are exposed here so
-/// the `subagent_enablement_e2e` integration test can call the handler
-/// directly and assert C2 state (running-subagent listing) end-to-end.
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
@@ -247,9 +235,6 @@ pub mod __test_internals {
         handle_list_subagents, handle_read_subagent, load_steer_subagent_target, ChildEdge,
         SteerSubagentTarget, AWAITING_CHILD_MATERIALIZATION,
     };
-    // #664: queue seams exposed so the replicated-request-convergence
-    // conformance tests can drive the owner-scoped supersede/drain directly and
-    // fence the `agent_did` guard against a foreign-DID replica.
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{
         drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
@@ -257,7 +242,6 @@ pub mod __test_internals {
     pub use crate::trigger_engine::run_subagent_source_for_test;
 }
 
-// Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod public_api_tests {
     use super::*;

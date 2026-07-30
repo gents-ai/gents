@@ -77,7 +77,6 @@ pub async fn desktop_peer_status_fetch(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
-/// Admin-only: probe an arbitrary address before the peer is saved.
 #[tauri::command]
 pub async fn desktop_peer_probe_address(
     request: PeerProbeRequest,

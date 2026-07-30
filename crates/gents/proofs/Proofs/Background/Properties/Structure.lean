@@ -1,17 +1,7 @@
 import Proofs.Background.Transition
 
-/-! Structural bridge invariants for subagent depth, link symmetry, and lineage-field preservation. -/
-
 namespace Subagent
 namespace BridgedState
-
-/-! ### Helper lemmas: lineage-field preservation across composed transitions
-
-The bridged invariants reduce to: `subagentDepth`, `causedByParentRequestId`,
-and `causedByParentToolCallId` are preserved across any inner
-`ComposedState.Transition`. None of the request-, admission-, clock-, or
-persistence-layer constructors touch these fields (they are submitter/spawn-set;
-the runtime treats them read-only after `bridge_spawn`). -/
 
 private theorem request_subagentDepth_preserved
     {pre post : RequestContext}
@@ -31,7 +21,6 @@ private theorem request_causedByParentToolCallId_preserved
     post.causedByParentToolCallId = pre.causedByParentToolCallId := by
   cases h <;> simp_all
 
-/-- Any ComposedState transition preserves the request's `subagentDepth`. -/
 private theorem composed_subagentDepth_preserved
     {pre post : ComposedState}
     (h : ComposedState.Transition pre post) :
@@ -48,7 +37,6 @@ private theorem composed_subagentDepth_preserved
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
-/-- Any ComposedState transition preserves the request's `causedByParentRequestId`. -/
 private theorem composed_causedByParentRequestId_preserved
     {pre post : ComposedState}
     (h : ComposedState.Transition pre post) :
@@ -65,7 +53,6 @@ private theorem composed_causedByParentRequestId_preserved
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
-/-- Any ComposedState transition preserves the request's `causedByParentToolCallId`. -/
 private theorem composed_causedByParentToolCallId_preserved
     {pre post : ComposedState}
     (h : ComposedState.Transition pre post) :
@@ -82,9 +69,6 @@ private theorem composed_causedByParentToolCallId_preserved
   | tool_spawn _ _ _ h_req _ _ _ _ _ _ => rw [h_req]
   | tool_step _ _ _ h_req _ _ _ _ _ => rw [h_req]
 
-/-- Per-step preservation of INV-DEPTH: any single bridge transition preserves
-    the depth bound on both parent and child. The trace-level theorem below
-    threads this through `Trace.step`. -/
 private theorem inv_depth_step
     {s₁ s₂ : BridgedState}
     (h_init : s₁.parent.request.subagentDepth ≤ maxSubagentDepth ∧
@@ -118,8 +102,6 @@ private theorem inv_depth_step
     · rw [h_parent_eq]; exact h_init.1
     · rw [h_child_depth_eq]; exact h_init.2
 
-/-- INV-DEPTH: subagent depth on both sides of the bridge stays ≤ maxSubagentDepth
-    across any reachable trace. -/
 theorem inv_depth
     (pre post : BridgedState)
     (h_init  : pre.parent.request.subagentDepth ≤ maxSubagentDepth ∧
@@ -131,8 +113,6 @@ theorem inv_depth
   | refl => exact h_init
   | step h_step _ ih => exact ih (inv_depth_step h_init h_step)
 
-/-- Per-step preservation of INV-LINK: any single bridge transition preserves
-    parent-child link symmetry. -/
 private theorem inv_link_step
     {s₁ s₂ : BridgedState}
     (h_init : s₁.linked)
@@ -144,14 +124,11 @@ private theorem inv_link_step
   | @bridge_spawn newTool _ _ h_newTool_callId _ h_newTool_child h_tools_append
                     h_post_child _ _ h_parent_id_eq _ =>
     refine ⟨?_, ?_, ?_⟩
-    · -- parentLink: newTool ∈ post.parent.tools (via h_tools_append's append),
-      -- with callId = post.bridgeCallId and childRequestId = some post.child.requestId.
+    ·
       refine ⟨newTool, ?_, h_newTool_callId, h_newTool_child⟩
       rw [h_tools_append]
       exact List.mem_append.mpr (Or.inr (List.mem_singleton.mpr rfl))
-    · -- childLink.causedByParentRequestId: post.child.request.cBPRId =
-      -- some pre.parent.requestId, and pre.parent.requestId =
-      -- post.parent.requestId via h_parent_id_eq.
+    ·
       rw [h_post_child.2.1, h_parent_id_eq]
     · exact h_post_child.2.2.1
   | @bridge_complete idx _ tPost _ h_idx_pre _ _ _ _
@@ -159,8 +136,7 @@ private theorem inv_link_step
                        h_bridgeId_eq h_parent_id_eq =>
     obtain ⟨_h_pLink, h_cLink⟩ := h_init
     refine ⟨?_, ?_, ?_⟩
-    · -- parentLink: tPost ∈ post.parent.tools (via .set), and tPost has the
-      -- bridge callId and childRequestId pointing at post.child.
+    ·
       have h_lt : idx < s₁.parent.tools.length :=
         (List.getElem?_eq_some_iff.mp h_idx_pre).1
       have h_in : tPost ∈ s₂.parent.tools := by
@@ -169,7 +145,7 @@ private theorem inv_link_step
       refine ⟨tPost, h_in, ?_, ?_⟩
       · rw [h_post_callId, h_bridgeId_eq]
       · rw [h_post_child, h_child_eq]
-    · -- childLink.causedByParentRequestId via h_child_eq + h_parent_id_eq.
+    ·
       rw [h_child_eq, h_parent_id_eq]; exact h_cLink.1
     · rw [h_child_eq, h_bridgeId_eq]; exact h_cLink.2
   | @bridge_failure idx _ tPost _ h_idx_pre _ _ _
@@ -190,22 +166,17 @@ private theorem inv_link_step
   | bridge_cancel_cascade _ _ _ h_parent_eq h_bridgeId_eq h_child_id_eq h_child_cBPR_eq h_child_cBPT_eq _ _ =>
     obtain ⟨h_pLink, h_cLink⟩ := h_init
     refine ⟨?_, ?_, ?_⟩
-    · -- parentLink: post.parent = pre.parent, so unfold parentLink and
-      -- rewrite back to pre.parent. Also rewrite post.bridgeCallId and
-      -- post.child.requestId.
+    ·
       show ∃ t ∈ s₂.parent.tools,
         t.callId = s₂.bridgeCallId ∧
         t.childRequestId = some s₂.child.requestId
       rw [h_parent_eq, h_bridgeId_eq, h_child_id_eq]; exact h_pLink
-    · -- childLink.causedByParentRequestId: h_child_cBPR_eq says it's preserved
-      -- from pre. h_parent_eq gives pre.parent.requestId = post.parent.requestId.
+    ·
       show s₂.child.request.causedByParentRequestId = some s₂.parent.requestId
       rw [h_child_cBPR_eq, h_parent_eq]; exact h_cLink.1
     · show s₂.child.request.causedByParentToolCallId = some s₂.bridgeCallId
       rw [h_child_cBPT_eq, h_bridgeId_eq]; exact h_cLink.2
 
-/-- INV-LINK: parent and child links stay symmetric across any reachable trace
-    once initialized by `bridge_spawn`. -/
 theorem inv_link
     (pre post : BridgedState)
     (h_init  : pre.linked)

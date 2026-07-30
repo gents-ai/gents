@@ -13,8 +13,6 @@ use super::progress::{gents_tool_call_status, GentsToolCallProgress};
 use super::store::query_node_json;
 use super::ShimState;
 
-// Requests and tool calls define the authorized bridge graph and lifecycle;
-// behaviors supply the optional model presentation metadata.
 const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 3] =
     ["AgentRequest", "AgentToolCall", "AgentBehavior"];
 
@@ -355,9 +353,6 @@ async fn attach_runtime_models(state: &ShimState, links: &mut [LinkedSubagentThr
     let response = match query_node_json(state.node.as_ref(), &query).await {
         Ok(response) => response,
         Err(error) => {
-            // Model metadata is optional presentation data. Authorization and
-            // thread navigation must remain available when an ACP view omits
-            // the child's behavior document.
             tracing::debug!(%error, "unable to load child behavior model metadata");
             return;
         }
@@ -520,10 +515,6 @@ fn resolve_authorized_subagent_threads(
     for _ in 0..MAX_SUBAGENT_DEPTH {
         let mut added = false;
 
-        // A background child may receive steering or automated wake-up
-        // requests in the same session. Once the spawn edge authorizes that
-        // session, those same-principal requests are valid parent contexts for
-        // nested spawns too.
         for (row_index, row) in requests.iter().enumerate() {
             if authorized.contains_key(&row_index) {
                 continue;
@@ -920,8 +911,6 @@ mod tests {
         let grandchild_session = Uuid::new_v4().to_string();
         let requests = vec![
             request("root-request", &root_session, 0, None, None),
-            // Reverse the child order so the fixed-point walk, rather than
-            // source ordering, is what makes the nested edge reachable.
             request(
                 "grandchild-request",
                 &grandchild_session,

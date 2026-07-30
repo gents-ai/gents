@@ -1,6 +1,3 @@
-//! The interactive `demo>` shell: command dispatch, welcome/help/status,
-//! streaming chat, and `reconfigure`.
-
 use anyhow::{Context, Result};
 
 use crate::commands::chat::submit_chat_turn;
@@ -105,7 +102,6 @@ async fn chat_loop(graphql: &str, agent_did: &str, reader: &mut StdinLines) -> R
         if matches!(message, "/back" | "/exit" | "back") {
             break;
         }
-        // Reuse the chat command's streaming so replies stream token-by-token.
         if let Err(error) =
             submit_chat_turn(graphql, agent_did, &session_id, None, message, 90, 1).await
         {
@@ -115,21 +111,15 @@ async fn chat_loop(graphql: &str, agent_did: &str, reader: &mut StdinLines) -> R
     Ok(())
 }
 
-/// Switch the inference backend. The demo's resume path never re-initializes
-/// node A, so a live document swap would be far more fragile than a clean
-/// re-init — `reconfigure` therefore starts a *fresh* single-node agent on the
-/// newly chosen backend (any paired worker is torn down first).
 async fn reconfigure(fleet: &mut Fleet, reader: &mut StdinLines) -> Result<()> {
     println!("  Reconfigure starts a fresh demo agent with a new backend");
     println!("  (this clears the current agent and any paired node).");
-    // The fresh agent starts unpaired — drop a paired worker first.
     if let Some(mut worker) = fleet.node_b.take() {
         let _ = worker.server.start_kill();
     }
     let backend = pick_backend(None, reader).await?;
     println!("  Setting up your demo agent (backend: {})…", backend.label);
 
-    // Stop and reap node A so its HTTP port is free to rebind.
     let _ = fleet.server_a.start_kill();
     let _ = fleet.server_a.wait().await;
 

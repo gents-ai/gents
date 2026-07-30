@@ -1,18 +1,8 @@
-//! Conformance fence for `Proofs/ScopeTemplates/`.
-//!
-//! Bridges the Lean resolution model to the Rust scope-template catalog and the
-//! template-driven pairing reconciler. Each test names the Lean theorem it
-//! mirrors and calls the REAL `resolve_template` / `scope_filter` (never a
-//! reimpl), so the resolution the reconciler uses is fenced against the spec.
-
 use gents::agent::p2p_reconcile::templates::{
     builtin_templates, resolve_template, scope_filter, Delivery, FilterPredicate, Scope,
     AGENT_DIRECTORY_COLLECTION,
 };
 
-/// Mirrors Lean `resolveTemplate_isSome_iff` / `resolveTemplate_id_eq`: every
-/// catalog id resolves to `some` carrying exactly that id, and an absent id
-/// resolves to `none`.
 #[test]
 fn resolve_template_is_total_over_catalog_and_id_faithful() {
     for t in builtin_templates() {
@@ -25,11 +15,6 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
     );
 }
 
-/// Mirrors Lean `conversation_filter_eq` /
-/// `conversation_filters_requester_lineage`: the conversation/Push template
-/// resolves every transcript collection to the paired requester's DID and the
-/// readiness acknowledgement to the same claimant DID — push is never
-/// silently unfiltered and same-agent third-party history cannot cross.
 #[test]
 fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
     let t = resolve_template("conversation").expect("conversation in catalog");
@@ -50,9 +35,6 @@ fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
     }
 }
 
-/// Mirrors Lean `conversation_request_crossing_is_peer_scoped`: two clients
-/// talking to the same agent get disjoint conversation slices because the
-/// immutable requester route, not owner identity, decides what crosses.
 #[test]
 fn conversation_scope_excludes_another_requester_on_the_same_agent() {
     let t = resolve_template("conversation").expect("conversation in catalog");
@@ -68,9 +50,6 @@ fn conversation_scope_excludes_another_requester_on_the_same_agent() {
     assert_ne!(classifier_request.1, Some(predicate.value.as_str()));
 }
 
-/// Mirrors Lean `machine_filter_eq`,
-/// `machine_filters_declared_collections`, and
-/// `machine_directory_crossing_is_home_scoped`.
 #[test]
 fn machine_scope_covers_conversation_and_home_owned_directory() {
     let template = resolve_template("machine").expect("machine in catalog");
@@ -104,9 +83,6 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
     );
 }
 
-/// Mirrors Lean `scopeFilter_unscoped` + `scopeFilter_isSome_iff`: an `Unscoped`
-/// scope (the agent-config / backup Replicate templates) yields NO filter, i.e.
-/// whole-collection replication.
 #[test]
 fn unscoped_scope_resolves_to_no_filter() {
     for id in ["agent-config", "backup"] {
@@ -119,11 +95,6 @@ fn unscoped_scope_resolves_to_no_filter() {
     }
 }
 
-/// Mirrors Lean `subagentCoordinator_filter_eq` / `subagentHost_filter_eq` /
-/// `subagentHost_filters_requester_lineage`: coordinator parent requests do
-/// not fan out to hosts, and every host artifact returns only to the paired
-/// requester DID. The return leg contains only the completion/readable-
-/// transcript projection consumed by the coordinator.
 #[test]
 fn subagent_templates_resolve_to_exact_directional_filters() {
     const RETURN_PROJECTION: &[&str] = &[
@@ -197,10 +168,6 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     }
 }
 
-/// Regression for #713: owner scoping made unrelated host history match the
-/// return leg. The requester route key keeps the coordinator-spawned child
-/// messages and excludes unrelated host history, even though both rows share
-/// the same host `agent_did`.
 #[test]
 fn subagent_host_message_filter_excludes_unrelated_host_history() {
     let host = resolve_template("subagent-host").expect("host template");
@@ -219,11 +186,6 @@ fn subagent_host_message_filter_excludes_unrelated_host_history() {
     assert_ne!(unrelated_requester_did, Some(predicate.value.as_str()));
 }
 
-/// Regression/measurement for #683. Under the former coordinator rule, one
-/// owner request matched all 16 host pairings because every pairing filtered
-/// `AgentRequest.agent_did` by the same coordinator DID. The request-party
-/// route key makes the return leg match exactly one requesting coordinator,
-/// while the coordinator leg carries no parent request at all.
 #[test]
 fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     let coordinator = resolve_template("subagent-coordinator").expect("coordinator template");
@@ -257,10 +219,6 @@ fn sixteen_peer_request_wave_is_reduced_to_one_target() {
     assert_eq!(routed_child_request_matches, 1);
 }
 
-/// Mirrors Lean `appCollections_in_catalog` / `appCollections_collections_empty`
-/// / `appCollections_unscoped_no_filter`: the app-collections "bring-your-own"
-/// template resolves, is Unscoped + Replicate, and carries no fixed collections
-/// (the DataPlanePairingDesired row supplies them).
 #[test]
 fn app_collections_template_is_unscoped_replicate_byo() {
     let t = resolve_template("app-collections").expect("app-collections in catalog");
@@ -271,7 +229,6 @@ fn app_collections_template_is_unscoped_replicate_byo() {
         t.collections.is_empty(),
         "app-collections carries no fixed collections; the row supplies them"
     );
-    // Unscoped yields no filters even over a supplied collection list.
     let f = scope_filter(
         &t.scope,
         &["ChangeProposed"],

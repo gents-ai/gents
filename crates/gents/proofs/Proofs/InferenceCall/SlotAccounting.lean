@@ -1,18 +1,10 @@
 import Proofs.InferenceCall.Properties
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
-/-!
-# Inference Call Slot Accounting
-
-Production scheduler capacity is reconstructed from persisted `InferenceCall`
-rows. A backend slot is held exactly by rows whose `call_state` is `running`.
--/
-
 open scoped BigOperators
 
 namespace InferenceCallState
 
-/-- Whether a persisted call state holds backend capacity. -/
 def holdsBackendSlot : InferenceCallState → Prop
   | .running => True
   | .queued => False
@@ -60,7 +52,6 @@ end InferenceCallState
 
 namespace InferenceCall
 
-/-- Whether this persisted row currently holds backend capacity. -/
 def holdsBackendSlot (call : InferenceCall) : Prop :=
   InferenceCallState.holdsBackendSlot call.state
 
@@ -68,18 +59,15 @@ instance (call : InferenceCall) : Decidable call.holdsBackendSlot := by
   unfold holdsBackendSlot
   infer_instance
 
-/-- One unit of reconstructed capacity contribution for a backend. -/
 def slotContribution (call : InferenceCall) (bid : BackendId) : Nat :=
   if call.backend = bid ∧ call.holdsBackendSlot then 1 else 0
 
-/-- Reconstructed held slots for a backend, counted from persisted call rows. -/
 def reconstructedSlotCount
     (callIds : Finset Nat)
     (row : Nat → InferenceCall)
     (bid : BackendId) : Nat :=
   ∑ callId ∈ callIds, (row callId).slotContribution bid
 
-/-- The scheduler's running view is a projection over `InferenceCall` rows. -/
 def ReconstructsSchedulerRunning
     (callIds : Finset Nat)
     (row : Nat → InferenceCall)
@@ -167,7 +155,6 @@ theorem failed_call_contributes_zero
   rw [h_state]
   exact Or.inr (Or.inr rfl)
 
-/-- Permit drop writes a terminal row for an already-running call. -/
 inductive PermitDropTerminalization : InferenceCall → InferenceCall → Prop where
   | stream_dropped {pre post : InferenceCall} :
       pre.state = .running →

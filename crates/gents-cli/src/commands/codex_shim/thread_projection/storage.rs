@@ -29,9 +29,6 @@ pub(in crate::commands::codex_shim) async fn ensure_agent_session(
     let escaped_agent_name = escape_graphql_string(&agent_name);
     let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
     let escaped_behavior_id = escape_graphql_string(&behavior_id);
-    // agent_name + behavior_id are write-once-at-create. The pin lives on the
-    // AgentSession; reopening a session under a different shim binding must
-    // not silently rebind it.
     let mutation = format!(
         r#"mutation {{
             upsert_AgentSession(
@@ -54,8 +51,6 @@ pub(in crate::commands::codex_shim) async fn ensure_agent_session(
     Ok(())
 }
 
-/// Load a single AgentSession scoped to the shim's identity. Returns `None`
-/// for unknown ids OR sessions owned by another (agent_did, behavior_id).
 pub(super) async fn load_scoped_session(
     state: &ShimState,
     session_id: &str,
@@ -87,7 +82,6 @@ pub(super) async fn load_scoped_session(
         .context("decoding AgentSession row")
 }
 
-/// List all AgentSessions scoped to the shim's identity, newest first.
 pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<SessionRow>> {
     let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
     let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
@@ -117,11 +111,6 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<Sessio
         .context("decoding AgentSession rows")
 }
 
-/// Session ids (scoped to the shim's identity) that carry at least one
-/// `codex_shim`-marked request. This is the durable Codex-ownership signal that
-/// distinguishes Codex threads from ordinary CLI/chat/runtime sessions that
-/// share the same `(agent_did, behavior_id)` — those create `AgentSession`s too
-/// but never a `codex_shim` request.
 pub(super) async fn codex_marked_session_ids(state: &ShimState) -> Result<HashSet<String>> {
     let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
     let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
@@ -157,10 +146,6 @@ pub(super) async fn codex_marked_session_ids(state: &ShimState) -> Result<HashSe
         .collect())
 }
 
-/// Verify the existing AgentSession (if any) is pinned to the shim's current
-/// bound behavior. If a session was created under a different binding,
-/// resuming it under the current shim is rejected so we don't silently
-/// reroute its turns.
 pub(in crate::commands::codex_shim) async fn ensure_agent_session_pinning(
     state: &ShimState,
     session_id: &str,

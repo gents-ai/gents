@@ -35,9 +35,6 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         home: Some(&home_dir),
         graphql: None,
         bind_agent_did: Some(ManifestAgentDidBindingArg::Home),
-        // Provisioning deliberately binds a portable manifest to the identity
-        // initialized for this home. Interactive config binding keeps the
-        // explicit force requirement for replacing a different concrete DID.
         force_rebind_concrete_did: true,
         access: Some(&access),
     })

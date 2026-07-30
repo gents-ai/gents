@@ -1,15 +1,3 @@
-//! `GET /subagents/tree` — walks the parent → child request graph rooted at a
-//! single `root_request_id`, returning a tree shape the desktop bridge can
-//! render directly. Edges carry the `spawn_subagent` bridge metadata
-//! (`await_mode`, `cancel_policy`, `tool_name`) so the panel can label the
-//! routing between request nodes without a second query.
-//!
-//! Companion to `/subagents/dispatches` (see [`crate::http::r5_dispatch`]):
-//! that endpoint returns immediate children of one parent and is the canonical
-//! source for the `subagents-cross-deployment` Rust consumer. This handler
-//! exists to spare the desktop bridge from issuing N+1 round trips against the
-//! one-level endpoint when it just wants the closure rooted at a turn.
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context, Result};
@@ -216,8 +204,6 @@ pub(crate) async fn load_subagent_tree_snapshot(
                 continue;
             }
             let node = request_row_into_node(request);
-            // Prefer keeping the first node we resolved for a request id; the
-            // root fetch already populated the root before the loop started.
             nodes.entry(node.request_id.clone()).or_insert(node);
         }
 
@@ -249,9 +235,6 @@ pub(crate) async fn load_subagent_tree_snapshot(
             if !nodes.contains_key(&child_request_id) {
                 next_frontier.insert(child_request_id);
             } else {
-                // We already have the request row; still walk descendants in
-                // case the local cache was populated by an earlier sibling
-                // bridge but its subtree has not been explored yet.
                 next_frontier.insert(child_request_id);
             }
         }
@@ -414,9 +397,6 @@ fn prune_terminal_subtrees(
     edges: &mut Vec<SubagentTreeEdge>,
     root_request_id: &str,
 ) {
-    // Drop request nodes whose entire subtree (including themselves) is
-    // terminal. The root is always retained so the panel can render an empty
-    // tree placeholder rooted at the caller's turn.
     let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for edge in edges.iter() {
         children
@@ -664,8 +644,6 @@ mod tests {
 
     #[tokio::test]
     async fn tree_respects_max_depth_and_sets_truncated_flag() -> anyhow::Result<()> {
-        // Build a 3-level chain: root -> a -> b -> c. We cap max_depth at 1 so
-        // only root -> a should land in the tree, with truncated = true.
         let root = json!({
             "data": {
                 "AgentRequest": [

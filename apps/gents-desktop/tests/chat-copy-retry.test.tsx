@@ -96,7 +96,6 @@ describe("transcript copy actions", () => {
     );
 
     const buttons = screen.getAllByRole("button", { name: "Copy" });
-    // Message copy + code-block copy.
     expect(buttons.length).toBe(2);
     fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() =>

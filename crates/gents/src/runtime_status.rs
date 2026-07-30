@@ -96,9 +96,6 @@ impl RuntimeStatusRow {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
-    /// Startup build-failure demotions (#559), folded into the runnable /
-    /// unavailable counts at every publish so a reconcile republish cannot
-    /// silently undo them — and `/healthz` degrades instead of reading green.
     startup_demotions: Arc<crate::startup_readiness::StartupDemotions>,
 }
 
@@ -115,8 +112,6 @@ impl RuntimeStatusHandle {
         self.startup_demotions.clone()
     }
 
-    /// Re-publish counts after a startup demotion so the degradation is
-    /// visible immediately, not only at the next reconcile publish.
     pub(crate) async fn record_startup_demotion(&self) {
         self.update(|row| {
             if row.runnable_behavior_count > 0 {
@@ -212,9 +207,6 @@ impl RuntimeStatusHandle {
 
     async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot, result: ReconcileResult) {
         let executor_status = executor_status_fields(snapshot);
-        // A behavior demoted for startup build failures is still in the
-        // snapshot's runnable set (the snapshot is document-derived); fold the
-        // ledger in so republishes report it unavailable, not healthy.
         let demoted = self.startup_demotions.snapshot();
         let demoted_runnable = snapshot
             .behaviors

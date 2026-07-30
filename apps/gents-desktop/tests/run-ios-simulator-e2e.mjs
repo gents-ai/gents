@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 const TESTS_ROOT = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = resolve(TESTS_ROOT, "..");
 const APPLE_ROOT = join(APP_ROOT, "src-tauri", "gen", "apple");
-// Hosts override via GENTS_IOS_BUNDLE_ID (fixture host / Amygdala). Default = Gents.
 const APP_BUNDLE_ID = process.env.GENTS_IOS_BUNDLE_ID?.trim() || "com.source-inc.gents";
 const STATUS_FILENAME = "native-e2e-status.json";
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -317,7 +316,6 @@ if (!skipBuild) {
   if (existsSync(priorTauriBuild)) {
     renameSync(priorTauriBuild, join(artifactRoot, "prior-tauri-build"));
   }
-  // Enable native-e2e command bodies + E2E capability overlay (design § Stable contracts).
   run(
     "npm",
     [

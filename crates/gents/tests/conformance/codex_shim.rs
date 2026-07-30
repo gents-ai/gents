@@ -505,12 +505,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 }
 
-/// Fence for the runnable-gated shim binding (#699).
-///
-/// Drives the real `ShimBinding` through every vector the Lean model emits. The
-/// shim disabled itself at boot on an empty store and never rebound when
-/// `config apply` later made the behavior runnable; these vectors pin that a
-/// published generation — not a process restart — is what binds it.
 pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
     use gents::codex_shim_binding::{ShimBinding, ShimBindingState, ShimUnboundReason};
 
@@ -549,15 +543,12 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
             other => panic!("{}: unmodeled pre-state {other:?}", case.witness),
         };
 
-        // The published generation either carries the bound behavior as runnable
-        // or it does not.
         let runnable: Vec<&str> = if case.bound_behavior_runnable {
             vec!["other", BOUND_BEHAVIOR]
         } else {
             vec!["other"]
         };
 
-        // The listener is only ever acquired when the generation authorizes it.
         let mut listen_attempts = 0usize;
         let host_can_listen = case.host_can_listen;
         let state = shim.observe_publish(runnable.iter().copied(), || {
@@ -579,8 +570,6 @@ pub(super) fn generated_codex_shim_binding_cases_pin_runnable_gated_binding() {
             case.witness
         );
 
-        // The listener is acquired only when the dependency was actually
-        // supplied — never speculatively, and never for a host-resource fixpoint.
         let expected_attempts = usize::from(
             case.bound_behavior_runnable
                 && case.pre_state == "unbound"

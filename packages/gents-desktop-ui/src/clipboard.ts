@@ -1,6 +1,3 @@
-/// Clipboard writes for the desktop webview. navigator.clipboard is the
-/// happy path; WKWebView permission quirks make the hidden-textarea
-/// execCommand fallback worth keeping.
 export async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
@@ -8,7 +5,6 @@ export async function copyText(text: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // fall through to the legacy path
   }
   const previouslyFocused = document.activeElement;
   let area: HTMLTextAreaElement | null = null;

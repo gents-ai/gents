@@ -2,10 +2,6 @@ import Proofs.InferenceCall
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Inference Call Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

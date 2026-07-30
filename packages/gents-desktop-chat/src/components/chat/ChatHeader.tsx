@@ -104,7 +104,6 @@ export function ChatHeader({
       await onRenameConversationTitle(selectedSessionId, trimmed);
       setIsRenamingTitle(false);
     } catch {
-      // The shell surfaces the error banner; keep the inline editor open.
     } finally {
       setRenamingTitle(false);
     }

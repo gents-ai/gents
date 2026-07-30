@@ -1,11 +1,5 @@
 import Proofs.ManagedExec.Transition
 
-/-!
-# Executable Managed Exec Semantics
-
-Finite action surface for conformance generation.
--/
-
 namespace ManagedExecContext
 
 inductive Action where

@@ -1,13 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.SelfConfig.Cases
 
-/-!
-# Self-Configuration JSON
-
-Serializers for the SelfConfig field tables (per-target writable/protected
-partitions) and patch-merge witness cases.
--/
-
 namespace Conformance.Contracts
 
 open SelfConfig SelfConfig.ContractCases

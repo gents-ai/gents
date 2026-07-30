@@ -1,12 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 
-/-!
-# CrossMachineComposed JSON
-
-Serializers for composed invariant conformance witness rows.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

@@ -203,8 +203,6 @@ async fn wait_for_request_lifecycle(
     }
 }
 
-/// One-worker push fan-out still delivers intermediate + terminal updates to a
-/// healthy peer (green TLA path under `PushWorkers = 1`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_push_worker_still_converges_agent_request_over_p2p() {
     let admission = TestP2pAdmission::single_push_worker();
@@ -258,8 +256,6 @@ async fn single_push_worker_still_converges_agent_request_over_p2p() {
     assert_eq!(on_peer_terminal.agent_did, OWNER_DID);
 }
 
-/// Burst of sequential owner writes under a tight push bound still reaches the
-/// peer — models multi-wave organic updates with PushWorkers=1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn single_push_worker_delivers_multi_wave_updates() {
     let admission = TestP2pAdmission::single_push_worker();
@@ -268,8 +264,6 @@ async fn single_push_worker_delivers_multi_wave_updates() {
 
     install_one_way_replicator(owner.node.as_ref(), peer.node.as_ref(), &["AgentRequest"]).await;
 
-    // Three sequential requests force multiple PushLog waves while the outbound
-    // semaphore has only one permit.
     for idx in 0..3 {
         let request_id = format!("admission-p2p-multi-wave-{idx}");
         let session_id = format!("admission-p2p-multi-session-{idx}");

@@ -82,8 +82,6 @@ describe("AddPeerForm", () => {
   });
 
   it("fetches /status then submits the discovered peer when the manual triple is incomplete", async () => {
-    // /status returns a runtime descriptor; the form parses it into a peer and
-    // submits THAT (fetch -> parse -> submit), not the empty manual form.
     const discovered = {
       agent_name: "discovered-worker",
       agent_did: "did:key:z6MkDiscovered",

@@ -40,15 +40,10 @@ pub struct MockModelEndpoint {
 }
 
 impl MockModelEndpoint {
-    /// Start a mock backend with no auth requirement (the common case: the
-    /// startup probe just needs `/models` to answer so the backend promotes to
-    /// healthy).
     pub fn start(model_name: &str) -> anyhow::Result<Self> {
         Self::start_with_required_bearer(model_name, None)
     }
 
-    /// Start a mock backend that requires `Authorization: Bearer <token>` on
-    /// every route when `required_bearer` is `Some`, returning 401 otherwise.
     pub fn start_with_required_bearer(
         model_name: &str,
         required_bearer: Option<&str>,

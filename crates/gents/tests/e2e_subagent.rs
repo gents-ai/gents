@@ -1,8 +1,3 @@
-//! Subagent/background end-to-end suites (R4/R4c/R6 + convergence/enablement).
-//!
-//! One binary per family: each module was a standalone test binary; the
-//! consolidation cuts link time without changing any test.
-
 mod support;
 
 #[path = "e2e_subagent/r4_subagent_completion.rs"]

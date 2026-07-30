@@ -1,23 +1,15 @@
 import Proofs.Client.Types
 import Proofs.ClientShell.Projection
 
-/-!
-# Live Overlay Conformance Cases
-
-Generated cases asserting the live-overlay render decision under the
-seven streaming patterns enumerated in the issue #64 design doc.
--/
-
 namespace Conformance.ContractCases
 
 structure LiveOverlayCase where
   name                : String
-  responseStatus      : String   -- "streaming" | "complete" | "error"
+  responseStatus      : String
   materialized        : Bool
   precedingToolCalls  : Nat
   turnTerminal        : Bool
-  turnLabel           : String   -- "waitingForClaim" | "streaming" | "completed"
-                                 -- | "failed" | "superseded" | "interrupted"
+  turnLabel           : String
   hasContent          : Bool
   hasReasoning        : Bool
   expectOverlay       : Bool
@@ -54,7 +46,6 @@ def liveOverlayCases : List LiveOverlayCase :=
     , turnTerminal := true, turnLabel := "interrupted"
     , hasContent := true, hasReasoning := false
     , expectOverlay := false }
-  -- P2P lag scenario: client sees error response before request lifecycle advances to `failed`.
   , { name := "error_mid_stream"
     , responseStatus := "error", materialized := false
     , precedingToolCalls := 0

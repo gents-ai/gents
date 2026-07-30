@@ -50,10 +50,6 @@ pub(super) async fn start_gents_turn(
         .await;
     }
     let user_text = user_text_from_input(&input);
-    // Explicitly-selected skills (the Codex "pill") are forwarded as id
-    // REFERENCES on the request; the runtime resolves + injects their bodies
-    // (deterministic activation, scoped to the effective set). A skill-only turn
-    // is therefore non-empty even with no text.
     let selected_skill_ids = selected_skill_ids_from_input(&input);
     if user_text.trim().is_empty() && selected_skill_ids.is_empty() {
         return send_error(
@@ -213,9 +209,6 @@ pub(super) async fn steer_gents_turn(
         .await;
     }
 
-    // Steering honors explicit skill selections the same way TurnStart does:
-    // forward the selected ids on the steering request so the runtime injects
-    // their bodies; a skill-only (or text+skill) steer is therefore not dropped.
     let user_text = user_text_from_input(&params.input);
     let selected_skill_ids = selected_skill_ids_from_input(&params.input);
     if user_text.trim().is_empty() && selected_skill_ids.is_empty() {

@@ -107,9 +107,6 @@ async fn drive_declarative_cancel_propagation() {
     let host = boot_agent(host_db, host_identity, "cancel-propagation-host").await;
     let coord = boot_agent(coord_db, coord_identity, "cancel-propagation-coord").await;
 
-    // Retain the loaded-runner budget while #929's startup retry fix soaks.
-    // If it fires again, the bounded runtime/P2P snapshots below provide
-    // additional state for classifying the failure without extending the wait.
     wait_for_replicator_installed(
         coord.db.node.as_ref(),
         &coord_did,
@@ -124,10 +121,6 @@ async fn drive_declarative_cancel_propagation() {
         Duration::from_secs(180),
     )
     .await;
-    // A persisted PeerPairingApplied row proves the replicator was configured,
-    // not that its transport is connected yet. Fence request creation on the
-    // actual P2P connection so this conformance case does not race the first
-    // outbound replication wave under a saturated package suite.
     wait_for_connected_peer(coord.db.node.as_ref(), Duration::from_secs(60)).await;
     wait_for_connected_peer(host.db.node.as_ref(), Duration::from_secs(60)).await;
     let RunningAgent {

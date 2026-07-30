@@ -1,7 +1,3 @@
-//! Background conformance home: R6 tool backgrounding, background-theorem
-//! witnesses (admission budget, cascade cancellation), subagent delegation
-//! graph, and R4c background-work observable shapes.
-
 use super::*;
 
 const BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID: &str = "r6-background-theorem-parent";
@@ -680,8 +676,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_bu
     );
 }
 
-/// Drives the local cascade-dispatch trace witness through the child request's
-/// persisted `interrupted` post-state.
 pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
     let witness = lean_r6_background_theorem_witness("Subagent.BridgedState.cascade_cancels_child");
     assert_eq!(witness.witness_kind.as_str(), "reachability_trace");
@@ -703,9 +697,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         true,
     )
     .await;
-    // After spawn convergence (#377) the child AgentRequest is materialized by
-    // SubagentSource, not synchronously by the hook.  Hold a standalone source
-    // for the lifetime of this test so the bridge row produces a child request.
     let _source = super::support::fixtures::spawn_subagent_source(
         db.node.clone(),
         AGENT_DID,
@@ -745,8 +736,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         Some(child_request_id.as_str())
     );
 
-    // Wait for SubagentSource to materialize the child (post-convergence #377:
-    // the child is no longer created synchronously by the hook).
     let child = wait_for_background_theorem_child_lifecycle_state(
         db.node.as_ref(),
         &child_request_id,
@@ -794,8 +783,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     interrupt_request(db.node.as_ref(), &intent.child_request_id)
         .await
         .expect("interrupt child request");
-    // This isolated consumer has no daemon observer running, so explicitly
-    // drive the same request-lifecycle interrupt arm used by the daemon.
     child_lifecycle
         .transition_to_interrupted()
         .await
@@ -1012,11 +999,6 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             terminal_payload,
         } => {
             assert_eq!(tool_call_id, "r4c-w4-tool-call");
-            // Shipped behavior (gents#403): no live ring buffer was built,
-            // so a running read has no live source and returns empty output; the
-            // persisted completion is the only non-empty source, served at
-            // terminal. This mirrors `background_tools.rs` and is independently
-            // pinned by `read_tool_output_running_returns_empty_live_stream_without_ring_buffer`.
             assert_eq!(running_source, "none");
             assert_eq!(terminal_source, "persisted_tool_completion");
             assert_eq!(running_payload, "");
@@ -1053,11 +1035,6 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
         other => panic!("unexpected R4c witness variant: {other:?}"),
     }
 
-    // #593: a returned background child id never disappears from the parent
-    // control plane. The projected status must be the exact string the runtime
-    // serves from `list_subagents`/`read_subagent`, the projection must be
-    // non-terminal (never fake a terminal outcome for an unmaterialized
-    // child), and the wait payload must be retryable.
     match lean_r4c_background_work_case("r4c.list_subagents.unmaterialized_child_visible") {
         LeanR4cBackgroundWorkCase::UnmaterializedChildVisible {
             caller_request_id,

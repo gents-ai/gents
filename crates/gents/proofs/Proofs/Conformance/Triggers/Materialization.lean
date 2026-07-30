@@ -1,17 +1,5 @@
 import Proofs.Conformance.Triggers.Lifecycle
 
-/-!
-# Trigger Request Materialization Conformance
-
-Creation-time shape and lifecycle embedding for trigger-created requests.
--/
-
-/--
-The concrete request shape materialized by `dispatchStep` before any later
-lifecycle evolution updates its terminal bit.
-
-This mirrors the record assembled in `Proofs/Triggers.lean::dispatchStep`.
--/
 def materializedTriggerRequest
     (state : SystemState)
     (intent : FireIntent)
@@ -28,13 +16,11 @@ def materializedTriggerRequest
       | .manual => .interactive
       | .schedule | .event => .scheduled }
 
-/-- Trigger-created requests enter the lifecycle as non-terminal observations. -/
 theorem materializedTriggerRequest_nonterminal
     (state : SystemState) (intent : FireIntent) (seed : RequestSeed) :
     (materializedTriggerRequest state intent seed).isTerminal = false := by
   rfl
 
-/-- The materialized trigger request's origin is determined solely by trigger kind. -/
 theorem materializedTriggerRequest_origin
     (state : SystemState) (intent : FireIntent) (seed : RequestSeed) :
     (materializedTriggerRequest state intent seed).executionOrigin =
@@ -43,15 +29,6 @@ theorem materializedTriggerRequest_origin
       | .schedule | .event => .scheduled := by
   rfl
 
-/--
-If `dispatch` materializes `seed`, the origin assigned to the corresponding
-trigger request is lineage-consistent.
-
-This is the load-bearing lineage theorem for materialization: unlike
-`T4_lineage_completeness`, which only unfolds the `consistentLineage`
-predicate, this theorem connects actual `dispatch` output, manual lineage-id
-normalization, and the execution origin written into the materialized request.
--/
 theorem dispatch_materializedTriggerRequest_consistentLineage
     (state : SystemState)
     (snap : TriggerSnapshot)
@@ -69,13 +46,6 @@ theorem dispatch_materializedTriggerRequest_consistentLineage
   | .event =>
       simp [consistentLineage, materializedTriggerRequest, h_kind]
 
-/--
-Creation-time coherence: a newly materialized trigger request is coherent with
-any lifecycle context already known to be at `.claimed` with the same origin.
-
-This matches the scheduler conformance story: trigger-created work enters the
-request lifecycle as claimed work, with origin fixed by the trigger engine.
--/
 theorem materializedTriggerRequest_coherent_with_claimed_context
     (state : SystemState)
     (intent : FireIntent)
@@ -89,7 +59,6 @@ theorem materializedTriggerRequest_coherent_with_claimed_context
   · simp [materializedTriggerRequest, requestStateToTriggerTerminal, h_state]
   · exact h_origin
 
-/-- Non-trigger lifecycle fields needed to embed a materialized trigger request. -/
 structure ClaimedEmbeddingInputs where
   backend : BackendId
   deadline : Time
@@ -104,7 +73,6 @@ structure ClaimedEmbeddingInputs where
   interruptRequestedAt : Option Time
   validUntil : Option Time
 
-/-- Canonical lifecycle context witnessing a claimed embedding for a trigger request. -/
 def claimedEmbeddingContext
     (state : SystemState)
     (intent : FireIntent)
@@ -126,15 +94,6 @@ def claimedEmbeddingContext
   , interruptRequestedAt := inputs.interruptRequestedAt
   , validUntil := inputs.validUntil }
 
-/--
-Every materialized trigger request has a canonical embedding into the claimed
-lifecycle state once the non-trigger fields are supplied.
-
-The trigger layer does not own backend selection, persistence bookkeeping, or
-timing values, so those remain parameters here. What the theorem fixes is the
-cross-layer shape: claimed state, waiting admission, matching origin, and a
-non-terminal trigger observation.
--/
 theorem materializedTriggerRequest_has_claimed_embedding
     (state : SystemState)
     (intent : FireIntent)
@@ -146,11 +105,6 @@ theorem materializedTriggerRequest_has_claimed_embedding
   simp [TriggerLifecycleCoherent, claimedEmbeddingContext, materializedTriggerRequest,
     requestStateToTriggerTerminal]
 
-/--
-The canonical claimed embedding is itself a coherent lifecycle context:
-claimed requests sit in waiting admission, which is one of the admissible
-claimed-state admission modes from `Request.lean`.
--/
 theorem materializedTriggerRequest_claimed_embedding_request_coherent
     (state : SystemState)
     (intent : FireIntent)

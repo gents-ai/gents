@@ -1,5 +1,3 @@
-//! Entry test for the pairing reconcile conformance harness.
-
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -69,11 +67,6 @@ async fn pairing_reconcile_scenarios_satisfy_safety_and_liveness() {
     }
 }
 
-/// Filter-change-reinstall scenario coverage (Finding #12): a converged pairing
-/// whose scope filter changes must tear down the old filtered replicator and
-/// install the new one on the same address — mirroring Lean
-/// `PairingReconcile.filter_change_forces_reinstall`. This asserts the *op
-/// shape*, so it would fail if the reconciler mutated the replicator in place.
 #[tokio::test]
 async fn filter_change_reinstalls_replicator() {
     const ADDR: &str = "/ip4/127.0.0.1/tcp/4103/p2p/peer-b";
@@ -95,7 +88,6 @@ async fn filter_change_reinstalls_replicator() {
     );
 
     let ops = harness.emitted_ops();
-    // Initial install, then a teardown+install pair for the filter change.
     let teardown = ops
         .iter()
         .position(|op| matches!(op, DiffOp::TeardownReplicator(a) if a == ADDR))
@@ -113,20 +105,12 @@ async fn filter_change_reinstalls_replicator() {
         installs, 2,
         "expected exactly two installs (initial + reinstall), got ops {ops:?}"
     );
-    // Final reconcile is a no-op: no churn after reconvergence.
     assert!(
         !matches!(ops.last(), Some(DiffOp::TeardownReplicator(_))),
         "reconverged pairing must not keep tearing down, got {ops:?}"
     );
 }
 
-/// Conformance fence for cut 5's Layer-1/Layer-2 merge against the
-/// PairingReconcile + ScopeTemplates Lean surfaces:
-///
-/// - unfiltered network-control collections remain subscriptions;
-/// - filtered conversation collections extend only the replicator collection
-///   set, never the subscription set;
-/// - the resulting replicator identity carries a per-collection filter map.
 #[test]
 fn layered_desired_merge_keeps_data_plane_replicator_only() {
     let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
@@ -187,9 +171,6 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
     );
 }
 
-/// A denied materializability gate is represented at the merge boundary by
-/// absence of Layer-2 desired state. This keeps the control-plane mesh intact
-/// while withholding the data-plane push collections.
 #[test]
 fn layered_desired_merge_absent_data_plane_preserves_control_only() {
     let control = PairingDesired {
@@ -205,14 +186,8 @@ fn layered_desired_merge_absent_data_plane_preserves_control_only() {
     assert_eq!(merged, control);
 }
 
-/// Mirrors Lean `PairingReconcile.Layering.appCollections_subscription_survives`
-/// / `nonApp_none_base_no_subscription`: an `app-collections` data-plane layer's
-/// subscription set survives `merge_layered_desired`, so an `InstallCollection`
-/// op can reach the diff; a network-control-only data-plane layer's subscription
-/// is still cleared (conversation data must never gossip unfiltered).
 #[test]
 fn merge_preserves_app_collections_subscription_only() {
-    // app-collections data-plane layer: subscription set must survive.
     let app_layer = PairingDesired {
         collections: set(&["ChangeProposed"]),
         replicator_addresses: set(&["addr-b"]),
@@ -226,7 +201,6 @@ fn merge_preserves_app_collections_subscription_only() {
         "app-collections subscription must survive the merge: {merged:?}"
     );
 
-    // network-control data-plane layer: subscription still cleared.
     let nc_layer = PairingDesired {
         collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["addr-b"]),
@@ -241,10 +215,6 @@ fn merge_preserves_app_collections_subscription_only() {
     );
 }
 
-/// Spec conformance case (iii); mirrors Lean `PairingReconcile.Layering.base_preserved`:
-/// an app-collections data-plane layer merges with a co-existing control
-/// (network-control) base pairing without cross-contaminating their subscriptions
-/// or replicator filters — the control pairing is undisturbed.
 #[test]
 fn app_collections_coexists_with_control_pairing() {
     let base = PairingDesired {
@@ -262,11 +232,9 @@ fn app_collections_coexists_with_control_pairing() {
         template_ids: set(&["app-collections"]),
     };
     let merged = merge_layered_desired(Some(base), Some(app_layer)).expect("merged");
-    // Control-plane subscriptions preserved AND the app-collections subscription added.
     assert!(merged.collections.contains("AgentNetwork"));
     assert!(merged.collections.contains("NetworkMembership"));
     assert!(merged.collections.contains("ChangeProposed"));
-    // Both replicator collection sets present; no filter cross-contamination.
     assert!(merged.replicator_collections.contains("AgentNetwork"));
     assert!(merged.replicator_collections.contains("ChangeProposed"));
     assert!(
@@ -296,9 +264,6 @@ pub(super) fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
 }
 
 pub(super) fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
-    // The generated row pins the Lean-owned boundary vocabulary. The production
-    // loop behavior is exercised by
-    // `agent::p2p_reconcile::engine::tests::pairing_reconciler_retries_initial_enumeration_failure_then_cancels_cleanly`.
     let cases = lean_pairing_reconcile_sweep_retry_boundary_cases();
     assert_eq!(cases.len(), 1);
     let case = &cases[0];

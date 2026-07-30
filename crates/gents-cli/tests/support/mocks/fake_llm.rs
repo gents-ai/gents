@@ -24,18 +24,12 @@ use axum::Router;
 use serde_json::Value;
 use tokio::sync::{oneshot, Notify};
 
-/// What the chat endpoint should do for a given request.
 pub enum ChatAction {
-    /// Respond immediately with this complete SSE body.
     Sse(String),
-    /// Sleep, then respond with this complete SSE body (cut short on shutdown).
     DelayThenSse(Duration, String),
-    /// Never respond (the client is expected to time out); returns once the
-    /// mock is dropped.
     Hang,
 }
 
-/// `Fn(&request_json) -> ChatAction`, invoked per authorized chat request.
 pub type Responder = Arc<dyn Fn(&Value) -> ChatAction + Send + Sync>;
 
 struct FakeState {
@@ -134,7 +128,6 @@ impl FakeLlm {
 
 impl Drop for FakeLlm {
     fn drop(&mut self) {
-        // Release any hanging/delayed handler, stop the server, join the thread.
         self.stopped.store(true, Ordering::Relaxed);
         self.stop.notify_waiters();
         if let Some(shutdown) = self.shutdown.take() {
@@ -214,12 +207,10 @@ async fn handle_chat(
     match (state.responder)(&request_json) {
         ChatAction::Sse(body) => sse_response(body),
         ChatAction::DelayThenSse(delay, body) => {
-            // Sleep for `delay`, but wake early on shutdown.
             let _ = tokio::time::timeout(delay, state.stop.notified()).await;
             sse_response(body)
         }
         ChatAction::Hang => {
-            // Never respond until the mock is dropped; the client times out.
             while !state.stopped.load(Ordering::Relaxed) {
                 let _ =
                     tokio::time::timeout(Duration::from_millis(50), state.stop.notified()).await;
@@ -239,15 +230,10 @@ async fn handle_fallback() -> Response {
     )
 }
 
-/// SSE body for a single assistant tool call (`tool_calls` delta then a
-/// `finish_reason: "tool_calls"` terminal chunk and `[DONE]`).
 pub fn tool_call_sse(tool_name: &str, arguments: &str) -> String {
     tool_call_sse_with_id("call-read-file", tool_name, arguments)
 }
 
-/// SSE body for a single assistant tool call with a caller-selected id.
-/// Multi-turn orchestration tests use distinct ids so their provider history
-/// matches real model behavior and every tool result has an unambiguous owner.
 pub fn tool_call_sse_with_id(tool_call_id: &str, tool_name: &str, arguments: &str) -> String {
     let chunk_1 = serde_json::json!({
         "choices": [{
@@ -290,7 +276,6 @@ pub fn tool_call_sse_with_id(tool_call_id: &str, tool_name: &str, arguments: &st
     )
 }
 
-/// SSE body for a single assistant text completion.
 pub fn completion_text_sse(text: &str) -> String {
     let chunk_1 = serde_json::json!({
         "choices": [{ "delta": { "content": text }, "finish_reason": null }],

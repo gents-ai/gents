@@ -1,12 +1,5 @@
 import Proofs.Transcript.Properties
 
-/-!
-# Transcript Tool-Result Dedupe Properties
-
-The #160 dedupe contract: a stable `(session, logical result id, payload hash)`
-key materializes at most one durable tool-result message row.
--/
-
 namespace Transcript
 
 theorem duplicate_tool_result_observation_noops

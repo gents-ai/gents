@@ -65,14 +65,6 @@ export type TrailingRefreshQueue = {
   dispose: () => void;
 };
 
-/**
- * Runs at most one refresh at a time and retains at most one trailing pass.
- *
- * DefraDB can publish many store versions while a replicated subagent batch is
- * landing. Rendering each version would start overlapping full snapshot
- * queries; the trailing pass guarantees the UI eventually observes the newest
- * version without replaying every intermediate one.
- */
 export function createTrailingRefreshQueue(
   refresh: () => Promise<void>,
 ): TrailingRefreshQueue {

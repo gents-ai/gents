@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { copyText } from "./clipboard.js";
 
-/// Small copy affordance for transcript content. `getText` is lazy so code
-/// blocks can read their rendered textContent at click time.
 export function CopyButton({
   getText,
   label = "Copy",

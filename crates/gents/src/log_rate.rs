@@ -1,20 +1,4 @@
 //! Process-wide log-rate ceiling.
-//!
-//! Guardrail for the incident class in #588: a single hot code path emitted
-//! unthrottled `WARN` events at ~350k lines/sec, saturating journald, CPU,
-//! and IO until the host wedged. No individual callsite should be able to
-//! flood the host journal, whatever its cause.
-//!
-//! [`CallsiteRateLimiter`] is the pure, deterministic core: a per-callsite
-//! fixed-window counter that admits up to `max_per_window` events per window
-//! and reports how many were suppressed when a new window opens.
-//! [`RateLimitFilter`] adapts it as a `tracing_subscriber` per-layer filter:
-//! suppression is never silent — when the next event from a suppressed
-//! callsite is admitted in a later window, a summary event reports the
-//! suppressed count. A callsite that goes permanently quiet after a
-//! suppressed stretch never flushes its final tail count; that is deliberate
-//! — its first `max_per_window` events of the window were already logged,
-//! and a quiet callsite is no longer a threat to the host.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -23,22 +7,15 @@ use std::time::{Duration, Instant};
 
 use tracing_subscriber::layer::{Context, Filter};
 
-/// Target used for suppression summary events. Exempt from rate limiting so
-/// the summaries themselves can never recurse into suppression.
 pub const SUMMARY_TARGET: &str = "gents::log_rate";
 
-/// Configuration for the per-callsite log-rate ceiling.
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
-    /// Maximum events admitted per callsite within one window.
     pub max_per_window: u32,
-    /// Length of the fixed window.
     pub window: Duration,
 }
 
 impl Default for RateLimitConfig {
-    /// 100 events per second per callsite: far above any legitimate logging
-    /// pattern, three orders of magnitude below the #588 flood.
     fn default() -> Self {
         Self {
             max_per_window: 100,
@@ -47,19 +24,13 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// Outcome of admitting one event through the limiter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
-    /// Admit the event.
     Allow,
-    /// Admit the event, and report that `suppressed` events were dropped at
-    /// this callsite since the last admitted one.
     AllowWithSummary { suppressed: u64 },
-    /// Drop the event.
     Suppress,
 }
 
-/// Deterministic fixed-window rate limiter keyed by callsite.
 #[derive(Debug)]
 pub struct CallsiteRateLimiter<K> {
     config: RateLimitConfig,
@@ -81,7 +52,6 @@ impl<K: Eq + Hash> CallsiteRateLimiter<K> {
         }
     }
 
-    /// Records one event at `key` observed at `now` and decides its fate.
     pub fn check(&mut self, key: K, now: Instant) -> Decision {
         let state = self.states.entry(key).or_insert(CallsiteState {
             window_start: now,
@@ -111,19 +81,6 @@ impl<K: Eq + Hash> CallsiteRateLimiter<K> {
     }
 }
 
-/// `tracing_subscriber` per-layer filter enforcing the ceiling on events.
-///
-/// Spans always pass; only events are rate-limited. When a suppressed
-/// stretch ends, a `WARN` summary event on [`SUMMARY_TARGET`] reports the
-/// suppressed count and the affected target, so suppression is observable.
-///
-/// Summaries cannot be emitted inline: `tracing` drops events dispatched
-/// while another dispatch is in progress on the same thread (the dispatcher
-/// thread-local is re-entrancy guarded), so a summary emitted from within
-/// `Filter::enabled` would vanish. A dedicated summariser thread emits them
-/// through the process-global dispatcher instead. Consequence: summaries are
-/// only visible on the global subscriber — which is how every production
-/// binary initializes telemetry — not on thread-scoped test subscribers.
 pub struct RateLimitFilter {
     limiter: Mutex<CallsiteRateLimiter<tracing::callsite::Identifier>>,
     now: fn() -> Instant,
@@ -140,15 +97,11 @@ impl RateLimitFilter {
         Self::with_clock(config, Instant::now)
     }
 
-    /// Test seam: inject a controllable clock.
     pub fn with_clock(config: RateLimitConfig, now: fn() -> Instant) -> Self {
         let (summaries, rx) = std::sync::mpsc::channel::<SuppressionSummary>();
         std::thread::Builder::new()
             .name("log-rate-summaries".into())
             .spawn(move || {
-                // Exits when the owning filter (the sender) is dropped. This
-                // thread never has a scoped dispatcher, so the event goes to
-                // the global default.
                 for summary in rx {
                     tracing::warn!(
                         target: SUMMARY_TARGET,
@@ -176,8 +129,6 @@ impl RateLimitFilter {
 
 impl<S: tracing::Subscriber> Filter<S> for RateLimitFilter {
     fn enabled(&self, meta: &tracing::Metadata<'_>, _cx: &Context<'_, S>) -> bool {
-        // Spans always pass: only event volume floods the journal, and span
-        // metadata is what makes the admitted events diagnosable.
         if !meta.is_event() || meta.target() == SUMMARY_TARGET {
             return true;
         }
@@ -185,8 +136,6 @@ impl<S: tracing::Subscriber> Filter<S> for RateLimitFilter {
         match self.check(meta) {
             Decision::Allow => true,
             Decision::AllowWithSummary { suppressed } => {
-                // A dead summariser thread only costs the summary, never the
-                // event.
                 let _ = self.summaries.send(SuppressionSummary {
                     suppressed,
                     original_target: meta.target().to_string(),

@@ -268,8 +268,6 @@ pub async fn save_backend_config(core: &ClientCore, request: BackendSaveRequest)
         });
     row.name = Some(name);
     row.provider_kind = Some(provider_kind);
-    // Only overwrite the wire API when the caller sends one, so the raw backend
-    // editor (which omits it) preserves whatever the backend already had.
     if request.openai_wire_api.is_some() {
         row.openai_wire_api = trim_optional(request.openai_wire_api);
     }
@@ -325,10 +323,6 @@ pub async fn save_inference_profile_config(
             retry_max_resample: None,
             retry_allow_repair: None,
             retry_interactive_max: None,
-            // Sampling knobs (#649) are not on the desktop form yet, same as the
-            // retry_* fields. `row` is cloned from the existing store row, so a
-            // value pinned via CLI or manifest SURVIVES a desktop save — only a
-            // brand-new profile starts them unset.
             top_p: None,
             top_k: None,
             min_p: None,
@@ -472,9 +466,6 @@ pub async fn save_tool_selection_config(
         .or(row.enable_session_history_tool);
     row.enable_context_budget = request.enable_context_budget.or(row.enable_context_budget);
     row.enable_defra_query = request.enable_defra_query.or(row.enable_defra_query);
-    // Preserve-on-absent: only overwrite the allowlist when the request actually
-    // carries it, so a save from a panel that doesn't manage this field can't
-    // wipe a configured allowlist (the SP2 data-loss bug). Some([]) clears it.
     if let Some(collections) = request.defra_query_collections {
         row.defra_query_collections = collections
             .into_iter()
@@ -485,9 +476,6 @@ pub async fn save_tool_selection_config(
     row.subagent_default_await_mode =
         trim_optional(request.subagent_default_await_mode).or(row.subagent_default_await_mode);
     row.orchestration_enabled = request.orchestration_enabled.or(row.orchestration_enabled);
-    // tool_policy_version + write_tools are NOT touched here: preserved from the
-    // loaded row (version is backfill-owned; write_tools is apply-managed and the
-    // UI never edits it — avoids bricking the fail-closed runtime loader).
     core.save_tool_selection(&row).await?;
     Ok(())
 }

@@ -448,11 +448,6 @@ impl GoalSource {
             return Ok(None);
         }
 
-        // A human or another automation source may have made the session busy
-        // between the initial idle read and the durable claim. Recheck after
-        // claiming so the controller never knowingly overlaps newer work. A
-        // consumed sequence is harmless; the newer terminal parent can claim
-        // the next one once the whole session is idle again.
         let Some(still_latest) = self.latest_request_when_session_idle(&goal).await? else {
             return Ok(None);
         };
@@ -490,8 +485,6 @@ impl GoalSource {
         let parent_request_id = parent.request_id.clone();
         Ok(Some(FireIntent {
             trigger_id: None,
-            // Like SubagentSource, the request was pre-materialized with its
-            // richer persisted kind before the generic engine observes it.
             trigger_kind: TriggerKind::Manual,
             task,
             concurrency: ConcurrencyMode::Serial,

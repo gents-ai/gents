@@ -30,11 +30,6 @@ pub(crate) async fn diff_bound_desired_manifest(
     bound: &super::binding::BoundDesiredManifest,
 ) -> Result<desired_state::DesiredStateDiffReport> {
     let desired_manifest = &bound.manifest;
-    // Diff remains an observability command even when the desired state cannot
-    // currently be applied. Pairing ownership collisions are included in the
-    // structured report; apply still rejects them before opening a transaction.
-    // Other live validation (such as EventTrigger schema probes) remains an
-    // apply-time concern and must not hide the diff that helps diagnose it.
     let live_validation_errors =
         desired_state::validate::validate_peer_pairing_ownership_against_live(
             desired_manifest,

@@ -135,9 +135,7 @@ export function ScheduleConfigEditor({
     try {
       await onDeleteScheduleConfig({ scheduleId: schedule.scheduleId, agentDid });
       onDeleted();
-    } catch {
-      // Surfaced by the shell error banner; the editor stays put.
-    }
+    } catch {}
   }
   const [scheduleId, setScheduleId] = useState("");
   const [taskId, setTaskId] = useState("");
@@ -156,7 +154,6 @@ export function ScheduleConfigEditor({
     setEnabled(b.enabled);
     setConcurrency(b.concurrency);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [schedule?.scheduleId, selectedTask?.taskId]);
 
   useEffect(() => {
@@ -359,7 +356,6 @@ export function ScheduleConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function scheduleFormValues(
   schedule: ScheduleView | null,
   fallbackTaskId: string | null,

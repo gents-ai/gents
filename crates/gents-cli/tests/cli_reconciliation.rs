@@ -249,11 +249,6 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
                 })
         })
         .ok_or_else(|| anyhow!("missing initial chat completion request"))?;
-    // Select the follow-up belonging to the behavior's tool loop (same system
-    // prompt as the initial request). Session-title generation hits the same
-    // mock and — because the mock answers every fresh conversation with a tool
-    // call — produces its own tool-result follow-up, which is tool-free by
-    // design and must not be matched here.
     let tool_result_request = captured_requests
         .iter()
         .find(|request| {

@@ -42,9 +42,6 @@ fn d4f_enabled() -> bool {
     std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
 
-/// The drifted config the model must edit: CRLF line endings and trailing
-/// whitespace after the target value — the exact byte drift that made
-/// exact-match `edit_file` unusable in production.
 const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"d4f\"\r\n}\r\n";
 
 #[derive(Deserialize)]
@@ -95,14 +92,11 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let db = test_db("edit-file-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("edit-file-live"));
 
-    // Workspace with the drift-trap config file.
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("profile.json"), SEED).unwrap();
 
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
 
-    // File tools (ReadWrite) only — bash stays off so there is no scripting
-    // escape hatch: the model must succeed through edit_file or fail.
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
@@ -159,7 +153,6 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(300)).await;
     assert_eq!(terminal, "completed", "live edit run must complete");
 
-    // The file: value changed, CRLF endings preserved, untouched line intact.
     let bytes = std::fs::read(workspace.path().join("profile.json")).unwrap();
     let text = String::from_utf8_lossy(&bytes);
     assert!(
@@ -179,8 +172,6 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         "unrelated line untouched:\n{text}"
     );
 
-    // The tool trail: edit_file succeeded; write_file was never used (the
-    // production fallback this feature exists to eliminate).
     let calls = fetch_tool_calls(db.node.as_ref(), request_id).await;
     assert!(!calls.is_empty(), "tool calls must be persisted");
     let edit_completed = calls.iter().any(|c| {

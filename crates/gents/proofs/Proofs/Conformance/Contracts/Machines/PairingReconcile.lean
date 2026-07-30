@@ -1,10 +1,6 @@
 import Proofs.PairingReconcile
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Pairing-Reconcile Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def pairingReconcileStates : List PairingReconcile.PairingPhase :=

@@ -135,8 +135,6 @@ async fn save_message_inner(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_role = escape_graphql_string(role);
-    // #492: persist the durable reasoning copy alongside content. Empty/absent
-    // reasoning is written as "" so the field round-trips deterministically.
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
 
     // `agent_did` is only written in the `add` branch: it is the immutable scope
@@ -212,11 +210,6 @@ pub(crate) async fn append_message_with_requester_did(
     }
 }
 
-/// #497: durable request-scoped dedup. Return the sequence of an already-persisted
-/// message for `(session_id, request_id, content)`, if one exists. Used to keep
-/// the turn-1 user prompt + `<context>` message exactly-once across daemon retry
-/// attempts (each attempt builds a fresh hook, so in-memory turn counting cannot
-/// prevent a duplicate row after a transient failure before the first token).
 pub(crate) async fn message_sequence_for_request_content(
     node: &EmbeddedNode,
     session_id: &str,
@@ -332,12 +325,7 @@ async fn create_message(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let requester_did_field = super::requester_did_create_field(requester_did);
     let escaped_role = escape_graphql_string(role);
-    // #492: durable reasoning copy written at materialize time (see save_message).
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
-    // #497: stamp the originating request id so the owned loop can durably dedup
-    // the turn-1 user prompt + <context> message across retry attempts (a fresh
-    // hook is built per attempt and cannot dedup in memory). Empty when the
-    // write is not request-scoped (background/fork paths).
     let escaped_request_id = escape_graphql_string(request_id.unwrap_or(""));
     let message_key = format!("{escaped_session_id}:{sequence}");
 

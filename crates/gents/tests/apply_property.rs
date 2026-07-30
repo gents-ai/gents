@@ -6,8 +6,6 @@ use gents::apply_model::{
 use proptest::prelude::*;
 use std::collections::BTreeMap;
 
-// --- generators ---
-
 fn collection_strategy() -> impl Strategy<Value = Collection> {
     prop_oneof![
         Just(Collection::AgentPrincipal),
@@ -24,10 +22,6 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
     ]
 }
 
-// --- referential manifest generator (used by P2b) ---
-
-/// Rank-0 collections that carry no references and can be referrers'
-/// dependencies.
 const LEAF_COLLECTIONS: &[Collection] = &[
     Collection::InferenceBackend,
     Collection::ToolSelection,
@@ -50,10 +44,6 @@ fn leaf_docref_strategy() -> impl Strategy<Value = DocRef> {
         .prop_map(|(collection, id)| DocRef { collection, id })
 }
 
-/// Generate a manifest with 1..5 leaf docs (empty refs) and 0..3
-/// AgentBehavior docs whose `refs` point at one randomly-chosen leaf.
-/// This ensures P2b is non-vacuous: behaviors must sort after their leaf
-/// dependencies.
 fn referential_manifest_strategy() -> impl Strategy<Value = Manifest> {
     prop::collection::btree_map(leaf_docref_strategy(), "[a-z]{1,4}", 1..5)
         .prop_flat_map(|leaves| {
@@ -88,18 +78,11 @@ fn referential_manifest_strategy() -> impl Strategy<Value = Manifest> {
         })
 }
 
-// Suppress dead-code warning: LEAF_COLLECTIONS is the authoritative
-// documentation of which ranks are "leaves" but the strategy expands it
-// inline via prop_oneof! to avoid a runtime index.
 #[allow(dead_code)]
 const _LEAF_COLLECTIONS_USED: &[Collection] = LEAF_COLLECTIONS;
 
-/// Strategy generating manifests that may include an AgentPrincipal
-/// with a default_behavior-style reference to one of the behaviors
-/// already generated. Exercises the rank-3 → rank-1 edge.
 fn referential_manifest_strategy_with_principal() -> impl Strategy<Value = Manifest> {
     referential_manifest_strategy().prop_flat_map(|m| {
-        // Collect behavior DocRefs from m.
         let behavior_refs: Vec<DocRef> = m
             .docs
             .keys()
@@ -108,7 +91,6 @@ fn referential_manifest_strategy_with_principal() -> impl Strategy<Value = Manif
             .collect();
 
         if behavior_refs.is_empty() {
-            // No behaviors → can't reference one; return m unchanged.
             return Just(m).boxed();
         }
 
@@ -163,8 +145,6 @@ fn live_state_strategy() -> impl Strategy<Value = LiveState> {
 }
 
 proptest! {
-    /// P1 (bucket partition): diff's four buckets partition the union of
-    /// manifest/live doc ids with no overlap.
     #[test]
     fn diff_buckets_partition(
         m in manifest_strategy(),
@@ -184,13 +164,6 @@ proptest! {
         prop_assert_eq!(seen, union);
     }
 
-    /// P2 (ordering preserves references — vacuous): applying `diff M L` one
-    /// step at a time produces no dangling references after every step.
-    /// NOTE: this property is vacuously true for the general
-    /// `manifest_strategy` because `desired_fields_strategy` only emits
-    /// empty-refs payloads. P2b below covers the substantive case using
-    /// `referential_manifest_strategy`, which generates manifests with real
-    /// cross-document references.
     #[test]
     fn apply_ordering_preserves_references(
         m in manifest_strategy(),
@@ -213,8 +186,6 @@ proptest! {
         }
     }
 
-    /// P3 (diff determinism): `diff` is deterministic — equal inputs produce
-    /// equal DiffReports regardless of underlying iteration order.
     #[test]
     fn diff_is_deterministic(
         m in manifest_strategy(),
@@ -225,9 +196,6 @@ proptest! {
         prop_assert_eq!(a, b);
     }
 
-    /// P4 (apply preserves live): `apply_all` does not touch the live
-    /// projection — the Rust analog of the Lean `apply_preserves_live`
-    /// lemma.
     #[test]
     fn apply_preserves_live(
         m in manifest_strategy(),
@@ -238,8 +206,6 @@ proptest! {
         prop_assert_eq!(&after.live, &l.live);
     }
 
-    /// P4b (prefix apply preserves live): every durable prefix of an apply pass
-    /// preserves runtime/live-owned fields.
     #[test]
     fn every_apply_prefix_preserves_live(
         m in manifest_strategy(),
@@ -252,12 +218,6 @@ proptest! {
         }
     }
 
-    /// P2b (referential version of apply-ordering-preserves-references):
-    /// for manifests carrying real references, every intermediate state
-    /// after an apply step has no dangling reference. Because `diff` sorts
-    /// steps by `apply_order`, any leaf reference is written before its
-    /// behavior referrer. If this fails, that is a real sort-order bug in
-    /// `apply_model::diff` — do NOT suppress.
     #[test]
     fn apply_ordering_preserves_real_references(
         m in referential_manifest_strategy(),
@@ -284,9 +244,6 @@ proptest! {
         }
     }
 
-    /// P5 (principal→behavior): for manifests that carry an AgentPrincipal
-    /// with a default_behavior-style reference, the diff's sorted output
-    /// writes the referenced behavior strictly before the principal.
     #[test]
     fn apply_orders_behavior_before_principal(
         m in referential_manifest_strategy_with_principal(),
@@ -312,10 +269,6 @@ proptest! {
         }
     }
 
-    /// P6 (prefix reference closure): for manifests carrying real references,
-    /// every prefix keeps the full desired projection reference-closed. The
-    /// scoped already-written-referrer predicate is asserted as the
-    /// product-facing corollary.
     #[test]
     fn every_apply_prefix_closes_written_referrers(
         m in referential_manifest_strategy_with_principal(),
@@ -338,9 +291,6 @@ proptest! {
         }
     }
 
-    /// P7 (retry convergence): recomputing diff after any prefix and applying
-    /// to completion reaches exactly the same model state as a complete first
-    /// pass.
     #[test]
     fn retry_after_any_prefix_matches_complete_apply(
         m in manifest_strategy(),
@@ -354,8 +304,6 @@ proptest! {
         }
     }
 
-    /// P8 (idempotence): once apply has converged, a second diff/apply pass is
-    /// a no-op.
     #[test]
     fn apply_is_idempotent_after_convergence(
         m in manifest_strategy(),
@@ -370,7 +318,6 @@ proptest! {
 
 #[allow(dead_code)]
 fn _manifest_constructor_is_used(m: Manifest, l: LiveState) -> BTreeMap<DocRef, DesiredFields> {
-    // Suppress "unused" warnings from imports when proptest-cfg'd.
     let _ = diff(&m, &l);
     m.docs
 }

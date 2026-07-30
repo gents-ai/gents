@@ -20,7 +20,6 @@ pub struct InferenceBackend {
     pub name: String,
     pub provider_kind: BackendProviderKind,
     pub openai_wire_api: Option<OpenAiWireApi>,
-    /// OpenAI-compatible API base URL, including the `/v1` path segment.
     pub endpoint: String,
     pub api_key: Option<String>,
     pub api_key_env_var: Option<String>,
@@ -97,13 +96,10 @@ impl InferenceBackend {
         })
     }
 
-    /// Whether this backend is available for scheduling.
     pub fn is_available(&self) -> bool {
         self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
     }
 
-    /// Effective API key for an outbound call: the raw `api_key` if set,
-    /// otherwise the value of `api_key_env_var` from the environment.
     pub fn resolved_api_key(&self) -> Option<String> {
         if let Some(key) = self.api_key.as_ref() {
             return Some(key.clone());
@@ -115,10 +111,6 @@ impl InferenceBackend {
             .filter(|v| !v.is_empty())
     }
 
-    /// Operator-UI rollup of `(enabled, probe_status)` into a single label.
-    /// `available` is the only state in which `is_available()` is true; the
-    /// other states split the unavailable cases for operator visibility.
-    /// Mirrors the panel-288 prototype's JS mapping.
     pub fn display_state(&self) -> &'static str {
         derive_display_state(self.enabled, &self.probe_status)
     }
@@ -274,9 +266,6 @@ pub(crate) async fn list_backend_records(
     Ok(backends)
 }
 
-/// Lists every registered backend, including disabled ones — the operator
-/// UI needs to surface disabled rows so the operator can see why a backend
-/// isn't accepting work.
 pub async fn list_all_backends(node: &EmbeddedNode) -> Result<Vec<InferenceBackend>> {
     Ok(list_backend_records(node)
         .await?
@@ -309,7 +298,6 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
     Ok(backends)
 }
 
-/// Persist a backend's `probe_status` by `backend_id`.
 pub async fn set_backend_probe_status(
     node: &EmbeddedNode,
     backend_id: &str,
@@ -335,9 +323,6 @@ pub async fn set_backend_probe_status(
     Ok(())
 }
 
-/// Persist a backend's `probe_status` and stamp `last_probe` in one write.
-/// Used by both the startup ratchet and the scheduled prober's recurring
-/// `unknown → healthy` promotion path.
 pub async fn set_backend_probe_status_with_last_probe(
     node: &EmbeddedNode,
     backend_id: &str,
@@ -365,20 +350,6 @@ pub async fn set_backend_probe_status_with_last_probe(
     Ok(())
 }
 
-/// Probe each enabled backend that is not already healthy and promote the
-/// reachable ones to `healthy`.
-///
-/// A fresh store's backends start at `probe_status=unknown`, and nothing else
-/// promotes them — so without this a brand-new deploy has zero runnable
-/// behaviors until an operator runs `config backend set --probe-status healthy`
-/// by hand. Run this once at startup, before the runtime resolves which
-/// behaviors are runnable.
-///
-/// Probe failures are intentionally non-destructive: the backend is left at its
-/// current status (typically `unknown`) and logged, so a transiently-unreachable
-/// backend degrades rather than being marked `unhealthy` and flapping. Recurring
-/// re-probing and unhealthy demotion are handled by the scheduled backend prober
-/// (`crate::backend_health`), whose measured state is merged into admission.
 pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,

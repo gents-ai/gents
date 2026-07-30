@@ -168,10 +168,6 @@ impl SessionState {
     fn persist_assistant_turn(&mut self) -> u32 {
         let sequence = match self.transcript_turn {
             TranscriptTurnState::AssistantBuilding { sequence } => sequence,
-            // `AssistantPersisted` means the PREVIOUS turn closed (tool-result
-            // messages keep it, see `reset_after_user_message`); persisting an
-            // assistant message from here starts a new turn, exactly like Idle
-            // (e.g. a text-only final turn after tool results).
             TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => {
                 self.sequence += 1;
                 self.sequence
@@ -257,10 +253,6 @@ impl SessionState {
         Ok(self.mark_tool_result_keys_seen(keys))
     }
 
-    /// True once the current turn's assistant message has been persisted
-    /// (`TranscriptTurnState::AssistantPersisted`). Tool-result messages may
-    /// only be persisted after this gate, so the abort-path backfill checks it
-    /// before reconciling completed-but-unmessaged tool calls (#442).
     fn assistant_turn_persisted(&self) -> bool {
         matches!(
             self.transcript_turn,
@@ -274,9 +266,6 @@ impl SessionState {
         result_id: Option<&str>,
         call_id: Option<&str>,
     ) -> Vec<String> {
-        // The hook, stream item, and transcript can expose different IDs for
-        // the same tool result. Persist all known aliases and skip when any
-        // alias has already materialized the result message.
         let mut keys = Vec::new();
         push_tool_result_key(&mut keys, "internal", Some(internal_call_id));
 
@@ -332,12 +321,7 @@ pub struct DefraSessionHook {
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: LiveToolOutputRegistry,
-    /// Last persisted partial_output_seq per in-flight tool call; skips
-    /// no-change flushes and is pruned to in-flight ids on every pass.
     live_output_flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
-    /// True while a demand-driven flusher task is alive. The task exists
-    /// only while live buffers exist, so paused-clock tests without
-    /// background tools never see its timer.
     live_output_flusher_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -489,9 +473,6 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        // This compatibility setter intentionally clears requester lineage:
-        // carrying a prior coordinator DID across requests would misroute the
-        // new request's immutable return artifacts.
         self.set_active_request_lineage(request_id, None).await;
     }
 
@@ -526,7 +507,6 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
-    /// Set the tool names the behavior policy holds for operator approval.
     pub async fn set_approval_required_tools(&self, tools: Vec<String>) {
         self.state.lock().await.approval_required_tools = tools;
     }
@@ -540,10 +520,6 @@ impl DefraSessionHook {
             .any(|name| name == tool_name)
     }
 
-    /// Mint a live-output writer for a foreground tool call and make sure
-    /// the flusher is running. The registry key must equal the persisted
-    /// row's `tool_call_id` column — for foreground calls that is the
-    /// internal call id (`ToolCallLifecycle::new` persists it as such).
     pub(crate) fn foreground_live_output_writer(
         &self,
         internal_call_id: &str,
@@ -552,7 +528,6 @@ impl DefraSessionHook {
         self.background_live_outputs.writer_for(internal_call_id)
     }
 
-    /// Drop a finished call's live buffer so the flusher can go idle.
     pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
         self.background_live_outputs.remove(tool_call_id).await;
         self.live_output_flushed_seq
@@ -561,9 +536,6 @@ impl DefraSessionHook {
             .remove(tool_call_id);
     }
 
-    /// Start the demand-driven flusher if it is not already running. Called
-    /// whenever a live-output writer is handed out; the task exits on the
-    /// first pass that finds no live buffers.
     pub(crate) fn ensure_live_output_flusher(&self) {
         use std::sync::atomic::Ordering;
         if self
@@ -593,17 +565,9 @@ impl DefraSessionHook {
         });
     }
 
-    /// Persist a capped rolling tail of live output for every in-flight tool
-    /// call whose byte counter moved since the last flush. Additive telemetry
-    /// on the AgentToolCall document — no lifecycle transition is touched.
-    /// Per-call failures are logged and skipped so one bad row cannot stall
-    /// the sweep.
     pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
         const TAIL_PERSIST_BYTES: usize = 4096;
 
-        // The live registry is keyed by the ids its producers write under
-        // (background tool-call ids) — NOT the in-flight lifecycle map, whose
-        // internal call ids never appear in the registry.
         let live_ids = self.background_live_outputs.live_ids().await;
         {
             let mut flushed = self.live_output_flushed_seq.lock().await;
@@ -630,10 +594,6 @@ impl DefraSessionHook {
             let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
             let tail = String::from_utf8_lossy(&bytes[start..]).to_string();
 
-            // DefraDB re-validates the whole document on update, so existing
-            // DateTime columns must be resupplied or the write errors. Fetch
-            // the row's current values (and skip rows that are not running —
-            // the CAS filter below would no-op anyway).
             let row_query = format!(
                 r#"{{
                     AgentToolCall(

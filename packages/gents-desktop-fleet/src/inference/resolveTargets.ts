@@ -4,7 +4,6 @@ import type {
   DeploymentView,
 } from "@source-inc/gents-desktop-client";
 
-/** Backend + behavior reconfigured for an already-provisioned agent. */
 export function resolveTargets(deployment: DeploymentView) {
   const behavior =
     deployment.behaviors.find((entry) => entry.isDefault) ??
@@ -20,7 +19,6 @@ export function resolveTargets(deployment: DeploymentView) {
   return { behavior, backend, backendId };
 }
 
-/** Re-save unchanged behavior fields while relinking the selected backend. */
 export function behaviorSaveFrom(
   behavior: BehaviorView,
   agentDid: string,

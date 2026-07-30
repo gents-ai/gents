@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Some helpers are introduced ahead of the R4 subagent completion worker.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;

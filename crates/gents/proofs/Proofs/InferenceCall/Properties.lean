@@ -1,11 +1,5 @@
 import Proofs.InferenceCall.Transition
 
-/-!
-# Inference Call Properties
-
-Local invariants for cancellation and request-id linkage.
--/
-
 namespace InferenceCall
 
 theorem transition_preserves_requestId
@@ -84,7 +78,6 @@ theorem cancelled_has_no_outgoing
           rw [h_cancelled] at h_state
           cases h_state
 
-/-- Once a call is cancelled, every valid trace keeps it cancelled. -/
 theorem cancelled_trace_stays_cancelled
     {pre post : InferenceCall}
     (h_cancelled : pre.state = .cancelled)
@@ -96,7 +89,6 @@ theorem cancelled_trace_stays_cancelled
   | step h_step _ =>
       exact False.elim (cancelled_has_no_outgoing h_step h_cancelled)
 
-/-- A cancelled call cannot re-enter `running` along any valid trace. -/
 theorem cancelled_trace_not_running
     {pre post : InferenceCall}
     (h_cancelled : pre.state = .cancelled)

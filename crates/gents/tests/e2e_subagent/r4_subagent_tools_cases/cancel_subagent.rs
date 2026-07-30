@@ -29,9 +29,6 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Spawn convergence (#377): resolve the child session id from the DB once
-    // SubagentSource has materialized the child (the receipt no longer carries
-    // it).
     let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
     update_request_state(
         db.node.as_ref(),
@@ -225,10 +222,6 @@ async fn cancel_subagent_rejects_unlinked_child_without_lifecycle_row() {
     );
 }
 
-/// #593: cancelling a background child whose `AgentRequest` has not
-/// materialized (remote spawn target — the local `SubagentSource` skips it)
-/// must explain the bridge state with a RETRYABLE payload instead of a bare
-/// not-available error.
 #[tokio::test]
 async fn cancel_subagent_explains_unmaterialized_child_bridge() {
     let fixture = setup_spawn_fixture(

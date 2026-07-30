@@ -29,8 +29,6 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
-    /// OAuth credentials for this agent, keyed by `credential_id`. Used to gate availability of
-    /// backends (e.g. ChatGptCodex) that need a credential before a behavior can start.
     pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
     pub(crate) tasks: HashMap<String, DocumentRecord<Task>>,
     pub(crate) schedules: HashMap<String, DocumentRecord<Schedule>>,
@@ -145,8 +143,6 @@ impl DocumentRuntimeView {
         key.is_some_and(|credential_id| self.oauth_credentials.remove(&credential_id).is_some())
     }
 
-    /// True when an enabled OAuth credential exists for `provider` (the agent is implicit — the
-    /// view is loaded per-agent). Used to gate behavior availability for credential-backed backends.
     pub(super) fn has_enabled_oauth_credential(&self, provider: &str) -> bool {
         self.oauth_credentials
             .values()
@@ -244,10 +240,6 @@ fn validate_subagent_targets_resolve(
                 selection.selection_id,
             );
         }
-        // Local-DID targets may be checked against locally-known behaviors;
-        // remote-DID targets resolve out-of-band via P2P, so we never require
-        // local resolution for them. This removes the cross-node delegation
-        // seam: a well-formed remote target never blocks reaching `ready`.
         if target.agent_did == own_agent_did && !view.behaviors.contains_key(&target.behavior_id) {
             anyhow::bail!(
                 "ToolSelection {} subagent_targets entry {entry:?} names a local behavior that does not resolve to an AgentBehavior",

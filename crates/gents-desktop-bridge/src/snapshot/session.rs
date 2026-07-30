@@ -273,8 +273,6 @@ pub fn build_session_snapshot_from_store_for_agent(
         .as_deref()
         .and_then(|request_id| build_pending_turn(store, agent_did, session_id, request_id));
 
-    // Durable request provenance distinguishes runtime controls from genuine
-    // user messages whose text happens to match a reserved-looking prompt.
     let requests_by_id: HashMap<&str, &AgentRequestRow> = requests
         .iter()
         .map(|request| (request.request_id.as_str(), *request))
@@ -323,7 +321,6 @@ pub fn build_session_snapshot_from_store_for_agent(
         .tool_calls
         .into_iter()
         .map(|row| {
-            // Prefer persisted cancel_cause when present; only derive when absent.
             let cancel_cause =
                 if let Some(persisted) = row.cancel_cause.as_deref().filter(|s| !s.is_empty()) {
                     Some(DerivedCancelCauseView {
@@ -336,7 +333,6 @@ pub fn build_session_snapshot_from_store_for_agent(
                         )],
                     })
                 } else {
-                    // Derive from this tool's OWN parent request, not latest_request.
                     let req_for_tool = row
                         .request_id
                         .as_deref()

@@ -1,5 +1,3 @@
-//! R4 background subagent completion projection tests.
-
 use std::time::Duration;
 
 use gents::background_completion::{
@@ -252,8 +250,6 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
     first_row::<RequestSessionRow>(&node.execute(&query).await, "AgentRequest").session_id
 }
 
-/// Wait for SubagentSource to materialize the child `AgentRequest` for
-/// `tool_call_id`, then return its `(request_id, session_id)` (#377).
 async fn wait_for_child_for_tool(node: &EmbeddedNode, tool_call_id: &str) -> (String, String) {
     let escaped = escape_graphql_string(tool_call_id);
     let query = format!(
@@ -739,8 +735,6 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
 #[tokio::test]
 async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_order").await;
-    // Spawn convergence (#377): the child `AgentRequest` is materialized by
-    // SubagentSource, not synchronously by the hook. Run a standalone source.
     let _source = spawn_subagent_source(
         db.node.clone(),
         AGENT_DID,

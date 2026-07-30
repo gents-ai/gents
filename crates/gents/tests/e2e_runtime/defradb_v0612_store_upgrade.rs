@@ -1,9 +1,3 @@
-//! Populated v0.6.12 store upgrade coverage for the pinned DefraDB release.
-//!
-//! Store-format open still succeeds. The gents lens-first engine rejects the
-//! pre-baseline lineage with [`gents_migration::Error::UnknownLineage`]
-//! (or ForeignVersion) — no legacy field-presence migrations remain.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

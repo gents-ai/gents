@@ -1,11 +1,3 @@
-//! Conformance fence for `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean`.
-//!
-//! The Lean model projects agent principals into directory entries and pins
-//! four properties: membership characterization (`mem_project`), idempotent
-//! convergence (`projectStep_idempotent`), the settled write-free fixpoint
-//! (`settled_fixpoint` — the sweep runs on Update events and must not
-//! self-perpetuate), and retraction soundness (`mem_project_erase`).
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
@@ -72,8 +64,6 @@ fn principal(did: &str, name: &str) -> (String, String) {
     (did.to_string(), name.to_string())
 }
 
-/// Mirrors `mem_project`: one entry per principal, contents a function of
-/// (principal, behaviors, runtime).
 #[test]
 fn derivation_projects_exactly_the_principals() {
     let derived = derive_directory_entries(
@@ -99,8 +89,6 @@ fn derivation_projects_exactly_the_principals() {
     assert_eq!(b.runtime_state, "");
 }
 
-/// Mirrors `projectStep_settles` + `settled_fixpoint`: the first sweep
-/// converges (including drifted payloads) and the second is write-free.
 #[tokio::test]
 async fn tick_converges_then_quiesces() {
     let store = DirectoryFixtureStore {
@@ -117,7 +105,7 @@ async fn tick_converges_then_quiesces() {
                 source_did: "did:key:home".to_string(),
                 display_name: "Amy".to_string(),
                 behaviors: Vec::new(),
-                runtime_state: "starting".to_string(), // drifted payload
+                runtime_state: "starting".to_string(),
                 last_seen: String::new(),
             },
         )])),
@@ -144,8 +132,6 @@ async fn tick_converges_then_quiesces() {
     );
 }
 
-/// Mirrors `mem_project_erase`: a removed principal retracts exactly its
-/// entry and nothing else.
 #[tokio::test]
 async fn tick_retracts_only_removed_principals() {
     let store = DirectoryFixtureStore {
@@ -190,9 +176,6 @@ async fn tick_retracts_only_removed_principals() {
     assert!(outcome.upserted.is_empty() && outcome.refreshed.is_empty());
 }
 
-/// Mirrors `projectStep_preserves_foreign`: a projector owns only rows whose
-/// source is its home DID. Same agent DIDs in foreign and local partitions must
-/// remain independently addressable.
 #[tokio::test]
 async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
     let foreign = DirectoryEntry {

@@ -52,10 +52,6 @@
 use gents::llm::tool::{Tool, ToolDefinition, ToolDyn, ToolError, UnparseableArgsKind};
 use serde::{Deserialize, Serialize};
 
-/// Mirror of a steward status-report tool's argument shape: a large markdown
-/// `body` string plus a `findings` array of strings (the array-param the d4f
-/// memory flags for raw-mode invalid-escape). This is the exact `Args` contract
-/// the real `ToolDyn::call` deserializes into.
 #[derive(Debug, Deserialize)]
 struct PostStatusArgs {
     #[allow(dead_code)]
@@ -77,9 +73,6 @@ struct PostStatusOutput {
 #[error("post_status tool failure: {0}")]
 struct PostStatusError(String);
 
-/// A native tool with the steward report shape, so we exercise the REAL
-/// `impl<T: Tool> ToolDyn for T` deserialization seam rather than
-/// re-implementing it.
 struct PostStatusTool;
 
 impl Tool for PostStatusTool {
@@ -134,10 +127,6 @@ fn large_steward_markdown_body() -> String {
     body
 }
 
-/// Build a VALID-on-the-wire tool-call `arguments` string by serializing a real
-/// object, then corrupt it to mimic the model's single-backslash output: replace
-/// the JSON-legal `\\d` with a single `\d`, which is an INVALID JSON escape.
-/// This is the "raw-escape" shape: the body parses fine until the bad escape.
 fn arguments_with_single_backslash_escape() -> String {
     let valid = serde_json::json!({
         "report_type": "steward",
@@ -149,16 +138,9 @@ fn arguments_with_single_backslash_escape() -> String {
         ]
     })
     .to_string();
-    // Collapse the legal double-backslash escapes the model would have emitted
-    // as a single backslash (its raw, un-JSON-escaped output).
     valid.replace("\\\\", "\\")
 }
 
-/// Build a TRUNCATED tool-call `arguments` string: a valid object cut off
-/// `cut_at` bytes in, as if the generation hit `max_tokens`
-/// (`finish_reason == "length"`) before closing the object — the EOF variant.
-/// The cut is taken on a char boundary so the string stays valid UTF-8; pass a
-/// `cut_at` that lands inside the long `body` value.
 fn arguments_truncated_mid_object(cut_at: usize) -> String {
     let valid = serde_json::json!({
         "report_type": "steward",
@@ -174,14 +156,9 @@ fn arguments_truncated_mid_object(cut_at: usize) -> String {
     valid[..end].to_string()
 }
 
-/// After the fix: a single-backslash-escape `arguments` string from the model is
-/// recovered (json-repair of the raw escapes) and the tool executes — the
-/// steward's report reaches the board.
 #[tokio::test]
 async fn post_status_json_single_backslash_escape_recovers_and_posts() {
     let args = arguments_with_single_backslash_escape();
-    // Sanity: the corrupted payload is genuinely invalid JSON before repair, so
-    // this test would fail without the repair pass.
     assert!(
         serde_json::from_str::<serde_json::Value>(&args).is_err(),
         "the corrupted single-backslash payload should be invalid JSON pre-repair"
@@ -197,17 +174,8 @@ async fn post_status_json_single_backslash_escape_recovers_and_posts() {
     );
 }
 
-/// After the fix: a truncated (`finish_reason == "length"`) `arguments` string
-/// is NOT silently dropped and is NOT run. The truncated body contains lone
-/// backslashes before the cut, so serde's first error is a syntax error; the
-/// escape-only repair fixes the backslashes but cannot complete the cut-off
-/// value, so the reparse fails with EOF and `ToolDyn::call` returns
-/// `ToolError::UnparseableArgs { kind: Truncated, .. }`. The dispatcher then
-/// renders this into a `JsonError:` notice for the model (not posted as success).
 #[tokio::test]
 async fn post_status_json_truncated_body_is_rejected_not_posted() {
-    // 5_037 bytes lands well inside the multi-KB `body` value, so the trailing
-    // string, the `findings` array, and the closing `}` are all missing.
     let args = arguments_truncated_mid_object(5_037);
     let tool = PostStatusTool;
 
@@ -233,9 +201,6 @@ async fn post_status_json_truncated_body_is_rejected_not_posted() {
     }
 }
 
-/// Truncating at several offsets inside the `body` value should consistently
-/// produce a truncation-kinded rejection — the result must not depend on one
-/// hardcoded cut point, and the truncated body is never run.
 #[tokio::test]
 async fn post_status_json_truncation_signal_is_offset_independent() {
     let tool = PostStatusTool;

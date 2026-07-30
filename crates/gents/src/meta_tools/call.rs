@@ -14,11 +14,6 @@ use super::shared::{
     StructuredToolError,
 };
 
-/// Maximum size returned verbatim to the model per `call_tool` invocation.
-/// Aligns with `DefraSpillTruncator`'s default byte budget (50 KiB / 2 000 lines).
-/// The full remote response still reaches the persistence layer via the
-/// turn-level backstop; this caps the in-loop copy that fits in the model's
-/// context window.
 const CALL_TOOL_MAX_BYTES: usize = 50 * 1024;
 const CALL_TOOL_MAX_LINES: usize = 2_000;
 
@@ -272,19 +267,6 @@ fn normalize_arguments(
     }
 }
 
-/// Parse a stringified `call_tool.arguments` JSON value, applying one tolerant
-/// [`repair_tool_arguments`] pass (escape-only: lone-backslash fixes, never
-/// truncation-closing) when the raw string fails to parse. Mirrors the native
-/// tool seam in [`crate::llm::tool::parse_tool_args`], so a truncated
-/// (`Category::Eof`) payload is never repaired-and-accepted — the repair cannot
-/// complete a cut-off value, so it stays an error.
-///
-/// Note the asymmetry with the native loop: there, an unparseable payload is
-/// rendered into a `JsonError:` tool result that terminalizes the call
-/// `failed(ArgumentInvalid)`. Here the error is returned to the MCP caller
-/// (`call.rs`), which surfaces it to the model as the tool result; both paths
-/// notify the model so it can re-emit corrected arguments, but neither runs a
-/// truncated value.
 fn parse_stringified_object(raw: &str) -> Result<Value, serde_json::Error> {
     match serde_json::from_str::<Value>(raw) {
         Ok(value) => Ok(value),

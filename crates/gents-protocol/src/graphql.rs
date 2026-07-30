@@ -1,9 +1,3 @@
-//! Shared GraphQL query and mutation presets for agent-facing applications.
-//!
-//! This module keeps transport concerns out of the protocol crate. Callers are
-//! can either execute the rendered strings themselves or use the shared
-//! transport helpers here.
-
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -250,9 +244,6 @@ pub async fn execute_graphql_async(
     execute_graphql_async_with_tx(graphql, query, options, None).await
 }
 
-/// Like `execute_graphql_async` but adds an `x-defradb-tx` header when
-/// `txn_id` is `Some`. Used by `gents-cli` to drive DefraDB HTTP
-/// transactions during `config apply`.
 pub async fn execute_graphql_async_with_tx(
     graphql: &str,
     query: &str,
@@ -582,10 +573,6 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
         Value::Number(value) => Ok(value.to_string()),
         Value::String(value) => Ok(graphql_string_literal(value)),
         Value::Array(values) => {
-            // Empty lists must serialize as `null`, never `[]`. A bare `[]`
-            // literal is typed by DefraDB as JsonArray and corrupts
-            // NillableStringArray columns (create stores JsonArray, later
-            // updates fail re-validation). Matches `string_list_field`.
             if values.is_empty() {
                 return Ok("null".to_string());
             }

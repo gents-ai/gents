@@ -1,4 +1,3 @@
-// Soft-cap justified: thin entry point plus ~170 lines of constants and ~175 lines of co-located bootstrap tests. Further splitting would fragment binary-crate setup.
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,15 +36,10 @@ use request_helpers::*;
 use resolve_helpers::*;
 
 const DEFAULT_AGENT_NAME: &str = "default";
-// Defaults target llama.cpp's llama-server running the demo model:
-//   llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
-/// Default model for the ChatGptCodex preset. ChatGPT subscriptions serve plain `gpt-5.x` slugs
-/// (not `-codex` variants); see `docs/backends.md`. List the account's models with
-/// `gents config backend discover-models`.
 const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
@@ -419,8 +413,6 @@ async fn async_main() -> Result<()> {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
-        // The Codex TUI owns the terminal and its own log routing; our
-        // stderr-bound telemetry layer would corrupt the display.
         Command::Codex(args) => {
             return commands::codex::codex(args).await;
         }
@@ -584,13 +576,7 @@ pub(crate) async fn resolve_config_access(
                     format!("building embedded DefraDB node from {}", data_dir.display())
                 })?,
         );
-        // Single schema entry point (baseline + chain + lineage verify). Always
-        // runs so absent collections are bootstrapped rather than rejected as
-        // UnknownLineage.
         gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
-        // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
-        // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable
-        // but required by the type system.
         Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
             unreachable!("node_arc had exactly one strong reference at this point")
         })

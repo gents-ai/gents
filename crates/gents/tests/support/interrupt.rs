@@ -321,10 +321,6 @@ pub struct InferenceCallSnapshot {
     pub failure_reason: Option<String>,
 }
 
-/// Wait for the latest inference attempt for `request_id` to reach `expected`.
-///
-/// The daemon retries transient provider failures, so a historical failed
-/// attempt must not hide the current attempt's running or terminal state.
 pub async fn wait_for_inference_call_state(
     node: &EmbeddedNode,
     request_id: &str,

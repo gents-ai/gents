@@ -1,13 +1,5 @@
 import Proofs.Transcript.State
 
-/-!
-# Transcript Transitions
-
-Relational successful-path transitions for transcript persistence. Complex
-cross-row transitions carry their post-state coherence as an invariant guard;
-storage success/failure remains modeled by `StorageObservation`.
--/
-
 namespace Transcript
 
 inductive Transition : TranscriptState → TranscriptState → Prop where

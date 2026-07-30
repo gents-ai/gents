@@ -1,13 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 
-/-!
-# Core Lifecycle JSON
-
-Serializers for request/process lifecycle, persistence, storage observation,
-and backend admission witness rows.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

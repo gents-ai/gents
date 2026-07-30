@@ -32,17 +32,6 @@ impl ProcessLifecycleObserver for RecordingObserver {
     }
 }
 
-/// The #559 regression, end to end on the production startup path.
-///
-/// The behavior is snapshot-RUNNABLE (backend healthy, references resolve) but
-/// its build fails on every attempt: the backend's `api_key_env_var` names an
-/// environment variable that is not set, which snapshot classification never
-/// resolves and `completion_client_api_key()` bails on. On main this wedges the
-/// readiness barrier forever — the slot hot-restarts, `wait_ready()` never
-/// returns, the process never reports Ready, and the trigger engine never
-/// starts. With the bounded budget the behavior is demoted instead: the process
-/// reaches Ready without it, and the degradation is visible in the AgentRuntime
-/// counts (`/healthz` reads them as degraded).
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
@@ -57,8 +46,6 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     )
     .await;
 
-    // The build poison: an env var nothing sets. Unique to this test so no
-    // other test's environment can accidentally satisfy it.
     let escaped_backend_id = escape_graphql_string("backend-559");
     let mutation = format!(
         r#"mutation {{
@@ -98,14 +85,8 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    // On main this wait never completes: the barrier has no release path for a
-    // behavior that cannot build. The helper's internal deadline turns the
-    // #559 hang into a loud failure.
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
-    // The demotion is observable, not silent: the runnable count dropped and
-    // the unavailable count carries the demoted behavior — the exact fields
-    // /healthz derives `degraded` from.
     let escaped_did = escape_graphql_string(identity.did());
     let query = format!(
         r#"{{
@@ -140,7 +121,6 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     let _ = shutdown_tx.send(true);
     run_task.await??;
 
-    // Ready was genuinely reached through the normal lifecycle.
     let observed = observer
         .states
         .lock()
@@ -154,15 +134,11 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     Ok(())
 }
 
-/// A build failure within the budget must not demote: the behavior that
-/// recovers on a later attempt reaches Ready as a healthy behavior. Here the
-/// env var appears after the first failure, so attempt two succeeds.
 #[tokio::test]
 async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> Result<()> {
     use std::ffi::OsString;
     use std::sync::LazyLock;
 
-    // Serialize env mutation with any other test touching process env.
     static ENV_VAR_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
     let _env_guard = ENV_VAR_LOCK.lock().await;
@@ -218,7 +194,6 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
                 max_delay_ms: 100,
             },
             startup_readiness: StartupReadinessOptions {
-                // Generous budget: the point is that recovery within it wins.
                 build_failure_budget: 10,
                 ..Default::default()
             },
@@ -229,7 +204,6 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run_task = tokio::spawn(agent.run(shutdown_rx));
 
-    // Let at least one build attempt fail, then supply the key.
     tokio::time::sleep(std::time::Duration::from_millis(75)).await;
     unsafe {
         std::env::set_var(VAR, "late-key");

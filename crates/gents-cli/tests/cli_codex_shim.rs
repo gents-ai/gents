@@ -339,7 +339,6 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     )?;
     let agent_did = agent_did_from_init(&init)?;
 
-    // Hold the shim port so the bind fails; the server must degrade, not die.
     let occupied = std::net::TcpListener::bind("127.0.0.1:0").context("occupying a port")?;
     let shim_port = occupied.local_addr()?.port();
     let shim_port_string = shim_port.to_string();
@@ -824,9 +823,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         "expected streamed Codex text to contain {expected_reply}, got:\n{final_text}"
     );
 
-    // Token-usage visibility (#494): turn completion must emit
-    // ThreadTokenUsageUpdated with real (non-zero) usage for this turn and the
-    // session cumulative total.
     let turn_usage = turn_capture
         .token_usage
         .as_ref()
@@ -845,8 +841,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
         "context capacity should come from the bound GENTS inference profile"
     );
 
-    // The thread goal's tokens_used is derived from real session usage, so it
-    // must be non-zero now that a turn has run.
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadGoalGet {
@@ -927,8 +921,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     assert_turn_has_user_text(resumed_turn, &prompt);
     assert_turn_has_agent_text(resumed_turn, &expected_reply);
 
-    // Resuming a thread with prior turns replays the session token usage so the
-    // counter is not dark on a resumed historical thread (#494).
     let replay_usage = read_token_usage_notification(&mut ws)
         .await
         .context("reading token-usage replay after thread/resume")?;
@@ -1028,13 +1020,6 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() -> Result<()> {
-    // Codex is a presentation layer: thread ownership is NOT persisted with a
-    // marker. A thread that has any turn carries a durable codex_shim-marked
-    // AgentRequest, so a fresh shim process (e.g. after restart, with an empty
-    // in-process sidecar) reconstructs it in thread/list purely from the data.
-    // A never-turned session carries no durable Codex interaction and is
-    // intentionally not surfaced. This test simulates "after restart" by seeding
-    // both kinds directly in the DB — neither is in this process's `created` set.
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -1076,8 +1061,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // A "previous session" Codex thread: AgentSession + a durable codex_shim
-    // request + conversation, none of it created by this shim process.
     let turned_session_id = Uuid::new_v4().to_string();
     for mutation in [
         format!(
@@ -1114,7 +1097,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         graphql_query(&graphql, &mutation).await?;
     }
 
-    // A "previous session" never-turned thread: a bare AgentSession, no request.
     let zero_turn_session_id = Uuid::new_v4().to_string();
     graphql_query(
         &graphql,
@@ -1188,8 +1170,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
          after restart: {listed:?}"
     );
 
-    // Reconstruction rebuilds the thread's identity from durable data — the name
-    // comes from the persisted conversation title, not any in-process state.
     let turned = listed
         .data
         .iter()
@@ -1206,10 +1186,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
-    // Regression guards for #494: git metadata is DERIVED from the thread cwd at
-    // read time (no ThreadMetadataUpdate round-trip), a non-git cwd yields no
-    // gitInfo without erroring, and a rename BEFORE the first turn persists via
-    // the create-if-absent AgentConversation upsert.
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -1271,8 +1247,6 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
     let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
-    // A thread whose cwd is a real git repo: git metadata is derived from cwd at
-    // ThreadStart, with no ThreadMetadataUpdate call.
     let git_dir = tempdir.path().join("repo");
     fs::create_dir_all(&git_dir)?;
     let expected_sha = init_test_git_repo(&git_dir, "main")?;
@@ -1309,7 +1283,6 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
         "git branch should be derived from the thread cwd"
     );
 
-    // Renaming before any turn must persist (create-if-absent AgentConversation).
     let git_thread_id = git_thread.thread.id.clone();
     send_client_request(
         &mut ws,
@@ -1345,7 +1318,6 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
         "rename before the first turn should persist to the conversation title"
     );
 
-    // A thread whose cwd is not a git repo yields no gitInfo and no error.
     let plain_dir = tempdir.path().join("plain");
     fs::create_dir_all(&plain_dir)?;
     send_client_request(
@@ -1417,8 +1389,6 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Seed a NON-Codex session + request for the bound identity, directly in the
-    // database (as the runtime/CLI would), with no codex_shim metadata.
     let foreign_session_id = Uuid::new_v4().to_string();
     graphql_query(
         &graphql,
@@ -4013,11 +3983,6 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
 
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
-    // Point the shim at a behavior_id that doesn't exist. A missing behavior is
-    // something the control plane can still supply, so the shim must WAIT for it
-    // rather than disable itself for the life of the process (#699). The port
-    // stays closed — there is nothing to serve yet — and the server keeps
-    // serving everything else.
     let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         server_port,
@@ -4421,8 +4386,6 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     .await?;
     let _write: codex::ConfigWriteResponse = read_typed_response(&mut ws, request_id(2)).await?;
 
-    // Verify the AgentBehavior doc was updated to the selected backend model
-    // while keeping the existing inference profile limits.
     let resp = graphql_query(
         &graphql,
         &format!(
@@ -4625,7 +4588,6 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Pre-seed an AgentSession with a foreign agent_name pinned to the default behavior.
     graphql_query(
         &graphql,
         &format!(
@@ -4641,7 +4603,6 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     )
     .await?;
 
-    // Trigger ensure_agent_session by resuming the pre-seeded session id.
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
         .await
         .context("connecting to codex-shim websocket")?;
@@ -4675,7 +4636,6 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
         },
     )
     .await?;
-    // Drain whichever response shape comes back; we only care about doc state.
     let _ = read_jsonrpc(&mut ws).await?;
 
     let resp = graphql_query(
@@ -4748,7 +4708,6 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
     wait_for_port(shim_port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Seed an AgentSession pinned to a behavior the shim isn't bound to.
     graphql_query(
         &graphql,
         &format!(
@@ -4812,9 +4771,6 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
     Ok(())
 }
 
-/// End-to-end (#340 slice 4): add a skill via the `config skill` CLI, then list
-/// and enable/disable it through the Codex shim protocol (skills/list +
-/// skills/config/write) — the management flow from the Codex CLI.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -4859,7 +4815,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // Add a principal-scoped skill via the CLI management command.
     let added = run_cli_json(
         &home_dir,
         &[
@@ -4908,7 +4863,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     let _: codex::InitializeResponse = read_typed_response(&mut ws, request_id(1)).await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
-    // skills/list surfaces the skill, enabled, with principal scope -> System.
     send_client_request(
         &mut ws,
         codex::ClientRequest::SkillsList {
@@ -4927,7 +4881,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     assert!(research.enabled, "newly added skill should be enabled");
     assert_eq!(research.scope, codex::SkillScope::System);
 
-    // skills/config/write disables it by name.
     send_client_request(
         &mut ws,
         codex::ClientRequest::SkillsConfigWrite {
@@ -4947,7 +4900,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         "config write should report disabled"
     );
 
-    // skills/list reflects the disable.
     send_client_request(
         &mut ws,
         codex::ClientRequest::SkillsList {
@@ -4972,11 +4924,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     Ok(())
 }
 
-/// End-to-end "agent discovers a skill in a live conversation" (#340): with the
-/// agent already running, `config skill add` reconciles the runtime live (no
-/// restart), and a subsequent turn carries the skill's catalog entry into the
-/// request the agent sends the model (progressive disclosure — the model would
-/// then call load_skill for the body).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -5022,7 +4969,6 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // Add a principal-scoped skill LIVE; the catalog phrase is distinctive.
     let catalog_phrase = format!("cite-sources-{}", Uuid::new_v4().simple());
     run_cli_json(
         &home_dir,
@@ -5046,7 +4992,6 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             "Always cite your sources.",
         ],
     )?;
-    // The live skill add must reconcile the running runtime (no restart).
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
@@ -5101,7 +5046,6 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     let (_text, completed) = read_turn_to_completion(&mut ws).await?;
     assert_eq!(completed.status, codex::TurnStatus::Completed);
 
-    // The skill catalog (name + load_skill mandate) must have reached the model.
     let captured = mock_endpoint.captured_chat_requests();
     assert!(
         captured.iter().any(|request| {
@@ -5166,7 +5110,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // A skill with a distinctive instruction body (the injected-body marker).
     let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
     run_cli_json(
         &home_dir,
@@ -5190,8 +5133,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &body_phrase,
         ],
     )?;
-    // The runtime resolves the explicit selection from its effective set, so the
-    // principal-scoped skill must reconcile into the running snapshot first.
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
@@ -5228,8 +5169,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     let thread_start: codex::ThreadStartResponse =
         read_typed_response(&mut ws, request_id(2)).await?;
 
-    // Turn input is ONLY the skill selection (no text) — proves it isn't
-    // rejected as empty and that the body is injected.
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnStart {
@@ -5249,7 +5188,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     let (_text, completed) = read_turn_to_completion(&mut ws).await?;
     assert_eq!(completed.status, codex::TurnStatus::Completed);
 
-    // The full skill body must have reached the model, wrapped as a <skill> block.
     let captured = mock_endpoint.captured_chat_requests();
     assert!(
         captured.iter().any(|request| {
@@ -5313,8 +5251,6 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // A BEHAVIOR-scoped skill, enabled, but NOT referenced by the bound behavior
-    // (skill_refs is empty by default) -> not in its effective set.
     let body_phrase = format!("UNSCOPED-BODY-{}", Uuid::new_v4().simple());
     run_cli_json(
         &home_dir,
@@ -5373,7 +5309,6 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let thread_start: codex::ThreadStartResponse =
         read_typed_response(&mut ws, request_id(2)).await?;
 
-    // Select the unscoped skill, with text so the turn is non-empty regardless.
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnStart {
@@ -5399,7 +5334,6 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     let (_text, completed) = read_turn_to_completion(&mut ws).await?;
     assert_eq!(completed.status, codex::TurnStatus::Completed);
 
-    // The un-opted-in skill body must NOT have been injected.
     let captured = mock_endpoint.captured_chat_requests();
     assert!(
         captured
@@ -5465,7 +5399,6 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // Add a principal-scoped skill LIVE (enabled) so it composes into the prompt.
     let catalog_phrase = format!("toggle-cite-{}", Uuid::new_v4().simple());
     run_cli_json(
         &home_dir,
@@ -5526,7 +5459,6 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     let thread_start: codex::ThreadStartResponse =
         read_typed_response(&mut ws, request_id(2)).await?;
 
-    // Turn 1: the enabled skill's catalog entry reaches the model.
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnStart {
@@ -5556,7 +5488,6 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
         "enabled skill's catalog entry should reach the model before the disable"
     );
 
-    // Disable the skill THROUGH THE CODEX SHIM (skills/config/write).
     let captured_before_toggle = mock_endpoint.captured_chat_requests().len();
     send_client_request(
         &mut ws,
@@ -5577,10 +5508,8 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
         "shim should report the skill disabled"
     );
 
-    // The shim's committed toggle must reconcile the running runtime (no restart).
     wait_for_runtime_quiescence(&graphql, &agent_did, gen1 + 1, Duration::from_secs(2)).await?;
 
-    // Turn 2: the disabled skill's catalog entry no longer reaches the model.
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnStart {
@@ -5618,9 +5547,6 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     Ok(())
 }
 
-/// CLI management round-trip for the `config skill` surface that the other
-/// tests don't exercise directly: disable -> enable -> rm, verified through
-/// `config skill show`/`list` (#340). Covers `skill_set_enabled` and `skill_rm`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -5695,8 +5621,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
         "tool_ref should be stored on add"
     );
 
-    // Re-add without --tool-ref must CLEAR the list (upsert update writes null),
-    // not leave the stale ["web_search"] in place.
     run_cli_json(
         &home_dir,
         &[
@@ -5742,7 +5666,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
         show.get("tool_refs")
     );
 
-    // disable
     let disabled = run_cli_json(
         &home_dir,
         &[
@@ -5774,7 +5697,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     )?;
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
 
-    // re-enable
     let enabled = run_cli_json(
         &home_dir,
         &[
@@ -5789,7 +5711,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     )?;
     assert_eq!(enabled.get("enabled").and_then(Value::as_bool), Some(true));
 
-    // rm, then it's gone from list
     let removed = run_cli_json(
         &home_dir,
         &[
@@ -5820,10 +5741,6 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     Ok(())
 }
 
-/// Real-world round-trip (#340 slice 5): import the NousResearch/hermes-agent
-/// skill tree (~177 SKILL.md files), export it back to SKILL.md, and re-import
-/// the export. Ignored by default; set HERMES_SKILLS_DIR to the external skill
-/// tree and pass `--ignored` to run it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "external fixture: set HERMES_SKILLS_DIR and pass --ignored"]
 async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
@@ -5860,7 +5777,6 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // Import the hermes skill tree.
     let imported = run_cli_json(
         &home_dir,
         &[
@@ -5885,7 +5801,6 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
         "expected to import many hermes skills, got {imported_count}: {imported}"
     );
 
-    // List reflects the distinct skills (≤ import count if dir names collide).
     let listed = run_cli_json(
         &home_dir,
         &[
@@ -5904,7 +5819,6 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
         "list count {listed_count}"
     );
 
-    // Export back to a SKILL.md tree.
     let out_dir = tempdir.path().join("export");
     let exported = run_cli_json(
         &home_dir,
@@ -5932,7 +5846,6 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
         "exported notion/SKILL.md should exist"
     );
 
-    // Re-import the export: round-trips cleanly (same skill_ids upsert in place).
     let reimported = run_cli_json(
         &home_dir,
         &[
@@ -5960,14 +5873,6 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
     Ok(())
 }
 
-/// The #699 regression: a shim that boots with no bound behavior must bind
-/// itself when a later `config apply` makes that behavior runnable — with no
-/// restart.
-///
-/// This is what stranded all 19 fleet agents: they came up server-first on empty
-/// stores, the shim found no behavior and disabled itself permanently, and the
-/// manifest that arrived seconds later reconciled the runtime while the shim's
-/// port stayed closed behind a green /healthz.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -5996,8 +5901,6 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     let root_str = root.to_str().expect("utf-8 root");
     run_cli_text(&home_dir, &["config", "export", "--root", root_str])?;
 
-    // Bind the shim to a behavior the store does not have yet. This is the
-    // empty-store bring-up, reduced to its essential shape.
     const LATE_BEHAVIOR: &str = "late-arriving-behavior";
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
@@ -6018,14 +5921,11 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
-    // The runtime is up and healthy, but the shim has nothing to serve yet.
     assert!(
         std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_err(),
         "the shim must not listen before its bound behavior exists"
     );
 
-    // Now supply the behavior the shim is waiting for, exactly as the fleet did:
-    // through the manifest, against the already-running server.
     let behaviors_dir = root.join("agent-behaviors");
     let existing = fs::read_dir(&behaviors_dir)
         .context("reading agent-behaviors dir after export")?
@@ -6033,8 +5933,6 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
     let late_dir = behaviors_dir.join(LATE_BEHAVIOR);
     fs::create_dir_all(&late_dir)?;
-    // Copy the whole behavior directory: the manifest carries sidecars
-    // (system_prompt.md) that object.json references by relative path.
     for entry in fs::read_dir(existing.path()).context("reading exported behavior dir")? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
@@ -6052,7 +5950,6 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         "config apply must succeed: {applied}"
     );
 
-    // The shim must now bind itself off the published generation. No restart.
     let deadline = std::time::Instant::now() + Duration::from_secs(45);
     loop {
         if std::net::TcpStream::connect(("127.0.0.1", shim_port)).is_ok() {

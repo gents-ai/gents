@@ -196,7 +196,6 @@ impl RequestLifecycle {
         let (interrupt_requested_at, valid_until) =
             fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
 
-        // Tie-break: interrupt always wins over stale
         if let Some(interrupt_at) = interrupt_requested_at {
             self.transition_pending_to_interrupted(&interrupt_at)
                 .await?;

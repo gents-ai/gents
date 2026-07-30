@@ -365,9 +365,6 @@ impl ClientCore {
         });
     }
 
-    /// Fork a conversation at a user turn, routed like every per-agent
-    /// operation. The caller principal must own the source session; the
-    /// runtime's fork machinery enforces that and the busy/turn-range rules.
     pub async fn fork_session(
         &self,
         agent_did: &str,
@@ -427,16 +424,10 @@ impl ClientCore {
         )
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
-        // The GraphQL transport appends CLI-flavored operator hints
-        // ("run `gents init`", "Retry with `--graphql ...`") that are
-        // meaningless inside the desktop app.
         .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
         Ok(timeline)
     }
 
-    /// Tool calls held in `awaitingApproval` for one agent. Routed per-agent:
-    /// a hold on a remote deployment lives (and must be resolved) on that
-    /// deployment's node, where its verdict watcher polls.
     pub async fn list_tool_call_holds(
         &self,
         agent_did: &str,
@@ -456,9 +447,6 @@ impl ClientCore {
         Ok(held)
     }
 
-    /// Resolve a held tool call by writing the AgentToolApproval decision
-    /// document. The approver identity is always the desktop's own principal
-    /// DID — never taken from the frontend. Returns the approval_id.
     pub async fn resolve_tool_call_hold(
         &self,
         agent_did: &str,
@@ -486,9 +474,6 @@ impl ClientCore {
         Ok(approval_id)
     }
 
-    /// Inner body of [`Self::resolve_tool_call_hold`]. Both remote calls are
-    /// bounded like the sibling per-agent reads so a dead peer fails the
-    /// panel instead of pinning the row's buttons for minutes.
     async fn resolve_tool_call_hold_inner(
         &self,
         agent_did: &str,
@@ -528,9 +513,6 @@ impl ClientCore {
         .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))
     }
 
-    /// Live P2P/network state for the visibility panel. Each probe fails
-    /// independently — a dead subsystem reports its error instead of hiding
-    /// the healthy ones.
     pub async fn network_status(&self) -> NetworkStatus {
         let local_peer_id = p2p_ops::p2p_local_peer_id(&self.p2p).await;
         let listen_addresses = p2p_ops::p2p_listen_addresses(&self.p2p).await;
@@ -645,9 +627,6 @@ impl ClientCore {
         Ok(Some(version))
     }
 
-    /// Re-read one active conversation from the embedded replica. The normal
-    /// observer remains the fast path; this bounded query is a watchdog for
-    /// missed/coalesced notifications during P2P-heavy turns.
     pub async fn refresh_local_request(
         &self,
         agent_did: &str,
@@ -807,8 +786,6 @@ impl ClientCore {
         }) {
             bail!("no Task document with task_id {task_id:?}");
         }
-        // Dependents block deletion: silently cascading into automation that
-        // still fires would be worse than asking the operator to detach it.
         let schedule_refs = snapshot
             .schedules
             .iter()
@@ -1286,8 +1263,6 @@ impl ClientCore {
         }) {
             bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
         }
-        // The default behavior is the request fallback; deleting it strands
-        // every request that names no behavior.
         let is_default = snapshot.agent_principals.iter().any(|principal| {
             principal.agent_did == source_agent_did
                 && principal.default_behavior_id.as_deref() == Some(behavior_id)
@@ -1371,9 +1346,6 @@ impl ClientCore {
         .await
     }
 
-    /// Shared tail for automation-document deletes: refresh, prune the row
-    /// locally so the UI reflects the delete immediately, log, and record or
-    /// clear the mutation error.
     async fn finish_automation_delete(
         &self,
         result: Result<()>,
@@ -1713,7 +1685,6 @@ impl ClientCore {
                 .cloned()
                 .with_context(|| format!("peer {peer_id} not found"))?;
             if record.source.as_deref() == Some("local-standard") {
-                // The local runtime is this machine, not a saved peer.
                 anyhow::bail!("the local runtime deployment cannot be removed");
             }
             record
@@ -1957,11 +1928,6 @@ impl ClientCore {
         }
     }
 
-    /// Persist a `Task` document.
-    ///
-    /// Task 51 leaves the mutation body stubbed out (Task 52 wires the
-    /// actual upsert); the method is kept on `ClientCore` so call sites
-    /// stay linkable.
     pub async fn save_task(&self, row: &TaskRow) -> Result<()> {
         match mutations::upsert_task(self.node.as_ref(), row).await {
             Ok(()) => {
@@ -1979,9 +1945,6 @@ impl ClientCore {
         }
     }
 
-    /// Persist a `Skill` document. Skills are apply-owned and globally
-    /// addressed by `skill_id`; every field is operator-authored, so the
-    /// upsert projects all of them (the runtime never writes skills back).
     pub async fn save_skill(&self, row: &SkillRow) -> Result<()> {
         match mutations::upsert_skill(self.node.as_ref(), row).await {
             Ok(()) => {
@@ -1999,7 +1962,6 @@ impl ClientCore {
         }
     }
 
-    /// Persist a `Schedule` document. See `save_task` for current limits.
     pub async fn save_schedule(&self, row: &ScheduleRow) -> Result<()> {
         match mutations::upsert_schedule(self.node.as_ref(), row).await {
             Ok(()) => {
@@ -2017,10 +1979,6 @@ impl ClientCore {
         }
     }
 
-    /// Persist an `EventTrigger` document. Writes ONLY apply-owned
-    /// fields; runtime-owned bookkeeping (`last_attempt_at`,
-    /// `last_fired_source_doc_id`, `last_status`, `last_error`,
-    /// `fire_count`) is never projected into the mutation input.
     pub async fn save_event_trigger(&self, row: &EventTriggerRow) -> Result<()> {
         match mutations::upsert_event_trigger(self.node.as_ref(), row).await {
             Ok(()) => {
@@ -2038,11 +1996,6 @@ impl ClientCore {
         }
     }
 
-    /// Fire a task immediately via the shared manual-run helper.
-    ///
-    /// Returns the new `AgentRequest`'s `_docID` on success. The row lands
-    /// at `lifecycle_state = "pending"` with manual lineage so the agent's
-    /// normal intake picks it up.
     pub async fn fire_task_now(
         &self,
         task_row: &TaskRow,
@@ -2065,13 +2018,6 @@ impl ClientCore {
         }
     }
 
-    /// Force a `Schedule`'s task to fire now.
-    ///
-    /// Delegates to `fire_task_now` on the schedule's `task_id` with
-    /// empty args, so the operator override produces an
-    /// `AgentRequest` with manual lineage (`caused_by_trigger_kind =
-    /// "manual"`, not `"schedule"`). Returns the new request's
-    /// `_docID` on success.
     pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<String> {
         match mutations::fire_schedule_now(self.node.as_ref(), row).await {
             Ok(doc_id) => {
@@ -2249,9 +2195,6 @@ pub(super) async fn cleanup_saved_peer_p2p(
             .collect()
     };
     let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
-    // The pinned transport defines disconnect as idempotent for absent peers,
-    // so always attempt it even when the deployment never connected or the
-    // replicator cleanup failed.
     let disconnect_result = p2p_disconnect_peer(p2p, &record.addr).await;
 
     match (replicator_result, disconnect_result) {
@@ -2494,7 +2437,6 @@ mod delete_source_tests {
     }
 }
 
-/// Drop advice lines that only make sense at a CLI prompt.
 fn strip_cli_operator_hints(message: &str) -> String {
     message
         .lines()
@@ -2509,7 +2451,6 @@ fn strip_cli_operator_hints(message: &str) -> String {
         .to_string()
 }
 
-/// Independent probe results; `Err` carries the probe's failure message.
 #[derive(Debug, Clone)]
 pub struct NetworkStatus {
     pub local_peer_id: std::result::Result<String, String>,

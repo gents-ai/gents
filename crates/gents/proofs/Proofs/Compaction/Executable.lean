@@ -1,18 +1,5 @@
 import Proofs.Compaction.Properties
 
-/-!
-# Compaction Executable
-
-Conformance vectors emitted as `CompactionReducerCase` rows. Registered
-in the coverage ledger as `consumerWithFollowUpCoverage` -- the Rust
-consumer wiring is intentionally deferred to a follow-up issue.
-
-These vectors pin the *structural* contract; behavioral coverage
-(stub-text formatting, file-activity extraction, byte-count display)
-stays in `crates/gents/src/compaction/tests.rs` and is not
-replaced by the cases here.
--/
-
 namespace Compaction
 
 structure CompactionReducerCase where

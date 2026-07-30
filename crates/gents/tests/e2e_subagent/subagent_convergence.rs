@@ -1,17 +1,3 @@
-//! Characterization tests for the local/remote subagent spawn convergence
-//! refactor (#377).
-//!
-//! These capture CURRENT observable behavior of the local spawn path against a
-//! full running agent (which boots `SubagentSource`). They are the regression
-//! safety net for converging the same-deployment (local) and cross-deployment
-//! (remote) spawn paths into one "write the bridge, let SubagentSource create
-//! the child" path.
-//!
-//! Harness mirrors `subagent_enablement_e2e.rs`: a real `Gents::run`
-//! drives the `TriggerEngine` + `SubagentSource`, and spawns are driven by
-//! writing the `AgentToolCall` bridge via `ToolCallLifecycle::start_running()`
-//! (exactly how the hook writes it before its local/remote branch).
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,8 +26,6 @@ struct RunningAgent {
     behavior_id: String,
 }
 
-/// Boot an agent with spawn_enabled + background_enabled and `behavior_id`
-/// as its own allowed subagent target (local self-spawn).
 async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> RunningAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
     let agent_did = identity.did().to_string();
@@ -178,8 +162,6 @@ struct RequestDeadlineRow {
     deadline: Option<String>,
 }
 
-/// Wait for the runtime watcher to claim a request (it stamps `deadline` at
-/// claim time, which parent-context loading requires).
 async fn wait_for_request_deadline(node: &EmbeddedNode, request_id: &str) {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
@@ -233,9 +215,6 @@ async fn fetch_tool_call_state(
         .and_then(|row| row.lifecycle_state)
 }
 
-/// CHARACTERIZATION: a local BACKGROUND spawn driven by writing the bridge
-/// materializes a child `AgentRequest` (via SubagentSource) with correct
-/// lineage, and `handle_list_subagents` reflects the running child.
 #[tokio::test]
 async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
     let db = test_db("convergence-local-background").await;
@@ -316,12 +295,6 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
     running.booted.shutdown().await;
 }
 
-/// REGRESSION (#593): a successful BACKGROUND spawn receipt must stay
-/// observable at the bridge level even while the child `AgentRequest` has not
-/// materialized. The bridge targets a REMOTE agent DID, so the local
-/// `SubagentSource` never creates the child — the durable analog of the live
-/// cross-deployment gap where the parent was told `status: running` and then
-/// `list_subagents(all)` returned `entries: []`.
 #[tokio::test]
 async fn unmaterialized_background_child_stays_observable_in_list() {
     let db = test_db("convergence-unmaterialized").await;
@@ -341,8 +314,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "parent prompt unmaterialized",
     )
     .await;
-    // read/steer load the parent context, which requires the claim-time
-    // deadline stamp — wait for the watcher before exercising them.
     wait_for_request_deadline(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
@@ -370,7 +341,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     );
     lifecycle.start_running().await.unwrap();
 
-    // The child must NOT have materialized (remote target, no paired peer).
     let escaped_child = escape_graphql_string(child_request_id);
     let child_query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child}" }} }}, limit: 1) {{ request_id behavior_id content subagent_depth caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind }} }}"#
@@ -382,7 +352,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "test premise: remote-target child must not materialize locally"
     );
 
-    // list_subagents(status="all") must return the bridge-level handle.
     let all: ListSubagentsArgs =
         serde_json::from_value(serde_json::json!({ "status": "all" })).unwrap();
     let resp = handle_list_subagents(
@@ -416,7 +385,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "diagnostic names the bridge: {list_diagnostic}"
     );
 
-    // The projection is non-terminal, so the DEFAULT (running) filter shows it.
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,
@@ -432,8 +400,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "the unmaterialized handle must be visible under the default running filter"
     );
 
-    // read_subagent must explain the bridge state instead of not-authorized,
-    // and must never fake a terminal outcome for an unmaterialized child.
     let read_args: ReadSubagentArgs =
         serde_json::from_value(serde_json::json!({ "child_request_id": child_request_id }))
             .unwrap();
@@ -455,7 +421,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "diagnostic names the bridge: {read_diagnostic}"
     );
 
-    // steer_subagent target resolution must explain materialization, not deny.
     match load_steer_subagent_target(db.node.as_ref(), parent_request_id, child_request_id)
         .await
         .expect("load_steer_subagent_target must not error")
@@ -469,8 +434,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         other => panic!("expected AwaitingMaterialization, got {other:?}"),
     }
 
-    // A parent request that does NOT own the bridge still gets nothing:
-    // lineage rejection is unchanged (r4c.list_subagents.lineage_rejects).
     create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
@@ -480,8 +443,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "unrelated parent prompt",
     )
     .await;
-    // The watcher stamps the request deadline at claim time; parent-context
-    // loading requires it, so wait for the claim before reading.
     wait_for_request_deadline(db.node.as_ref(), "unmat-other-parent").await;
     let stranger = handle_read_subagent(
         db.node.as_ref(),
@@ -499,18 +460,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     running.booted.shutdown().await;
 }
 
-/// CHARACTERIZATION: a local FOREGROUND spawn driven by writing the bridge
-/// materializes a child `AgentRequest` (via SubagentSource) with correct
-/// lineage. The foreground bridge stays `running` until the child reaches a
-/// terminal state.
-///
-/// NOTE: this characterizes the spawn at the level reachable without the model
-/// loop. We assert (a) the child materializes via SubagentSource for a local
-/// foreground bridge and (b) the bridge is observable as `running` after the
-/// child exists, then (c) bridge completion projects to the parent tool call.
-/// We do NOT exercise the hook's blocking `await_foreground_subagent` poll here
-/// (that requires the model loop); the convergence refactor relies on
-/// SubagentSource creating the child for both await modes, which this captures.
 #[tokio::test]
 async fn local_foreground_spawn_materializes_child_via_source() {
     let db = test_db("convergence-local-foreground").await;
@@ -553,7 +502,6 @@ async fn local_foreground_spawn_materializes_child_via_source() {
     );
     lifecycle.start_running().await.unwrap();
 
-    // SubagentSource creates the child for a local foreground bridge too.
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
     assert_eq!(child.behavior_id, running.behavior_id);
@@ -568,13 +516,11 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         Some(parent_tool_call_id)
     );
 
-    // The foreground bridge is still running while the child is live.
     let state = fetch_tool_call_state(db.node.as_ref(), parent_session_id, parent_tool_call_id)
         .await
         .expect("bridge tool call row must exist");
     assert_eq!(state.as_str(), "running");
 
-    // Driving the bridge to completion projects to the parent tool call.
     lifecycle
         .bridge_complete("foreground final answer".to_string())
         .await

@@ -1,5 +1,3 @@
-//! Integration tests for R4c steer_subagent.
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
@@ -113,9 +111,6 @@ async fn setup_db(
     )
     .await
     .unwrap();
-    // Spawn convergence (#377): the child `AgentRequest` is materialized by
-    // SubagentSource, not synchronously by the hook. Run a standalone source for
-    // the lifetime of the test; the guard is returned so callers hold it alive.
     let source = spawn_subagent_source(
         db.node.clone(),
         AGENT_DID,
@@ -214,8 +209,6 @@ async fn spawn_background_child(
         .await;
     let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
-    // Spawn convergence (#377): backfill the child session id once SubagentSource
-    // materializes the child (the receipt no longer carries it).
     let child_request_id = receipt["child_request_id"]
         .as_str()
         .expect("child_request_id")

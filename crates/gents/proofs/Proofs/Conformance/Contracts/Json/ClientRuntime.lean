@@ -4,13 +4,6 @@ import Proofs.StreamingResponse.Executable
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
 
-/-!
-# Client and Runtime Support JSON
-
-Serializers for live overlays, streaming responses, compaction, and recovery
-sweeps.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

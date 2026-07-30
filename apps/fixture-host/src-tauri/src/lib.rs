@@ -1,5 +1,3 @@
-//! Fixture host shell: owns Builder, bundle identity, and co-resident plugins.
-
 use std::path::PathBuf;
 
 use fixture_domain_plugin::DomainConfig;
@@ -8,14 +6,8 @@ use gents_desktop_bridge::{
     BootstrapPolicy, BridgeConfig, HomePolicy, SnapshotGrants, TracingConfig,
 };
 
-/// The bridge configuration this host ships. Kept as a pure function so the
-/// capability-consistency test below can compare it against
-/// `capabilities/default.json` (v1 process-wide profile: capability grants
-/// must never exceed the declared snapshot grants).
 fn bridge_config() -> BridgeConfig {
     BridgeConfig {
-        // FixedRoot under host_root for deterministic isolation tests; production
-        // shape is AppDataDir — both keep storage under gents-fixture-host/.
         home: HomePolicy::AppDataDir {
             subdirectory: "gents-fixture-host/client",
         },
@@ -24,8 +16,6 @@ fn bridge_config() -> BridgeConfig {
             app_name: "Gents Fixture Host".into(),
             app_version: env!("CARGO_PKG_VERSION").into(),
         },
-        // Process-wide profile matching capabilities/default.json
-        // (chat + fleet + read-only operations).
         snapshot_grants: SnapshotGrants {
             session_read: true,
             fleet_read: true,
@@ -38,8 +28,6 @@ fn bridge_config() -> BridgeConfig {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // The bridge resolves its real client home from Tauri's app_data_dir during
-    // plugin setup. The host separately owns its logs and domain-plugin home.
     let host_root = dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("gents-fixture-host");
@@ -73,7 +61,6 @@ mod tests {
 
     const CAPABILITIES: &str = include_str!("../capabilities/default.json");
 
-    /// Projection-relevant grant bits implied by the capability file.
     fn granted_projection_bits() -> SnapshotGrants {
         let caps: serde_json::Value =
             serde_json::from_str(CAPABILITIES).expect("capabilities/default.json parses");
@@ -97,11 +84,6 @@ mod tests {
         bits
     }
 
-    /// v1 process-wide model: every projection-relevant read set granted in
-    /// capabilities/default.json must be covered by the declared profile —
-    /// otherwise a webview holds a capability whose payload the projection
-    /// would strip (under-grant) or, worse, the config declares sections no
-    /// capability justifies (over-declare).
     #[test]
     fn capability_grants_match_declared_snapshot_grants() {
         let declared = bridge_config().snapshot_grants;

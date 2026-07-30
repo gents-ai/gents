@@ -1,12 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Layer 4: Scheduling Vocabulary
-
-Shared types for backend binding and scheduler admission.
--/
-
-/-- The origin of a unit of work. -/
 inductive ExecutionOrigin where
   | interactive
   | scheduled
@@ -14,12 +7,10 @@ inductive ExecutionOrigin where
 
 namespace ExecutionOrigin
 
-/-- String vocabulary persisted in `AgentRequest.execution_origin`. -/
 def toDefraDB : ExecutionOrigin → String
   | .interactive => "interactive"
   | .scheduled => "scheduled"
 
-/-- Parse the persisted `AgentRequest.execution_origin` vocabulary. -/
 def fromDefraDB? : String → Option ExecutionOrigin
   | "interactive" => some .interactive
   | "scheduled" => some .scheduled
@@ -31,18 +22,15 @@ theorem fromDefraDB_toDefraDB (origin : ExecutionOrigin) :
 
 end ExecutionOrigin
 
-/-- Backend identifier. Opaque — we only need equality. -/
 structure BackendId where
   val : String
   deriving DecidableEq, Repr
 
-/-- Backend state as observed by the scheduler. -/
 structure BackendState where
   max_concurrent : Nat
   available : Bool
   deriving DecidableEq, Repr
 
-/-- Admission state with respect to scheduler capacity. -/
 inductive AdmissionState where
   | released
   | waiting
@@ -52,7 +40,6 @@ inductive AdmissionState where
 
 namespace AdmissionState
 
-/-- Whether the scheduler currently considers this work to hold a slot. -/
 def holdsSlot : AdmissionState → Prop
   | .acquired => True
   | .executing => True
@@ -71,14 +58,12 @@ end AdmissionState
 
 export AdmissionState (holdsSlot)
 
-/-- Aggregate scheduler state over all backends visible to a daemon. -/
 structure SchedulerState where
   running : BackendId → Nat
   backends : BackendId → BackendState
 
 namespace SchedulerState
 
-/-- Extensionality for scheduler states. -/
 @[ext] theorem ext
     {s t : SchedulerState}
     (h_running : s.running = t.running)
@@ -90,7 +75,6 @@ namespace SchedulerState
   cases h_backends
   rfl
 
-/-- Capacity safety: no backend is tracked as overloaded. -/
 def capacityInvariant (s : SchedulerState) : Prop :=
   ∀ bid : BackendId, s.running bid ≤ (s.backends bid).max_concurrent
 

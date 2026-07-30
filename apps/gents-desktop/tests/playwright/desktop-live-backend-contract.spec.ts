@@ -90,7 +90,6 @@ async function fulfillBridgeRoute(
     return;
   }
   if (method === "POST" && path === "/desktop/operations/snapshot") {
-    // The chat workspace polls this for the stuck-work attention badge.
     await fulfillJson(
       route,
       await fixture.adapter.fetchOperationsSnapshot({ rootRequestId: null }),

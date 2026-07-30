@@ -50,8 +50,6 @@ struct RequestRow {
     lifecycle_state: String,
 }
 
-// --- Two-node P2P plumbing (same shape as event_trigger_p2p_e2e / R5) ---
-
 async fn install_one_way_replicator(
     sender: &Arc<EmbeddedNode>,
     receiver: &Arc<EmbeddedNode>,
@@ -81,8 +79,6 @@ async fn install_one_way_replicator(
         .add_collections(collection_names.clone())
         .await
         .expect("add receiver p2p collections");
-    // DefraDB needs both the sender-side push target and the receiver-side
-    // authorization record. Data-flow under test remains sender -> receiver.
     receiver_p2p
         .add_replicator(
             collection_names.clone(),
@@ -154,8 +150,6 @@ async fn wait_for_push_enqueues_and_idle(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
-
-// --- AgentRequest helpers ---
 
 async fn create_request(
     node: &EmbeddedNode,
@@ -296,8 +290,6 @@ async fn wait_for_request_lifecycle(
     }
 }
 
-/// Live path: intermediate processing replicates, owner terminal converges on
-/// the peer, then owner re-drive re-asserts without changing the peer's view.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let owner = test_p2p_db("convergence-p2p-owner-live").await;
@@ -308,7 +300,6 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let request_id = "convergence-p2p-live-req";
     let session_id = "convergence-p2p-live-session";
 
-    // 1. Owner writes a non-terminal request (the #661 intermediate shape).
     create_request(
         owner.node.as_ref(),
         request_id,
@@ -331,10 +322,8 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         on_peer_processing.agent_did, OWNER_DID,
         "peer replica must retain the owner's DID (peer is passive)"
     );
-    // Sanity: peer DID is not the owner — the replica is foreign on the peer node.
     assert_ne!(on_peer_processing.agent_did, PEER_DID);
 
-    // 2. Owner terminalizes — the primary PushLog path under test.
     terminalize_request(
         owner.node.as_ref(),
         request_id,
@@ -369,8 +358,6 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "peer must match owner terminal exactly"
     );
 
-    // 3. Owner re-drive: same-value re-assert (higher-priority CRDT delta).
-    //    Peer must remain at the owner terminal — no fork / no regression.
     let first = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
         .await
         .expect("redrive");
@@ -379,7 +366,6 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "owner re-drive must re-assert at least the terminal row; report={first:?}"
     );
 
-    // Give PushLog a moment, then confirm peer is still converged.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let after_redrive = wait_for_request_lifecycle(
         peer.node.as_ref(),
@@ -393,7 +379,6 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     assert_eq!(after_redrive.agent_did, OWNER_DID);
     assert_eq!(after_redrive.doc_id, on_peer_terminal.doc_id);
 
-    // 4. Cap exhaust: remaining re-asserts drain the budget; peer stays put.
     let mut total_reasserted = first.reasserted;
     for _ in 0..TERMINAL_REDRIVE_CAP {
         let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
@@ -426,9 +411,6 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     peer.node.shutdown().await;
 }
 
-/// Recovery path: the peer stays unavailable beyond the persisted re-drive cap.
-/// Installing the replicator then performs a full replay, which must converge
-/// the peer even though the owner is no longer eligible for same-value re-drive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     let owner = test_p2p_db("convergence-p2p-owner-late").await;
@@ -437,7 +419,6 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     let request_id = "convergence-p2p-late-req";
     let session_id = "convergence-p2p-late-session";
 
-    // Owner reaches terminal with no peer yet.
     create_request(
         owner.node.as_ref(),
         request_id,
@@ -457,7 +438,6 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     .await;
     assert_eq!(on_owner.status, "completed");
 
-    // Spend the entire persisted budget while the peer is unavailable.
     let mut reasserted_total = 0usize;
     for _ in 0..TERMINAL_REDRIVE_CAP {
         let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
@@ -471,8 +451,6 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
         .expect("redrive after persistent cap");
     assert!(exhausted.is_noop(), "persistent cap must be exhausted");
 
-    // Peer recovery installs a full replicator replay. This path does not author
-    // another AgentRequest delta and therefore does not grow request history.
     install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"]).await;
 
     let on_peer = wait_for_request_lifecycle(
@@ -495,11 +473,6 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     peer.node.shutdown().await;
 }
 
-/// #683 wave-volume measurement using the same 13-doc × 16-pairing incident
-/// shape as the #1103 harness. One real filtered two-node route observes the
-/// sender's outbound enqueue counter; the former fleet-wide predicate is the
-/// 16-replicator baseline. Each re-driven request now produces one push to its
-/// requester, so the measured reduction is 16x (well above the 5x gate).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     const REQUESTS: usize = 13;

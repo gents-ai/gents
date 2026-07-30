@@ -24,7 +24,6 @@ use rig::http_client::{
 };
 use rig::wasm_compat::WasmCompatSend;
 
-/// Header carrying the agent session id on outbound inference requests.
 const SESSION_ID_HEADER: &str = "x-session-id";
 
 pub(crate) fn build_openai_responses_client<H>(
@@ -135,10 +134,6 @@ where
     }
 }
 
-/// A [`HttpClientExt`] that injects [`SESSION_ID_HEADER`] from the current
-/// admission request context onto each outbound request, then delegates to the
-/// inner reqwest client. When there is no active session context (e.g. one-shot
-/// calls outside the daemon scope) the request is passed through unchanged.
 #[derive(Clone, Debug, Default)]
 pub struct SessionTaggingHttpClient<H = ReqwestClient> {
     inner: H,

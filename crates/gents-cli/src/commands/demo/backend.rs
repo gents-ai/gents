@@ -17,7 +17,6 @@ use super::util::{non_empty, prompt_line, prompt_secret, StdinLines};
 
 const DEFAULT_OPENAI_DEMO_MODEL: &str = "gpt-5.4-mini";
 
-/// How the demo's inference backend was resolved, ready to pass to `init`.
 #[derive(Clone)]
 pub(super) struct BackendChoice {
     pub(super) init_args: Vec<String>,
@@ -28,7 +27,6 @@ pub(super) async fn resolve_backend(
     args: &DemoArgs,
     reader: &mut StdinLines,
 ) -> Result<BackendChoice> {
-    // Non-interactive paths first (flags / env).
     if let Some(url) = &args.inference_url {
         return Ok(custom_url_backend(
             url,
@@ -49,11 +47,9 @@ pub(super) async fn resolve_backend(
             args.api_key.as_deref(),
         ));
     }
-    // Interactive first-run picker.
     pick_backend(args.model.as_deref(), reader).await
 }
 
-/// Interactively pick a backend. Reused by first-run setup and `reconfigure`.
 pub(super) async fn pick_backend(
     model: Option<&str>,
     reader: &mut StdinLines,
@@ -179,7 +175,6 @@ fn custom_url_backend(url: &str, model: Option<&str>, api_key: Option<&str>) -> 
     }
 }
 
-/// GET `{base}/models`; return the first advertised model id if reachable.
 async fn probe_models(base: &str) -> Option<String> {
     let response = reqwest::Client::new()
         .get(format!("{base}/models"))

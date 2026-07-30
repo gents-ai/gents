@@ -1,20 +1,5 @@
 import Proofs.Persistence
 
-/-!
-# Storage Observation Boundary
-
-This module models the daemon-visible storage facts used by persistence and
-session code. It deliberately does not model DefraDB internals. Instead, it
-records the minimum observations the daemon is allowed to rely on:
-
-* an awaited successful mutation is treated as a committed write,
-* a failed mutation is not treated as committed,
-* stale reads or missing events do not regress a successful mutation ack, and
-* a successful ack has read-your-writes and eventual-observation paths.
--/
-
-/-- Daemon-local observations at the storage boundary. These are contract names,
-not persisted DefraDB values. -/
 inductive StorageObservation where
   | noMutation
   | inFlight
@@ -27,7 +12,6 @@ inductive StorageObservation where
 
 namespace StorageObservation
 
-/-- Stable contract vocabulary for Rust tests. -/
 def toContract : StorageObservation -> String
   | .noMutation => "noMutation"
   | .inFlight => "inFlight"
@@ -37,7 +21,6 @@ def toContract : StorageObservation -> String
   | .readVisible => "readVisible"
   | .lostAcknowledged => "lostAcknowledged"
 
-/-- Parse storage-observation contract vocabulary. -/
 def fromContract? : String -> Option StorageObservation
   | "noMutation" => some .noMutation
   | "inFlight" => some .inFlight
@@ -74,20 +57,15 @@ instance : HasTerminal StorageObservation where
         | inl h => exact absurd h (by decide)
         | inr h => exact absurd h (by decide))
 
-/-- Projection from daemon observations into the existing persistence model. -/
 def toPersistence : StorageObservation -> PersistenceState
   | .noMutation => .uncommitted
   | .inFlight => .committing
   | .successAcknowledged => .committed
   | .mutationFailed => .uncommitted
-  -- Stale observations only occur after a success ack in this model, so they
-  -- preserve the daemon's committed observation instead of proving storage
-  -- engine visibility.
   | .staleObserved => .committed
   | .readVisible => .committed
   | .lostAcknowledged => .lost
 
-/-- Storage-observation actions. -/
 inductive Action where
   | beginMutation
   | mutationSuccess
@@ -100,7 +78,6 @@ inductive Action where
   | acknowledgeLost
   deriving DecidableEq, Repr
 
-/-- Relational storage-observation transitions parameterized by failure policy. -/
 inductive Transition (policy : PersistenceState.FailurePolicy) :
     StorageObservation -> StorageObservation -> Prop where
   | begin_mutation :
@@ -126,7 +103,6 @@ inductive Transition (policy : PersistenceState.FailurePolicy) :
       policy = .failOpen ->
       Transition policy .mutationFailed .lostAcknowledged
 
-/-- Executable storage-observation transition function. -/
 def step? (policy : PersistenceState.FailurePolicy)
     (pre : StorageObservation) : Action -> Option StorageObservation
   | .beginMutation =>
@@ -148,7 +124,6 @@ def step? (policy : PersistenceState.FailurePolicy)
   | .acknowledgeLost =>
       if policy = .failOpen /\ pre = .mutationFailed then some .lostAcknowledged else none
 
-/-- A trace is a sequence of valid storage observations. -/
 inductive Trace (policy : PersistenceState.FailurePolicy) :
     StorageObservation -> StorageObservation -> Prop where
   | refl {s : StorageObservation} : Trace policy s s
@@ -188,8 +163,6 @@ theorem mutation_failed_ne_committed :
 theorem stale_observation_preserves_success_commit :
     toPersistence .staleObserved = toPersistence .successAcknowledged := rfl
 
-/-- Downstream bridge predicate: a terminal response write may rely on either
-    the local success ack or a later visible read observation. -/
 def terminalWriteObserved (obs : StorageObservation) : Prop :=
   obs = .successAcknowledged ∨ obs = .readVisible
 

@@ -1,8 +1,3 @@
-//! Compile-only assertion that each operations command has the
-//! parameter and return-type shape downstream panels rely on. These tests
-//! never call the underlying functions (which would panic via
-//! unimplemented!()); they only assert types at compile time.
-
 #![cfg(test)]
 
 use super::operations::{

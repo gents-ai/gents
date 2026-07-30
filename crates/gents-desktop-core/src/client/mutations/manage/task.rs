@@ -122,11 +122,6 @@ pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
 }
 
 pub async fn upsert_schedule(node: &EmbeddedNode, row: &ScheduleRow) -> Result<()> {
-    // CRITICAL: only apply-owned fields may appear in the mutation input.
-    // Runtime-owned fields (`next_run_at`, `last_attempt_at`,
-    // `last_status`, `last_error`, `fire_count`) belong to the scheduler
-    // and must never be set from the desktop apply path — otherwise
-    // reapplying a Schedule edit would wipe the engine's bookkeeping.
     let schedule_id = normalize_required("schedule_id", &row.schedule_id)?;
     let task_id = normalize_required(
         "task_id",
@@ -226,9 +221,6 @@ pub async fn fire_task_now(
         bail!("task {task_id} is disabled");
     }
 
-    // Resolve `agent_did` via GraphQL. The desktop `ClientStore` has
-    // behavior rows cached, but a fresh lookup keeps this writer correct
-    // even if the store is stale, and mirrors the CLI path's shape.
     let behavior_query = format!(
         r#"query {{
             AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{
@@ -350,15 +342,6 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
     fire_task_now(node, &task_row, serde_json::json!({})).await
 }
 
-/// Apply-path upsert for an `EventTrigger` document.
-///
-/// CRITICAL: only apply-owned fields may appear in the mutation input.
-/// Runtime-owned fields (`last_attempt_at`, `last_fired_source_doc_id`,
-/// `last_status`, `last_error`, `fire_count`) are written exclusively by
-/// the trigger engine. Projecting them here would let a desktop edit
-/// clobber the engine's bookkeeping on every re-apply. The CLI's
-/// `config_writes/event_trigger.rs` enforces the same contract for
-/// manifest-apply; this desktop path mirrors it for in-app edits.
 pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) -> Result<()> {
     let trigger_id = normalize_required("trigger_id", &row.trigger_id)?;
     let task_id = normalize_required(

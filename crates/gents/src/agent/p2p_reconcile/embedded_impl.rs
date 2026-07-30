@@ -17,7 +17,6 @@ use super::{RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteRep
 
 const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Runtime-local admin adapter over an embedded DefraDB node's P2P operations.
 #[derive(Clone)]
 pub struct EmbeddedRemoteP2pAdmin {
     node: Arc<EmbeddedNode>,
@@ -134,9 +133,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // The P2P subscription set (`get_collections`) is keyed by collection id,
-        // but desired state carries collection names; resolve via the local schema
-        // catalog so the reconcile diff compares both sides in id-space.
         match self.node.get_collection(name) {
             Ok(Some(def)) => Ok(Some(def.collection_id)),
             Ok(None) => Ok(None),
@@ -147,9 +143,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 
     async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
-        // Walk the local catalog to invert id → name. The subscribe/unsubscribe
-        // adapter calls take names, but `PairingApplied` records ids, so teardown
-        // of a no-longer-desired collection must recover the name here.
         let names = self.node.list_collections().map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("list_collections for id {id}: {error}"))
         })?;
@@ -247,11 +240,6 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
     }
 }
 
-/// Translate our `PairingFilters` seam type into defradb's `ReplicationFilters`
-/// (per-collection equality predicate), passed straight to the filtered
-/// `add_replicator` on the pinned #1033 rev. Filters are translated 1:1 and
-/// validated (fail-closed) by defradb — there is no unfiltered fallback. Our
-/// predicate values are agent DIDs (strings), so they map to JSON strings.
 fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
     filters
         .iter()
@@ -261,8 +249,6 @@ fn to_defra_filters(filters: &PairingFilters) -> ReplicationFilters {
                 ReplicationFilter {
                     field: predicate.field.clone(),
                     value: serde_json::Value::String(predicate.value.clone()),
-                    // gents's pairing scope is a simple field==value filter;
-                    // the rich `Conditions` predicate (added upstream) is unused.
                     conditions: None,
                 },
             )

@@ -1,12 +1,5 @@
 import Proofs.StreamingResponse.State
 
-/-!
-# StreamingResponse Transitions
-
-Relational transitions for the AgentResponse streaming → terminal
-lifecycle, plus the composed `BridgeTransition` for the S6 bridge.
--/
-
 namespace StreamingResponse
 
 inductive Transition : ResponseContext → ResponseContext → Prop where
@@ -57,10 +50,6 @@ inductive Transition : ResponseContext → ResponseContext → Prop where
       post = { pre with
         status := .completed
       , liveTail := .empty
-      -- issue #492: copy-then-clear. The reasoning present in the live tail
-      -- is durably persisted into the materialized message BEFORE the live
-      -- tail is cleared. `durableReasoning` captures that copy; `liveTail`
-      -- still clears to `.empty` (issue #64 invariant preserved).
       , durableReasoning := pre.tailReasoning
       , materializedMessageSequence := some seq } →
       Transition pre post

@@ -1,8 +1,3 @@
-//! `/sessions` surfacing: recent sessions for the running agent, scoped via
-//! `AgentRequest.agent_did` and joined with persisted session/message/
-//! compaction metadata. This is a recent-activity view, not an all-time
-//! exhaustive scan.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};

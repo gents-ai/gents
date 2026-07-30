@@ -6,7 +6,6 @@ import type { ClientUpdateEvent, Unlisten } from "./transport.js";
 import type { DesktopClientSnapshot } from "./types.js";
 
 export type TimingConfig = {
-  /** Coalesce burst of client-updated events into one refresh. */
   refreshDebounceMs: number;
 };
 
@@ -23,12 +22,6 @@ export type DesktopStoreState = {
 
 type Listener = () => void;
 
-/**
- * Shared client store + refresh coordinator.
- * Each store owns exactly one client-updated subscription. Gents Desktop still
- * retains its mature session polling coordinator; package providers can bind
- * their domain actions to this store's `client.api`.
- */
 export type DesktopStore = {
   getState(): DesktopStoreState;
   subscribe(listener: Listener): () => void;
@@ -91,8 +84,6 @@ export function createDesktopStore(
         } while (refreshRequested);
       })().finally(() => {
         refreshInFlight = null;
-        // A request can arrive after the drain's final condition check but
-        // before this finally callback runs. Preserve that trailing refresh.
         if (refreshRequested) {
           void requestRefresh();
         }
@@ -153,7 +144,6 @@ export function createDesktopStore(
         try {
           await client.clientShutdown();
         } catch {
-          // ignore shutdown errors on teardown
         }
         setState({ started: false });
       });

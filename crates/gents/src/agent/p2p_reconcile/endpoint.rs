@@ -37,9 +37,6 @@ pub async fn run_endpoint_heartbeat(
         );
     }
 
-    // `tokio::time::interval` makes its first tick immediately ready. Consume
-    // that scheduling tick after the explicit startup write so entering the
-    // loop does not issue a redundant second upsert during startup contention.
     interval.tick().await;
 
     loop {
@@ -67,14 +64,6 @@ async fn tick_endpoint(
         .local_peer_id()
         .await
         .map_err(|e| anyhow::anyhow!("local_peer_id: {e}"))?;
-    // Publish the SHAREABLE address (`best_shareable_public_addr`), NOT the raw
-    // `listen_addresses` form. `connect_peer` -> `parse_public_peer_addr` only
-    // recovers dialable direct addresses from the shareable form; the
-    // listen-address form parses to an EMPTY direct-addr set, so a peer dialing
-    // it falls back to peer discovery — which is off in trusted-fleet / loopback
-    // deployments — and fails with "Address Lookup failed". A peer can only
-    // materialize the network-derived reverse mesh edge if the endpoint it reads
-    // is dialable, so the heartbeat must publish the dialable form.
     let address = p2p
         .shareable_address()
         .await

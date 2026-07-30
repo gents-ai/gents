@@ -1,7 +1,3 @@
-// Soft-cap justified: agent startup sequence with strong ordering constraints
-// between health checking, snapshot resolution, slot bootstrap, and recovery.
-// Each phase depends on the previous; splitting into submodules would require
-// threading many intermediate values across module boundaries for no gain.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -42,12 +38,6 @@ enum BackgroundTaskResult {
     DirectoryProjection(Result<()>),
 }
 
-/// Startup demotion policy (#559): demote a behavior only while the startup
-/// barrier is still waiting on it, releasing the barrier without claiming
-/// health and surfacing the reason through the ledger, the status counts, and
-/// the log. `RuntimeReconcile.StartupReadiness` is the model; the conformance
-/// fence drives its emitted vectors through the same `BuildStanding` the slot
-/// loop steps.
 struct StartupSlotFailurePolicy {
     barrier: Arc<StartupBarrier>,
     demotions: Arc<crate::startup_readiness::StartupDemotions>,
@@ -62,9 +52,6 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     }
 
     async fn try_demote(&self, behavior_id: &str, error: &str) -> bool {
-        // The authoritative pending check happens here, at the demotion
-        // moment: a behavior that started once (this or a sibling worker) or
-        // that never entered the barrier is not a startup demotion.
         if !self.barrier.is_pending(behavior_id).await {
             return false;
         }
@@ -87,13 +74,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
     }
 
     async fn on_slot_retired(&self, behavior_id: &str, recreated: bool) {
-        // Retirement releases a never-started behavior (superseded) so a
-        // mid-startup generation change cannot orphan its barrier entry; a
-        // recreated slot earns a fresh budget, so its old demotion is lifted.
         self.barrier.mark_behavior_superseded(behavior_id).await;
-        // Recreated: fresh budget lifts the old demotion. Removed: drop the
-        // stale reason so the router does not reject with a demotion message
-        // for a behavior that no longer exists. Either way the entry goes.
         let _ = recreated;
         self.demotions.clear(behavior_id);
     }
@@ -104,9 +85,6 @@ pub(in crate::agent) async fn run_agent(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
-    // AgentRuntime executor-status fields must exist before RuntimeStatusHandle
-    // writes them, so run the full migration set (shared with the desktop
-    // bootstrap so the two hosts cannot drift) before publishing any status.
     crate::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
@@ -130,11 +108,6 @@ pub(in crate::agent) async fn run_agent(
         agent.local_subnet.clone(),
         agent.agent_did().to_string(),
     );
-    // Promote reachable enabled backends to healthy before resolving which
-    // behaviors are runnable. A fresh store's backends start `probe_status=
-    // unknown`, and nothing else promotes them, so without this the runtime
-    // comes up with zero runnable behaviors until an operator manually runs
-    // `config backend set --probe-status healthy`.
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
 
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
@@ -158,12 +131,6 @@ pub(in crate::agent) async fn run_agent(
         agent.health_checker_options.clone(),
         agent.agent_did().to_string(),
     );
-    // Scheduled backend prober (#640): measures endpoint reachability on an
-    // interval and vetoes routing after K consecutive failures. Transitions
-    // nudge the control watcher through this channel so the snapshot
-    // re-resolves without waiting for a document update. The startup ratchet
-    // above stays: it promotes unknown backends BEFORE behavior resolution;
-    // the prober keeps that promotion recurring afterwards.
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
     let _backend_prober = crate::backend_health::spawn_backend_prober(
         agent.node.clone(),
@@ -235,17 +202,6 @@ pub(in crate::agent) async fn run_agent(
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
 
-    // The legacy scheduler module has been replaced by the event-driven
-    // `TriggerEngine`. Construct a `ScheduleSource` and an `EventSource`
-    // backed by the active runtime snapshot, plus a `ProductionMaterializer`
-    // that writes `AgentRequest` documents with `caused_by_trigger_{id,kind}`
-    // lineage via the lifecycle module. The materializer enqueues Pending
-    // requests; the normal watcher/router path claims and executes them.
-    // Host-owned subsystems (the Codex shim) re-derive their enablement from the
-    // published generation, exactly as the runtime's own subscribers do. Without
-    // this, a host subsystem can only sample the control documents once at boot,
-    // which is precisely how the shim stayed dark after a later `config apply`
-    // made its bound behavior runnable (#699).
     if let Some(observer) = agent.runtime_snapshot_observer.clone() {
         let mut snapshot_rx = active_snapshot_rx.clone();
         let mut observer_shutdown = shutdown.clone();
@@ -287,10 +243,6 @@ pub(in crate::agent) async fn run_agent(
     // and are polling for the handle.
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
-    // Publish the handle; `set` returns `Err` only if another path already
-    // populated the cell, which is not expected here but is harmless to
-    // ignore — the handle is `Clone` and all copies route to the same
-    // channel sender.
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
@@ -360,10 +312,6 @@ pub(in crate::agent) async fn run_agent(
     let ready_unavailable_count = initial_active_snapshot.unavailable_behaviors.len();
     let ready_demotions = startup_demotions.clone();
     let readiness_handle = tokio::spawn(async move {
-        // Watchdog, not a deadline: demotion (budget) and supersession
-        // (retirement) make the barrier terminate by construction, and the
-        // per-attempt build timeout converts hangs into failures — so nothing
-        // here force-flips Ready. This only makes an unforeseen wedge loud.
         let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));
         watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         watchdog.tick().await;
@@ -534,10 +482,6 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
-    // Discovery reconciler: materializes registry-owned PeerPairingDesired rows
-    // from PeerRegistry. Idles unless `discovery_auto_pair` is enabled (default
-    // OFF, gated by GENTS_DISCOVERY_AUTO_PAIR) — the registry still
-    // replicates either way, but no auto-pairing happens when off.
     let discovery_node = agent.node.clone();
     let discovery_cancel = cancel.child_token();
     background_tasks.spawn(async move {
@@ -806,13 +750,6 @@ fn is_degraded_startup_unavailable_reason(reason: &str) -> bool {
             && reason.contains(" probe_status="))
         || reason.contains("did not advertise model")
         || reason.contains("startup readiness probe")
-        // A behavior with no backend binding is unconfigured, not structurally
-        // invalid. Starting degraded (with /healthz reporting the reason and a
-        // zero runnable count) lets an operator inspect and finish configuration
-        // — applying a manifest, attaching a backend — over a live endpoint.
-        // Treating it as fatal instead crash-loops the runtime, which is how a
-        // fresh-store bootstrap (where ensure_agent_principal seeds a backendless
-        // default behavior) became unstartable.
         || reason.contains("has no backend binding")
 }
 
@@ -936,11 +873,6 @@ async fn load_startup_paired_peer_dids(
         .and_then(|d| d.get("PeerPairingDesired"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
-    // Never treat this node's OWN DID as a trusted PEER. A PeerPairingDesired row
-    // carrying our own DID would otherwise route a LOCAL spawn into the
-    // trusted-paired-peer (cross-deployment) branch and — with the
-    // cross-deployment flag off — wrongly deny it. Empty/blank DIDs are likewise
-    // dropped.
     let local_did = local_did.trim();
     Ok(rows
         .into_iter()

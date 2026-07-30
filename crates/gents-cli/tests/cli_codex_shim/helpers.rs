@@ -1032,10 +1032,6 @@ pub(super) fn run_git_command(cwd: &std::path::Path, args: &[&str]) -> Result<()
 }
 
 fn run_git_output(cwd: &std::path::Path, args: &[&str]) -> Result<String> {
-    // Disable commit signing so the test is hermetic against the host/CI git
-    // config: a runner with `commit.gpgsign=true` but no usable gpg key (headless)
-    // would otherwise fail `git commit` with "gpg failed to sign the data".
-    // Harmless for non-commit subcommands (init/add).
     let output = Command::new("git")
         .args(["-c", "commit.gpgsign=false"])
         .args(args)
@@ -2195,8 +2191,6 @@ fn server_notification_from_jsonrpc(
         .context("decoding Codex server notification")
 }
 
-/// Read server notifications until a `ThreadTokenUsageUpdated` arrives, skipping
-/// any unrelated notifications. Used to assert the resume token-usage replay.
 pub(super) async fn read_token_usage_notification(
     ws: &mut ShimWebSocket,
 ) -> Result<codex::ThreadTokenUsage> {

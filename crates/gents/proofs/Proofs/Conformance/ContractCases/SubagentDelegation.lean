@@ -1,13 +1,6 @@
 import Proofs.Background.Properties.DelegationGraph
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Subagent Delegation Graph Conformance Cases
-
-Finite rows for #349 gap 2: arbitrary delegation graph termination,
-acyclicity, and cascade propagation over bounded cascade paths.
--/
-
 namespace Conformance.ContractCases
 
 def subagentDelegationGraphCases : List SubagentDelegationGraphCase :=

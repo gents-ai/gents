@@ -317,7 +317,6 @@
     opacity: 0;
   }
 
-  /* When a timestamp occupies the auto slot, the copy button docks beside it. */
   .message-time + .message-copy {
     margin-left: 0;
   }
@@ -374,7 +373,6 @@
     border-radius: 0;
   }
 
-  /* highlight.js scopes mapped onto the app palette — no imported theme. */
   .hljs-keyword,
   .hljs-selector-tag,
   .hljs-built_in,
@@ -435,8 +433,6 @@
 }
 
 @layer transcript {
-  /* Reading measure: prose lines cap near 76ch; assistant text reads as an
-     open page while the user's asks sit in visually distinct cards. */
   .transcript-panel .message-card {
     max-width: 76ch;
   }

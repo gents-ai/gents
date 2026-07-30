@@ -1,12 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Shared Rust Conformance Contract Types
-
-Small JSON-emission and finite-state helpers used by
-`Proofs.Conformance.Contracts`.
--/
-
 namespace Conformance.Contracts
 
 structure TransitionPair where
@@ -14,22 +7,11 @@ structure TransitionPair where
   target : String
   deriving DecidableEq, Repr
 
-/-- A transition row carrying a stable name plus precondition flags. Used
-    alongside `legalTransitions`/`illegalTransitions` for machines whose
-    consumers (e.g. R2 Bucket 2's matrix tests) need to discriminate beyond
-    the (source, target) pair — for example, native-only vs subagent-only
-    edges, or state-preserving mode flips that share `source = target`. -/
 structure NamedTransition where
   name : String
   source : String
   target : String
-  /-- `true` ⇒ the inner-state edge is only legal when the tool is native
-      (i.e. has no `childRequestId`). Bucket 2 uses this to assert that the
-      Rust side rejects a native `complete`/`fail` on a subagent-typed tool. -/
   requiresNative : Bool := false
-  /-- `true` ⇒ the edge requires a linked child (e.g. the bridge-completion
-      and bridge-failure edges that lift a child terminal into the parent
-      tool's state). Counterpart to `requiresNative`. -/
   requiresChild : Bool := false
   deriving Repr
 
@@ -47,9 +29,6 @@ structure StateMachineContract where
   actions : List String
   legalTransitions : List TransitionPair
   illegalTransitions : List TransitionPair
-  /-- Optional, per-machine richer transition rows. Defaults to `[]` so
-      existing call sites don't need to change. Emitted as the
-      `named_transitions` JSON field. -/
   namedTransitions : List NamedTransition := []
   deriving Repr
 
@@ -67,9 +46,6 @@ def jsonEscape (s : String) : String :=
 def jsonString (s : String) : String :=
   "\"" ++ jsonEscape s ++ "\""
 
-/-- Regression guard (#553): the single emitted-JSON string serializer escapes
-    quotes and backslashes. All conformance modules route through this, so a
-    field value containing `"`/`\\` cannot emit malformed JSON. -/
 example : jsonString "a\"b\\c" = "\"a\\\"b\\\\c\"" := by native_decide
 
 def jsonArray (values : List String) : String :=

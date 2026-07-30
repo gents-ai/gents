@@ -36,14 +36,8 @@ const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
 const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
-// Live tool-heavy turns can keep the embedded transport busy long enough that
-// short probe deadlines misclassify healthy peers as wedged.
 const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
-// Desktop intentionally inflates fan-out / rate relative to server defaults:
-// the embedded client is often a leaf that must absorb hub bursts without
-// local-only backpressure starving interactive turns. Server operators get
-// the knobs; desktop keeps elevated UX defaults.
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
 const DESKTOP_P2P_RATE_LIMIT_BURST: u32 = 5_000;
 const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
@@ -103,7 +97,6 @@ pub struct ClientPeerStatus {
     pub pairing: Vec<PairingCollectionStatus>,
 }
 
-/// Per-peer-per-collection reconcile retry state, in-memory in v1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingCollectionStatus {
     pub collection_id: String,
@@ -479,10 +472,6 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
-        // Scope legacy GraphQL recovery to the selected deployment and this
-        // desktop principal. A worker node can contain many unrelated
-        // conversations; fetching all of them is both incorrect and too large
-        // for a reliable phone reconnect.
         let mut snapshot =
             load_full_snapshot_from_graphql(graphql, &record.agent_did, self.principal.did())
                 .await?;
@@ -504,10 +493,6 @@ impl ClientCore {
 
     const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
 
-    /// Ensure the local store has fresh rows for `agent_did`. If a prior
-    /// `ensure_agent_loaded(agent_did)` ran within `SELECTION_RELOAD_DEBOUNCE`,
-    /// returns `Ok(false)` without doing work. Otherwise loads a scoped
-    /// snapshot, merges it into the store, and records the timestamp.
     pub async fn ensure_agent_loaded(&self, agent_did: &str) -> Result<bool> {
         let now = std::time::Instant::now();
         let mut map = self.last_loaded_for.lock().await;
@@ -530,7 +515,6 @@ impl ClientCore {
         Ok(true)
     }
 
-    /// Snapshot the observer's metrics if the observer is running.
     pub async fn observer_metrics(
         &self,
     ) -> Option<crate::client::observe::ObserverMetricsSnapshot> {

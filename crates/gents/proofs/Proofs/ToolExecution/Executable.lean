@@ -1,23 +1,8 @@
 import Proofs.ToolExecution.Transition
 
-/-!
-# Executable Tool-Call Semantics
-
-Executable actions, step function, and refinement theorem connecting
-`step?` to the relational `Transition`. Mirrors `Proofs/Request/Executable.lean`.
--/
-
 namespace ToolExecution
 namespace ToolCallContext
 
-/-- Executable tool-call actions mirroring the state-changing constructors of
-    `Transition`. The two non-state constructors (`timeAdvance`,
-    `persistenceStep`) are not exposed here; they are internal to trace
-    construction in liveness proofs.
-
-    Cancel causes are transition metadata: `step?` returns the same post-state
-    for each cause, while `step_refines_transition` carries the selected cause
-    into the relational witness. -/
 inductive Action where
   | dispatch
   | spawnFailed (failure : FailureClass)
@@ -34,7 +19,6 @@ inductive Action where
   | timeoutWhileHeld
   deriving DecidableEq, Repr
 
-/-- Executable transition function for the tool-call layer. -/
 def step? (pre : ToolCallContext) : Action → Option ToolCallContext
   | .dispatch =>
       if pre.state = .pending then
@@ -102,7 +86,6 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
       else
         none
 
-/-- Refinement: every successful `step?` corresponds to a relational `Transition`. -/
 theorem step_refines_transition
     (pre : ToolCallContext) (a : Action) (post : ToolCallContext) :
     step? pre a = some post → Transition pre post := by

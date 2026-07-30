@@ -39,21 +39,6 @@ pub fn validate_cron_schedule(
     Ok(())
 }
 
-/// Next UTC instant strictly after `after_utc` at which `expression` fires in
-/// `timezone`. Walks forward minute-by-minute, matching the local wall-clock
-/// time, so DST handling falls out for free:
-/// - **Spring-forward gap** (local times that never occur) is skipped to the
-///   next valid local occurrence — a `30 2 * * *` schedule simply does not fire
-///   on the day clocks jump 02:00 → 03:00.
-/// - **Fall-back repeat** (local times that occur twice) fires at *each*
-///   occurrence; the earlier UTC instant is returned first, the later one on the
-///   subsequent call.
-///
-/// Restart / missed-run semantics: on load a schedule re-seeds `next_run_at`
-/// from `next_cron_run_after(.., now)`, so windows that fully elapsed while the
-/// runtime was down are **not** backfilled — the next future occurrence fires.
-/// With the `latest_only` policy any accumulated backlog collapses to a single
-/// fire. This is deterministic and independent of restart timing.
 pub fn next_cron_run_after(
     expression: &str,
     timezone: &str,

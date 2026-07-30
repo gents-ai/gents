@@ -3,10 +3,6 @@ import Proofs.InferenceCall.SlotAccounting
 import Proofs.Request
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Slot and Fleet Accounting Witness Cases
--/
-
 namespace Conformance.ContractCases
 
 def otherBackend : BackendId :=

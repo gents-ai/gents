@@ -309,7 +309,6 @@ export function SkillConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function skillFormValues(skill: SkillView | null) {
   return {
     skillId: skill?.skillId ?? "",

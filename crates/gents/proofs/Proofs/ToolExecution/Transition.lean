@@ -1,14 +1,6 @@
 import Proofs.ToolExecution.CancelCause
 import Proofs.ToolExecution.State
 
-/-!
-# Tool Call Transitions
-
-Relational transition system for `ToolCallContext`. Seven state-changing
-constructors plus five non-state constructors (`timeAdvance`, `persistenceStep`,
-`background`, `foreground`, `detach`).
--/
-
 namespace ToolExecution
 namespace ToolCallContext
 
@@ -121,7 +113,6 @@ inductive Transition : ToolCallContext → ToolCallContext → Prop where
       (h_post   : post = { pre with persistence := next })
       : Transition pre post
 
-/-- A trace is a sequence of valid tool-call transitions. -/
 inductive Trace : ToolCallContext → ToolCallContext → Prop where
   | refl {c : ToolCallContext} : Trace c c
   | step {c₁ c₂ c₃ : ToolCallContext} :

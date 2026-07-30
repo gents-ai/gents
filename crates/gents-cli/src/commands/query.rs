@@ -1,11 +1,3 @@
-//! `gents query` — a read-only structured query against a DefraDB
-//! collection, reusing the agent's `defra_query` core (filter rendering, the
-//! always-on secret-field guard, and collection scoping). Talks to a running
-//! node over GraphQL-over-HTTP, so it works while `gents server` is up.
-//!
-//! The shared [`run_defra_query`] helper also backs the MCP `defra_query` tool,
-//! so the CLI and MCP surfaces are guaranteed to behave identically.
-
 use anyhow::{Context, Result};
 use gents::defra_query::{
     build_query, diagnose_failed_query, discovery_payload, introspection_query,
@@ -35,9 +27,6 @@ async fn fetch_collection_schema(
     Ok(parse_collection_schema(response.get("data")))
 }
 
-/// Turn a failed query into an agent-usable diagnostic by introspecting the
-/// collection; when introspection itself fails (e.g. the failure was
-/// transport-level), the original error text is preserved unchanged.
 async fn enriched_query_failure(
     graphql: &str,
     params: &DefraQueryParams,
@@ -53,14 +42,6 @@ async fn enriched_query_failure(
     )
 }
 
-/// Build + execute a structured query over GraphQL-over-HTTP and return the
-/// `{collection, count, results}` envelope. Shared by the CLI command and the
-/// MCP tool so both honor the same secret guard + scope.
-///
-/// `fields: ["*"]` is discovery mode and returns the collection's queryable
-/// field inventory instead of documents. On a GraphQL failure the collection
-/// is introspected and the error enriched into a field-level diagnostic; if
-/// introspection itself fails, the raw errors are surfaced unchanged.
 pub(crate) async fn run_defra_query(
     graphql: &str,
     params: &DefraQueryParams,
@@ -110,8 +91,6 @@ pub(crate) async fn run_defra_query(
     }))
 }
 
-/// Parse the `{collection, filter, fields, limit, allow_collections}` CLI args
-/// into the structured contract.
 pub(crate) fn params_from_args(args: &QueryArgs) -> Result<(DefraQueryParams, CollectionScope)> {
     let filter = match args
         .filter

@@ -20,15 +20,10 @@ use std::io::Cursor;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Deterministic, admin-bound network id computed before signing.
-///
-/// `network_id` is itself a signed `AgentNetwork` field, so it cannot depend on
-/// DefraDB's `_docID` or any other storage detail created after insertion.
 pub fn derive_network_id(admin_did: &str, name: &str) -> String {
     format!("net-{}", digest16_base58(admin_did, name))
 }
 
-/// Deterministic composite key for `NetworkMembership(network_id, member_did)`.
 pub fn derive_membership_key(network_id: &str, member_did: &str) -> String {
     format!("mem-{}", digest16_base58(network_id, member_did))
 }
@@ -98,8 +93,6 @@ pub struct JoinRequestRecord {
 macro_rules! signing_payload_impl {
     ($t:ty) => {
         impl $t {
-            /// CBOR of this record with `sig` zeroed — the bytes signed/verified.
-            /// Mirrors [`crate::pairing_token::signing_payload`].
             pub fn signing_payload(&self) -> Vec<u8> {
                 let mut unsigned = self.clone();
                 unsigned.sig = Vec::new();
@@ -116,12 +109,6 @@ signing_payload_impl!(MembershipRecord);
 signing_payload_impl!(EndpointRecord);
 signing_payload_impl!(JoinRequestRecord);
 
-/// Network bootstrap pointer: identifies a network and how to reach its admin.
-///
-/// Distinct from the pairwise `dapair1-` invite — it carries no membership
-/// grant. A joiner decodes this to learn the network's id, the admin DID to
-/// trust (TOFU), and the admin's transport `ticket`, then sends a
-/// `NetworkJoinRequest`; the admin authors the actual `NetworkMembership`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkPointer {
     pub v: u8,
@@ -134,9 +121,7 @@ pub struct NetworkPointer {
     pub sig: Vec<u8>,
 }
 
-/// Prefix for all encoded network pointers.
 pub const NETWORK_POINTER_PREFIX: &str = "danet1-";
-/// Current network-pointer version.
 pub const NETWORK_POINTER_VERSION: u8 = 1;
 
 impl NetworkPointer {
@@ -153,7 +138,6 @@ impl NetworkPointer {
     }
 }
 
-/// Encode a pointer as `NETWORK_POINTER_PREFIX` + base58(CBOR(pointer)).
 pub fn encode_pointer(p: &NetworkPointer) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(p, &mut bytes).context("encoding network pointer")?;
@@ -163,10 +147,6 @@ pub fn encode_pointer(p: &NetworkPointer) -> Result<String> {
     ))
 }
 
-/// Decode a `NETWORK_POINTER_PREFIX`-prefixed pointer string.
-///
-/// Returns an error (mentioning "re-issue with a newer gents") for any
-/// pointer whose `v` field is not [`NETWORK_POINTER_VERSION`].
 pub fn decode_pointer(raw: &str) -> Result<NetworkPointer> {
     let encoded = raw
         .trim()

@@ -1,13 +1,9 @@
-//! Desktop schema helpers — registration routes through the shared
-//! `gents-migration` engine so desktop and runtime share one lineage.
-
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::schemas::{
     ALL_COLLECTION_NAMES, BRANCHABLE_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES,
 };
 
-/// Register baseline + verify lineage (same entry point as the runtime).
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     gents_migration::ensure_migrations(node)
         .await
@@ -16,8 +12,7 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
         .context("ensure_migrations")
 }
 
-/// Alias — full baseline only (no partial registration).
-#[allow(dead_code)] // public test/bootstrap alias
+#[allow(dead_code)]
 pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
     ensure_runtime_schemas(node).await
 }

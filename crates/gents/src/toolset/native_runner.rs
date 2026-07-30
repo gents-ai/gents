@@ -11,10 +11,6 @@ use crate::tool_call_lifecycle::runtime::{
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
-/// Hard backstop for a single filesystem-tool call (#729). The runner bounds
-/// itself with in-process walk budgets and returns partial results well
-/// before this; the cap only kills a wedged runner. Without it the only
-/// bound is the request deadline, which can be hours.
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
 
 fn effective_deadline(
@@ -25,10 +21,6 @@ fn effective_deadline(
     request_deadline.map_or(cap, |deadline| deadline.min(cap))
 }
 
-/// Result for a killed runner. The lifecycle timeout marker (which the hook
-/// maps to the tool-call timedOut terminal and request termination) is only
-/// legal when the REQUEST deadline has actually expired — the per-call cap
-/// expiring first is an ordinary tool failure the model can react to.
 fn fs_runner_timed_out_result(
     tool_name: &str,
     request_deadline: Option<chrono::DateTime<chrono::Utc>>,

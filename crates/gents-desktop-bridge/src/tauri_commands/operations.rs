@@ -1,8 +1,3 @@
-//! Tauri commands for operator-surfaces panels. Stubs return an `Err`
-//! describing the panel issue that will replace them; real implementations
-//! land via their own panel PRs. `desktop_operations_snapshot` (panel
-//! #276) and the MCP-health commands (panel #278) are live.
-
 use crate::error::BridgeError;
 
 use std::sync::Arc;
@@ -35,10 +30,6 @@ use crate::types::{
 
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
 
-/// Number of most-recent `InferenceCall` rows surfaced per backend in the
-/// health panel. Picked to give the operator enough history to see a
-/// pattern (e.g. consecutive `QueueFull` rejections) without overwhelming
-/// the row's expanded detail.
 const RECENT_CALLS_PER_BACKEND: usize = 10;
 
 #[tauri::command]
@@ -59,11 +50,6 @@ pub async fn desktop_operations_snapshot(
             BridgeError::from_legacy_message("no agent selected; pass agentDid explicitly")
         })?;
 
-    // 1) In-process native executor snapshot. The runtime exposes this via
-    //    `gents::active_native_executors()` (re-exported from
-    //    `gents::native_executor_status`). Cast `pid: i32` -> `u32`
-    //    for the view shape (the DefraDB schema has no native exec rows;
-    //    this is purely in-process).
     let native_executors: Vec<NativeExecutorStatusView> =
         gents::native_executor_status::active_native_executors()
             .into_iter()
@@ -77,18 +63,10 @@ pub async fn desktop_operations_snapshot(
             })
             .collect();
 
-    // 2) Query only live background calls owned by the selected deployment.
-    //    Replicated stores can contain rows for many agents, so treating the
-    //    local node as an ownership boundary leaks another deployment's work
-    //    into this panel.
     let tool_call_rows = fetch_background_tool_calls(&core, &agent_did)
         .await
         .map_err(|e| format!("failed to query AgentToolCall: {e}"))?;
 
-    // 3) Build a minimal liveness view. The request / active_tool_call /
-    //    expired_processing_count fields are populated by other panels
-    //    (#283/#284); panel #277 only owns the native executor list and
-    //    the backgrounded-tools projection.
     let liveness = RuntimeLivenessView {
         expired_processing_count: 0,
         requests: Vec::new(),
@@ -107,18 +85,10 @@ pub async fn desktop_operations_snapshot(
         liveness_unavailable_reason: None,
         backgrounded_tools,
         stuck_diagnostics,
-        lineage: None, // owned by panel #285 (subagent lineage view)
+        lineage: None,
     })
 }
 
-/// Query DefraDB for backgrounded `AgentToolCall` rows on the local node.
-///
-/// We deliberately use `ClientCore::node()` -> `EmbeddedNode::execute()`
-/// here rather than `graphql_for_agent`: `graphql_for_agent` returns a
-/// remote-peer endpoint URL (`Option<String>`) for cross-deployment HTTP
-/// queries, but operator-surfaces panels read the operator's own local
-/// replicated store. The explicit `agent_did` filter is the deployment
-/// boundary inside that shared store.
 async fn fetch_background_tool_calls(
     core: &Arc<ClientCore>,
     agent_did: &str,
@@ -265,9 +235,6 @@ pub async fn desktop_list_subagent_tree(
         BridgeError::from_legacy_message("desktop bridge has not finished bootstrapping")
     })?;
 
-    // Cross-node lineage: the walk fans out to the local node plus every
-    // saved peer with a GraphQL endpoint, so children spawned on other
-    // deployments resolve regardless of which agent is selected.
     let mut accesses = vec![SubagentTreeAccess {
         label: None,
         access: TreeQueryAccess::Local(core.node_arc()),
@@ -299,10 +266,6 @@ pub async fn desktop_list_subagent_tree(
     })
 }
 
-/// Translate the agent's GraphQL URL into the runtime's `/subagents/tree`
-/// endpoint URL. Mirrors the path-stripping logic in
-/// `gents_desktop_core::local_runtime::runtime_status_url` but targets
-/// the R5 subagent-lineage handler.
 #[cfg(test)]
 fn subagent_tree_url(
     graphql: &str,
@@ -488,10 +451,6 @@ pub async fn list_backends_with_health_for_core(
             enabled: backend.enabled,
             probe_status: backend.probe_status,
             display_state,
-            // `last_probe` is a DateTime on the schema but not currently
-            // surfaced via `InferenceBackend::from_value`. Returning None
-            // keeps the wire shape stable for a follow-up that exposes
-            // probe metadata; the panel renders "never" when absent.
             last_probe: None,
             max_concurrent: backend.max_concurrent,
             max_queue_depth: backend.max_queue_depth,
@@ -587,9 +546,6 @@ fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
     }
 }
 
-/// Panel #278: returns the persisted `ToolServiceHealthState` rows the
-/// agent writes every health-check cycle. The desktop renders these into
-/// the MCP health status panel — see `apps/gents-desktop/src/components/mcpHealth/`.
 #[tauri::command]
 pub async fn desktop_list_mcp_services_with_health(
     state: State<'_, DesktopAppState>,
@@ -610,10 +566,6 @@ pub async fn list_mcp_services_with_health_for_core(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
-/// Panel #278: kicks off a one-shot probe of a single registered MCP
-/// service and returns the resulting `ProbeResult`. K-state is not
-/// updated by this call — the running agent's health checker remains the
-/// authority for `failure_count` / `backoff_until` / persisted state.
 #[tauri::command]
 pub async fn desktop_probe_mcp_service(
     state: State<'_, DesktopAppState>,
@@ -636,9 +588,6 @@ pub(crate) async fn probe_mcp_service_for_core(
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
 }
 
-/// Holds strip: list the selected agent's tool calls awaiting operator
-/// approval. Routed per-agent — remote deployments answer from their own
-/// node, where the hold (and its verdict watcher) actually live.
 #[tauri::command]
 pub async fn desktop_list_tool_call_holds(
     state: State<'_, DesktopAppState>,
@@ -674,8 +623,6 @@ pub async fn list_tool_call_holds_for_core(
         .collect())
 }
 
-/// Approve or deny a held tool call. The approver DID recorded on the
-/// decision document is always the desktop's own principal identity.
 #[tauri::command]
 pub async fn desktop_resolve_tool_call_hold(
     state: State<'_, DesktopAppState>,

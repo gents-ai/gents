@@ -54,29 +54,18 @@ pub(crate) const RESUME_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 /// within one round-trip.
 pub(crate) const RAPID_STREAM_DEATH_THRESHOLD: Duration = Duration::from_secs(10);
 
-/// Consecutive resume *errors* tolerated for one stream before the session
-/// is poisoned.
 pub(crate) const MAX_CONSECUTIVE_RESUME_FAILURES: usize = 3;
 
-/// Per-service counters for the resume/re-init lifecycle, so a flapping MCP
-/// server is visible without log archaeology. Shared between the pool (which
-/// counts re-inits and connect failures) and each connection's
-/// [`SessionResumePolicy`] (which counts resume attempts and failures).
 #[derive(Debug, Default)]
 pub struct McpResumeStats {
-    /// SSE reconnects granted by the policy (resume attempts).
     pub resume_attempts: AtomicU64,
-    /// Resume attempts that errored (consulted on the transport error path).
     pub resume_failures: AtomicU64,
     /// Sessions declared terminal (empty-stream signature or failure cap).
     pub sessions_poisoned: AtomicU64,
-    /// Poisoned connections replaced by the pool with a fresh session.
     pub session_reinits: AtomicU64,
-    /// Failed attempts to establish a fresh connection.
     pub connect_failures: AtomicU64,
 }
 
-/// `SseRetryPolicy` for one pooled MCP connection. See the module docs.
 #[derive(Debug)]
 pub(crate) struct SessionResumePolicy {
     service_id: String,
@@ -108,8 +97,6 @@ impl SessionResumePolicy {
         Arc::new(Self::new(service_id, Arc::new(McpResumeStats::default())))
     }
 
-    /// True once resume has been declared terminal for this session. The
-    /// pool must drop the connection and connect fresh instead of reusing it.
     pub(crate) fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
     }
@@ -156,8 +143,6 @@ impl SseRetryPolicy for SessionResumePolicy {
             return None;
         }
 
-        // rmcp's error path passes the count of consecutive reconnect
-        // failures for one stream (1-based); cap it.
         if current_times >= 1 {
             self.stats.resume_failures.fetch_add(1, Ordering::Relaxed);
             if current_times >= MAX_CONSECUTIVE_RESUME_FAILURES {
@@ -167,9 +152,6 @@ impl SseRetryPolicy for SessionResumePolicy {
             return Some(self.grant(RESUME_RECONNECT_DELAY));
         }
 
-        // Graceful-close path: rmcp always passes 0 here, so the previous
-        // grant's stream lifetime is the only signal that distinguishes a
-        // healthy long-lived stream from a resume that came back dead.
         let previous_grant = *self.last_grant.lock().expect("last_grant lock");
         if let Some(grant) = previous_grant {
             let stream_lifetime = Instant::now()

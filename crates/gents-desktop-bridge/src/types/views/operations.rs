@@ -1,9 +1,3 @@
-//! Operator-surfaces view types per
-//! docs/superpowers/specs/2026-05-20-desktop-operator-surfaces-design.md (git history)
-//! "Operations Snapshot Type" (line ~799). Stubs only — the panels in their
-//! own PRs (#276/#277/#278/#281/#283/#284/#285/#286/#288) build and populate
-//! these structs.
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -315,9 +309,9 @@ pub struct McpServiceProbeResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedCancelCauseView {
-    pub cause: String,      // "userCancelled" | "interrupted" | "deadline" | "unknown"
-    pub source: String, // "requestInterrupt" | "parentCascade" | "deadline" | "toolLifecycle" | "responseInterruptedAt" | "unresolved"
-    pub confidence: String, // "direct" | "derived"
+    pub cause: String,
+    pub source: String,
+    pub confidence: String,
     pub at: Option<String>,
     pub evidence: Vec<String>,
 }

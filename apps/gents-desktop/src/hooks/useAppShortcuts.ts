@@ -7,10 +7,6 @@ export type AppShortcutHandlers = {
   toggleHelp: () => void;
 };
 
-/// App-level keyboard shortcuts: Cmd/Ctrl+1..4 switch views, Cmd/Ctrl+N
-/// starts a conversation, Cmd/Ctrl+K focuses the composer, Cmd/Ctrl+/ shows
-/// the shortcut reference. Handlers ride a ref so the window listener is
-/// installed exactly once.
 export function useAppShortcuts(handlers: AppShortcutHandlers) {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;

@@ -2,19 +2,8 @@ import Proofs.Recovery.Contract
 import Proofs.Properties.Liveness
 import Proofs.StreamingResponse.State
 
-/-! Request and streaming response startup-recovery sweep contracts. -/
-
 namespace Recovery
 
-/-! ## Request lifecycle recovery -/
-
-/-
-`AgentResponse` is the durable terminal-repair intent. The owned loop persists
-the response outcome before (or atomically with) the request terminal edge. If
-that request write exhausts its bounded immediate retry, the response survives
-restart and the periodic/startup repair path deterministically finishes the
-same completed, failed, or interrupted edge without re-executing the request.
--/
 inductive DurableRequestOutcome where
   | absent
   | completed
@@ -122,15 +111,9 @@ def requestRecoveryEquivalence : RecoveryEquivalence requestRecoverySweep :=
   , h_recover_eq_uninterrupted := requestRecover_matches_uninterrupted
   }
 
-/-! ## Streaming response recovery -/
-
 abbrev ResponseRecoveryStatus := StreamingResponse.Status
 
 namespace ResponseRecoveryStatus
-  /-- Contract name (not the DefraDB persistence name). `toContract` and
-  `StreamingResponse.Status.toDefraDB` serve different consumers: the
-  contract uses Lean-variant names ("completed"), while the persistence
-  field stringifies to "complete" (matching the Rust enum). -/
   def toContract : StreamingResponse.Status → String
     | .streaming => "streaming"
     | .completed => "completed"

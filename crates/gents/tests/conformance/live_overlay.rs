@@ -1,11 +1,3 @@
-//! Integration test pinning the issue #64 live-tail contract to the
-//! generated Lean LiveOverlay case table.
-//!
-//! Each case asserts that the rendered overlay decision computed from
-//! `(response_status, materialized, derived_turn, hasContent, hasReasoning)`
-//! matches `expectOverlay` from the Lean case table emitted by
-//! `Proofs.Conformance.Contracts`.
-
 use gents_protocol::client_protocol::ClientTurnState;
 
 use crate::lean_vocab_test::{lean_live_overlay_cases, LeanLiveOverlayCase};
@@ -22,10 +14,6 @@ fn parse_turn(label: &str) -> Option<ClientTurnState> {
     }
 }
 
-/// Mirror of the Lean `projectActiveOverlay` decision (see
-/// `Proofs/ClientShell/Projection.lean`). Kept inline in the test rather than
-/// imported, so the test can fail loudly if either the bridge or the frontend
-/// drifts from the contract.
 fn should_show_overlay(
     response_status: &str,
     materialized: bool,
@@ -76,7 +64,6 @@ fn live_overlay_cases_match_lean_table() {
             expected = case.expect_overlay,
         );
 
-        // Sanity: terminal turns must hide the overlay regardless of content.
         if case.turn_terminal {
             assert!(
                 !case.expect_overlay,
@@ -85,11 +72,6 @@ fn live_overlay_cases_match_lean_table() {
             );
         }
 
-        // The `precedingToolCalls` field disambiguates otherwise field-identical
-        // streaming cases. The runtime predicate ignores it (the live-tail
-        // decision does not depend on tool-call prefix shape) — referencing the
-        // field here keeps the snapshot pinned and prevents Lean from silently
-        // dropping the column.
         let _ = case.preceding_tool_calls;
     }
 }

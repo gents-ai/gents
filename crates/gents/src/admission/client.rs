@@ -12,12 +12,6 @@ use super::stream_guard::hold_stream_guard;
 use super::AdmissionRegistry;
 use crate::watcher::AgentRequest;
 
-/// Error message used when a completion/stream call is cancelled by request
-/// interrupt signal via the inference_token in AdmissionCallContext. Callers
-/// that need to distinguish cancellation from other provider errors today
-/// must string-match on this value; a future rig update with a
-/// `CompletionError::Cancelled` variant would let them pattern-match
-/// structurally.
 const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interrupt";
 
 #[derive(Clone)]
@@ -110,11 +104,6 @@ where
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         let mut permit = self.admission.acquire_current_call().await?;
         let token = current_context().ok().and_then(|c| c.inference_token);
-        // The token here covers pre-stream cancellation while the provider
-        // future is producing a stream handle. After `hold_stream_guard`
-        // owns the permit, mid-stream interrupts are handled by the daemon:
-        // it cancels the request token and drops the stream, so the permit's
-        // Drop path observes the cancelled token and persists `cancelled`.
         match token {
             Some(token) => {
                 tokio::select! {
@@ -169,21 +158,11 @@ pub(crate) struct AdmissionCallContext {
     pub(super) backend_id: String,
     pub(super) behavior_id: String,
     pub(super) agent_did: String,
-    /// Stable per-conversation id, emitted as `x-session-id` on inference
-    /// requests for sticky-session load-balancer routing (issue #447).
     pub(super) session_id: String,
     pub(super) call_kind: CallKind,
     pub(super) attempt: i64,
     pub(super) call_seq: Arc<AtomicU64>,
-    /// Cancellation token tied to the request's lifecycle. When cancelled,
-    /// the `AdmittedCompletionModel` races the inner call against it and
-    /// calls `permit.mark_interrupted()` before returning a cancelled
-    /// error. `None` means no cancellation observation (e.g. one-shot CLI
-    /// calls without a daemon-side interrupt observer).
     pub(super) inference_token: Option<CancellationToken>,
-    /// Daemon-owned terminal failure reason for cases where an outer runtime
-    /// condition intentionally drops a guarded stream before the stream can
-    /// yield a provider error itself.
     pub(super) terminal_failure_reason: Option<TerminalFailureReasonObserver>,
 }
 
@@ -245,10 +224,6 @@ pub(crate) async fn scope_call<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
-/// Like `scope_call`, but also attaches a cancellation token that the
-/// `AdmittedCompletionModel` observes during the inner completion/stream
-/// call. When the token cancels, the permit is marked as interrupted so
-/// the `InferenceCall` row lands as `cancelled` rather than `failed`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn scope_call_with_token<T>(
     call_kind: CallKind,
@@ -301,9 +276,6 @@ pub(super) fn current_context() -> Result<AdmissionCallContext, CompletionError>
         .map_err(|_| CompletionError::ProviderError("missing inference admission context".into()))
 }
 
-/// The session id of the in-flight inference request, if called within a
-/// request scope. Used to tag outbound inference requests with `x-session-id`
-/// for sticky-session routing (issue #447); returns `None` outside a scope.
 pub(crate) fn current_session_id() -> Option<String> {
     ADMISSION_CALL_CONTEXT
         .try_with(|context| context.session_id.clone())

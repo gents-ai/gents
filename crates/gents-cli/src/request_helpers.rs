@@ -114,9 +114,6 @@ pub(crate) fn materialized_message_query(session_id: &str, sequence: i64) -> Str
     )
 }
 
-/// Query that yields the subset of `AgentRequest` fields the waiter uses to
-/// decide when a request has reached a terminal lifecycle state (even if no
-/// `AgentResponse` row ever materializes).
 pub(crate) fn request_terminal_query(request_id: &str) -> String {
     format!(
         r#"{{
@@ -136,10 +133,6 @@ pub(crate) fn request_terminal_query(request_id: &str) -> String {
     )
 }
 
-/// Returns `true` when a request's lifecycle_state is one of the terminal
-/// states that the waiter should stop polling on. `interrupted` counts even
-/// though the response row may stay `status="streaming"` with partial content
-/// and a stamped `interrupted_at`.
 pub(crate) fn is_terminal_lifecycle_state(state: &str) -> bool {
     matches!(
         state,
@@ -223,10 +216,6 @@ pub(crate) async fn hydrate_materialized_response_content(
         }
     }
 
-    // A terminal response can legitimately materialize to no visible text,
-    // for example after a final assistant message that only closes a tool
-    // loop. The waiter only needs to know that the referenced message row
-    // exists; visible content is optional.
     Ok(true)
 }
 
@@ -394,29 +383,6 @@ fn metadata_with_selected_skill_ids(
     Some(Some(value.to_string()))
 }
 
-/// Poll both `AgentRequest.lifecycle_state` and the latest `AgentResponse`
-/// row until either:
-///   - the request reaches a terminal lifecycle state (`completed`, `failed`,
-///     `superseded`, `dead`, `interrupted`), or
-///   - the response reaches a historical terminal status (`complete`,
-///     `error`).
-///
-/// Returning is intentionally lenient on partial data:
-///   - `interrupted` requests stamp `interrupted_at` before terminalizing the
-///     response as `error`, so callers can observe a durable interrupt marker
-///     even if the request lifecycle reaches `interrupted` first.
-///   - historical/background writers have used both `complete` and
-///     `completed`; both spellings are treated as terminal success.
-///   - `dead`/`Stale` requests (TTL'd before ever claiming) may have no
-///     `AgentResponse` row at all; in that case we synthesize one and rely on
-///     the top-level `request` field for the terminal info.
-///
-/// The returned JSON is backward-compatible with the old response-only shape:
-/// all previous `AgentResponse` fields remain at the top level, and a new
-/// `request` field carries the lifecycle view for callers that want it. For
-/// completed live-tail responses, `content`/`reasoning` are hydrated from the
-/// materialized `AgentMessage` in the returned JSON only; the persisted
-/// `AgentResponse` row remains the live-tail surface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitProgressMarker {
     request_lifecycle_state: Option<String>,
@@ -499,9 +465,6 @@ pub(crate) async fn wait_for_terminal_response(
     let mut last_progress_marker: Option<WaitProgressMarker> = None;
 
     loop {
-        // Fetch request + response in sequence (cheap on the embedded node;
-        // also keeps the "no GraphQL batching" contract simple for the
-        // HTTP path).
         let request_row = {
             let query = request_terminal_query(request_id);
             let response = post_graphql(graphql, &query).await?;
@@ -557,11 +520,6 @@ pub(crate) async fn wait_for_terminal_response(
             } else {
                 None
             };
-            // Build the return value: prefer the real response row when present
-            // (interrupted / streaming-with-partial-content / complete / error).
-            // If no row ever materialized (dead/Stale pre-claim), synthesize a
-            // minimal one so older consumers that read top-level fields don't
-            // explode.
             let mut envelope = response_row.unwrap_or_else(|| {
                 serde_json::json!({
                     "request_id": request_id,
@@ -713,8 +671,6 @@ pub(crate) fn print_json(value: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Parse a short human duration (e.g. `30s`, `5m`, `2h`, `1d`). Bare numbers
-/// are treated as seconds for convenience.
 pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration> {
     let s = raw.trim();
     if s.is_empty() {
@@ -735,9 +691,6 @@ pub(crate) fn parse_duration_suffix(raw: &str) -> Result<Duration> {
     Ok(Duration::from_secs(secs))
 }
 
-/// Resolve the `--valid-until` flag to an absolute deadline. `None` on the
-/// CLI defaults to `now + 5m` — the standard TTL for interactive requests.
-/// Pass `"none"` or `"0"` to explicitly disable the TTL for this submission.
 pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTime<Utc>>> {
     match raw.map(str::trim) {
         None => Ok(Some(Utc::now() + chrono::Duration::minutes(5))),
@@ -750,10 +703,6 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
     }
 }
 
-/// Minimal projection of an AgentRequest used by `resend` to copy over
-/// submission inputs. Queried via the HTTP GraphQL endpoint. Carries the
-/// sampling overrides and `metadata` so resend preserves submitter intent —
-/// dropping them would silently change model behavior on retry.
 #[derive(Debug, Clone)]
 pub(crate) struct StaleRequestView {
     pub(crate) agent_did: String,

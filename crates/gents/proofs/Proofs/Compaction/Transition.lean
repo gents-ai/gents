@@ -1,24 +1,5 @@
 import Proofs.Compaction.State
 
-/-!
-# Compaction Transition
-
-`TranscriptReducer := PromptView → PromptView` and the `IsValidReducer`
-typeclass -- the contract any transcript-reduction strategy must satisfy.
-
-Each instance picks its own `gate` predicate (matches Rust's per-strategy
-`needs_compaction`). The `identityBelowGate` and `identityUnlessSafe`
-fields capture the conditional-fixpoint shape: the reducer is the
-identity when its gate is false OR when the view is not safe to reduce.
-`reapplyPreservesCoh` is the invariant-idempotence obligation -- strict
-`r (r v) = r v` would fail for LLM-based strategies (Summarize,
-StripThenSummarize) whose summary output is non-deterministic, but
-re-application must still preserve `ViewCoherent`.
-
-Witness instances (`identityReducer`, `stripToolResultsReducer`) ship
-in subsequent commits.
--/
-
 namespace Compaction
 
 abbrev TranscriptReducer := PromptView → PromptView
@@ -44,10 +25,6 @@ namespace Compaction
 
 open Transcript (MessageKind)
 
-/-- Abstract analogue of the Rust stub-payload mutation: the textual
-content of a tool-result message is replaced with a stub, but the
-linking metadata (callId, key) is preserved. Since the model abstracts
-away payload text, this is case-wise the identity on MessageKind. -/
 def stubMessageKind : MessageKind → MessageKind
   | .toolResult callId key => .toolResult callId key
   | .assistantToolCalls callIds => .assistantToolCalls callIds
@@ -72,11 +49,6 @@ theorem stubMessages_id (msgs : List Transcript.MessageRow) :
   rw [show stubMessageRow = id from funext stubMessageRow_id]
   exact List.map_id msgs
 
-/-- Abstract analogue of Rust's `CompactionStrategy::StripToolResults`.
-Replaces each tool-result payload with a stub. In the model this is
-propositionally identity-shaped (the textual payload is abstracted away),
-but the typeclass instance still has to discharge `preservesPairs`,
-`preservesOrder`, etc. via `stubMessages_id` -- see Properties.lean. -/
 def stripToolResultsReducer : TranscriptReducer := fun v =>
   { v with messages := stubMessages v.messages }
 
@@ -114,8 +86,6 @@ end Compaction
 
 namespace Compaction
 
-/-- The trivial reducer -- does nothing. Witnesses that `IsValidReducer`
-is non-vacuous. -/
 def identityReducer : TranscriptReducer := fun v => v
 
 instance instIsValidReducerIdentity : IsValidReducer identityReducer where

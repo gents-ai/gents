@@ -25,12 +25,6 @@ use super::network_admin::{load_membership_record, load_single_network_record};
 use super::output::resolve_p2p_peer_id;
 use super::pairings::resolve_pairing_template;
 
-/// Binary QR envelope for a gzip-compressed CBOR bearer token.
-///
-/// The normal copy/paste token remains `dabear1-` + base58(CBOR). Encoding
-/// that text directly in a QR expands the payload by roughly 37%, producing a
-/// code wider than many terminals. The scanner recognizes this compact,
-/// QR-only envelope and reconstructs the exact normal token before pairing.
 const BEARER_QR_MAGIC: &[u8] = b"dabear1z\0";
 
 pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
@@ -82,8 +76,6 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
         "graphql": graphql,
         "token": encoded,
         "peer_id": token.peer_id,
-        // `issuer_did` is the v3 vocabulary; `did` is kept as a backward-compatible
-        // alias so existing tooling/scripts that read `.did` keep working.
         "issuer_did": token.issuer_did,
         "did": token.issuer_did,
         "network_id": token.network_id,
@@ -94,11 +86,6 @@ pub(super) async fn p2p_invite(args: P2pInviteArgs) -> Result<()> {
     Ok(())
 }
 
-/// Mint an audience-unbound bearer invite (`dabear1-`): no membership grant is
-/// embedded and no reciprocal intent is recorded — the running daemon's
-/// bearer-claim reconciler authors both at claim time, bound to whichever DID
-/// presents a valid self-signed claim first. Single-use (issuer-side nonce
-/// burn) and 5-minute expiry.
 async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -147,7 +134,6 @@ async fn p2p_invite_bearer(args: P2pInviteArgs) -> Result<()> {
     let encoded = encode_bearer(&token)?;
 
     if args.qr {
-        // QR goes to stderr so stdout stays a single parseable JSON object.
         let payload = compact_bearer_qr_payload(&token)?;
         let code = qrcode::QrCode::with_error_correction_level(&payload, qrcode::EcLevel::L)
             .context("encoding bearer invite token as a QR code")?;
@@ -215,9 +201,6 @@ fn compact_bearer_qr_payload(token: &BearerInviteToken) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-/// Resolve this node's (peer id, dialable ticket) for an invite: prefer the
-/// LIVE shareable address (see `current_invite_token_signed` for why), fall
-/// back to the persisted listen address only when the daemon is unreachable.
 async fn resolve_invite_transport(home: Option<&Path>, graphql: &str) -> Result<(String, String)> {
     use crate::http::version::{NodeIdentityResponse, P2pShareableAddressResponse};
 
@@ -283,14 +266,6 @@ async fn current_invite_token_signed(
     network: NetworkRecord,
 ) -> Result<InviteToken> {
     let home_dir = resolve_home_dir(home);
-    // Prefer the LIVE shareable address: it is the runtime's best-known *dialable*
-    // address (NAT/relay-aware), whereas the persisted runtime-state file carries
-    // only listen-form addresses, which are not guaranteed dialable under
-    // no-relay/no-discovery. An un-dialable invite ticket is a permanent
-    // replication-liveness failure, not a slow one — see PairingTransport.tla
-    // (the `Dialable = FALSE` counterexample) and the Lean
-    // `convergence_requires_successful_install` obligation. The persisted path is
-    // an offline fallback used only when the live HTTP endpoint is unreachable.
     let mut token = match build_live_token(home, graphql, template, identity, &grant, &network)
         .await
     {
@@ -303,7 +278,6 @@ async fn current_invite_token_signed(
         }
     };
 
-    // Sign: compute payload over token with sig=[] then fill in the signature.
     let payload = signing_payload(&token);
     let sig = identity
         .sign(&payload)
@@ -313,9 +287,6 @@ async fn current_invite_token_signed(
     Ok(token)
 }
 
-/// Generate a fresh single-use invite nonce. A v4 UUID is the established
-/// random-id primitive in this crate (see `request_helpers`); the join path
-/// records it in a consumed-nonce ledger to make a token single-use (Task C2).
 fn mint_nonce() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -337,10 +308,6 @@ fn build_persisted_token(
     let Some(peer_id) = normalize_optional_string(runtime_state.p2p_peer_id.as_deref()) else {
         return Ok(None);
     };
-    // Offline fallback only (the live shareable address is preferred — see
-    // `current_invite_token_signed`). Listen-form addresses are not guaranteed
-    // dialable under no-relay/no-discovery; this path runs only when the live
-    // HTTP endpoint is unreachable, where no better address is available.
     let Some(ticket) = runtime_state
         .p2p_listen_addresses
         .iter()
@@ -360,7 +327,7 @@ fn build_persisted_token(
         template: template.to_string(),
         grant: grant.clone(),
         network: network.clone(),
-        sig: Vec::new(), // filled in by caller
+        sig: Vec::new(),
     }))
 }
 
@@ -397,7 +364,6 @@ async fn build_live_token(
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
 
-    // Prefer the identity DID; fall back to resolve_agent_did for forward compat.
     let issuer_did = {
         let id_did = identity.did();
         if id_did.is_empty() {
@@ -418,7 +384,7 @@ async fn build_live_token(
         template: template.to_string(),
         grant: grant.clone(),
         network: network.clone(),
-        sig: Vec::new(), // filled in by caller
+        sig: Vec::new(),
     })
 }
 

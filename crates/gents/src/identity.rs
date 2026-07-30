@@ -130,12 +130,6 @@ impl AgentIdentity for KeyIdentity {
     }
 }
 
-/// Agent identity backed by a DefraDB signing identity registered in this process.
-///
-/// DefraDB's identity registry is process-local. This adapter is for embedded
-/// hosts that have already registered a local key or remote signer before
-/// constructing the agent runtime; it is not a persistent identity loader for a
-/// fresh `gents server` process.
 pub struct RegisteredIdentity {
     did: String,
     service_account: Option<ServiceAccount>,
@@ -516,8 +510,6 @@ fn lowercase_hex(bytes: &[u8]) -> String {
 }
 
 fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
-    // Fast path: the process-local registry (populated when a KeyIdentity or
-    // RegisteredIdentity is constructed in this process).
     if let Some(key) = known_public_keys()
         .read()
         .expect("known public keys lock poisoned")
@@ -527,10 +519,6 @@ fn known_public_key_for_did(did: &str) -> Result<KnownPublicKey> {
         return Ok(key);
     }
 
-    // Fallback: `did:key` DIDs are self-describing — the public key is encoded
-    // in the DID string itself. This makes cross-node verification possible
-    // (e.g. node B verifying a signed invite from node A) without requiring A's
-    // key to be pre-registered in B's process.
     if did.starts_with("did:key:") {
         let (key_type, bytes) = crypto::parse_did_key(did)
             .map_err(anyhow::Error::from)

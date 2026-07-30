@@ -185,7 +185,6 @@ pub(super) fn handle_request(
             ))
         }
         ("POST", "/desktop/peer/status") => {
-            // Live harness probes by address (fleet-admin probe path).
             let request =
                 decode::<PeerProbeRequest>(&request.body, "decoding peer status request")?;
             let payload =

@@ -26,8 +26,6 @@ pub enum Collection {
 }
 
 impl Collection {
-    /// All variants in declaration order. Not sorted by `apply_order()` —
-    /// callers that need apply-ordered iteration must sort explicitly.
     pub const ALL: [Collection; 12] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
@@ -43,7 +41,6 @@ impl Collection {
         Collection::EventTrigger,
     ];
 
-    /// Top-level file name, only for collections that don't use a directory form.
     pub fn file_name(self) -> Option<&'static str> {
         match self {
             Collection::AgentPrincipal => Some("agent-principal.json"),
@@ -51,7 +48,6 @@ impl Collection {
         }
     }
 
-    /// Directory name for the per-doc subdirectory form.
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
             Collection::AgentPrincipal => None,
@@ -65,14 +61,10 @@ impl Collection {
             Collection::PeerPairingDesired => Some("peer-pairings"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
-            // EventTrigger uses underscore (not hyphen) to match the schema
-            // field name that originated in PR #68; the inconsistency with
-            // other hyphenated dir names is intentional and documented.
             Collection::EventTrigger => Some("event_triggers"),
         }
     }
 
-    /// DefraDB GraphQL type name for this collection.
     pub fn graphql_type(self) -> &'static str {
         match self {
             Collection::AgentPrincipal => "AgentPrincipal",
@@ -90,7 +82,6 @@ impl Collection {
         }
     }
 
-    /// Unique-id field name used in `filter: { <field>: { _eq: ... } }`.
     pub fn unique_field(self) -> &'static str {
         match self {
             Collection::AgentPrincipal => "agent_did",
@@ -128,18 +119,11 @@ impl Collection {
         }
     }
 
-    /// Whether this collection's live config projection is provenance-scoped
-    /// to the current manifest owner. Such rows converge on manifest absence
-    /// without requiring generic `--prune`.
     pub fn manifest_authoritative(self) -> bool {
         matches!(self, Collection::PeerPairingDesired)
     }
 }
 
-/// Snake-case plural identifier used as the `ConfigExportBundle` /
-/// `DesiredStateManifest` field name for this collection. Note the
-/// irregular plural `tool_service_registries` — preserve it when
-/// renaming variants.
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {

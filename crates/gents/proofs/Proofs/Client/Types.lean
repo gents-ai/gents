@@ -1,12 +1,5 @@
 import Proofs.Request
 
-/-!
-# Client Turn Types
-
-Client-visible turn states, request/response snapshots, and pure derivation functions.
--/
-
-/-- The 6 client-visible turn states. -/
 inductive ClientTurnState where
   | waitingForClaim
   | streaming
@@ -18,8 +11,6 @@ inductive ClientTurnState where
 
 namespace ClientTurnState
 
-/-- Client state ordering for monotonicity.
-    Terminal states share rank 2 (incomparable). -/
 def rank : ClientTurnState → Nat
   | .waitingForClaim => 0
   | .streaming       => 1
@@ -28,7 +19,6 @@ def rank : ClientTurnState → Nat
   | .superseded      => 2
   | .interrupted     => 2
 
-/-- Whether a client turn state is terminal. -/
 def isTerminal : ClientTurnState → Bool
   | .completed   => true
   | .failed      => true
@@ -43,60 +33,36 @@ instance : HasTerminal ClientTurnState where
 
 end ClientTurnState
 
-/-- Client-visible response status, read from AgentResponse.status. -/
 inductive ResponseStatus where
   | streaming
   | complete
   | error
   deriving DecidableEq, Repr
 
-/-- Snapshot of an AgentRequest as observed by the client.
-    Only the fields that affect derivation are included. -/
 structure RequestSnapshot where
   lifecycleState : RequestState
   isSuperseded : Bool
   deriving DecidableEq, Repr
 
-/-- Snapshot of an AgentResponse as observed by the client.
-    progressSeq is omitted — it orders response versions
-    but does not affect the derivation result.
-    `tailEmpty` reflects whether both live-tail fields (content/reasoning)
-    are empty. It does not affect `deriveAttempt` and is not read by
-    `projectActiveOverlay`, which takes more granular `hasContent` /
-    `hasReasoning` parameters from the runtime. The flag is exposed for
-    client-side render decisions that only need the single empty bit. -/
 structure ResponseSnapshot where
   status    : ResponseStatus
   tailEmpty : Bool
   deriving DecidableEq, Repr
 
-/-- A single attempt observation: request + optional response. -/
 structure AttemptView where
   request : RequestSnapshot
   response : Option ResponseSnapshot
   deriving DecidableEq, Repr
 
-/-- Derive client turn state from a single attempt observation.
-
-    Priority order:
-    1. Supersession takes absolute precedence (cross-turn event).
-    2. Server terminal lifecycle states override any response
-       (terminal states are irreversible — proven in Request.lean).
-    3. For non-terminal request states, response may be more current
-       than the request under P2P replication lag. Trust the response.
-    4. No response and non-terminal request → waitingForClaim. -/
 def deriveAttempt : AttemptView → ClientTurnState
   | ⟨req, resp⟩ =>
-    -- Supersession: cross-turn event, always takes precedence
     if req.isSuperseded then .superseded
     else match req.lifecycleState with
-    -- Server terminal states override any stale response
     | .superseded    => .superseded
     | .completed     => .completed
     | .failed        => .failed
     | .dead          => .failed
     | .interrupted   => .interrupted
-    -- Non-terminal: response may be more current than request
     | .pending | .claimed | .processing | .inputRequired =>
       match resp with
       | some r =>
@@ -106,20 +72,11 @@ def deriveAttempt : AttemptView → ClientTurnState
         | .streaming => .streaming
       | none => .waitingForClaim
 
-/-- Derive client turn state from a full turn observation.
-
-    The turn is a retry chain that has already been normalized by the
-    merge layer into root-first, tip-last order. The Rust reference
-    implementation performs that tip resolution from request metadata
-    before applying the same derivation rules.
-
-    Returns `none` for empty observations (no turn exists). -/
 def deriveTurn : List AttemptView → Option ClientTurnState
   | []          => none
   | [a]         => some (deriveAttempt a)
   | _ :: rest   => deriveTurn rest
 
-/-- deriveTurn always returns the derivation of the last element. -/
 theorem deriveTurn_append_singleton
     (attempts : List AttemptView)
     (a : AttemptView) :
@@ -130,7 +87,5 @@ theorem deriveTurn_append_singleton
     cases tail with
     | nil => rfl
     | cons h' t' =>
-      -- Now (head :: h' :: t') ++ [a] = head :: (h' :: t' ++ [a])
-      -- and deriveTurn matches the `_ :: rest` case
       simp only [List.cons_append, deriveTurn]
       exact ih

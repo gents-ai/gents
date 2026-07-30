@@ -20,9 +20,6 @@ function detail(rawText: string) {
   return { rawText, fields: [] };
 }
 
-// Result fixtures mirror the runtime's envelopes exactly: `gents_fs: {json}` +
-// a human body line (toolset/file_tools.rs) and `gents_exec: {json}` +
-// `stdout:\n…\nstderr:\n…` framing (toolset/shared/command.rs).
 describe("toCodeToolView", () => {
   it("projects edit_file into a replacement diff", () => {
     const view = toCodeToolView(
@@ -89,7 +86,6 @@ describe("toCodeToolView", () => {
     expect(created).toMatchObject({
       kind: "fileEdit",
       created: true,
-      // Trailing newline in content must not produce a spurious blank line.
       diff: [
         { kind: "add", text: "line 1" },
         { kind: "add", text: "line 2" },
@@ -115,7 +111,6 @@ describe("toCodeToolView", () => {
     const view = toCodeToolView(
       toolCall({
         toolName: "bash",
-        // Exec-style: the raw arg carries only the executable.
         args: detail(JSON.stringify({ command: "cargo", args: ["test", "--release"] })),
         result: detail(
           'gents_exec: {"ok":true,"status":"success","command":"cargo test --release","exit_code":0,"timed_out":false,"execution_mode":"read_only","network_mode":"disabled"}\nstdout:\ntest result: ok. 3 passed\nstderr:\n(empty)',
@@ -138,7 +133,6 @@ describe("toCodeToolView", () => {
   });
 
   it("splits by exact byte offset when stdout contains a stderr:-lookalike line", () => {
-    // Multibyte content proves the offset math is byte-accurate, not UTF-16.
     const stdout = "búild log ✓\nstderr:\nnot really stderr\ntail line";
     const stdoutBytes = new TextEncoder().encode(stdout).length;
     const meta = JSON.stringify({
@@ -175,8 +169,6 @@ describe("toCodeToolView", () => {
   });
 
   it("anchors the split from the end when stdout is truncated but stderr is not", () => {
-    // Truncated stdout gains a variable-length "[Showing lines …]" note, so
-    // only the untruncated stderr length is exact — anchored from the end.
     const renderedStdout =
       "[Showing lines 5-9 of 9 (900 bytes total)]\n\nfoo\nstderr:\nlookalike";
     const stderr = "real error";
@@ -236,8 +228,6 @@ describe("toCodeToolView", () => {
   });
 
   it("marks a timed-out command as failed even with a null exit code", () => {
-    // Timeouts complete the tool call (statusKind success) with exit_code null;
-    // the envelope is the only failure signal.
     const view = toCodeToolView(
       toolCall({
         toolName: "bash",
@@ -257,10 +247,6 @@ describe("toCodeToolView", () => {
   });
 
   it("marks a raw_json non-zero exit as failed (no gents_exec envelope)", () => {
-    // raw_json=true makes render_command_output emit the bare CommandOutput
-    // JSON — flattened metadata plus stdout/stderr fields, no envelope head —
-    // while the call still completes (statusKind success). The failure signal
-    // must be rescued from the bare JSON, never defaulted to ok.
     const view = toCodeToolView(
       toolCall({
         toolName: "bash",
@@ -338,9 +324,6 @@ describe("toCodeToolView", () => {
   });
 
   it("keeps the generic disclosure when the envelope was truncated away", () => {
-    // Tail truncation for bash keeps the LAST lines, dropping the gents_exec
-    // head; without trustworthy metadata the call must not project (a nonzero
-    // exit would otherwise badge ok).
     const view = toCodeToolView(
       toolCall({
         toolName: "bash",

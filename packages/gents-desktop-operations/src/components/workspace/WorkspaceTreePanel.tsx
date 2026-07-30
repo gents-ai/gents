@@ -7,9 +7,6 @@ import type {
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { useOperationsApi } from "../../apiContext.js";
 
-/// Read-only browser over the local agent's tool root — the workspace the
-/// code tools actually operate in. One directory per fetch (lazy descent),
-/// jailed server-side to the root.
 export function WorkspaceTreePanel({
   api: explicitApi,
 }: {

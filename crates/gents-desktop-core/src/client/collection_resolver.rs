@@ -21,9 +21,6 @@ impl CollectionResolver {
         Self::default()
     }
 
-    /// Resolve `collection_id` to its static collection name. On cache miss,
-    /// rebuild the full id→name index by walking `ALL_COLLECTION_NAMES`.
-    /// Returns `None` if the id does not match any known collection.
     pub async fn resolve(
         &self,
         node: &EmbeddedNode,

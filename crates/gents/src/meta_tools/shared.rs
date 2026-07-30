@@ -384,7 +384,6 @@ pub(super) async fn enforce_health_gate(
     Ok(health)
 }
 
-// Inline test module preserved: single-test smoke check, deliberately not extracted to keep it co-located with the narrow code it tests.
 #[cfg(test)]
 mod registry_parsing_tests {
     use super::RegistryServiceEntry;

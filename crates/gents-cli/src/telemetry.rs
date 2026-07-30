@@ -20,9 +20,6 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
     const NOISE_DIRECTIVES: &[&str] = &[
         "iroh_quinn_proto::connection=error",
         "noq_proto::connection=error",
-        // Mirror the desktop defaults so tailing the agent log is sane by
-        // default. Users who need verbose P2P / relay output can still
-        // override with RUST_LOG.
         "p2p=warn",
         "iroh=warn",
         "iroh_net=warn",
@@ -53,12 +50,6 @@ impl TelemetryGuard {
     }
 }
 
-/// Per-callsite log-rate ceiling on everything the agent writes to stderr.
-///
-/// Guardrail for #588: one hot code path (an iroh relay retry loop) flooded
-/// journald at ~350k WARN lines/sec and wedged the host. Whatever the source,
-/// no single callsite may emit unbounded output; suppression is reported via
-/// bounded summary events, so failures stay visible.
 fn log_rate_ceiling() -> gents::log_rate::RateLimitFilter {
     gents::log_rate::RateLimitFilter::new(gents::log_rate::RateLimitConfig::default())
 }

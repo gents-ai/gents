@@ -1,9 +1,3 @@
-//! ManagedExec conformance home: pins the generated native-process state
-//! machine and liveness cases. The OS-process behavior behind each transition
-//! (spawn/kill/reap against real children) is witnessed by the
-//! `managed_exec::tests` unit suite, which the coverage ledger registers
-//! alongside this shape fence.
-
 use super::*;
 
 pub(super) fn managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool() {

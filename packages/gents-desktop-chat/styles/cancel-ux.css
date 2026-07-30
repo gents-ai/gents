@@ -1,5 +1,4 @@
 @layer components {
-  /* ---------- CancelCause badges ---------- */
   .cause-badge {
     display: inline-flex;
     align-items: center;
@@ -45,7 +44,6 @@
     border-color: rgb(var(--overlay-rgb) / 0.1);
   }
 
-  /* Wrapper for cause evidence details list (CancelCauseDetails component) */
   .cause-details {
     display: grid;
     grid-template-columns: 130px 1fr;
@@ -114,7 +112,6 @@
     font-weight: 600;
   }
 
-  /* ---------- Group layout (will-interrupt, will-detach, etc) ---------- */
   .group {
     margin: var(--space-5) 0;
   }
@@ -209,7 +206,6 @@
     padding-top: var(--space-1);
   }
 
-  /* ---------- Button variants for cancel-ux components ---------- */
   .btn-warn {
     background: transparent;
     color: var(--color-warning);
@@ -220,7 +216,6 @@
     background: rgb(var(--color-warning-rgb) / 0.1);
   }
 
-  /* ---------- Notice strip (success, info, warn) ---------- */
   .notice {
     margin-top: var(--space-6);
     padding: var(--space-4) var(--space-6);

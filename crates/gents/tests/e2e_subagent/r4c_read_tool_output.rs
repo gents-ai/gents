@@ -1,5 +1,3 @@
-//! Integration tests for R4c read_tool_output.
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;
@@ -375,7 +373,6 @@ async fn read_tool_output_terminal_parses_native_command_streams() {
         json!({ "tool_call_id": tool_call_id }),
     )
     .await;
-    // stdout + labeled boundary + stderr behind a single cursor.
     let output = result["output"].as_str().unwrap();
     assert_eq!(output, "matches\n--- stderr ---\ngrep: invalid option -- P");
     assert_eq!(result["total_bytes"].as_u64(), Some(output.len() as u64));
@@ -387,10 +384,7 @@ async fn read_tool_output_terminal_parses_native_command_streams() {
 
 #[tokio::test]
 async fn read_tool_output_pages_gap_free_across_budget() {
-    // Output larger than one budget; read incrementally from the cursor and
-    // reassemble. Pages must be contiguous (no head/tail drop) and cover the
-    // whole buffer exactly once, with honest has_more/next_offset/total_bytes.
-    let large = format!("{}tail", "prefix".repeat(60)); // 364 bytes
+    let large = format!("{}tail", "prefix".repeat(60));
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-paging",
         registry(
@@ -407,7 +401,6 @@ async fn read_tool_output_pages_gap_free_across_budget() {
     let waited = wait_tool(&hook, "wait-large", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
 
-    // First page from offset 0 with the smallest budget (64 tokens -> 256 bytes).
     let first = read_tool_output(
         &hook,
         "read-page-0",
@@ -433,10 +426,8 @@ async fn read_tool_output_pages_gap_free_across_budget() {
     );
     let next_offset = first["next_offset"].as_u64().unwrap();
     assert_eq!(next_offset, 256, "cursor = offset + bytes returned");
-    // Page is contiguous from the start (NOT a tail-drop).
     assert_eq!(first_output, &large[..256]);
 
-    // Walk the cursor to the end, reassembling gap-free.
     let mut reassembled = first_output;
     let mut cursor = next_offset;
     let mut has_more = first["has_more"].as_bool().unwrap();
@@ -462,12 +453,10 @@ async fn read_tool_output_pages_gap_free_across_budget() {
         pages += 1;
         assert!(pages < 20, "paging did not terminate");
     }
-    // Final state: cursor at total_bytes, full buffer reassembled byte-for-byte.
     assert_eq!(cursor, large.len() as u64);
     assert_eq!(reassembled, large);
     assert!(pages >= 2, "should take more than one page");
 
-    // Reading at/after the end yields an empty, terminal slice.
     let past_end = read_tool_output(
         &hook,
         "read-past-end",
@@ -484,15 +473,7 @@ async fn read_tool_output_pages_gap_free_across_budget() {
 
 #[tokio::test]
 async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
-    // Build a buffer where multi-byte codepoints (3-byte UTF-8 sequences,
-    // U+2019 RIGHT SINGLE QUOTATION MARK = 0xE2 0x80 0x99) are dense enough
-    // that a budget boundary will often fall inside a codepoint.  Assert that
-    // every page returned by the API is valid UTF-8 (no panic), that pages
-    // concatenate byte-for-byte to the original, and that no page is empty
-    // unless it is the terminal read-past-the-end.
-    let char_3byte: char = '\u{2019}'; // 3-byte UTF-8: 0xE2 0x80 0x99
-                                       // 64 repetitions × 3 bytes = 192 bytes.  With a 64-token (~256-byte)
-                                       // budget, every page boundary is near codepoint edges.
+    let char_3byte: char = '\u{2019}';
     let raw: String = std::iter::repeat(char_3byte).take(64).collect();
     assert_eq!(
         raw.len(),
@@ -516,9 +497,6 @@ async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
     let waited = wait_tool(&hook, "wait-utf8", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
 
-    // Page through with a budget deliberately misaligned with 3-byte chars.
-    // max_tokens=64 → 256 bytes; 256 / 3 = 85.33, so the raw boundary at 256
-    // bytes is not a char boundary for 3-byte sequences.
     let mut reassembled = String::new();
     let mut cursor = 0u64;
     let mut pages = 0;
@@ -534,8 +512,6 @@ async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
         )
         .await;
         let out = page["output"].as_str().expect("output must be a string");
-        // Valid UTF-8 is guaranteed by the API contract; if it were violated
-        // `serde_json` deserialization above would have already failed.
         assert!(
             std::str::from_utf8(out.as_bytes()).is_ok(),
             "page output is not valid UTF-8"
@@ -563,18 +539,6 @@ async fn read_process_multibyte_utf8_page_boundary_slices_on_char_boundary() {
 
 #[tokio::test]
 async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
-    // Build a result that has both stdout and stderr so the combined buffer
-    // contains the STDERR_BOUNDARY separator.  Walk the cursor across the full
-    // combined buffer (including the boundary) with a small budget and assert:
-    //   - pages are contiguous (no gap, no overlap),
-    //   - total_bytes and next_offset stay honest across every page,
-    //   - the full reassembly equals the combined string byte-for-byte.
-    // The native result format is detected by the `persisted_tool_output_streams`
-    // parser; we use the plain (non-native) path by returning a string that
-    // does NOT start with "gents_exec: " — in that case stdout == result and
-    // stderr == "".  To exercise the stdout+stderr path we need the native
-    // format.  The native format is:
-    //   gents_exec: <json>\nstdout:\n<stdout>\nstderr:\n<stderr>
     let stdout_body = "A".repeat(200);
     let stderr_body = "B".repeat(200);
     let native_result = format!(
@@ -599,7 +563,6 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
         stderr = stderr_body,
     );
 
-    // The native parser only fires for the "bash" tool name.
     let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-stdout-stderr-paging",
         registry(
@@ -616,23 +579,18 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
     let waited = wait_tool(&hook, "wait-dual", tool_call_id).await;
     assert_eq!(waited["status"].as_str(), Some("completed"));
 
-    // Read the first page to learn total_bytes, then walk all pages and
-    // reassemble.  total_bytes must stay constant across all pages.
     let first = read_tool_output(
         &hook,
         "read-dual-page-0",
         json!({
             "tool_call_id": tool_call_id,
             "offset": 0,
-            "max_tokens": 64  // 256 bytes per page
+            "max_tokens": 64
         }),
     )
     .await;
     let total_bytes = first["total_bytes"].as_u64().expect("total_bytes");
-    // The native parser extracts stdout and stderr from the result; the
-    // combined buffer is stdout + STDERR_BOUNDARY ("\n--- stderr ---\n") +
-    // stderr = 200 + 16 + 200 = 416 bytes.
-    let stderr_boundary_len = "\n--- stderr ---\n".len(); // 16
+    let stderr_boundary_len = "\n--- stderr ---\n".len();
     let expected_combined_len = stdout_body.len() + stderr_boundary_len + stderr_body.len();
     assert_eq!(
         total_bytes, expected_combined_len as u64,

@@ -1,11 +1,3 @@
-//! Integration tests for request interruption + TTL.
-//!
-//! These tests exercise the DB-level interactions that span multiple
-//! `RequestLifecycle` instances and the resend chain, plus the full
-//! `BehaviorDaemon` interrupt path against a deterministic local streaming
-//! backend. The daemon tests assert the cross-layer bridge from a mid-stream
-//! request interrupt to linked `InferenceCall.call_state = "cancelled"`.
-
 use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
@@ -38,16 +30,6 @@ const TARGET_PARTIAL: &str = "partial response content ";
 const SURVIVOR_MARKER: &str = "survivor-target";
 const SURVIVOR_PARTIAL: &str = "survivor partial content ";
 
-// --- DB-level integration tests ---
-
-/// Offline replay: if a large batch of pre-existing `AgentRequest` rows have
-/// `valid_until` in the past (e.g. agent was offline and is catching up), each
-/// `RequestLifecycle::claim()` should short-circuit to `Expired` and transition
-/// the row to `dead`/`Stale`. No inference call ever fires because the
-/// expiration check runs before any backend interaction.
-///
-/// This guards the TTL safety property: stale work never consumes backend
-/// quota or side-effects on replay.
 #[tokio::test]
 async fn offline_replay_of_stale_requests_does_not_call_backend() {
     let db = test_db("offline-replay-stale").await;
@@ -65,10 +47,6 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
         request_doc_ids.push((doc_id, request_id, session_id));
     }
 
-    // Claim each row sequentially — this matches the "offline agent catching
-    // up after coming back online" shape the test is modelling, and avoids
-    // the embedded-datastore transaction-conflict retry limit we'd hit with
-    // fully parallel claims on the shared AgentRequest secondary indexes.
     for (doc_id, request_id, session_id) in request_doc_ids.clone() {
         let request = build_request(doc_id, request_id, session_id, created_at.clone());
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -83,7 +61,6 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
         assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
     }
 
-    // All rows should now be dead/Stale with no backend binding present.
     for (doc_id, _, _) in &request_doc_ids {
         let snap = fetch_request_snapshot(&db.node, doc_id).await;
         assert_eq!(snap.lifecycle_state, "dead");
@@ -99,16 +76,6 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
     }
 }
 
-/// Resend chain: after a request goes stale, a resend should populate
-/// `retry_parent_request = <previous>` and `retry_root_request = <original>`.
-/// Chaining further must keep `retry_root_request` stable across the chain
-/// while `retry_parent_request` advances — this is the invariant the UI
-/// relies on to render the root-level grouping of retry attempts.
-///
-/// We exercise this against the DB directly rather than calling
-/// `resend_request` (which lives in `gents-desktop` and would
-/// introduce a dev-dep cycle). The `create_retry_request` helper mirrors
-/// exactly the fields that the `resend_request` helper writes.
 #[tokio::test]
 async fn resend_from_stale_populates_retry_chain() {
     let db = test_db("resend-chain").await;
@@ -116,7 +83,6 @@ async fn resend_from_stale_populates_retry_chain() {
     let created_at = chrono::Utc::now().to_rfc3339();
     let past = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
 
-    // --- Step 1: original request goes stale. ---
     let original_request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let original_doc_id = create_request(
@@ -146,15 +112,14 @@ async fn resend_from_stale_populates_retry_chain() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
 
-    // --- Step 2: first resend chains from the original. ---
     let resend_1_id = uuid::Uuid::new_v4().to_string();
     let resend_1_created_at = chrono::Utc::now().to_rfc3339();
     let resend_1_doc_id = create_retry_request(
         &db.node,
         &resend_1_id,
         &session_id,
-        &original_request_id, // retry_parent
-        &original_request_id, // retry_root == original (original is the root)
+        &original_request_id,
+        &original_request_id,
         "hello",
         &resend_1_created_at,
     )
@@ -164,8 +129,6 @@ async fn resend_from_stale_populates_retry_chain() {
     assert_eq!(snap_1.retry_parent_request, original_request_id);
     assert_eq!(snap_1.retry_root_request, original_request_id);
 
-    // --- Step 3: resend_1 also goes stale; second resend chains from resend_1
-    // but root must remain the original. ---
     set_valid_until(&db.node, &resend_1_doc_id, &past).await;
     let request_1 = build_request(
         resend_1_doc_id.clone(),
@@ -190,8 +153,8 @@ async fn resend_from_stale_populates_retry_chain() {
         &db.node,
         &resend_2_id,
         &session_id,
-        &resend_1_id,         // retry_parent = previous resend
-        &original_request_id, // retry_root STAYS original
+        &resend_1_id,
+        &original_request_id,
         "hello",
         &resend_2_created_at,
     )
@@ -218,15 +181,12 @@ async fn inference_call_wait_observes_latest_attempt() {
         Some("ProviderError: transient connect failure"),
     )
     .await;
-    // Regression guard: a failed historical attempt must not hide the current retry.
     insert_inference_call(db.node.as_ref(), request_id, 2, "running", None).await;
 
     let call = wait_for_inference_call_state(db.node.as_ref(), request_id, "running").await;
     assert_eq!(call.call_seq, 2);
     assert_eq!(call.call_state, "running");
 }
-
-// --- Full BehaviorDaemon streaming interruption tests ---
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
@@ -515,8 +475,6 @@ async fn insert_inference_call(
         String::new()
     };
 
-    // These links are plain string fields in the test schema; the helper does
-    // not need to create matching backend or behavior rows.
     let mutation = format!(
         r#"mutation {{
             add_InferenceCall(input: {{

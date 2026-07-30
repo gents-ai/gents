@@ -130,9 +130,7 @@ export function InferenceProfileConfigEditor({
         agentDid,
       });
       onDeleted();
-    } catch {
-      // Surfaced by the shell error banner; the editor stays put.
-    }
+    } catch {}
   }
   const [profileId, setProfileId] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -158,7 +156,6 @@ export function InferenceProfileConfigEditor({
     setStreamLivenessSecs(b.streamLivenessSecs);
     setDeadlineSecs(b.deadlineSecs);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [profile?.profileId]);
 
   const contextWindowValid = isOptionalInt(contextWindow, { min: 1 });
@@ -363,7 +360,6 @@ export function InferenceProfileConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function profileFormValues(profile: InferenceProfileView | null) {
   return {
     profileId: profile?.profileId ?? "",

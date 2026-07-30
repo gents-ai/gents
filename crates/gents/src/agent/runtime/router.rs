@@ -82,10 +82,6 @@ where
             continue;
         }
 
-        // A behavior demoted for startup build failures still has a dispatcher
-        // (its slot is parked); dispatching would queue the request into a
-        // channel nobody drains. Fail it loudly with the build error instead
-        // (#559), mirroring the snapshot-unavailable rejection below.
         if let Some(reason) = startup_demotions.reason(&resolution.behavior_id) {
             tracing::warn!(
                 request_id = %request.request_id,

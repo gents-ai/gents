@@ -99,7 +99,6 @@ export function createDesktopShellChatActions({
     }
   }
 
-  /** Re-submit a failed turn's content verbatim (error-card Retry). */
   function onRetryMessage(content: string) {
     void submitContent(content);
   }

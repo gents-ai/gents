@@ -12,8 +12,6 @@ use super::super::DocumentResolveContext;
 
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
-// Replicated control docs can arrive before their referenced DAGs materialize.
-// Keep polling past the initial debounce instead of immediately marking the behavior unavailable.
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
@@ -129,10 +127,6 @@ pub(super) async fn run_control_watcher(
                     sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_WATCHER_IDLE_SLEEP);
                 }
             }
-            // The backend prober's measured health crossed the routing
-            // threshold (#640). No document changed, so no reload or settle
-            // window — the existing view re-resolves against the updated
-            // BackendHealthMap and proposes if the fingerprint moved.
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(
                     agent_did = %agent_did,

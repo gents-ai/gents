@@ -115,9 +115,6 @@ fn build_output_rows(
         .map(|row| row.tool_call_id.as_str())
         .collect::<BTreeSet<_>>();
     let mut native_by_tool_name: BTreeMap<&str, Vec<NativeExecutorView>> = BTreeMap::new();
-    // Native executor liveness currently identifies the executable/tool, not
-    // the specific AgentToolCall that spawned it. Treat these as tool-name
-    // matches only.
     for executor in &liveness.active_native_executors {
         if let Some(tool_name) = executor.tool_name.as_deref() {
             native_by_tool_name

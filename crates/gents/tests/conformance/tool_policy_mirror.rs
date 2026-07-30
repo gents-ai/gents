@@ -1,7 +1,3 @@
-//! Adapter from Lean's compact JSON SurfaceView into the production Rust
-//! tool-surface policy resolver. This file intentionally does not reimplement
-//! the meet: it only performs vocabulary conversion around `ToolPolicySurface`.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents::tool_surface::ToolPolicySurface;
@@ -90,8 +86,6 @@ fn unit_scope_from_prefixes(kind: &str, keys: &[Vec<String>]) -> EndpointScope<V
     }
 }
 
-/// Pair-keyed unit scope (subagent targets). Lean serializes each `(did,
-/// behavior)` key as `"<did>::<behavior>"`; we split it back here.
 fn pair_scope_from_keys(kind: &str, keys: &[String]) -> EndpointScope<(String, String), ()> {
     match kind {
         "none" => EndpointScope::None,
@@ -112,10 +106,6 @@ fn encode_pair_keys(scope: &EndpointScope<(String, String), ()>) -> Vec<String> 
         .collect()
 }
 
-/// CLI tools carry a per-tool value set in production, but the Lean view only
-/// observes the *keys* (cli value-narrowing shares the set-intersection
-/// combinator that `write_tools` already fences via `write_fields`). Reconstruct
-/// with empty value sets so the key-meet round-trips exactly.
 fn cli_scope_from_keys(kind: &str, keys: &[String]) -> EndpointScope<String, BTreeSet<String>> {
     match kind {
         "none" => EndpointScope::None,

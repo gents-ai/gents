@@ -280,7 +280,6 @@ export function getDesktopApiAdapter(
   return adapter ?? desktopApiAdapterOverride ?? defaultDesktopApiAdapter;
 }
 
-/** Compatibility seam for first-party harnesses; reusable UI uses providers. */
 export function setDesktopApiAdapterForTests(
   adapter: DesktopApiAdapter | null,
 ) {

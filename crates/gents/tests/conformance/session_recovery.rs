@@ -629,9 +629,6 @@ fn status_for_lifecycle_state(lifecycle_state: &str) -> &'static str {
 fn expected_reissue_denial_fragment(
     case: &lean_vocab_test::LeanSessionRecoveryCase,
 ) -> &'static str {
-    // Generated cases assert the first denial in the DB-backed reissue check
-    // order, so future multi-violation cases should choose this precedence
-    // deliberately.
     if !case.pre_failed_exists {
         "not found"
     } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {

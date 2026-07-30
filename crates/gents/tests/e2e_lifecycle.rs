@@ -1,8 +1,3 @@
-//! Request lifecycle + interrupt end-to-end suites.
-//!
-//! One binary per family: each module was a standalone test binary; the
-//! consolidation cuts link time without changing any test.
-
 mod support;
 
 #[path = "e2e_lifecycle/interrupt_observer.rs"]

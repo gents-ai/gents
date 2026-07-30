@@ -1,13 +1,5 @@
 import Proofs.Basic
 
-/-!
-# Durable Goal Controller
-
-The model covers the durable status machine, the three-turn blocked audit,
-session-idle continuation gate, infrastructure outcome matrix, exactly-once
-parent latch, and one-shot budget wrap-up.
--/
-
 namespace Goals
 
 inductive Status where

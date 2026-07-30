@@ -1,18 +1,7 @@
 import Proofs.ApplyReconcile.Apply
 
-/-!
-# Apply/Reconcile Apply Properties
-
-Live-field preservation, intermediate reference closure, and desired-projection view.
--/
-
 namespace ApplyReconcile
 
-/-- `applyAll` does not touch the `live` projection. Stated as a named
-    lemma so downstream users (property tests, conformance reasoning,
-    future runtime-side proofs) can rely on it directly. Not needed by
-    T-Conv's composition chain; kept as a general invariant of the
-    apply model. -/
 @[simp]
 lemma apply_preserves_live
     (L : LiveState) (steps : List ApplyStep) :
@@ -24,15 +13,11 @@ lemma apply_preserves_live
       rw [ih]
       rfl
 
-/-- `applyAll` on an appended list reduces to `applyOne` on the prefix
-    result. -/
 lemma applyAll_append (L : LiveState) (pref : List ApplyStep) (s : ApplyStep) :
     applyAll L (pref ++ [s]) = applyOne (applyAll L pref) s := by
   unfold applyAll
   simp [List.foldl_append]
 
-/-- A payload-bearing step only adds/updates (never removes) `desired`
-    entries. Delete is intentionally excluded because it clears its target. -/
 lemma applyOne_desired_some_of_some (L : LiveState) (s : ApplyStep) (d : DocRef)
     (hwrite : s.payload?.isSome = true)
     (h : (L.desired d).isSome = true) : ((applyOne L s).desired d).isSome = true := by
@@ -53,16 +38,12 @@ lemma applyAll_desired_some_of_some (L : LiveState) (steps : List ApplyStep) (d 
         fun s' hmem => hsteps s' (List.mem_cons_of_mem _ hmem)
       exact ih (L := applyOne L s) hrest (applyOne_desired_some_of_some L s d hs h)
 
-/-- Applying a payload-bearing step makes its target's desired projection
-    present. -/
 lemma applyOne_target_isSome (L : LiveState) (s : ApplyStep) :
     s.payload?.isSome = true →
     ((applyOne L s).desired s.target).isSome = true := by
   intro hwrite
   unfold applyOne; simp [hwrite]
 
-/-- If any step in `steps` targets `d`, then `applyAll` produces a `some`
-    at `d`. -/
 lemma applyAll_desired_some_of_target_mem
     (L : LiveState) (steps : List ApplyStep) (d : DocRef)
     (hsteps : ∀ s ∈ steps, s.payload?.isSome = true)
@@ -76,7 +57,7 @@ lemma applyAll_desired_some_of_target_mem
       show ((applyAll (applyOne L s) rest).desired d).isSome = true
       obtain ⟨s', hmem', htgt'⟩ := h
       rcases List.mem_cons.mp hmem' with heq | hmem_rest
-      · -- s' = s, so applying s gives d a some; then applyAll preserves it.
+      ·
         have hs_write : s.payload?.isSome = true := hsteps s (List.mem_cons_self _ _)
         subst heq
         have hrest : ∀ s' ∈ rest, s'.payload?.isSome = true :=
@@ -90,8 +71,6 @@ lemma applyAll_desired_some_of_target_mem
           fun s' hmem => hsteps s' (List.mem_cons_of_mem _ hmem)
         exact ih (L := applyOne L s) hrest ⟨s', hmem_rest, htgt'⟩
 
-/-- If `pref ++ [s]` is a prefix of `diff M L` and `s' ∈ diff M L` has
-    strictly lower rank than `s`, then `s' ∈ pref`. -/
 lemma mem_prefix_of_lower_rank
     {M : Manifest} {L : LiveState}
     {pref : List ApplyStep} {s s' : ApplyStep}
@@ -100,11 +79,10 @@ lemma mem_prefix_of_lower_rank
     (hlt : s'.target.collection.applyOrder < s.target.collection.applyOrder) :
     s' ∈ pref := by
   obtain ⟨suf, hsuf⟩ := hpref
-  -- Rewrite via hsuf so all positions live in `pref ++ [s] ++ suf`.
   rw [← hsuf] at hmem'
   obtain ⟨k', hk'_lt, hk'_eq⟩ := List.getElem_of_mem hmem'
   by_cases hcase : k' < pref.length
-  · -- k' falls in pref; extract membership.
+  ·
     have hk'_in_left : k' < (pref ++ [s]).length := by simp; omega
     have hk'_in_pref : k' < pref.length := hcase
     have h_in : s' ∈ pref := by
@@ -114,26 +92,21 @@ lemma mem_prefix_of_lower_rank
       exact List.getElem_mem _
     exact h_in
   · push_neg at hcase
-    -- k' ≥ pref.length. Apply sort bound.
     have hpref_lt_len : pref.length < (pref ++ [s] ++ suf).length := by
       simp
-    -- The sort lemma takes positions in diff M L; transport via hsuf.
     have hpref_lt_diff : pref.length < (diff M L).length := by
       rw [← hsuf]; exact hpref_lt_len
     have hk'_lt_diff : k' < (diff M L).length := by
       rw [← hsuf]; exact hk'_lt
     have hsort := diff_sorted_by_applyOrder M L pref.length k' hcase hk'_lt_diff
-    -- Show that the s at pref.length of diff has the same rank as s.
     have hpref_at_s :
         ((diff M L).get ⟨pref.length, hpref_lt_diff⟩).target.collection.applyOrder
           = s.target.collection.applyOrder := by
       simp only [List.get_eq_getElem]
-      -- Use hsuf to rewrite the indexing.
       have h1 : (pref ++ [s] ++ suf)[pref.length]'hpref_lt_len = s := by
         rw [List.getElem_append_left (by simp)]
         rw [List.getElem_append_right (by simp)]
         simp
-      -- Cast via hsuf.
       have h2 : (diff M L)[pref.length]'hpref_lt_diff =
                 (pref ++ [s] ++ suf)[pref.length]'hpref_lt_len := by
         congr 1
@@ -151,32 +124,26 @@ lemma mem_prefix_of_lower_rank
     rw [hpref_at_s, hk'_at_s'] at hsort
     omega
 
-/-- L-3: Every intermediate state reached during apply is reference-closed
-    when M is well-formed and the steps are in `Collection.applyOrder`. -/
 lemma apply_preserves_wellFormed
     {M : Manifest} {L : LiveState}
     (hM : M.WellFormed) (hL : L.WellFormed) :
     ∀ pref : List ApplyStep,
       List.IsPrefix pref (diff M L) →
       (applyAll L pref).WellFormed := by
-  -- We induct on pref using snoc (end-extension) induction via List.reverseRecOn.
   intro pref
   induction pref using List.reverseRecOn with
   | nil =>
       intro _hpref
-      -- applyAll L [] = L
       show (applyAll L []).WellFormed
       change L.WellFormed
       exact hL
   | append_singleton pref' s ih =>
       intro hpref
-      -- Prefix of (pref' ++ [s]) is also a prefix of pref'.
       have hpref' : List.IsPrefix pref' (diff M L) := by
         obtain ⟨suf, hsuf⟩ := hpref
         refine ⟨[s] ++ suf, ?_⟩
         rw [← hsuf]; simp [List.append_assoc]
       have ih_wf := ih hpref'
-      -- s ∈ diff M L.
       have hs_mem : s ∈ diff M L := by
         obtain ⟨suf, hsuf⟩ := hpref
         rw [← hsuf]
@@ -192,7 +159,6 @@ lemma apply_preserves_wellFormed
         exact List.mem_append_left _ ht
       have hpref'_write : ∀ t ∈ pref', t.payload?.isSome = true :=
         fun t ht => diff_step_payload_isSome (hpref'_mem t ht)
-      -- Decode s from the filterMap: s.target ∈ M.support and s.payload = (M.docs s.target).get.
       have hMd : M.docs s.target = some s.payload := by
         unfold diff at hs_mem
         rw [List.mem_mergeSort, List.mem_filterMap] at hs_mem
@@ -208,7 +174,6 @@ lemma apply_preserves_wellFormed
             | none =>
                 intro h
                 simp at h
-                -- h : ApplyStep.create d' f' = s
                 have hs_eq : s = ApplyStep.create d' f' := h.symm
                 rw [hs_eq]
                 exact hMd'
@@ -220,34 +185,27 @@ lemma apply_preserves_wellFormed
                   have hs_eq : s = ApplyStep.update d' f' := h.symm
                   rw [hs_eq]
                   exact hMd'
-      -- Abbreviate the post-state.
       have happ : applyAll L (pref' ++ [s]) = applyOne (applyAll L pref') s :=
         applyAll_append L pref' s
-      -- Show both conjuncts of WellFormed after applying s.
       refine ⟨?_, ?_⟩
-      · -- Ref-closure
+      ·
         intro d f hf r hr
         rw [happ] at hf
-        -- Does s target d?
         by_cases heq : d = s.target
-        · -- d = s.target: payload is s.payload = f
+        ·
           have hf_payload : s.payload = f := by
             have : (applyOne (applyAll L pref') s).desired d = some s.payload := by
               unfold applyOne; simp [heq, hs_payload_some]
             rw [this] at hf
             exact Option.some.inj hf
-          -- Now r ∈ referencesOf s.payload = referencesOf f.
           rw [← hf_payload] at hr
-          -- Use hM.1 and hM.2 with s.target in place of d.
           have hr_in_M : M.contains r = true := hM.1 s.target s.payload hMd r hr
           have hr_rank : r.collection.applyOrder < s.target.collection.applyOrder :=
             hM.2 s.target s.payload hMd r hr
-          -- Goal: (applyAll L (pref' ++ [s])).contains r.
           show ((applyAll L (pref' ++ [s])).desired r).isSome = true
           rw [happ]
           apply applyOne_desired_some_of_some
           · exact hs_write
-          -- Now reduce to showing ((applyAll L pref').desired r).isSome.
           cases hLd : L.desired r with
           | some _ =>
               apply applyAll_desired_some_of_some
@@ -276,7 +234,7 @@ lemma apply_preserves_wellFormed
                   apply applyAll_desired_some_of_target_mem
                   · exact hpref'_write
                   exact ⟨s_r, hs_r_in_pref', hs_r_tgt⟩
-        · -- d ≠ s.target: applyOne doesn't change desired d.
+        ·
           have hpre : (applyOne (applyAll L pref') s).desired d = (applyAll L pref').desired d :=
             applyOne_desired_ne _ _ _ heq
           rw [hpre] at hf
@@ -284,7 +242,7 @@ lemma apply_preserves_wellFormed
           show ((applyAll L (pref' ++ [s])).desired r).isSome = true
           rw [happ]
           exact applyOne_desired_some_of_some _ _ _ hs_write hrclo
-      · -- Rank invariant
+      ·
         intro d f hf r hr
         rw [happ] at hf
         by_cases heq : d = s.target
@@ -302,10 +260,6 @@ lemma apply_preserves_wellFormed
           rw [hpre] at hf
           exact ih_wf.2 d f hf r hr
 
-/-- Utility: after apply, the desired projection agrees with the manifest
-    on every document M declares. This is the desired-projection view of
-    convergence; runtime-facing T-Conv statements live in
-    `ApplyReconcile.Convergence`. -/
 theorem apply_realizes_desired
     {M : Manifest} {L : LiveState}
     (hM : M.WellFormed)

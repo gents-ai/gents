@@ -10,8 +10,6 @@ use crate::support::{create_request, test_db, AGENT_DID};
 
 const C1: &str = "ComposedState.deadline_exceeded_request_timesOut_running_tools_from_initial";
 const C1_PRIME: &str = "ComposedState.deadline_exceeded_request_cancels_pending_tools_from_initial";
-// The C2 theorem proves both the pending and running live-tool arms; each is a
-// separate witness row sharing the theorem name, so they are looked up by scenario.
 const C2_PENDING: &str = "interrupted_request_cancels_live_pending_tool";
 const C2_RUNNING: &str = "interrupted_request_cancels_live_running_tool";
 
@@ -156,8 +154,6 @@ async fn drive_interrupted_pending_witness(witness: &LeanComposedInvariantWitnes
     assert_eq!(witness.tool_post_state, "cancelled");
     assert_eq!(witness.cancel_cause.as_deref(), Some("interrupted"));
     assert!(!witness.pre_tool_persisted);
-    // C2 is an interrupt scenario, not a deadline one: the tool is still
-    // clock-coherent with the (non-exceeded) parent request.
     assert!(!witness.deadline_exceeded);
     assert_eq!(witness.request_id, witness.tool_request_id);
     assert_eq!(witness.request_current_time, witness.tool_current_time);
@@ -224,8 +220,6 @@ async fn drive_interrupted_running_witness(witness: &LeanComposedInvariantWitnes
     assert_eq!(witness.tool_pre_state, "running");
     assert_eq!(witness.tool_post_state, "cancelled");
     assert_eq!(witness.cancel_cause.as_deref(), Some("interrupted"));
-    // The running arm dispatches (start_running) before the interrupt, so the
-    // tool row is already persisted — mirrors the Lean tool_step.dispatch step.
     assert!(witness.pre_tool_persisted);
     assert!(!witness.deadline_exceeded);
     assert_eq!(witness.request_id, witness.tool_request_id);

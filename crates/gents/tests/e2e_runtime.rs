@@ -1,8 +1,3 @@
-//! Runtime/infra end-to-end suites (migrations, observability, bootstrap).
-//!
-//! One binary per family: each module was a standalone test binary; the
-//! consolidation cuts link time without changing any test.
-
 mod support;
 
 #[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]

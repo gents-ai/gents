@@ -1,5 +1,3 @@
-//! Integration tests for R4c read_subagent_transcript.
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
@@ -90,9 +88,6 @@ async fn setup_db(
     )
     .await
     .unwrap();
-    // Spawn convergence (#377): the child `AgentRequest` is materialized by
-    // SubagentSource, not synchronously by the hook. Run a standalone source for
-    // the lifetime of the test; the guard is returned so callers hold it alive.
     let source = spawn_subagent_source(
         db.node.clone(),
         AGENT_DID,
@@ -191,8 +186,6 @@ async fn spawn_background_child(
         .await;
     let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
-    // Spawn convergence (#377): backfill the child session id once SubagentSource
-    // materializes the child (the receipt no longer carries it).
     let child_request_id = receipt["child_request_id"]
         .as_str()
         .expect("child_request_id")
@@ -572,7 +565,6 @@ async fn read_transcript_cursor_advances_cleanly() {
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cursor", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
-    // Pad each turn so a small token budget caps the read after a few blocks.
     let pad = "x".repeat(120);
     for sequence in 1..=10 {
         append_message(
@@ -585,8 +577,6 @@ async fn read_transcript_cursor_advances_cleanly() {
         .await;
     }
 
-    // Walk the cursor across the whole transcript with a tiny token budget and
-    // assert every turn is visited exactly once, gap-free, with honest has_more.
     let mut cursor = 0u64;
     let mut pages = 0;
     let mut seen = Vec::new();
@@ -641,7 +631,6 @@ async fn read_transcript_terminal_flag_tracks_child_lifecycle() {
     )
     .await;
 
-    // While the child is still running (set up as "processing"), terminal=false.
     let running = read_transcript(
         &hook,
         "read-running",
@@ -649,10 +638,8 @@ async fn read_transcript_terminal_flag_tracks_child_lifecycle() {
     )
     .await;
     assert_eq!(running["terminal"].as_bool(), Some(false));
-    // Child is materialized in the "pending" lifecycle state by SubagentSource.
     assert_eq!(running["lifecycle_state"].as_str(), Some("pending"));
 
-    // Flip the child to a completed terminal state and re-read.
     mark_child_completed(db.node.as_ref(), child_request_id).await;
     let done = read_transcript(
         &hook,

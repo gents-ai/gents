@@ -1,11 +1,3 @@
-//! Conformance fence for `Proofs/PeerRegistryDiscovery/`.
-//!
-//! Bridges the Lean derivation model to the Rust discovery reconciler. Each test
-//! names the Lean theorem it mirrors. The ownership invariant (the whole point
-//! of R5) is exercised through the [`DiscoveryStore`] seam with a fake that
-//! holds a *separate* operator-owned partition the discovery step must never
-//! touch — the Rust analogue of the Lean two-finset partition.
-
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -35,8 +27,6 @@ fn entry(peer: &str, live: bool) -> DiscoveredEntry {
     }
 }
 
-/// Mirrors Lean `mem_deriveRegistryDesired` + `self_not_mem_derive`: a peer is
-/// derived iff it is a live, non-self registry entry.
 #[test]
 fn derive_matches_live_non_self_membership() {
     let reg = vec![
@@ -48,8 +38,6 @@ fn derive_matches_live_non_self_membership() {
     assert_eq!(d, BTreeSet::from(["peerA".to_string()]));
 }
 
-/// Mirrors Lean `derive_idempotent` / `derive_convergent`: the derivation is a
-/// pure function of the registry, so it is stable across ticks.
 #[test]
 fn derive_is_idempotent_and_convergent_over_stable_registry() {
     let reg = vec![entry("peerA", true), entry("peerB", true)];
@@ -126,9 +114,6 @@ impl DiscoveryStore for PartitionStore {
     }
 }
 
-/// Mirrors Lean `ownership_safe`: a discovery tick never mutates an
-/// operator-owned row. Here peerA is operator-owned with no registry entry; the
-/// tick materializes peerB but leaves peerA entirely alone.
 #[tokio::test]
 async fn ownership_safe_operator_rows_never_touched() {
     let store = PartitionStore::new("self", vec![entry("peerB", true)], &[], &["peerA"]);
@@ -137,7 +122,6 @@ async fn ownership_safe_operator_rows_never_touched() {
 
     assert_eq!(outcome.upserted, BTreeSet::from(["peerB".to_string()]));
     assert!(outcome.retracted.is_empty());
-    // No operator-owned peer was ever upserted or deleted.
     for op in store
         .upserts
         .lock()
@@ -152,9 +136,6 @@ async fn ownership_safe_operator_rows_never_touched() {
     }
 }
 
-/// Mirrors Lean `retraction_sound` / `retraction_drops_unique_source` /
-/// `retraction_preserves_others`: staling an entry retracts exactly its
-/// registry-owned row, and an operator-owned row for a different peer survives.
 #[tokio::test]
 async fn retraction_sound_removes_only_staled_registry_row() {
     let store = PartitionStore::new(
@@ -168,24 +149,10 @@ async fn retraction_sound_removes_only_staled_registry_row() {
 
     assert_eq!(outcome.retracted, BTreeSet::from(["peerA".to_string()]));
     assert_eq!(*store.deletes.lock().unwrap(), vec!["peerA".to_string()]);
-    // peerB is operator-owned: operator intent wins (the union collapses to the
-    // operator row under the single-row-per-peer index), so discovery neither
-    // deletes nor duplicates it.
     assert!(!outcome.upserted.contains("peerB"));
     assert!(!store.deletes.lock().unwrap().contains(&"peerB".to_string()));
     assert!(!store.upserts.lock().unwrap().contains(&"peerB".to_string()));
 }
-
-// ---------------------------------------------------------------------------
-// v4 registry/TOFU admission arm (Lean `signedByMember` / `isMember`).
-//
-// `decide_join_admission` is the registry-liveness arm modeled by `signedByMember`
-// in `PeerRegistryDiscovery/Transition.lean`. NOTE: the v5 CLI join path
-// (`enforce_v5_membership`) does NOT call this — v5 admission authority is the
-// admin-signed membership grant, fenced by `decide_v5_admission` / Lean
-// `admitsV5Join` (see the v5 section below). This arm survives only as the
-// transitional bootstrap; these tests fence it for that role.
-// ---------------------------------------------------------------------------
 
 fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow {
     RegistryMemberRow {
@@ -195,16 +162,6 @@ fn member_row(did: &str, status: &str, age: ChronoDuration) -> RegistryMemberRow
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signed network-membership materialization (Lean §9
-// `deriveNetworkDesired` / `decideMaterializable`).
-//
-// The Rust materializer receives only entries that already passed the
-// admin-signed-network, active-admin-signed-membership, fresh-member-signed
-// endpoint gate. These tests fence the executable derivation/reconciliation
-// layer against that model surface.
-// ---------------------------------------------------------------------------
-
 fn network_entry(peer: &str, did: &str) -> NetworkEndpointEntry {
     NetworkEndpointEntry {
         peer_id: peer.to_string(),
@@ -213,9 +170,6 @@ fn network_entry(peer: &str, did: &str) -> NetworkEndpointEntry {
     }
 }
 
-/// Mirrors Lean `mem_deriveNetworkDesired` plus the implementation's peer-id
-/// materialization boundary: every materializable non-self endpoint with a
-/// non-empty peer id becomes a network-owned desired peer id.
 #[test]
 fn derive_network_desired_matches_materializable_non_self_entries() {
     let entries = vec![
@@ -294,10 +248,6 @@ impl NetworkStore for NetworkPartitionStore {
     }
 }
 
-/// Mirrors Lean `materializable_is_derived`, `materializable_witness`, and the
-/// ownership partition used by the Rust reconciler: materializable network
-/// peers are upserted, stale network-owned peers are retracted, and non-network
-/// operator/data-plane intent blocks network ownership for the same peer.
 #[tokio::test]
 async fn network_reconcile_materializes_only_unblocked_network_peers() {
     let store = NetworkPartitionStore::new(
@@ -350,9 +300,6 @@ const STALE: ChronoDuration = ChronoDuration::seconds(200);
 // filter or stubbed a signature check would fail here.
 // ---------------------------------------------------------------------------
 
-/// A fresh random signing identity. Loading registers the public key in the
-/// process-local registry, so any other identity can later `verify` its
-/// signatures by DID (the temp key file is no longer needed once loaded).
 fn gate_identity(label: &str) -> KeyIdentity {
     let dir = tempfile::tempdir().expect("tempdir for gate key");
     KeyIdentity::load_or_create(dir.path().join(format!("{label}.key")), None)
@@ -411,10 +358,6 @@ async fn signed_endpoint(member: &KeyIdentity, age: ChronoDuration) -> EndpointR
     rec
 }
 
-/// Baseline: an active admin-signed membership whose member has a fresh
-/// member-signed endpoint IS materializable (`admittedMember` ∧
-/// `memberSignedEndpoint`). Without this the negative tests below could pass
-/// vacuously.
 #[tokio::test]
 async fn gate_admits_active_signed_member_with_fresh_endpoint() {
     let admin = gate_identity("gate-admit-admin");
@@ -432,8 +375,6 @@ async fn gate_admits_active_signed_member_with_fresh_endpoint() {
     assert_eq!(out[0].peer_id, "peer-node-id");
 }
 
-/// Mirrors `revoke_drops_member`: a `status != "active"` (revoked) membership
-/// does not materialize even with a perfectly fresh signed endpoint.
 #[tokio::test]
 async fn gate_excludes_revoked_member() {
     let admin = gate_identity("gate-revoke-admin");
@@ -452,9 +393,6 @@ async fn gate_excludes_revoked_member() {
     );
 }
 
-/// The reciprocal negative gate accepts only explicit revocations signed by
-/// the selected network's admin. Active and forged rows cannot suppress a
-/// standing conversation intent.
 #[tokio::test]
 async fn reciprocal_gate_selects_only_verified_revocations() {
     let admin = gate_identity("reciprocal-revoke-admin");
@@ -475,15 +413,13 @@ async fn reciprocal_gate_selects_only_verified_revocations() {
     assert_eq!(revoked, BTreeSet::from([valid_member.did().to_string()]));
 }
 
-/// Mirrors `unsigned_membership_not_materialized`: a membership whose admin
-/// signature does not verify is dropped, even if active with a fresh endpoint.
 #[tokio::test]
 async fn gate_excludes_forged_membership_signature() {
     let admin = gate_identity("gate-forgemem-admin");
     let member = gate_identity("gate-forgemem-member");
     let net = signed_network(&admin).await;
     let mut mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
-    mem.sig = vec![0u8; 64]; // tamper: no longer a valid admin signature
+    mem.sig = vec![0u8; 64];
     let ep = signed_endpoint(&member, FRESH).await;
 
     let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
@@ -496,8 +432,6 @@ async fn gate_excludes_forged_membership_signature() {
     );
 }
 
-/// Mirrors `forged_endpoint_not_materializable`: a valid active membership whose
-/// endpoint binding signature does not verify is dropped.
 #[tokio::test]
 async fn gate_excludes_forged_endpoint_signature() {
     let admin = gate_identity("gate-forgeep-admin");
@@ -505,7 +439,7 @@ async fn gate_excludes_forged_endpoint_signature() {
     let net = signed_network(&admin).await;
     let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
     let mut ep = signed_endpoint(&member, FRESH).await;
-    ep.sig = vec![0u8; 64]; // tamper: no longer a valid member binding signature
+    ep.sig = vec![0u8; 64];
 
     let out = select_materializable_entries(&admin, &net, &[mem], &[ep], Utc::now(), STALE_AFTER)
         .await
@@ -517,8 +451,6 @@ async fn gate_excludes_forged_endpoint_signature() {
     );
 }
 
-/// A stale endpoint (heartbeat lapsed) is not materializable even for an active
-/// signed member — the freshness arm of `memberSignedEndpoint`.
 #[tokio::test]
 async fn gate_excludes_stale_endpoint() {
     let admin = gate_identity("gate-stale-admin");
@@ -534,14 +466,12 @@ async fn gate_excludes_stale_endpoint() {
     assert!(out.is_empty(), "stale endpoint must not materialize");
 }
 
-/// A network root whose admin signature does not verify materializes NOTHING —
-/// the `validNetwork` precondition of `admittedMember`.
 #[tokio::test]
 async fn gate_returns_empty_for_invalid_network_signature() {
     let admin = gate_identity("gate-forgenet-admin");
     let member = gate_identity("gate-forgenet-member");
     let mut net = signed_network(&admin).await;
-    net.sig = vec![0u8; 64]; // tamper the network root signature
+    net.sig = vec![0u8; 64];
     let mem = signed_membership(&admin, &net.network_id, member.did(), "active").await;
     let ep = signed_endpoint(&member, FRESH).await;
 
@@ -555,18 +485,6 @@ async fn gate_returns_empty_for_invalid_network_signature() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// v5 signed-invite join admission (Lean §13 `admitsV5Join`).
-//
-// `decide_v5_admission` is the structural + signature + grantee authority the
-// CLI join path (`enforce_v5_membership`) actually enforces for a v5 invite —
-// the executable mirror of `admitsV5Join`. These tests fence each negative arm
-// of the Lean predicate. (Replay / single-use of the nonce is the separate
-// `replay_rejected` arm, exercised end-to-end in `cli_p2p.rs`.)
-// ---------------------------------------------------------------------------
-
-/// A fully valid admin-issued claim for an active admin-signed grant naming the
-/// joiner. The non-vacuity baseline (Lean `v5_admits_witness`).
 fn valid_v5_claim<'a>() -> V5AdmissionClaim<'a> {
     V5AdmissionClaim {
         issuer_did: "did:key:admin",
@@ -585,7 +503,6 @@ fn v5_admits_valid_admin_issued_grant() {
     assert_eq!(decide_v5_admission(&valid_v5_claim()), Ok(()));
 }
 
-/// Mirrors `v5_non_admin_issuer_rejected`: only admin-issued v5 invites admit.
 #[test]
 fn v5_rejects_non_admin_issuer() {
     let mut c = valid_v5_claim();
@@ -593,7 +510,6 @@ fn v5_rejects_non_admin_issuer() {
     assert_eq!(decide_v5_admission(&c), Err(V5Rejection::IssuerNotAdmin));
 }
 
-/// Mirrors `v5_invalid_network_sig_rejected`.
 #[test]
 fn v5_rejects_invalid_network_signature() {
     let mut c = valid_v5_claim();
@@ -604,7 +520,6 @@ fn v5_rejects_invalid_network_signature() {
     );
 }
 
-/// The deterministic-id / token-network-grant agreement arm.
 #[test]
 fn v5_rejects_inconsistent_network_id() {
     let mut c = valid_v5_claim();
@@ -615,7 +530,6 @@ fn v5_rejects_inconsistent_network_id() {
     );
 }
 
-/// Mirrors the `active` arm of `admittedMember` (revoke ⇒ not admitted).
 #[test]
 fn v5_rejects_revoked_grant() {
     let mut c = valid_v5_claim();
@@ -623,8 +537,6 @@ fn v5_rejects_revoked_grant() {
     assert_eq!(decide_v5_admission(&c), Err(V5Rejection::GrantNotActive));
 }
 
-/// Mirrors `v5_forged_grant_rejected`: an unsigned/forged grant is not an
-/// `admittedMember`.
 #[test]
 fn v5_rejects_invalid_grant_signature() {
     let mut c = valid_v5_claim();
@@ -635,21 +547,12 @@ fn v5_rejects_invalid_grant_signature() {
     );
 }
 
-/// Mirrors `v5_wrong_grantee_rejected`: the grant must name the joining node.
 #[test]
 fn v5_rejects_wrong_grantee() {
     let mut c = valid_v5_claim();
     c.grant_member_did = "did:key:someone-else";
     assert_eq!(decide_v5_admission(&c), Err(V5Rejection::WrongGrantee));
 }
-
-// ---------------------------------------------------------------------------
-// Layer-2 data-plane membership gate (D11: membership is the master gate over
-// BOTH layers). The full chain: `select_materializable_entries` (the signed
-// gate) feeds `peer_is_materializable` (the per-peer Layer-2 check the data-plane
-// reconciler uses). An active member's conversation edge materializes; a revoke
-// drops it from the gate output, so the Layer-2 edge retracts too.
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn data_plane_gate_admits_active_member_and_excludes_self() {
@@ -664,12 +567,10 @@ async fn data_plane_gate_admits_active_member_and_excludes_self() {
             .await
             .expect("gate");
 
-    // The coordinator (admin) sees the member as a materializable data-plane peer.
     assert!(
         peer_is_materializable(&entries, "peer-node-id", admin.did()),
         "active member must be a materializable data-plane peer"
     );
-    // The member never pairs with itself.
     assert!(
         !peer_is_materializable(&entries, "peer-node-id", member.did()),
         "self must be excluded from data-plane materialization"
@@ -689,15 +590,12 @@ async fn data_plane_gate_retracts_revoked_member() {
             .await
             .expect("gate");
 
-    // Revoked ⇒ not in the gate output ⇒ no Layer-2 data-plane edge (retracted).
     assert!(
         !peer_is_materializable(&entries, "peer-node-id", admin.did()),
         "revoked member's data-plane edge must retract (D11 master gate)"
     );
 }
 
-/// Mirrors the TOFU bootstrap arm: an empty registry (or one holding only our
-/// own self-registration row) admits any signed invite.
 #[test]
 fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
     let now = Utc::now();
@@ -718,7 +616,6 @@ fn join_gate_empty_or_self_only_registry_is_tofu_bootstrap() {
     );
 }
 
-/// Mirrors `isMember`: a live (online + fresh) issuer row admits the join.
 #[test]
 fn join_gate_admits_live_member_issuer() {
     let rows = [member_row("did:key:issuer", "online", FRESH)];
@@ -734,25 +631,19 @@ fn join_gate_admits_live_member_issuer() {
     );
 }
 
-/// Mirrors `non_member_invite_rejected`: with a non-empty registry, an issuer
-/// that is absent, offline, or stale is NOT a live member, so the join is
-/// rejected (the TOFU arm does not apply once peers exist).
 #[test]
 fn join_gate_rejects_non_live_member_when_registry_nonempty() {
     let now = Utc::now();
-    // Issuer absent (a different peer is the only member).
     let absent = [member_row("did:key:other", "online", FRESH)];
     assert_eq!(
         decide_join_admission("did:key:issuer", "did:key:self", &absent, now, STALE_AFTER),
         JoinAdmission::Rejected
     );
-    // Issuer present but offline.
     let offline = [member_row("did:key:issuer", "offline", FRESH)];
     assert_eq!(
         decide_join_admission("did:key:issuer", "did:key:self", &offline, now, STALE_AFTER),
         JoinAdmission::Rejected
     );
-    // Issuer present and online but heartbeat is stale.
     let stale = [member_row("did:key:issuer", "online", STALE)];
     assert_eq!(
         decide_join_admission("did:key:issuer", "did:key:self", &stale, now, STALE_AFTER),

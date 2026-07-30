@@ -21,8 +21,6 @@ const SOURCE_LABELS: Record<DerivedCancelCauseView["source"], string> = {
   unresolved: "an unresolved source",
 };
 
-/// Operator-facing summary first; the raw derivation (enums, confidence,
-/// evidence rows) stays available behind a disclosure for bug reports.
 export function CancelCauseDetails({
   cause,
 }: CancelCauseDetailsProps): JSX.Element {

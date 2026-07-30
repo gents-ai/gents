@@ -19,13 +19,10 @@ pub(crate) struct DesiredApplyBundle {
 }
 
 impl DesiredApplyBundle {
-    /// Module-private constructor. Only callable from within the
-    /// `desired_state` module tree.
     pub(super) fn from_trusted_bundle(inner: ConfigExportBundle) -> Self {
         Self { inner }
     }
 
-    /// View the underlying bundle's GraphQL-shaped fields.
     pub(crate) fn as_bundle(&self) -> &ConfigExportBundle {
         &self.inner
     }

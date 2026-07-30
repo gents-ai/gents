@@ -36,9 +36,6 @@ impl ProcessLifecycleObserver for CliReadyObserver {
     }
 }
 
-/// Forwards each published runtime generation's runnable behaviors to the host,
-/// so host-owned subsystems can reconcile against the control plane instead of a
-/// boot-time sample (#699).
 struct CliRunnableBehaviorObserver {
     tx: watch::Sender<Vec<String>>,
 }
@@ -49,10 +46,6 @@ impl gents::RuntimeSnapshotObserver for CliRunnableBehaviorObserver {
     }
 }
 
-/// Announce a freshly bound shim and build its readiness JSON.
-///
-/// Shared by the boot-time bind and the supervisor's later bind so the operator
-/// sees the same thing either way (#699).
 fn announce_codex_shim(
     bound: &crate::commands::codex_shim::BoundCodexShim,
     args: &ServeArgs,
@@ -99,15 +92,6 @@ fn codex_shim_launch_command(websocket: &str, auth_token_env: Option<&str>) -> S
     command
 }
 
-/// Watch published generations and bind the shim on the one that makes its bound
-/// behavior runnable (#699).
-///
-/// The decision is `ShimBinding`, which is the Rust mirror of
-/// `CodexShim.Binding.Shim.observePublish` — so what binds the shim here is the
-/// same state machine the Lean model proves converges, and the same one the
-/// conformance fence drives. The supervisor exits as soon as the shim is no
-/// longer waiting on something the control plane can supply: either it is
-/// serving, or it hit a host resource, which no generation can retract.
 fn set_codex_shim_health(handle: &CodexShimHealthHandle, health: CodexShimHealth) {
     if let Ok(mut guard) = handle.write() {
         *guard = health;
@@ -162,9 +146,6 @@ fn spawn_codex_shim_supervisor(
                         return;
                     }
                     Err(error) if error.is_dependency_missing() => {
-                        // The behavior is runnable but its documents are not
-                        // resolvable yet (the profile has not landed). Stay in the
-                        // suppliable class and wait for the next generation.
                         tracing::debug!(
                             behavior_id = %bound_behavior_id,
                             error = %error.error(),
@@ -194,7 +175,6 @@ fn spawn_codex_shim_supervisor(
             }
 
             if runnable_rx.changed().await.is_err() {
-                // The runtime is gone; nothing left to reconcile against.
                 return;
             }
         }
@@ -337,7 +317,6 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
         crate::p2p_relay::log_relay_mode_diagnostics(args.p2p_relay_mode);
         log_p2p_admission_config(config);
     }
-    // The MCP `defra_query` endpoint is opt-in (unauthenticated read surface).
     let mcp_query_scope = if !args.enable_mcp {
         None
     } else if args.mcp_query_collections.is_empty() {
@@ -347,17 +326,9 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
             args.mcp_query_collections.clone(),
         ))
     };
-    // Snapshot admission knobs for ready-status / runtime.json / metrics before
-    // the node builder consumes the config (P2PConfig is not Clone).
     let p2p_admission_state = p2p_config.as_ref().map(p2p_admission_state);
     let p2p_admission = p2p_admission_state.as_ref().map(P2pAdmissionState::to_json);
-    // One measured-health handle shared between the runtime's prober (writer)
-    // and the /metrics endpoint (reader), so the probe-status metric reports
-    // measurement instead of the stored document constant (#640).
     let backend_health = gents::BackendHealthMap::new();
-    // Created before the HTTP surface because the shim may bind long after
-    // /healthz starts serving: the supervisor flips this when a published
-    // generation makes the bound behavior runnable (#699).
     let codex_shim_health: CodexShimHealthHandle =
         Arc::new(std::sync::RwLock::new(if args.no_codex_shim {
             CodexShimHealth::Off
@@ -393,12 +364,8 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node")?,
     );
-    // Single schema entry point shared with daemon/desktop hosts.
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
-    // The host's window onto reconciliation: every published generation's
-    // runnable behaviors. The Codex shim reconciles against this instead of the
-    // boot-time document read that stranded it in #699.
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());
 
     let agent = Gents::from_default_behavior_documents(
@@ -504,15 +471,6 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
     )?;
 
     let mut codex_shim_output = None;
-    // The shim runs by default, so its preconditions must not take the whole
-    // runtime down: degrade and keep serving. But *how* it degrades matters. A
-    // missing bound behavior is something the control plane can still supply —
-    // on a fresh store the behavior often arrives moments later via `config
-    // apply` — so the shim waits for it and binds on the generation that carries
-    // it. Only a host resource we cannot get (a taken port, a refused address)
-    // is terminal. Conflating the two is #699: every fleet agent booted on an
-    // empty store, disabled the shim forever, and served a green /healthz behind
-    // a closed port.
     let codex_shim_bind_args = CodexShimBindArgs {
         home: home_dir.clone(),
         fs_root: effective_tool_root.clone(),
@@ -920,7 +878,6 @@ fn resolve_server_p2p_config(
 /// Upper bound matching `tokio::sync::Semaphore::MAX_PERMITS` (`usize::MAX >> 3`).
 /// Worker counts flow into `Semaphore::new` and panic above this.
 const MAX_P2P_SEMAPHORE_PERMITS: usize = usize::MAX >> 3;
-/// Prometheus gauges cast these to `i64`; keep requested values representable.
 const MAX_P2P_METRICS_GAUGE: usize = i64::MAX as usize;
 
 /// Reject degenerate or unrepresentable admission values before the node starts.
@@ -1059,8 +1016,6 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
 
-/// Shim host for URLs handed to `gents codex --remote`: IPv6 addresses
-/// need bracketing to form a valid authority (`ws://[::1]:9292/`).
 fn display_shim_host(host: IpAddr) -> String {
     let host_text = display_host(host);
     if host.is_ipv6() {
@@ -1207,7 +1162,6 @@ mod shim_host_tests {
         let zero_rate = parse_server(&["--p2p-rate-limit-rate", "0"]);
         assert!(resolve_server_p2p_config(tempdir.path(), &zero_rate).is_err());
 
-        // Use `=` form so clap does not treat a leading `-` as another flag.
         let negative_rate = parse_server(&["--p2p-rate-limit-rate=-1.0"]);
         assert!(resolve_server_p2p_config(tempdir.path(), &negative_rate).is_err());
 
@@ -1215,7 +1169,6 @@ mod shim_host_tests {
         let huge_push = parse_server(&["--p2p-max-concurrent-push-tasks", &usize::MAX.to_string()]);
         assert!(resolve_server_p2p_config(tempdir.path(), &huge_push).is_err());
 
-        // Metrics gauges cast pending capacity to i64; reject values that wrap.
         let over_gauge = ((i64::MAX as u128) + 1).to_string();
         let huge_pending = parse_server(&["--p2p-max-pending-dags", &over_gauge]);
         assert!(resolve_server_p2p_config(tempdir.path(), &huge_pending).is_err());

@@ -2,8 +2,6 @@ import { defineConfig, devices } from "@playwright/test";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-// Vite may be hoisted to the workspace root; resolve it instead of assuming
-// a nested node_modules layout.
 const viteBin = join(
   dirname(createRequire(import.meta.url).resolve("vite/package.json")),
   "bin/vite.js",
@@ -25,8 +23,6 @@ export default defineConfig({
   expect: {
     timeout: 10_000,
     toHaveScreenshot: {
-      // Near-exact: a 1% ratio (~13k px at 1440x900) once hid an entire
-      // status-label redesign. 64px covers antialiasing jitter, nothing more.
       maxDiffPixels: 64,
     },
   },

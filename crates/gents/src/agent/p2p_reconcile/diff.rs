@@ -17,14 +17,8 @@ use super::templates::PairingFilters;
 /// `filter_change_forces_reinstall`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingDesired {
-    /// Collections to subscribe to (gossip). Empty for `Push` templates, which
-    /// deliberately do NOT subscribe — the filtered replicator is the only
-    /// channel, so the unfiltered collection never gossips.
     pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
-    /// Collections the replicator carries. For subscribe+replicate this equals
-    /// `collections`; for filtered push it is the template collection set even
-    /// though `collections` (the subscription set) is empty.
     #[serde(default)]
     pub replicator_collections: BTreeSet<String>,
     #[serde(default)]
@@ -38,10 +32,6 @@ impl PairingDesired {
         !self.collections.is_empty() || !self.replicator_addresses.is_empty()
     }
 
-    /// The collection set this pairing's replicators carry. Explicit
-    /// `replicator_collections` wins; legacy rows with no explicit set fall
-    /// back to the subscription collections (the same convention `apply_op`
-    /// uses when installing).
     pub fn effective_replicator_collections(&self) -> &BTreeSet<String> {
         if self.replicator_collections.is_empty() {
             &self.collections
@@ -57,41 +47,14 @@ impl PairingDesired {
     }
 }
 
-/// Actual pairing state read from the remote.
-///
-/// BOUNDARY (Lean `PairingReconcile.PairingActual`): the model keys actual
-/// replicators on the full `ReplicatorId = (address, ReplicatorFilter,
-/// ReplicatorCollections)`. The remote read here observes the transport
-/// *address* and the *collection set* each replicator carries
-/// (`list_replicators` returns both) — the installed scope filters are not
-/// recoverable from the peer. The filter component of the identity is
-/// therefore fenced on the reconciler-owned side:
-/// `PairingApplied.replicator_filter` records the filter map last installed,
-/// and `compute_owned_pairing_diff` compares desired-vs-applied filters to
-/// force a reinstall on change (Lean `filter_change_forces_reinstall`), while
-/// the collections component compares desired against `replicator_collections`
-/// read back from the remote (Lean `collections_change_forces_reinstall`).
-/// Actual carries no `replicator_filter` by design; do not add one expecting
-/// to read it back from the remote.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingActual {
     pub collections: BTreeSet<String>,
     pub replicator_addresses: BTreeSet<String>,
-    /// Collection set each remote replicator carries, keyed by address, in
-    /// collection-*name* space (reverse-resolved at the read boundary like the
-    /// subscription set). An absent address means the collection set could not
-    /// be observed; the diff then skips the collections-identity comparison
-    /// for that address rather than churn.
     #[serde(default)]
     pub replicator_collections: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Reconciler-owned pairing state persisted after successful operations.
-///
-/// `replicator_filter` records the scope filter last installed for this
-/// pairing's replicators, so a subsequent desired filter that differs is
-/// detected as divergence and triggers reinstall (Lean
-/// `filter_change_forces_reinstall`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingApplied {
     pub collections: BTreeSet<String>,
@@ -106,7 +69,6 @@ impl PairingApplied {
     }
 }
 
-/// One emit-an-RPC instruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffOp {
     InstallCollection(String),
@@ -115,7 +77,6 @@ pub enum DiffOp {
     TeardownReplicator(String),
 }
 
-/// Diff in canonical sorted order: collections first, then replicators.
 pub fn compute_pairing_diff(desired: &PairingDesired, actual: &PairingActual) -> Vec<DiffOp> {
     let mut ops = Vec::new();
     for c in desired.collections.difference(&actual.collections) {
@@ -139,8 +100,6 @@ pub fn compute_pairing_diff(desired: &PairingDesired, actual: &PairingActual) ->
     ops
 }
 
-/// Ownership-safe diff: install desired gaps, but only tear down actual extras
-/// that this reconciler previously recorded in `applied`.
 pub fn compute_owned_pairing_diff(
     desired: &PairingDesired,
     actual: &PairingActual,
@@ -174,9 +133,6 @@ pub fn compute_owned_pairing_diff(
     {
         ops.push(DiffOp::InstallReplicator(r.clone()));
     }
-    // Reinstall every managed address that survives into the desired set with
-    // a changed identity: the old replicator must be replaced (Lean
-    // `filter_change_forces_reinstall` / `collections_change_forces_reinstall`).
     for r in actual
         .replicator_addresses
         .intersection(&applied.replicator_addresses)

@@ -39,8 +39,6 @@ describe("ErrorBoundary", () => {
       );
 
       expect(screen.getByTestId("error-boundary")).toBeInTheDocument();
-      // The details carry the real diagnostics: stack + component stack —
-      // the packaged app has no console for a bug report to quote.
       const details = screen.getByTestId("error-boundary").querySelector("pre");
       expect(details?.textContent).toContain("boom from render");
       expect(details?.textContent).toContain("Component stack:");
@@ -57,8 +55,6 @@ describe("ErrorBoundary", () => {
   });
 
   it("App wraps the shell in the boundary (the actual white-screen fix)", () => {
-    // App's outer function is hook-free, so its element tree can be
-    // inspected without mounting the shell.
     expect(App({}).type).toBe(ErrorBoundary);
   });
 });

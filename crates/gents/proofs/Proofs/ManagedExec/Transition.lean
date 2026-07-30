@@ -1,11 +1,5 @@
 import Proofs.ManagedExec.State
 
-/-!
-# Managed Exec Transitions
-
-Relational transition system for a single managed subprocess executor.
--/
-
 namespace ManagedExecContext
 
 inductive Transition : ManagedExecContext → ManagedExecContext → Prop where
@@ -57,13 +51,11 @@ inductive Transition : ManagedExecContext → ManagedExecContext → Prop where
       (h_post : post = { pre with now := t })
       : Transition pre post
 
-/-- Unbounded executor trace. -/
 inductive Trace : ManagedExecContext → ManagedExecContext → Prop where
   | refl {c : ManagedExecContext} : Trace c c
   | step {c₁ c₂ c₃ : ManagedExecContext} :
       Transition c₁ c₂ → Trace c₂ c₃ → Trace c₁ c₃
 
-/-- Exact-length executor trace used for bounded liveness statements. -/
 inductive BoundedTrace : ManagedExecContext → ManagedExecContext → Nat → Prop where
   | refl {c : ManagedExecContext} : BoundedTrace c c 0
   | step {c₁ c₂ c₃ : ManagedExecContext} {n : Nat} :

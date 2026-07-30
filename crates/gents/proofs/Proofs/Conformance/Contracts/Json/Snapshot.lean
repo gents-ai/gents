@@ -20,12 +20,6 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 
-/-!
-# Conformance Snapshot Assembly
-
-Top-level JSON snapshot emitted for Rust conformance tests.
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

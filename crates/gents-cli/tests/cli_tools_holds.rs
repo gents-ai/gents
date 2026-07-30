@@ -8,11 +8,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// `tools holds` lists rows parked in `awaitingApproval`, and
-/// `tools approve --deny` writes the AgentToolApproval decision the runtime's
-/// verdict watcher consumes. The row is seeded directly — driving a live
-/// daemon into a hold needs an approval-required behavior and a model turn,
-/// which the hook integration tests already cover.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -40,7 +35,6 @@ async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // No holds yet.
     let empty = run_cli_json(
         &home_dir,
         &[
@@ -54,7 +48,6 @@ async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
     )?;
     assert_eq!(empty.get("count").and_then(Value::as_u64), Some(0));
 
-    // Seed a held row the way the runtime's hold_for_approval persists it.
     let deadline = (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -98,8 +91,6 @@ async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
         Some("bash_unrestricted")
     );
 
-    // Deny it with a reason; the decision document must land with the
-    // approver identity defaulting to the home agent DID.
     let denied = run_cli_json(
         &home_dir,
         &[
@@ -152,7 +143,6 @@ async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
         Some(agent_did.as_str())
     );
 
-    // Approving an unknown call id fails with a useful message.
     let stderr = run_cli_failure_stderr(
         &home_dir,
         &[

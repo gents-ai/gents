@@ -132,11 +132,6 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "enable_defra_query",
             row.enable_defra_query,
         )),
-        // tool_policy_version is backfill-owned: the save handler carries it from
-        // the loaded row and never sets it from a UI flip (see config.rs), so this
-        // re-emits the stored value (graphql_string_field writes `null` for None,
-        // which keeps an unversioned row unversioned). The version is preserved by
-        // load-then-re-emit, not by omission.
         Some(graphql_string_field(
             "tool_policy_version",
             row.tool_policy_version.as_deref(),

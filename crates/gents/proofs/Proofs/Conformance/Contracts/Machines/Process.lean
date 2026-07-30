@@ -1,10 +1,6 @@
 import Proofs.Process
 import Proofs.Conformance.ContractTypes
 
-/-!
-# Process Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 def processStates : List ProcessState :=

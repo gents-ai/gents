@@ -75,7 +75,6 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
 }
 
 async fn session_fork(args: SessionForkArgs) -> Result<()> {
-    // CLI resolves the caller DID from local config unless overridden.
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
         .context("resolving caller agent_did")?;
 

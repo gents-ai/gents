@@ -3,13 +3,6 @@ import Proofs.Persistence
 import Proofs.Request.State
 import Proofs.Transcript.State
 
-/-!
-# StreamingResponse State
-
-State vocabulary for the AgentResponse streaming → terminal lifecycle.
-See `docs/superpowers/specs/2026-05-14-agent-response-streaming-lean-design.md` (removed from the tree; see git history).
--/
-
 namespace StreamingResponse
 
 abbrev DocId := Nat
@@ -88,16 +81,7 @@ structure ResponseContext where
   requestId                   : RequestId
   status                      : Status
   liveTail                    : LiveTail
-  /-- Reasoning-presence of the live tail (issue #492 / enable-thinking).
-  Tracks whether the streaming live tail currently carries chain-of-thought
-  reasoning. This is the source that `finalizeComplete` copies into
-  `durableReasoning` at materialize time, before clearing the live tail. -/
   tailReasoning               : LiveTail
-  /-- Durable reasoning-presence persisted into the materialized
-  `AgentMessage.reasoning` field at finalize/materialize (issue #492). This is
-  a NEW, separate persistence captured AT materialize time as a copy of
-  `tailReasoning`; it is independent of (and does not relax) the issue #64
-  invariant that clears `liveTail` to `.empty` on finalize. -/
   durableReasoning            : LiveTail
   tokenCount                  : Nat
   lastProgressAt              : Time

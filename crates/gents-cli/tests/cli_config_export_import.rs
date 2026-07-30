@@ -8,12 +8,6 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Read all `object.json` files from subdirectories of a collection dir.
-/// Returns an empty Vec if the directory does not exist.
 fn read_per_doc_collection(root: &Path, dir_name: &str) -> Result<Vec<Value>> {
     let dir = root.join(dir_name);
     if !dir.exists() {
@@ -32,8 +26,6 @@ fn read_per_doc_collection(root: &Path, dir_name: &str) -> Result<Vec<Value>> {
     Ok(docs)
 }
 
-/// Run `gents config export --root <root>` and return the stdout
-/// confirmation string. Errors if the command exits non-zero.
 fn run_config_export(home_dir: &Path, root: &Path, extra_args: &[&str]) -> Result<String> {
     let root_str = root
         .to_str()
@@ -43,7 +35,6 @@ fn run_config_export(home_dir: &Path, root: &Path, extra_args: &[&str]) -> Resul
     run_cli_text(home_dir, &args)
 }
 
-/// Run `gents config apply --root <root>` and return the JSON report.
 fn run_config_apply(home_dir: &Path, root: &Path) -> Result<Value> {
     let root_str = root
         .to_str()
@@ -104,16 +95,13 @@ async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Resu
     Ok(())
 }
 
-/// Write a minimal manifest root with a single agent, behavior, tool-selection,
-/// and inference-backend, all using filesystem-safe IDs (no colons).
-/// Returns `(agent_did, behavior_id, selection_id, backend_id)`.
 fn write_simple_manifest_root(
     root: &Path,
     agent_name: &str,
     backend_endpoint: &str,
     model_name: &str,
 ) -> Result<(String, String, String, String)> {
-    let agent_did = format!("did-{agent_name}"); // no colon separators
+    let agent_did = format!("did-{agent_name}");
     let behavior_id = format!("{agent_name}-default");
     let selection_id = format!("{agent_name}-tools");
     let backend_id = format!("{agent_name}-backend");
@@ -183,18 +171,6 @@ fn write_simple_manifest_root(
     Ok((agent_did, behavior_id, selection_id, backend_id))
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-/// Test that `config import` correctly imports a JSON bundle, rejects a second
-/// import without `--override`, and accepts one with `--override`.
-///
-/// This test builds its bundle fixture inline (not from `config export --root`)
-/// so that it exercises the `config import` mechanics without being affected
-/// by the filesystem-safe-ID requirement that `config export --root` enforces.
-/// The `config export --root` → `config apply --root` roundtrip is covered by
-/// `config_export_apply_round_trips_with_extra_collections` below.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_import_round_trips_and_requires_override() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -212,7 +188,6 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     let backend_id = format!("{agent_name}-backend");
     let export_path = tempdir.path().join("agent-config.json");
 
-    // Build an inline JSON bundle representing a freshly initialised agent.
     let bundle = serde_json::json!({
         "format": "gents-config/v2",
         "agent_did": agent_did,
@@ -312,7 +287,6 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
         Some(2)
     );
 
-    // A second import without --override must fail with guidance.
     let stderr = run_cli_failure_stderr(
         &target_home,
         &[
@@ -326,7 +300,6 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
         "expected override guidance in stderr, got:\n{stderr}"
     );
 
-    // With --override the import must succeed.
     let overridden = run_cli_json(
         &target_home,
         &[
@@ -344,12 +317,6 @@ async fn config_import_round_trips_and_requires_override() -> Result<()> {
     Ok(())
 }
 
-/// Test that `config export --root` writes a manifest root that faithfully
-/// captures tool services, tasks, and schedules added via `config import`,
-/// and that `config apply --root` can reproduce those docs in a fresh DB.
-///
-/// Uses filesystem-safe IDs (no colons) so that `config export --root`
-/// does not reject the behavior/selection handles.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -371,7 +338,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let second_task_id = format!("weekly-audit-{}", Uuid::new_v4().simple());
     let second_schedule_id = format!("{second_task_id}-daily");
 
-    // Set up the source DB via `config apply --root` using simple, safe IDs.
     let (agent_did, behavior_id, _selection_id, _backend_id) = write_simple_manifest_root(
         &initial_root,
         &agent_name,
@@ -379,7 +345,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         &model_name,
     )?;
 
-    // Add a tool service, task, and schedule to the initial root.
     {
         let dir = initial_root.join("tool-services").join(&service_id);
         fs::create_dir_all(&dir)?;
@@ -480,7 +445,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
 
-    // Apply the manifest root to the source DB.
     let applied = run_config_apply(&source_home, &initial_root)?;
     assert_eq!(
         applied.get("status").and_then(Value::as_str),
@@ -510,7 +474,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(2)
     );
 
-    // Export the source DB to a new manifest root.
     let export_stdout =
         run_config_export(&source_home, &export_root, &["--agent-did", &agent_did])?;
     assert!(
@@ -518,7 +481,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         "expected export confirmation, got: {export_stdout}"
     );
 
-    // Verify the export root contains the expected collections.
     let principal = read_json_file(&export_root.join("agent-principal.json"))?;
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
@@ -535,7 +497,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(service_id.as_str()),
         "expected tool service {service_id} in export root"
     );
-    // Runtime-only fields should be absent.
     let ts_object = read_json_file(
         &export_root
             .join("tool-services")
@@ -596,8 +557,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         .iter()
         .find(|t| t.get("task_id").and_then(Value::as_str) == Some(task_id.as_str()))
         .ok_or_else(|| anyhow!("task {task_id} not found in export root"))?;
-    // The prompt_template may be spilled to a sidecar file.  Accept either the
-    // sidecar reference ("./prompt.md") or the inline value.
     let prompt_template = task_doc
         .get("prompt_template")
         .and_then(Value::as_str)
@@ -640,7 +599,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         "expected schedule {second_schedule_id} in export root"
     );
 
-    // Apply the exported root to a fresh target DB and verify convergence.
     let reapplied = run_config_apply(&target_home, &export_root)?;
     assert_eq!(
         reapplied.get("status").and_then(Value::as_str),
@@ -670,7 +628,6 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         Some(2)
     );
 
-    // Re-export from the target and verify the data survived the apply.
     let reexport_stdout =
         run_config_export(&target_home, &reapply_root, &["--agent-did", &agent_did])?;
     assert!(

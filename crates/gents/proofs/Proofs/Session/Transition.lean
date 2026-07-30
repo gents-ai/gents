@@ -1,16 +1,7 @@
 import Proofs.Session.State
 
-/-!
-# Session Queue Transitions
-
-Relational semantics for R4a session queues.
--/
-
 namespace SessionQueue
 
-/-- Session queue transitions. Coalescing is represented as either appending the
-    first pending request for a non-empty key, or as a no-op when that key is
-    already represented in `pending`. -/
 inductive Transition : SessionQueueState → SessionQueueState → Prop where
   | append_pending {pre post : SessionQueueState} {entry : QueueEntry} :
       entry.policy = .append →
@@ -46,7 +37,6 @@ inductive Transition : SessionQueueState → SessionQueueState → Prop where
       post = pre.drainAutomatedWakeups source queueKey →
       Transition pre post
 
-/-- A trace is a sequence of valid session queue transitions. -/
 inductive Trace : SessionQueueState → SessionQueueState → Prop where
   | refl {s : SessionQueueState} : Trace s s
   | step {s₁ s₂ s₃ : SessionQueueState} :

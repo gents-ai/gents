@@ -1,36 +1,19 @@
-//! Permission-projected snapshots.
-//!
-//! The aggregate snapshot is available under `core`, but sections are stripped
-//! unless the host-declared grants (mirroring capability permission sets) allow
-//! them. Projection runs at the builder seam so every snapshot-bearing response
-//! — direct, lifecycle, mutation refresh, nested pairing/removal — is covered.
-
 use crate::types::{
     BehaviorView, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
     DesktopRuntimeSnapshot, InferenceBackendView, SkillView, ToolSelectionView,
 };
 
-/// Section grants for snapshot / bootstrap projection.
-///
-/// Hosts set these on [`crate::config::BridgeConfig`] to match the capability
-/// permission sets they grant the webview. Gents Desktop uses [`Self::all`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotGrants {
-    /// Conversations / session previews on deployments.
     pub session_read: bool,
-    /// Peer network details (addresses, graphql, dial state, saved peers).
     pub fleet_read: bool,
-    /// Authored config: prompts, endpoints, credentials, full tool/task shapes.
     pub config_read: bool,
-    /// Operations-oriented payload on the aggregate snapshot (reserved).
     pub operations_read: bool,
-    /// Filesystem paths, tool roots, GraphQL endpoints on bootstrap.
     pub runtime_admin: bool,
 }
 
 impl Default for SnapshotGrants {
     fn default() -> Self {
-        // core-only: lifecycle/runtime status, no domain sections.
         Self {
             session_read: false,
             fleet_read: false,
@@ -56,7 +39,6 @@ impl SnapshotGrants {
         }
     }
 
-    /// Chat package profile: session + purpose-built config fields (not full config-read).
     pub fn chat_package() -> Self {
         Self {
             session_read: true,
@@ -67,7 +49,6 @@ impl SnapshotGrants {
         }
     }
 
-    /// Fleet package profile (read-only base, no admin paths).
     pub fn fleet_package() -> Self {
         Self {
             session_read: false,
@@ -79,7 +60,6 @@ impl SnapshotGrants {
     }
 }
 
-/// Project a full client snapshot down to the granted sections.
 pub fn project_client_snapshot(
     mut snapshot: DesktopClientSnapshot,
     grants: SnapshotGrants,
@@ -96,7 +76,6 @@ pub fn project_bootstrap_summary(
     grants: SnapshotGrants,
 ) -> DesktopBootstrapSummary {
     if !grants.runtime_admin {
-        // core: keep existence flags + identity labels; strip paths and tool roots.
         summary.default_agent_home = String::new();
         summary.init_tool_root = None;
         summary.desktop_home = String::new();
@@ -107,7 +86,6 @@ pub fn project_bootstrap_summary(
     if !grants.fleet_read {
         summary.saved_peers.clear();
     } else if !grants.runtime_admin {
-        // fleet-read without runtime-admin: peer ids/labels only — no addresses/endpoints.
         for peer in &mut summary.saved_peers {
             peer.addr = String::new();
             peer.graphql = None;
@@ -122,7 +100,6 @@ pub fn project_runtime_snapshot(
 ) -> DesktopRuntimeSnapshot {
     if !grants.fleet_read {
         runtime.listen_addresses.clear();
-        // Keep aggregate health counts (lifecycle); clear per-peer detail via deployments.
     }
     runtime.deployments = runtime
         .deployments
@@ -148,7 +125,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         return deployment;
     }
 
-    // Purpose-built redaction: keep selection/identity/capability-shape; strip authored content.
     deployment.behaviors = deployment
         .behaviors
         .into_iter()
@@ -170,15 +146,11 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         .map(project_tool_selection_for_fleet)
         .collect();
 
-    // Full authored config surfaces require config-read.
-    // Fleet-read without config-read keeps count/metric fields for FleetRow
-    // (task/conversation counts) while clearing authored bodies.
     if !grants.fleet_read {
         deployment.tasks.clear();
         deployment.schedules.clear();
         deployment.event_triggers.clear();
     } else {
-        // Metric-only: drop prompt templates and run history detail.
         for task in &mut deployment.tasks {
             task.prompt_template = None;
             task.description = None;
@@ -191,18 +163,15 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment
 }
 
-/// Chat needs skillRefs, display names, and model label — not system prompts.
 fn project_behavior_for_chat(mut behavior: BehaviorView) -> BehaviorView {
     behavior.system_prompt = None;
     behavior.backend_id = None;
-    // model_name is a selection/label field (projectable per spec).
     behavior.inference_profile_id = None;
     behavior.compaction_strategy = None;
     behavior.compaction_threshold = None;
     behavior
 }
 
-/// Slash skills need scope/enabled/name — not instruction bodies.
 fn project_skill_for_chat(mut skill: SkillView) -> SkillView {
     skill.instructions = None;
     skill.description = None;
@@ -218,7 +187,6 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
 }
 
 fn project_tool_selection_for_fleet(mut selection: ToolSelectionView) -> ToolSelectionView {
-    // Keep capability-shape identifiers for fleet tool icons; drop roots/policies.
     selection.file_tool_root = None;
     selection.command_execution_policy = None;
     selection.command_allowed_argv_prefixes.clear();
@@ -369,12 +337,10 @@ mod tests {
         assert!(dep.conversations.is_empty());
         assert!(dep.addr.is_empty());
         assert!(dep.behaviors[0].system_prompt.is_none());
-        // model_name is a projectable selection/label field for chat.
         assert_eq!(dep.behaviors[0].model_name.as_deref(), Some("gpt"));
         assert_eq!(dep.behaviors[0].skill_refs, vec!["skill_a".to_string()]);
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.skills[0].skill_id, "skill_a");
-        // Identity labels remain.
         assert_eq!(
             projected.bootstrap.init_agent_did.as_deref(),
             Some("did:test:local")
@@ -400,7 +366,6 @@ mod tests {
         assert!(projected.bootstrap.saved_peers[0].addr.is_empty());
         assert!(projected.bootstrap.saved_peers[0].graphql.is_none());
         let dep = &projected.client.as_ref().unwrap().deployments[0];
-        // fleet_read keeps deployment network fields
         assert_eq!(dep.addr, "/ip4/127.0.0.1/tcp/1");
         assert!(dep.conversations.is_empty());
     }

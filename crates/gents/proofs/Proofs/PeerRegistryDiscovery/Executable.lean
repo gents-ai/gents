@@ -1,18 +1,9 @@
 import Proofs.PeerRegistryDiscovery.Transition
 
-/-!
-# Peer Registry Discovery — Executable Contract
-
-Small executable vocabulary consumed by the Rust conformance bridge (R5).
-Mirrors `PairingReconcile/Executable.lean`: a `TransitionKind` vocabulary and a
-coarse phase machine with `toContract`/`fromContract?` round-trips.
--/
-
 namespace PeerRegistryDiscovery
 
 def domainName : String := "PeerRegistryDiscovery"
 
-/-- Coarse phase vocabulary for contract extraction. -/
 inductive DiscoveryPhase where
   | unsettled
   | settled
@@ -35,14 +26,9 @@ theorem fromContract_toContract (phase : DiscoveryPhase) :
 
 end DiscoveryPhase
 
-/-- Stringly-typed transition kinds emitted by the discovery reconciler. -/
 inductive TransitionKind where
   | derive
   | join
-  /-- A reciprocal join (`--reciprocal`): same admission gate as `join`, plus a
-  return-leg replicator wired outside the modeled discovery state. Emitted as a
-  distinct kind so the Rust bridge cannot route a reciprocal join down a path
-  that skips `decideAdmitsJoin` — it shares `join`'s admission decision. -/
   | reciprocalJoin
   | removeEntry
   | operatorWrite
@@ -71,9 +57,6 @@ theorem fromString_toString (k : TransitionKind) :
 
 end TransitionKind
 
-/-- Executable coarse transition relation for conformance extraction. A derive
-step settles; a registry edit (join/removeEntry) unsettles the derived view;
-an operator write leaves the derived view as-is. -/
 def step? : DiscoveryPhase → TransitionKind → Option DiscoveryPhase
   | _, .derive => some .settled
   | _, .join => some .unsettled
@@ -81,23 +64,9 @@ def step? : DiscoveryPhase → TransitionKind → Option DiscoveryPhase
   | _, .removeEntry => some .unsettled
   | phase, .operatorWrite => some phase
 
-/-! ## Executable join-admission decision (mirrors Rust `decide_join_admission`)
-
-The Rust bridge decides whether a join is admissible with a single boolean. This
-function is that boolean, and it now threads the single-use nonce check: a join
-is admitted iff it is member-signed (or TOFU-bootstrapped) AND the token's nonce
-has not already been consumed. `decideAdmitsJoin_agrees` fences it to the
-`admitsJoin` Prop that BOTH the `Transition.join` and the `Transition.reciprocalJoin`
-constructors require, so the executable decision and the relation can never
-diverge on replay — and a reciprocal join takes the identical decision (no
-weaker reciprocal path exists). -/
 def decideAdmitsJoin (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) : Bool :=
   decide (admitsJoin s tok tofuBootstrap)
 
-/-- The executable decision agrees exactly with the `admitsJoin` relation that
-gates `Transition.join`. The freshness conjunct is inside `admitsJoin`, so the
-nonce check is threaded by construction — a replayed token (`tok.nonce ∈
-s.consumedNonces`) makes both the Bool `false` and the Prop unprovable. -/
 theorem decideAdmitsJoin_agrees (s : DiscoveryState) (tok : Token) (tofuBootstrap : Bool) :
     decideAdmitsJoin s tok tofuBootstrap = true ↔ admitsJoin s tok tofuBootstrap := by
   unfold decideAdmitsJoin

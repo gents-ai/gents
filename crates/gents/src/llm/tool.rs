@@ -1,22 +1,10 @@
-//! Native tool trait + definition, mirroring rig's `tool::{Tool, ToolDyn,
-//! ToolError}` and `completion::ToolDefinition`. gents is not a wasm
-//! target, so the wasm-compat bounds reduce to `Send`/`Sync` and the boxed
-//! future is a plain [`BoxFuture`].
-//!
-//! Tools implement [`Tool`] (typed args/output); the blanket impl gives every
-//! `Tool` a dyn-safe [`ToolDyn`] (string-in / string-out) that the owned loop
-//! dispatches. See `docs/design/native-llm-types-shed-rig.md` (removed from the tree; see git history).
-
 use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
-/// Boxed, `Send` future — the off-wasm form of rig's `BoxFuture`.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// A tool's name, description, and JSON-schema parameters, sent to the provider.
-/// Mirrors rig's `completion::ToolDefinition`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
@@ -24,14 +12,10 @@ pub struct ToolDefinition {
     pub parameters: serde_json::Value,
 }
 
-/// Error from dyn tool dispatch: the tool itself failed, or args/output failed
-/// to de/serialize. Mirrors rig's `tool::ToolError`.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
-    /// Error returned by the tool's own `call`.
     #[error("tool call error: {0}")]
     ToolCallError(#[from] Box<dyn std::error::Error + Send + Sync>),
-    /// Arguments or output failed to de/serialize.
     #[error("tool json error: {0}")]
     JsonError(#[from] serde_json::Error),
     /// The model's tool-call `arguments` string could not be parsed even after a
@@ -51,18 +35,9 @@ pub enum ToolError {
     },
 }
 
-/// Why a tool-call `arguments` string was unparseable, mapped from the failing
-/// [`serde_json`] error category. Distinguishes a truncated payload (the
-/// `finish_reason == "length"` shape) from a structurally malformed one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnparseableArgsKind {
-    /// The arguments ended mid-value: the generation hit its token cap
-    /// (`finish_reason == "length"`) before closing the JSON. Surfaced by
-    /// `serde_json` as `Category::Eof`.
     Truncated,
-    /// The arguments were structurally malformed (e.g. a lone-backslash escape
-    /// the model emitted raw) and the tolerant repair pass could not recover a
-    /// value that deserializes into the tool's `Args`.
     Malformed,
 }
 
@@ -75,35 +50,24 @@ impl std::fmt::Display for UnparseableArgsKind {
     }
 }
 
-/// A typed tool: deserializes `Args`, runs, serializes `Output`. Mirrors rig's
-/// `tool::Tool`.
 pub trait Tool: Sized + Send + Sync {
-    /// Unique tool name.
     const NAME: &'static str;
-    /// The tool's error type.
     type Error: std::error::Error + Send + Sync + 'static;
-    /// The tool's argument type (deserialized from the model's JSON).
     type Args: for<'a> Deserialize<'a> + Send + Sync;
-    /// The tool's output type (serialized back to the model).
     type Output: Serialize;
 
-    /// The tool's name (defaults to [`Tool::NAME`]).
     fn name(&self) -> String {
         Self::NAME.to_string()
     }
 
-    /// The tool's definition; `prompt` may tailor it.
     fn definition(&self, prompt: String) -> impl Future<Output = ToolDefinition> + Send + Sync;
 
-    /// Execute the tool.
     fn call(
         &self,
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 }
 
-/// Dyn-safe, string-in/string-out tool the loop dispatches. Mirrors rig's
-/// `tool::ToolDyn`.
 pub trait ToolDyn: Send + Sync {
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
@@ -154,7 +118,6 @@ fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
     A: for<'de> Deserialize<'de>,
 {
-    // The happy path: a clean `arguments` string parses with no repair.
     let first_error = match serde_json::from_str::<A>(args) {
         Ok(value) => return Ok(value),
         Err(error) => error,
@@ -172,16 +135,10 @@ where
     if let Some(repaired) = repair_tool_arguments(args) {
         match serde_json::from_str::<A>(&repaired) {
             Ok(value) => return Ok(value),
-            // The escape repair changed the string but it still does not parse:
-            // classify on THIS (post-repair) error so a malformed-escape that also
-            // happens to be truncated is reported as `Truncated`, not `Malformed`.
             Err(second_error) => return Err(unparseable_args_error(&second_error)),
         }
     }
 
-    // No repair was applicable (or it was a no-op). Surface the typed failure so
-    // the caller can tell a truncated payload (`finish_reason == "length"`) from a
-    // malformed one and notify the model accordingly.
     Err(unparseable_args_error(&first_error))
 }
 
@@ -240,11 +197,6 @@ pub fn repair_tool_arguments(raw: &str) -> Option<String> {
     }
 }
 
-/// Double any backslash that does not begin a valid JSON escape sequence, so the
-/// model's raw single-backslash output (`\d`, `C:\temp`) becomes legal JSON. A
-/// backslash that already introduces a valid escape (`\"`, `\\`, `\n`, `ꯍ`,
-/// …) is left untouched, and the second backslash of a legal `\\` pair is
-/// consumed so it is not re-escaped.
 fn escape_lone_backslashes(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = String::with_capacity(raw.len() + 8);
@@ -255,31 +207,24 @@ fn escape_lone_backslashes(raw: &str) -> String {
             continue;
         }
         match bytes.get(idx + 1).copied() {
-            // A legal single-char JSON escape: emit the pair verbatim and consume
-            // the escaped char so it is not reconsidered.
             Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
                 out.push('\\');
                 if let Some((_, next)) = chars.next() {
                     out.push(next);
                 }
             }
-            // A `\u` escape is legal only when followed by four hex digits.
             Some(b'u') if is_valid_unicode_escape(bytes, idx) => {
                 out.push('\\');
                 if let Some((_, next)) = chars.next() {
                     out.push(next);
                 }
             }
-            // A lone backslash (invalid escape, or a trailing `\` at EOF): double
-            // it so the literal backslash is preserved as legal JSON.
             _ => out.push_str("\\\\"),
         }
     }
     out
 }
 
-/// Whether the bytes at `backslash_idx` form a valid `\uXXXX` escape (a `u`
-/// followed by exactly four ASCII hex digits).
 fn is_valid_unicode_escape(bytes: &[u8], backslash_idx: usize) -> bool {
     let hex_start = backslash_idx + 2;
     bytes
@@ -287,12 +232,6 @@ fn is_valid_unicode_escape(bytes: &[u8], backslash_idx: usize) -> bool {
         .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit))
 }
 
-/// Escape literal control characters (`0x00-0x1f`) that appear INSIDE string
-/// literals, leaving inter-token whitespace untouched (#589). Expects its
-/// input to have well-formed backslash escapes (run [`escape_lone_backslashes`]
-/// first), so `\"` inside a string never toggles the in-string state. An
-/// unterminated (truncated) string stays unterminated — this never closes
-/// anything.
 fn escape_control_characters_in_strings(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 8);
     let mut in_string = false;
@@ -306,8 +245,6 @@ fn escape_control_characters_in_strings(raw: &str) -> String {
             continue;
         }
         match ch {
-            // A well-formed escape pair: emit verbatim, consume the escaped
-            // char so an escaped quote does not toggle the string state.
             '\\' => {
                 out.push(ch);
                 if let Some(next) = chars.next() {
@@ -387,14 +324,8 @@ pub fn normalize_tool_call_arguments(
     }
 }
 
-/// The truncation cap for the coercion warning's payload snippet: enough to
-/// identify the corruption class and build a fixture from real bytes, without
-/// dumping an unbounded model payload into the log stream.
 const COERCION_WARN_SNIPPET_CHARS: usize = 256;
 
-/// One bounded, counted warning per non-object coercion, so production
-/// occurrences of the #589/#590 class are observable (the original incident
-/// left zero log evidence of the offending bytes).
 fn warn_nonobject_arguments_coerced(seam: &str, tool_name: &str, arguments: &serde_json::Value) {
     let rendered = arguments.to_string();
     let truncated: String = rendered.chars().take(COERCION_WARN_SNIPPET_CHARS).collect();

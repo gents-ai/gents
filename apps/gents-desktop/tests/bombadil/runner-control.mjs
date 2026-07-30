@@ -82,9 +82,6 @@ export async function stopProcess(
 
   let sentFinalKill = false;
   if (killProcessGroup) {
-    // Bombadil launches Chrome descendants. The CLI may exit on SIGTERM while
-    // a wedged browser remains in its process group, so always fence the group
-    // with SIGKILL after the grace period (ESRCH simply means it is clean).
     const killSignalSent = sendSignal(child, "SIGKILL", true, killByPid, alreadyExited);
     if (!killSignalSent) {
       return;

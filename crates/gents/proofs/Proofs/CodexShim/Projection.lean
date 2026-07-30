@@ -3,29 +3,8 @@ import Proofs.CodexShim.TurnLifecycle
 import Proofs.InferenceCall.State
 import Proofs.Request.Transition
 
-/-!
-# Codex Shim Projection
-
-Projection from the core GENTS request/response model into the lighter
-Codex-facing turn lifecycle.
-
-The shim turn phase is not an independent product lifecycle. It is the protocol
-view that stock Codex needs while a GENTS request is running behind it:
-
-* non-terminal GENTS request states project to `inProgress`;
-* terminal GENTS request states project to a terminal Codex phase;
-* response status can advance a non-terminal request observation when response
-  replication wins the race;
-* local Codex interrupt acknowledgement takes precedence and projects directly
-  to `interrupted`, without waiting for the core request row to reach
-  `interrupted`.
--/
-
 namespace CodexShim
 
-/-- Coarse rank for monotonicity of the Codex-facing projection. Terminals are
-rank-equivalent because Codex needs "not working anymore", not a retry policy
-decision, from this adapter layer. -/
 def projectedRank : TurnPhase → Nat
   | .notStarted => 0
   | .inProgress => 1
@@ -33,8 +12,6 @@ def projectedRank : TurnPhase → Nat
   | .failed => 2
   | .interrupted => 2
 
-/-- Projection of the core `AgentRequest.lifecycle_state` vocabulary into the
-Codex app-server turn vocabulary. -/
 def projectRequestState : RequestState → TurnPhase
   | .pending => .inProgress
   | .claimed => .inProgress
@@ -46,15 +23,6 @@ def projectRequestState : RequestState → TurnPhase
   | .superseded => .interrupted
   | .interrupted => .interrupted
 
-/-!
-## First-class subagent projection
-
-GENTS's subagent tools and request lifecycle are projected into Codex's
-`collabAgentToolCall` vocabulary.  This is deliberately an adapter mapping: it
-does not introduce a second subagent lifecycle.
--/
-
-/-- GENTS tools which have a first-class Codex collaboration equivalent. -/
 inductive SubagentControlTool where
   | spawn
   | wait
@@ -63,8 +31,6 @@ inductive SubagentControlTool where
   | other
   deriving DecidableEq, Repr
 
-/-- The Codex collaboration tool variants supported by the pinned app-server
-protocol. -/
 inductive CollabTool where
   | spawnAgent
   | wait
@@ -72,9 +38,6 @@ inductive CollabTool where
   | closeAgent
   deriving DecidableEq, Repr
 
-/-- Project native GENTS subagent controls into first-class Codex collaboration
-items.  Inspection tools (`list_subagents` and `read_subagent`) remain ordinary
-MCP calls and enter this model as `other`. -/
 def projectSubagentControl : SubagentControlTool → Option CollabTool
   | .spawn => some .spawnAgent
   | .wait => some .wait
@@ -92,17 +55,12 @@ theorem known_subagent_control_projects_collab
 theorem non_control_tool_stays_mcp :
     projectSubagentControl .other = none := rfl
 
-/-- Lifecycle of the Codex collaboration operation itself. This is distinct
-from the child agent state carried in `agentsStates`. -/
 inductive CollabToolCallPhase where
   | inProgress
   | completed
   | failed
   deriving DecidableEq, Repr
 
-/-- A linked spawn operation is complete once the child exists, even while the
-runtime bridge remains open to follow that child's background lifecycle. Tool
-failure remains authoritative; non-spawn controls retain their runtime phase. -/
 def projectCollabToolCallPhase
     (tool : SubagentControlTool)
     (hasReciprocalLink : Bool)
@@ -125,11 +83,6 @@ theorem non_spawn_control_retains_runtime_phase
     projectCollabToolCallPhase tool true phase = phase := by
   cases phase <;> simp [projectCollabToolCallPhase, h]
 
-/-- Whether a subagent control row is ready to be shown to Codex. A reciprocal
-link authorizes the native collaboration item. While that link may still
-replicate, the item stays deferred, including for a bounded settle window after
-the enclosing request becomes terminal. Once that window expires, the durable
-MCP row is the visibility-preserving fallback. -/
 inductive SubagentItemProjection where
   | collab (tool : CollabTool)
   | mcp
@@ -175,8 +128,6 @@ theorem expired_unresolved_subagent_control_stays_visible
     projectSubagentItem tool false true true = .mcp := by
   simp [projectSubagentItem, h]
 
-/-- Codex's per-agent status vocabulary.  `shutdown` and `notFound` are local
-app-server bookkeeping states, so no core request lifecycle maps to them. -/
 inductive CollabAgentPhase where
   | pendingInit
   | running
@@ -185,12 +136,10 @@ inductive CollabAgentPhase where
   | interrupted
   deriving DecidableEq, Repr
 
-/-- A child agent is terminal exactly when its GENTS request is terminal. -/
 def CollabAgentPhase.terminal : CollabAgentPhase → Prop
   | .completed | .errored | .interrupted => True
   | .pendingInit | .running => False
 
-/-- Project the authoritative child request lifecycle into Codex's agent status. -/
 def projectSubagentState : RequestState → CollabAgentPhase
   | .pending => .pendingInit
   | .claimed | .processing | .inputRequired => .running
@@ -209,9 +158,6 @@ theorem subagent_status_terminal_precisely
          , RequestState.instHasTerminal
          ]
 
-/-- The equality key used by the live adapter must carry the projected child
-state and failure message as well as the parent tool status. Otherwise a child
-transition cannot refresh Codex's `agentsStates` after the tool item completes. -/
 structure CollabPresentationFingerprint where
   childPhase : CollabAgentPhase
   failureMessage : Option String
@@ -230,9 +176,6 @@ theorem collab_fingerprint_includes_latest_child_state
     (collabPresentationFingerprint state failureMessage).childPhase =
       projectSubagentState state := rfl
 
-/-- Authorized child threads remain durable snapshots until the client loads
-them. Loading an authorized child upgrades the projection to the live event
-stream; authorization is required in both modes. -/
 inductive ChildThreadProjection where
   | hidden
   | snapshot
@@ -256,9 +199,6 @@ theorem authorized_loaded_child_is_live :
     projectChildThread true true = .live := by
   simp [projectChildThread]
 
-/-- The bridge between a parent tool call and a child request.  Codex thread IDs
-identify sessions, not requests, so `childSessionId` is the only sound receiver
-identifier for TUI navigation. -/
 structure SubagentThreadLink where
   childRequestId : String
   childSessionId : String
@@ -270,23 +210,11 @@ def receiverThreadId (link : SubagentThreadLink) : String :=
 theorem receiver_thread_is_child_session (link : SubagentThreadLink) :
     receiverThreadId link = link.childSessionId := rfl
 
-/-!
-### Subagent presentation metadata and discovery
-
-The runtime remains authoritative for optional presentation metadata.  The
-adapter preserves values which GENTS owns and leaves unavailable values absent;
-it never substitutes Codex defaults.  Authorized GENTS children are ordinary
-spawned subagent threads in the Codex source vocabulary.
--/
-
-/-- Runtime-owned metadata carried by a native collaboration item. -/
 structure CollabPresentationMetadata where
   model : Option String
   reasoningEffort : Option String
   deriving DecidableEq, Repr
 
-/-- Projection is intentionally identity: the shim formats runtime facts but
-does not create an independent configuration source. -/
 def projectCollabPresentationMetadata
     (metadata : CollabPresentationMetadata) : CollabPresentationMetadata :=
   metadata
@@ -299,7 +227,6 @@ theorem absent_runtime_reasoning_effort_stays_absent
     (projectCollabPresentationMetadata
       { model := model, reasoningEffort := none }).reasoningEffort = none := rfl
 
-/-- Source filters relevant to a GENTS child created by `spawn_subagent`. -/
 inductive ThreadSourceFilter where
   | cli
   | subAgent
@@ -333,8 +260,6 @@ theorem unauthorized_child_never_listed (filters : List ThreadSourceFilter) :
     spawnedSubagentListed false filters = false := by
   simp [spawnedSubagentListed]
 
-/-- The pinned Codex `Thread` carries spawn ancestry inside
-`source.subAgent.thread_spawn`; there is no top-level `parentThreadId` field. -/
 structure SubagentThreadParentProjection where
   nativeSourceParent : Option String
   legacyTopLevelParent : Option String
@@ -353,32 +278,12 @@ theorem subagent_parent_uses_native_source (parentThreadId : String) :
 theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
     (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
 
-/-!
-## Native reasoning presentation
-
-GENTS owns two views of reasoning: the bounded live `AgentResponse.reasoning`
-preview and the durable `AgentMessage.reasoning` copy materialized before the
-live tail is cleared.  The shim projects both through Codex's raw reasoning
-channel. It must not relabel provider reasoning text as a summary merely to
-make a client render it by default.
-
-`liveDelta` is the append-only text recovered by the adapter's bounded-tail
-cursor. A primed cursor on child-thread resume therefore supplies `none` until
-new reasoning arrives. At terminal observation, durable text is used to create
-the lifecycle when replication skipped every live observation and is always
-the authoritative completed-item payload.
--/
-
-/-- Codex item notifications emitted for native reasoning text. The event type
-deliberately has only a raw-text delta constructor, so the adapter cannot
-accidentally promote raw reasoning to a summary. -/
 inductive ReasoningProjectionEvent where
   | started
   | rawTextDelta (text : String)
   | completed
   deriving DecidableEq, Repr
 
-/-- Facts available at one reasoning projection observation. -/
 structure ReasoningProjectionObservation where
   itemOpen : Bool
   itemCompleted : Bool
@@ -398,8 +303,6 @@ def preferReasoningText (preferred fallback : Option String) : Option String :=
   | some text => some text
   | none => nonemptyReasoningText fallback
 
-/-- Text to expose at this observation. Live cursor output wins. A durable
-terminal value is streamed only when no item was already opened or primed. -/
 def reasoningTextForObservation
     (obs : ReasoningProjectionObservation) : Option String :=
   match nonemptyReasoningText obs.liveDelta with
@@ -424,8 +327,6 @@ def reasoningProjectionEvents
     if obs.terminal && openAfter && !obs.itemCompleted then [.completed] else []
   startEvents ++ deltaEvents ++ completionEvents
 
-/-- Completed-item content comes from the durable materialized message, never
-from the bounded live preview, when that durable value exists. -/
 def completedReasoningText
     (obs : ReasoningProjectionObservation) : Option String :=
   if obs.terminal && !obs.itemCompleted then
@@ -561,15 +462,6 @@ theorem reasoning_completion_requires_an_open_item
     ReasoningProjectionEvent.completed ∉ reasoningProjectionEvents obs := by
   simp [reasoningProjectionEvents, hClosed, hNoText]
 
-/-!
-## Runtime metadata hydration
-
-The runtime documents remain authoritative for thread liveness, behavior/model
-binding, tool identity and diagnostics, and timestamps. These functions define
-the loss-minimizing choices the stateless shim makes when Codex has fewer
-fields than GENTS.
--/
-
 inductive ThreadPresentationStatus where
   | active
   | idle
@@ -699,9 +591,6 @@ theorem persisted_event_timestamp_precedes_observation :
 theorem absent_event_timestamp_uses_observation :
     projectedEventTimestampMs none 200 = 200 := rfl
 
-/-- Automatic compaction runs after the request is accepted and before the
-owned inference/tool loop, so replay places its item between the user request
-and model-derived items. -/
 inductive RequestReplayStage where
   | user
   | compaction
@@ -713,19 +602,6 @@ def completedCompactionReplayStages : List RequestReplayStage :=
 
 theorem completed_compaction_replay_matches_runtime_order :
     completedCompactionReplayStages = [.user, .compaction, .modelItems] := rfl
-
-/-!
-## Context and compaction presentation
-
-Codex distinguishes cumulative token accounting from the tokens occupying the
-current model context.  GENTS persists both views in `InferenceCall`: the sum of
-all terminal calls is cumulative accounting, while the newest inference call is
-the context observation.  The effective inference-profile window supplies the
-capacity.
-
-Compaction presentation is likewise derived from the persisted compaction
-`InferenceCall`; the shim does not introduce a second compaction lifecycle.
--/
 
 structure ContextUsageObservation where
   cumulativeInput : Nat
@@ -757,24 +633,16 @@ theorem context_remaining_saturates_at_zero
     contextRemaining obs = 0 := by
   simp [contextRemaining, Nat.min_eq_left h]
 
-/-- Codex item notifications emitted for a persisted compaction call. -/
 inductive ContextCompactionEvent where
   | started
   | completed
   deriving DecidableEq, Repr
 
-/-- Events required when the first observation of a compaction call arrives.
-A completed row can win the replication race, so it emits the pair needed for
-a well-formed Codex item lifecycle. Failed/cancelled rows never claim success. -/
 def initialCompactionEvents : InferenceCallState → List ContextCompactionEvent
   | .queued | .running => [.started]
   | .completed => [.started, .completed]
   | .failed | .cancelled => []
 
-/-- Events required after a nonterminal compaction call was already observed.
-The pinned protocol has no failed-item notification. Failed/cancelled calls
-therefore emit no success event; a client which renders `started` must clear the
-in-progress presentation when the enclosing turn terminates. -/
 def subsequentCompactionEvents
     (previous current : InferenceCallState) : List ContextCompactionEvent :=
   match previous, current with
@@ -805,36 +673,23 @@ theorem failed_compaction_never_claims_completed :
 theorem cancelled_compaction_never_claims_completed :
     initialCompactionEvents .cancelled = [] := rfl
 
-/-- Observation available to the shim while streaming a Codex turn. -/
 structure ProjectionObservation where
   requestState : RequestState
   responseStatus : Option ResponseStatus
   localInterruptAcked : Bool
   deriving DecidableEq, Repr
 
-/-- Response statuses that make the Codex-facing turn effectively terminal even
-when the request row has not replicated to a terminal lifecycle state yet. -/
 def responseStatusTerminal : Option ResponseStatus → Prop
   | some .complete => True
   | some .error => True
   | some .streaming => False
   | none => False
 
-/-- Terminality observed at the Codex shim boundary.
-
-The local interrupt acknowledgement is part of the effective terminal condition:
-the shim must clear the active Codex turn as soon as it has accepted the local
-interrupt, even while the core request row is settling asynchronously. -/
 def turnEffectivelyTerminal (obs : ProjectionObservation) : Prop :=
   isTerminal obs.requestState ∨
   obs.localInterruptAcked = true ∨
   responseStatusTerminal obs.responseStatus
 
-/-- Project a live GENTS observation to the Codex-facing turn phase.
-
-For non-terminal request states, the response may be newer than the request row
-under replication lag, so complete/error responses can advance the projection.
-For terminal request states, the request lifecycle wins. -/
 def projectObservation (obs : ProjectionObservation) : TurnPhase :=
   if obs.localInterruptAcked then
     .interrupted
@@ -934,11 +789,6 @@ theorem terminal_request_projects_terminal
     TurnPhase.terminal (projectRequestState s) := by
   rcases h with h | h | h | h | h <;> subst s <;> trivial
 
-/-- Terminal coherence for the Codex shim projection.
-
-The projected turn is terminal exactly when the request is terminal, the shim has
-locally acknowledged an interrupt, or the response has already reached a terminal
-status under replication lag. -/
 theorem codex_turn_terminates_precisely
     (obs : ProjectionObservation) :
     TurnPhase.terminal (projectObservation obs) ↔
@@ -965,7 +815,6 @@ theorem codex_turn_terminates_precisely
                , RequestState.instHasTerminal
                ]
 
-/-- Core request transitions never move the Codex projection backwards. -/
 theorem request_transition_projection_monotonic
     {pre post : RequestContext}
     (h : RequestContext.Transition pre post) :

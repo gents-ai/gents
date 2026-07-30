@@ -59,9 +59,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .timeout(Duration::from_secs(5))
         .build()
         .context("building backend discovery client")?;
-    // For ChatGptCodex the bearer is an OAuthCredential document, not an api_key. Read-only:
-    // discovery never refreshes (the owning runtime is the single refresh writer); if the stored
-    // access token is expired the /models call surfaces an actionable 401.
     let is_chatgpt_codex = target.provider_kind == BackendProviderKind::ChatGptCodex;
     let (chatgpt_credential, codex_agent_did) = if is_chatgpt_codex {
         let (credential, agent_did) = load_chatgpt_credential_for_discovery(&args).await?;
@@ -79,8 +76,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     .await
     {
         Ok(models) => models,
-        // Mirror codex-auth-probe: on an auth-class failure for ChatGptCodex, append the
-        // re-login guidance the bare discovery error omits.
         Err(error) if is_chatgpt_codex && discovery_error_is_auth(&error) => {
             let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
                 codex_agent_did.as_deref().unwrap_or(""),
@@ -105,9 +100,6 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     Ok(())
 }
 
-/// Load the ChatGptCodex OAuth credential document for model discovery, returning the resolved
-/// owning agent DID alongside it. The credential is `None` when none exists yet (the discovery
-/// primitive then emits actionable `codex-login` guidance).
 async fn load_chatgpt_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
 ) -> Result<(Option<gents::chatgpt_codex::OAuthCredential>, String)> {

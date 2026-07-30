@@ -2,14 +2,6 @@ import Proofs.Conformance.ContractCases.Types
 import Proofs.Request.Executable
 import Proofs.Session.Executable
 
-/-!
-# Queue and Deadline Conformance Cases
-
-Finite witness rows for R4a queue admission and claim deadline preservation.
-The rows replay existing Lean queue/request executable semantics so Rust
-conformance tests can detect drift without re-implementing the proof model.
--/
-
 namespace Conformance.ContractCases
 
 open SessionQueue

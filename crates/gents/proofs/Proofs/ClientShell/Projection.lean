@@ -1,13 +1,5 @@
 import Proofs.ClientShell.Transition
 
-/-!
-# Client Shell Projection
-
-Pure chat-view and transport diagnostic projections.
--/
-
-/-! ## Projection -/
-
 inductive SelectionHealth where
   | noSelection
   | resolved
@@ -33,11 +25,6 @@ inductive SendDecision where
   | blocked (reason : SendBlockedReason)
   deriving DecidableEq, Repr
 
-/-- The visible chat view. Pure function of
-    `(shell, store, submit-context)`. Does **not** take
-    `TransportHealth` — the load-bearing components are
-    transport-independent. Transport diagnostics are a separate,
-    decoupled projection (`projectTransportIndicator`). -/
 structure ChatView where
   selection       : Selection
   selectionHealth : SelectionHealth
@@ -47,18 +34,12 @@ structure ChatView where
   sendDecision    : SendDecision
   deriving DecidableEq, Repr
 
-/-- Whether the shell's workflow currently references `sid`, so a
-    missing-from-store selection can be distinguished between
-    "pending observation" (we're expecting it) and "absent". -/
 def workflowReferences (w : SubmissionWorkflow) (sid : SessionId) : Bool :=
   match w with
   | .submitting _ (some sid') => decide (sid = sid')
   | .awaiting sid' _          => decide (sid = sid')
   | _                         => false
 
-/-- Classify the selected session against the current store and
-    workflow. Returns both the health and the visible observation
-    (when resolved). -/
 def classifySelection
     (sel : Selection) (store : LocalStore) (w : SubmissionWorkflow)
     : SelectionHealth × Option SessionObservation :=
@@ -71,8 +52,6 @@ def classifySelection
       if workflowReferences w sid then (.pendingObservation, none)
       else (.absent, none)
 
-/-- Derive the send decision. Transport does not appear —
-    `clientAvailable` is the only "can we even submit" signal. -/
 def projectSendDecision
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
   if ¬ ctx.clientAvailable then .blocked .clientOffline
@@ -102,8 +81,6 @@ def projectSendDecision
               else .blocked (.awaitingTurnTerminality t)
             | _,      _      => .blocked .inconsistentObservation
 
-/-- The core projection. Pure function of
-    `(shell, store, submit-context)`. No `TransportHealth` argument. -/
 def projectChat
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : ChatView :=
   let classified := classifySelection s.selection store s.workflow
@@ -113,12 +90,6 @@ def projectChat
     turnState       := classified.snd.bind (·.latestTurn),
     workflow        := s.workflow,
     sendDecision    := projectSendDecision s store ctx }
-
-/-! ## Transport diagnostics (decoupled)
-
-`TransportIndicator` is a separate projection that takes only
-`TransportHealth` and never appears in `ChatView`. This keeps the
-core theorem surface free of transport concerns. -/
 
 inductive TransportIndicator where
   | quiet
@@ -131,20 +102,11 @@ def projectTransportIndicator : TransportHealth → TransportIndicator
   | .degraded => .degradedNotice
   | .wedged   => .wedgedNotice
 
-/-! ## Active Overlay
-
-`projectActiveOverlay` is a pure function over the tip response and the
-derived turn state. It returns `some` when the live overlay block should be
-rendered, otherwise `none`. The body of the block is intentionally elided —
-the formal model only needs the *presence* decision, not the byte content. -/
-
 structure OverlayBlock where
   hasContent   : Bool
   hasReasoning : Bool
   deriving DecidableEq, Repr
 
-/-- Decide whether the live overlay should be rendered, and if so what
-    payload presence flags it carries. -/
 def projectActiveOverlay
     (resp : Option ResponseSnapshot)
     (turn : Option ClientTurnState)
@@ -167,11 +129,6 @@ def projectActiveOverlay
           else none
         else none
 
-/-! ## Theorems O1–O3 -/
-
-/-- O1: `projectActiveOverlay` returns at most one `OverlayBlock`. Trivial by
-    construction (the function returns at most one `some`). Stated for the
-    contract surface. -/
 theorem projectActiveOverlay_at_most_one
     (resp : Option ResponseSnapshot)
     (turn : Option ClientTurnState)
@@ -184,7 +141,6 @@ theorem projectActiveOverlay_at_most_one
   rw [h₁] at h₂
   injection h₂
 
-/-- O2: A terminal turn state hides the overlay. -/
 theorem projectActiveOverlay_terminal_hides
     (resp : Option ResponseSnapshot)
     (t : ClientTurnState)
@@ -214,7 +170,6 @@ theorem projectActiveOverlay_terminal_hides
         | error =>
           simp [projectActiveOverlay]
 
-/-- O3: A materialized response hides the overlay. -/
 theorem projectActiveOverlay_materialized_hides
     (resp : Option ResponseSnapshot)
     (turn : Option ClientTurnState)

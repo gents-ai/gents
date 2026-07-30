@@ -85,7 +85,6 @@ export function useManualPeerDiscovery({
         : await fetchServerStatus();
       await onSubmit(request);
     } catch {
-      // Field-level and parent errors are rendered in the form.
     }
   }
 
@@ -93,7 +92,6 @@ export function useManualPeerDiscovery({
     try {
       await fetchServerStatus();
     } catch {
-      // The status line renders the discovery error.
     }
   }
 

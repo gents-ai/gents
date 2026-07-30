@@ -67,8 +67,6 @@ export function FleetRow({
     const label = (editingLabel ?? "").trim();
     setEditingLabel(null);
     if (label && label !== deployment.label && onRenamePeer) {
-      // Shell handlers rethrow after setting the banner; fire-and-forget
-      // call sites must swallow or the rejection escapes unhandled.
       void Promise.resolve(onRenamePeer(deployment.peerId, label)).catch(
         () => {},
       );
@@ -100,8 +98,6 @@ export function FleetRow({
   const defaultBehaviorLabel = displayBehaviorLabel(
     deployment.defaultBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId,
   );
-  // Per-deployment reconciler heartbeat — NOT the desktop client's global
-  // P2P probe, which is identical for every row and lies about dead peers.
   const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;
 
   return (

@@ -27,12 +27,6 @@ mod lean_vocab_test;
 
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 
-// Topological desired-state write order. Every prefix is safe to observe: a
-// written document may only reference documents in earlier apply ranks, and a
-// retry recomputes diff against the partial state before continuing. Production
-// realizes the Lean retry model by rebuilding the live diff at the start of
-// each `config apply` attempt, then applying selected documents with
-// unique-field upserts or equivalent override writers.
 const CONFIG_APPLY_ORDER: [Collection; 12] = [
     Collection::PeerPairingDesired,
     Collection::InferenceBackend,
@@ -364,10 +358,6 @@ fn generic_import_mutation_field(
     };
     let add_literal = graphql_input_literal(&add_doc)?;
     let field = if override_existing {
-        // This is the generic production bridge for apply retry convergence:
-        // after a partial prefix, rerunning `config apply` recomputes live diff
-        // and uses unique-field upsert so already-written rows are updated with
-        // the same desired payload while missing rows are created.
         let update_literal =
             graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("missing update document for {collection_name}")
@@ -416,9 +406,6 @@ async fn apply_generic_import_document(
     };
     let add_literal = graphql_input_literal(&add_doc)?;
     let mutation = if override_existing {
-        // Per-document fallback preserves the same retry property as the batch
-        // path: the unique-field filter makes repeated successful writes land
-        // on the same logical document.
         let update_literal =
             graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("missing update document for {collection_name}")
@@ -512,11 +499,6 @@ async fn query_existing_documents_by_unique_values(
         .iter()
         .map(|doc| doc.unique_value.clone())
         .collect::<Vec<_>>();
-    // Query live rows independently so an unbounded tombstone history can
-    // never consume the batch limit and make an existing document look
-    // absent. At two rows per requested key, either every valid live row fits
-    // or a duplicated key is represented at least twice and the selector
-    // below rejects it as corruption.
     let mut by_unique = query_document_refs_by_unique_values(
         txn,
         collection_name,
@@ -543,10 +525,6 @@ async fn query_existing_documents_by_unique_values(
     Ok(by_unique)
 }
 
-/// Fetch at most one historical row per logical key.
-///
-/// A separate aliased field per key prevents one key's arbitrarily long
-/// tombstone history from starving later keys under a global query limit.
 async fn query_one_historical_document_per_unique_value(
     txn: &ConfigApplyTxn<'_>,
     collection_name: &str,
@@ -708,9 +686,6 @@ fn custom_override_mutation_field(
             doc_id = escape_graphql_string(doc_id),
         )
     } else {
-        // A tombstone occupies this unique value: identical manifest content
-        // would regenerate the tombstoned docID. Mint a fresh identity for the
-        // new incarnation while leaving a first-time create unchanged.
         let add_doc = if existing.is_some() {
             crate::config_writes::mint_recreate_identity(&doc.add_doc)
         } else {

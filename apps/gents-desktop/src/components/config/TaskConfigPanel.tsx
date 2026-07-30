@@ -131,9 +131,7 @@ export function TaskConfigEditor({
     try {
       await onDeleteTaskConfig({ taskId: task.taskId, agentDid });
       onDeleted();
-    } catch {
-      // Surfaced by the shell error banner; the editor stays put.
-    }
+    } catch {}
   }
   const [taskId, setTaskId] = useState("");
   const [name, setName] = useState("");
@@ -157,7 +155,6 @@ export function TaskConfigEditor({
     setOutputSchemaRef(b.outputSchemaRef);
     setEnabled(b.enabled);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [selectedBehavior?.behaviorId, task?.taskId]);
 
   useEffect(() => {
@@ -438,7 +435,6 @@ function displayTaskListTitle(task: TaskView) {
   return task.taskId;
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function taskFormValues(task: TaskView | null, fallbackBehaviorId: string | null) {
   return {
     taskId: task?.taskId ?? "",

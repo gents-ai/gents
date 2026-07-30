@@ -1,46 +1,3 @@
-//! Task B6 — capstone e2e for the `write_tools` primitive.
-//!
-//! This proves the two required properties of the steward emit->trigger loop:
-//!
-//!   1. **Multi-field templating** — a Task `prompt_template` that references
-//!      SEVERAL fields of the triggering doc (`{{ doc.drift_sig }}`,
-//!      `{{ doc.summary }}`, `{{ doc.target_paths }}`) renders ALL of them from
-//!      the doc that fired the trigger. (Single-field render was already shown by
-//!      `event_trigger_e2e.rs`; B6 must show multi-field — "verify report data
-//!      gets pulled into the template properly".)
-//!
-//!   2. **A declared `BoundedWriteTool`'s output is a valid trigger source** — a
-//!      `request_action -> ActionRequest` write tool, constructed exactly as the
-//!      runtime constructs it (B3/B4), when its `.call()` writes an
-//!      `ActionRequest` doc, fires an `EventTrigger` on `ActionRequest`. The
-//!      tool's write is therefore a real, trigger-driving source-doc event.
-//!
-//! ## Why the deterministic-split shape (NO path), not a live tool call
-//!
-//! B6's plan asks whether the test harness can script a model completion that
-//! returns an assistant message carrying a `tool_calls` entry, so a LIVE agent
-//! could be driven to invoke `request_action` end to end. It cannot:
-//!
-//!   - `crate::support::mock_endpoint::MockModelEndpoint` only answers `GET /models`
-//!     for the startup health probe; it drives no inference at all.
-//!   - `crate::support::streaming_backend::MockStreamingBackend` streams scripted
-//!     CONTENT chunks, but every SSE delta it emits hard-codes
-//!     `"tool_calls": []` (see `write_sse_chunk`) — it has no way to script an
-//!     assistant tool call.
-//!   - The R4 subagent-tool tests (`tests/r4_subagent_tools.rs`) drive tool
-//!     execution by hand-constructing a `rig` `ToolCall`/`ToolFunction` and
-//!     feeding it through the session hook's `on_tool_call`, with a `TestModel`
-//!     whose `completion`/`stream` both error — i.e. they bypass the model
-//!     entirely rather than scripting one to emit a tool call.
-//!
-//! So there is no supported way to make a real model emit a tool call in Plan 1.
-//! We therefore prove the integration deterministically in two parts: Test 1
-//! drives the trigger via a direct source-doc write (multi-field render), and
-//! Test 2 drives it via the write tool's own `.call()` against the same live
-//! node (write-tool output fires the trigger). A LIVE model invoking the tool is
-//! qualified in Plan 2 against d4f; B6 proves the tool's write fires triggers and
-//! that multi-field templating renders, both deterministically.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,18 +15,12 @@ use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
 
-// Shared across both tests: an `ActionRequest` source collection (the steward
-// loop's emit target) and a Task whose template pulls THREE of its fields.
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
 const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
 const PROMPT_TEMPLATE: &str =
     "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
 
-/// Register the `ActionRequest` source collection BEFORE seeding triggers — the
-/// EventSource introspects its fields to hydrate `doc.*`, and the filter probe
-/// needs the indexed field present. `status` is indexed so an operator filter on
-/// it would pass DefraDB's limit-1 probe.
 async fn register_action_request_schema(node: &EmbeddedNode) {
     let sdl = r#"
         type ActionRequest {
@@ -207,7 +158,6 @@ async fn query_agent_requests_for_trigger(
         .collect()
 }
 
-/// Poll until exactly one trigger-driven `AgentRequest` lands, then return it.
 async fn wait_for_one_agent_request(node: &EmbeddedNode, trigger_id: &str) -> AgentRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut requests = loop {
@@ -231,8 +181,6 @@ async fn wait_for_one_agent_request(node: &EmbeddedNode, trigger_id: &str) -> Ag
     requests.remove(0)
 }
 
-/// Assert the rendered prompt substituted ALL THREE referenced doc fields. This
-/// is the multi-field requirement: not just one `{{ doc.* }}`, but the whole set.
 fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
     assert_eq!(
         request.caused_by_trigger_id.as_deref(),
@@ -255,7 +203,6 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
         "rendered prompt must substitute ALL of drift_sig/summary/target_paths from the \
          triggering doc: {request:?}"
     );
-    // Belt-and-suspenders: each field individually present in the render.
     assert!(
         request.content.contains(DRIFT_SIG),
         "render missing drift_sig: {request:?}"
@@ -274,10 +221,6 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
     );
 }
 
-/// Boot a live `Gents` with the `ActionRequest` Task + EventTrigger seeded
-/// and reconciled into the active snapshot. Returns the running agent's handle,
-/// its shutdown sender, and its DID. The source schema must already be
-/// registered on the node before calling.
 async fn boot_agent_with_action_trigger(
     db: &crate::support::TestDb,
     test_name: &str,
@@ -313,7 +256,6 @@ async fn boot_agent_with_action_trigger(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    // Startup reconcile baseline.
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -328,7 +270,6 @@ async fn boot_agent_with_action_trigger(
         startup.last_reconcile_error
     );
 
-    // Seed Task + EventTrigger on ActionRequest with the multi-field template.
     create_task(
         db.node.as_ref(),
         task_id,
@@ -345,8 +286,6 @@ async fn boot_agent_with_action_trigger(
     )
     .await;
 
-    // Wait for the control watcher to reconcile the new trigger into the active
-    // snapshot and subscribe the EventSource to ActionRequest.
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -363,9 +302,6 @@ async fn boot_agent_with_action_trigger(
     (handle, shutdown_tx)
 }
 
-/// The `request_action -> ActionRequest` declaration the runtime would build a
-/// `BoundedWriteTool` from (mirrors `src/defra_write/tests.rs::decl`, extended
-/// with the `target_paths` field the multi-field template references).
 fn request_action_decl() -> WriteToolDecl {
     WriteToolDecl {
         tool_name: "request_action".into(),
@@ -392,9 +328,6 @@ fn request_action_decl() -> WriteToolDecl {
     }
 }
 
-/// Test 1 (multi-field templating, REQUIRED): a direct `ActionRequest` write
-/// fires the EventTrigger and the rendered `AgentRequest.content` substitutes
-/// ALL THREE referenced doc fields (drift_sig, summary, target_paths).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
     let db = test_db("write-tool-trigger-multifield").await;
@@ -405,8 +338,6 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let (handle, shutdown_tx) =
         boot_agent_with_action_trigger(&db, "b6-multifield", task_id, trigger_id).await;
 
-    // Direct source-doc write (no tool): drives the trigger so we can isolate
-    // the multi-field render assertion.
     let escaped_drift = escape_graphql_string(DRIFT_SIG);
     let escaped_summary = escape_graphql_string(SUMMARY);
     let escaped_paths = escape_graphql_string(TARGET_PATHS);
@@ -434,12 +365,6 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     handle.await.unwrap().unwrap();
 }
 
-/// Test 2 (write-tool output is a valid trigger source, REQUIRED): construct the
-/// `request_action` `BoundedWriteTool` exactly as the runtime does, against the
-/// SAME live node whose EventTrigger is subscribed to `ActionRequest`, call
-/// `.call()` with concrete args, and assert the doc the tool wrote fires the
-/// trigger — an `AgentRequest` materializes with the multi-field render. This
-/// proves the write tool's output integrates with the trigger machinery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
     let db = test_db("write-tool-trigger-tooldriven").await;
@@ -450,8 +375,6 @@ async fn declared_write_tool_call_fires_event_trigger() {
     let (handle, shutdown_tx) =
         boot_agent_with_action_trigger(&db, "b6-tooldriven", task_id, trigger_id).await;
 
-    // Build the write tool the runtime would build from the decl, bound to the
-    // SAME node the EventTrigger is live on, and invoke it.
     let tool = BoundedWriteTool::new(db.node.clone(), request_action_decl());
     assert_eq!(
         Tool::name(&tool),
@@ -475,7 +398,6 @@ async fn declared_write_tool_call_fires_event_trigger() {
         "tool should report the ActionRequest it created: {out}"
     );
 
-    // The tool wrote exactly one ActionRequest doc with the supplied fields.
     let action_rows = db
         .node
         .execute("{ ActionRequest { drift_sig summary target_paths status } }")
@@ -505,8 +427,6 @@ async fn declared_write_tool_call_fires_event_trigger() {
         Some(TARGET_PATHS)
     );
 
-    // The write-tool's doc fired the EventTrigger: one AgentRequest with the
-    // multi-field render materializes.
     let request = wait_for_one_agent_request(db.node.as_ref(), trigger_id).await;
     assert_multi_field_render(&request, trigger_id);
 

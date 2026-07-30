@@ -32,7 +32,6 @@ pub enum DaemonError {
     Shutdown,
 }
 
-/// Configuration errors — detected at startup.
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("missing required configuration: {key}")]
@@ -60,7 +59,6 @@ pub enum WatcherError {
     ClaimFailed { doc_id: String, reason: String },
 }
 
-/// Inference / LLM errors — includes retry classification.
 #[derive(Debug, Error)]
 pub enum InferenceError {
     #[error("model unreachable at {endpoint}")]
@@ -133,7 +131,6 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
         rig::agent::StreamingError::Completion(completion_err) => {
             let reason = completion_err.to_string();
             match completion_err {
-                // HTTP errors (connection reset, DNS, timeout) are transient.
                 rig::completion::CompletionError::HttpError(_) => {
                     if error_message_has_status(&reason, 429) {
                         InferenceError::RateLimited {
@@ -160,12 +157,6 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                             retry_after_secs: 60,
                         }
                     } else if provider_message_is_tool_call_json_parse_failure(provider_msg) {
-                        // vLLM returns 400 (type "BadRequestError") when its server-side
-                        // tool-call parser fails to json.loads the model's streamed tool
-                        // arguments — e.g. a single-backslash regex/path the model emits in
-                        // an array/object-typed argument that the raw-mode parser does not
-                        // repair. This is intermittent and sampling-dependent (a fresh
-                        // generation usually parses cleanly), so retry rather than fail fast.
                         InferenceError::TransientFailure { reason }
                     } else if provider_message_has_any_status(
                         provider_msg,
@@ -177,12 +168,10 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         || provider_msg_lower.contains("authentication")
                         || provider_msg_lower.contains("unauthorized")
                     {
-                        // Auth errors are permanent — retrying won't help.
                         InferenceError::PermanentFailure { reason }
                     } else if provider_msg_lower.contains("invalid_request")
                         || provider_msg_lower.contains("invalid request")
                     {
-                        // Bad request errors are permanent.
                         InferenceError::PermanentFailure { reason }
                     } else if provider_message_has_any_status(
                         provider_msg,
@@ -191,14 +180,11 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                         || provider_msg_lower.contains("overloaded")
                         || provider_msg_lower.contains("temporarily unavailable")
                     {
-                        // Server errors are transient.
                         InferenceError::TransientFailure { reason }
                     } else {
-                        // Unknown provider errors — assume transient to be safe.
                         InferenceError::TransientFailure { reason }
                     }
                 }
-                // JSON/URL parse errors are permanent (bad request shape).
                 rig::completion::CompletionError::JsonError(_)
                 | rig::completion::CompletionError::UrlError(_) => {
                     InferenceError::PermanentFailure { reason }

@@ -7,7 +7,6 @@ use gents::ensure_runtime_schemas;
 use serde_json::Value;
 use uuid::Uuid;
 
-// Feature matrix tag: mcp-health / operatorCli.
 #[tokio::test]
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

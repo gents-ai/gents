@@ -35,9 +35,6 @@ function readCountLabel(view: {
   return `${view.returnedCount}${of} ${noun}${view.truncated ? " · truncated" : ""}`;
 }
 
-// Renders a code tool call as a diff (file edits) or a terminal block (bash),
-// instead of the generic args/result disclosure. Foundation-aligned: the data
-// is already on the persisted tool call; this is a projection, not new state.
 export function CodeToolItem({ view }: { view: CodeToolView }) {
   if (view.kind === "fileEdit") {
     return (

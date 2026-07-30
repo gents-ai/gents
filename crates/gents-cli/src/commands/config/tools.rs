@@ -7,9 +7,6 @@ use crate::config_writes::{write_tool_selection_document_with_clear_fields, Conf
 use crate::normalize_optional_string;
 use crate::print_json;
 
-/// Builds a single `--subagent-target` JSON entry from its parts and prints
-/// it to stdout, so it composes as `--subagent-target "$(... subagent-target-entry ...)"`
-/// with real flag validation instead of a hand-typed JSON parse error.
 pub(super) fn subagent_target_entry_command(args: SubagentTargetEntryArgs) -> Result<()> {
     let entry = gents::subagent_target_entry(
         args.name,
@@ -191,12 +188,7 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         enable_context_budget: args.enable_context_budget,
         enable_defra_query: args.enable_defra_query,
         defra_query_collections,
-        // `write_tools` is apply-managed (declared in `config apply` manifests);
-        // the imperative command exposes no flag, so leave it `None` to preserve
-        // any apply-managed decls on update (same rationale as subagent_targets).
         write_tools: None,
-        // No imperative flags for self-config (#654): `None` preserves any
-        // stored gate/guardrail values on update.
         enable_self_config: None,
         self_config_categories: None,
         self_config_no_lockout: None,
@@ -370,10 +362,6 @@ fn subagent_targets_update(args: &ToolSelectionUpsertArgs) -> Result<Option<Vec<
     }
 }
 
-/// Expands one `--subagent-target` value. A plain value is passed through
-/// unchanged (the existing inline-JSON behavior). A `@path`/`@-` value reads
-/// the file (or stdin, for `-`) and accepts either a single JSON object or a
-/// JSON array of objects, expanding an array into multiple entries.
 fn expand_subagent_target_value(raw: &str) -> Result<Vec<String>> {
     let Some(source) = raw.strip_prefix('@') else {
         return Ok(vec![raw.to_string()]);
@@ -390,10 +378,6 @@ fn expand_subagent_target_value(raw: &str) -> Result<Vec<String>> {
     parse_subagent_target_contents(&contents, raw)
 }
 
-/// Parses the contents of a `@path`/`@-` `--subagent-target` source: either a
-/// single JSON object or a JSON array of objects. Split out from
-/// [`expand_subagent_target_value`] so the parsing/expansion logic is
-/// testable without touching the filesystem or stdin.
 fn parse_subagent_target_contents(contents: &str, raw_for_error: &str) -> Result<Vec<String>> {
     let value: serde_json::Value = serde_json::from_str(contents)
         .with_context(|| format!("parsing --subagent-target JSON from {raw_for_error}"))?;
@@ -646,9 +630,6 @@ mod tests {
             behavior_id: "did:key:z-test:default".to_string(),
             description: Some("A helper instance for delegated sub-tasks".to_string()),
         };
-        // subagent_target_entry_command only prints; exercise the same
-        // construction it delegates to and confirm it round-trips through
-        // SubagentTarget::parse (the same parser used at write time).
         let entry = gents::subagent_target_entry(
             args.name.clone(),
             args.agent_did.clone(),

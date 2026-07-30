@@ -26,9 +26,6 @@ pub struct WorkspaceListingView {
     pub truncated: bool,
 }
 
-/// List one directory of the local agent's tool root. Strictly jailed:
-/// the canonicalized target must stay under the canonicalized root, so
-/// `..` segments and symlink escapes both fail closed.
 #[tauri::command]
 pub fn desktop_workspace_list(
     subpath: Option<String>,
@@ -93,8 +90,6 @@ pub fn desktop_workspace_list(
     })
 }
 
-/// The agent home's configured tool root, canonicalized. No tool root
-/// (meta-only agents) is an honest error, not an empty listing.
 fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, BridgeError> {
     #[derive(serde::Deserialize)]
     struct InitRootView {

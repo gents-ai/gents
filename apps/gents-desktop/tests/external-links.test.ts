@@ -92,7 +92,6 @@ describe("external link guard", () => {
 
     const event = clickAnchor("");
 
-    // Default action of <a href=""> is a full document reload — must not run.
     expect(event.defaultPrevented).toBe(true);
     expect(openSpy).not.toHaveBeenCalled();
     uninstall();
@@ -103,7 +102,6 @@ describe("external link guard", () => {
     const uninstall = installExternalLinkGuard(document);
 
     const wrapper = document.createElement("div");
-    // Bubble-phase swallow, as React components do (e.g. dialog click guards).
     wrapper.addEventListener("click", (event) => event.stopPropagation());
     const anchor = document.createElement("a");
     anchor.setAttribute("href", "https://example.com/docs");

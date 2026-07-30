@@ -5,7 +5,6 @@ export type OperationsRailTabId = string;
 export type OperationsRailTabDescriptor = {
   id: OperationsRailTabId;
   label: string;
-  /** Optional badge text (e.g. count). */
   badge?: string | null;
   render: () => ReactNode;
 };

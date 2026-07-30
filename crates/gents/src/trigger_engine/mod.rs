@@ -1,9 +1,4 @@
 //! Trigger engine scaffold.
-//!
-//! Unifies how schedules, event triggers, and manual requests are turned into
-//! `AgentRequest` materializations. The full engine is built up across
-//! Tasks 27-33; this module currently defines only the public types that
-//! downstream tasks will consume.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,18 +20,10 @@ pub mod subscription_source;
 #[cfg(test)]
 mod tests;
 
-/// `(agent_did, trigger_id, trigger_kind)`: the trigger tuple is only unique
-/// per agent — replicated fleets share human-chosen schedule ids, and one
-/// runtime can host two agents with same-named schedules (#605).
 type TriggerLockKey = (String, String, TriggerKind);
 type TriggerLock = Arc<Mutex<()>>;
 type TriggerLockMap = HashMap<TriggerLockKey, TriggerLock>;
 
-/// Kind of trigger that produced a fire intent.
-///
-/// Schedule and Event triggers both drive the engine from stored trigger
-/// documents. Manual is reserved for direct fire requests (e.g. CLI / API
-/// invocations) that do not have a persisted trigger document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
     Schedule,
@@ -47,8 +34,6 @@ pub enum TriggerKind {
 }
 
 impl TriggerKind {
-    /// Lowercase string representation used in persisted fields (e.g.
-    /// `AgentRequest.trigger_kind`) and log/metric labels.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             TriggerKind::Schedule => "schedule",
@@ -58,12 +43,6 @@ impl TriggerKind {
     }
 }
 
-/// A single fire attempt produced by a `TriggerSource`.
-///
-/// Carries everything the engine needs to render the prompt and materialize a
-/// request: the resolved task, the concurrency policy, the template variable
-/// bags, and a one-shot `on_result` callback so the source can react (e.g.
-/// write back `last_status` bookkeeping on the trigger document).
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
@@ -87,13 +66,6 @@ impl FireIntent {
     }
 }
 
-/// Outcome of a dispatched `FireIntent`.
-///
-/// `Fired` means the engine successfully materialized an `AgentRequest` and
-/// carries the new request id. `Skipped` is a policy outcome (e.g. serial
-/// concurrency found an in-flight run) and is not an error. `Errored` is an
-/// unexpected failure that the source should record and, in most cases, retry
-/// on a later tick.
 #[derive(Debug, Clone)]
 pub enum FireResult {
     #[allow(dead_code)]
@@ -109,28 +81,13 @@ pub enum FireResult {
     },
 }
 
-/// Stream of fire intents produced by a source (e.g. the schedule clock, an
-/// event-queue poller, a manual-fire inbox).
-///
-/// Sources are polled by the engine's main loop; returning `None` indicates
-/// the source is exhausted and should be dropped.
 pub trait TriggerSource: Send + Sync {
     fn next_fire(
         &mut self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<FireIntent>> + Send + '_>>;
 }
 
-/// Abstraction over the request-materialization + trigger-aware bookkeeping
-/// the engine needs at fire time.
-///
-/// Production wiring (Task 30+) will point this at `crate::lifecycle`'s
-/// materialize entry points; tests can provide a lightweight spy. Keeping
-/// this as a trait avoids the engine having to depend directly on the
-/// lifecycle module while the two layers are still being wired together.
 pub(crate) trait MaterializerHandle: Send + Sync {
-    /// Create a new `AgentRequest` for `task` with the rendered prompt, using
-    /// `trigger_id` / `trigger_kind` as the provenance recorded on the
-    /// materialized document. Returns the new request id.
     fn materialize(
         &self,
         task: &crate::runtime_snapshot::ResolvedTask,
@@ -153,11 +110,6 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         trigger_kind: TriggerKind,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
-    /// Supersede any active runtime requests of `agent_did` bound to this
-    /// trigger. Returns the number of requests transitioned. Invoked by
-    /// `LatestOnly` concurrency before materializing the new fire. Scoped by
-    /// DID for the same reason as the gate — superseding would otherwise
-    /// locally rewrite other agents' replicated requests (#605).
     fn supersede_active_runtime_requests_for_trigger(
         &self,
         agent_did: &str,
@@ -194,13 +146,6 @@ impl TriggerEngine {
         }
     }
 
-    /// Run the engine until `cancel` is triggered.
-    ///
-    /// Each `TriggerSource` is polled serially in its own loop: `next_fire`
-    /// yields one `FireIntent` at a time, which we hand to `dispatch` before
-    /// re-polling the source. Sources run in parallel with each other via a
-    /// `JoinSet`. The outer `select!` honors `cancel` so shutdown short-
-    /// circuits any in-flight `next_fire`/`dispatch` pair.
     pub(crate) async fn run(self, sources: Vec<Box<dyn TriggerSource>>, cancel: CancellationToken) {
         let engine = Arc::new(self);
         let mut join_set = tokio::task::JoinSet::new();
@@ -237,15 +182,6 @@ impl TriggerEngine {
         }
     }
 
-    /// Dispatch a single `FireIntent`.
-    ///
-    /// Current scope (Tasks 30-33): enabled gate against the active snapshot,
-    /// then render the task's prompt template (render failures return
-    /// `Errored` without materializing), then apply the intent's concurrency
-    /// mode (`Parallel` fires unconditionally; `Serial` skips when an active
-    /// runtime request already exists for this trigger tuple; `LatestOnly`
-    /// supersedes any prior active runtime request under a per-trigger lock),
-    /// then hand the rendered prompt to the materializer.
     #[allow(dead_code)]
     async fn dispatch(&self, intent: FireIntent) -> FireResult {
         if let Some(error) = intent.well_formed_error() {
@@ -264,7 +200,6 @@ impl TriggerEngine {
 
         let snapshot = self.snapshot_rx.borrow().clone();
 
-        // 1. Enabled gate.
         match intent.trigger_kind {
             TriggerKind::Schedule => {
                 let Some(trigger_id) = intent.trigger_id.as_deref() else {
@@ -298,12 +233,9 @@ impl TriggerEngine {
                     return result;
                 }
             }
-            TriggerKind::Manual => {
-                // Manual runs bypass the enabled gate (operator-initiated).
-            }
+            TriggerKind::Manual => {}
         }
 
-        // 2. Render the prompt template against the intent's scope.
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let (node_scope, ctx_scope) =
             crate::template::task_node_ctx(&snapshot.local_did, &intent.task.behavior_id, &now);
@@ -318,12 +250,6 @@ impl TriggerEngine {
         {
             Ok(s) => s,
             Err(e) => {
-                // Render failure is reported as `Errored` with a `template:`
-                // prefix so upstream sources can route the result to
-                // `last_status = "error"` bookkeeping without having to parse
-                // the underlying minijinja message. The callback runs before
-                // return so the dispatched source observes the same value the
-                // caller will.
                 let result = FireResult::Errored {
                     error: format!("template: {e}"),
                 };
@@ -332,16 +258,6 @@ impl TriggerEngine {
             }
         };
 
-        // 3. Concurrency gate. `Parallel` skips the check entirely. `Serial`
-        // queries the materializer for an active runtime request bound to the
-        // same `(agent_did, trigger_id, trigger_kind)` tuple; the full tuple
-        // is load-bearing: trigger_id alone is not unique across kinds, and
-        // `(trigger_id, kind)` alone is not unique across agents on a
-        // replicated fleet (#605).
-        //
-        // The DID is resolved from the same snapshot the materializer will
-        // use, so the gate and materialize agree on the fire's identity; an
-        // unresolvable behavior errors here exactly as materialize would.
         let concurrency_agent_did = || {
             snapshot
                 .behavior(&intent.task.behavior_id)
@@ -357,13 +273,8 @@ impl TriggerEngine {
         };
         use crate::runtime_snapshot::ConcurrencyMode;
         match intent.concurrency {
-            ConcurrencyMode::Parallel => {
-                // No coordination; proceed to materialize.
-            }
+            ConcurrencyMode::Parallel => {}
             ConcurrencyMode::Serial => {
-                // Manual mode has trigger_id = None and isn't really
-                // Serial-vs-Parallel in practice; bypass the in-flight check
-                // if there's no trigger id to key on.
                 if let Some(trigger_id) = intent.trigger_id.as_deref() {
                     let agent_did = match concurrency_agent_did() {
                         Ok(did) => did,
@@ -391,7 +302,7 @@ impl TriggerEngine {
                             (intent.on_result)(result.clone());
                             return result;
                         }
-                        Ok(false) => { /* no in-flight; proceed */ }
+                        Ok(false) => {}
                         Err(e) => {
                             let result = FireResult::Errored {
                                 error: format!("in-flight query: {e}"),
@@ -403,9 +314,6 @@ impl TriggerEngine {
                 }
             }
             ConcurrencyMode::LatestOnly => {
-                // Manual + LatestOnly is unusual (no persisted trigger id to
-                // key a lock on); fall through to materialize without
-                // serialization rather than error.
                 if let Some(trigger_id) = intent.trigger_id.as_deref() {
                     let agent_did = match concurrency_agent_did() {
                         Ok(did) => did,
@@ -417,10 +325,6 @@ impl TriggerEngine {
                             return result;
                         }
                     };
-                    // Acquire (or create) the per-trigger async mutex. The
-                    // outer `per_trigger_locks` mutex is held only long enough
-                    // to clone the `Arc<Mutex<()>>` for this `(agent_did,
-                    // trigger_id, trigger_kind)` tuple.
                     let lock_key = (
                         agent_did.clone(),
                         trigger_id.to_owned(),
@@ -432,9 +336,6 @@ impl TriggerEngine {
                             .or_insert_with(|| Arc::new(Mutex::new(())))
                             .clone()
                     };
-                    // `_guard` is bound at function scope so it outlives the
-                    // materialize call below — supersede + materialize run
-                    // inside the same critical section.
                     let _guard = lock.lock().await;
                     match self
                         .materializer
@@ -445,7 +346,7 @@ impl TriggerEngine {
                         )
                         .await
                     {
-                        Ok(_count) => { /* proceed to materialize under lock */ }
+                        Ok(_count) => {}
                         Err(e) => {
                             let result = FireResult::Errored {
                                 error: format!("supersede: {e}"),
@@ -454,24 +355,14 @@ impl TriggerEngine {
                             return result;
                         }
                     }
-                    // Materialize under the held lock. `_guard` stays alive
-                    // for the duration of this await because it's a local in
-                    // this block and Rust drops locals only when the enclosing
-                    // scope exits; `return` evaluates its expression first,
-                    // so the guard covers the materialize call.
                     return self.materialize_after_lock(intent, rendered).await;
                 }
             }
         }
 
-        // 4. Materialize.
         self.materialize_after_lock(intent, rendered).await
     }
 
-    /// Run the materialize step and fire the `on_result` callback. Factored
-    /// out so the `LatestOnly` path can call it while still holding the
-    /// per-trigger lock (the caller's `_guard` stays alive across this await
-    /// because it was declared in the caller's outer scope).
     async fn materialize_after_lock(&self, intent: FireIntent, rendered: String) -> FireResult {
         let request_id = match self
             .materializer
@@ -499,17 +390,6 @@ impl TriggerEngine {
     }
 }
 
-/// Run a standalone `SubagentSource` driven by a `TriggerEngine` against
-/// `node` until `cancel` fires, without booting the full `Gents` request
-/// daemon. Used by integration tests (`r4_subagent_tools`) that drive the
-/// `DefraSessionHook` directly but need the same `SubagentSource` that
-/// production runs to materialize child `AgentRequest`s from `AgentToolCall`
-/// bridge rows.
-///
-/// The `SubagentSource` always produces `FireIntent`s carrying a
-/// `pre_materialized_request_id`, so `TriggerEngine::dispatch` short-circuits
-/// before ever touching the `MaterializerHandle`; a panicking stub is therefore
-/// sufficient and never invoked.
 #[doc(hidden)]
 pub async fn run_subagent_source_for_test(
     node: Arc<defra_node::EmbeddedNode>,

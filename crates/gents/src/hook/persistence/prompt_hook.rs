@@ -1,11 +1,5 @@
 use super::*;
 
-/// Persistence/lifecycle side-effects for the owned completion loop (#400).
-///
-/// These were rig `PromptHook` callbacks; the owned loop (`agent::loop_stream`)
-/// now calls them directly as inherent methods, so the trait and its generic
-/// `M` are gone. They keep returning rig's `HookAction` / `ToolCallHookAction`
-/// (kept per decision D3).
 impl DefraSessionHook {
     pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
         self.on_completion_call_with_context(prompt, _history, None)
@@ -355,9 +349,6 @@ impl DefraSessionHook {
         match result {
             Ok(()) if hold_required => {
                 self.record_success();
-                // Block the turn on the operator verdict: Continue dispatches
-                // the now-running tool; Skip carries the deny/cancel/timeout
-                // reason back as the tool result.
                 match self
                     .drive_held_tool_call(tool_name, internal_call_id)
                     .instrument(tracing::info_span!(
@@ -420,12 +411,6 @@ impl DefraSessionHook {
                 });
             }
 
-            // Unparseable-args failures arrive wrapped in a collision-free marker
-            // set by the loop's dispatcher. Strip it so the persisted lifecycle
-            // result and the model-facing message are the clean notice, and force
-            // the `failed(ArgumentInvalid)` terminal (the proven Running -> Failed
-            // edge) rather than classifying the text — a tool's own output must
-            // never reach the argument-invalid branch by accident.
             let (result, force_argument_invalid) = match unparseable_args_notice(result) {
                 Some(notice) => (notice, true),
                 None => (result, false),
@@ -455,9 +440,6 @@ impl DefraSessionHook {
             let truncator =
                 DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id)
                     .with_requester_did(self.active_requester_did().await);
-            // The owned loop (#400) passes the full tool output here directly, so
-            // the persisted copy spills/truncates the complete result. (The old
-            // rig path needed a recorder shim to recover the full output; gone.)
             let result_for_persistence = result;
             let truncated = truncator
                 .truncate(

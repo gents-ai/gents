@@ -13,11 +13,6 @@ export type ToolCallHoldsState = {
   refresh: () => Promise<void>;
 };
 
-/// Held tool calls for one agent, polled every 10 s (the shared ops-panel
-/// cadence) so a hold raised mid-turn surfaces without a manual refresh.
-/// Background refreshes skip the loading flip to avoid flicker. A generation
-/// counter drops out-of-order responses so a slow fetch for a previous agent
-/// (or an older poll tick) can never overwrite fresher rows.
 export function useToolCallHolds(
   agentDid: string | null,
   explicitApi?: DesktopApiAdapter,
@@ -59,8 +54,6 @@ export function useToolCallHolds(
   );
 
   useEffect(() => {
-    // Reset stale rows immediately on agent switch: the previous agent's
-    // holds must not linger while the new fetch is in flight.
     setHolds(null);
     setLoading(true);
     void refresh();

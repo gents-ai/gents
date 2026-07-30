@@ -1,8 +1,3 @@
-//! Integration coverage for `gents demo`: the interactive shell is driven
-//! non-interactively (piped stdin) against a test-only mock OpenAI endpoint. The
-//! *shipped* demo bundles no mock — these assert node bring-up, streaming chat,
-//! the seeded skills, live backend `reconfigure`, resume, and clean teardown.
-
 mod support;
 use support::*;
 
@@ -19,7 +14,6 @@ use gents::defra_node::{EmbeddedNode, StorageBackend};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-/// Drive `gents demo` to completion with `input` fed to its shell.
 fn run_demo(tmp_home: &Path, args: &[&str], input: &str) -> Result<std::process::Output> {
     run_demo_with_env(tmp_home, args, input, &[])
 }
@@ -56,8 +50,6 @@ fn run_demo_with_env(
     child.wait_with_output().context("waiting for gents demo")
 }
 
-/// True once nothing accepts connections on `127.0.0.1:port` (evidence the demo
-/// tore its server subprocess down and left no orphan).
 fn wait_port_free(port: u16, timeout: Duration) -> bool {
     let addr = format!("127.0.0.1:{port}").parse().expect("loopback addr");
     let deadline = Instant::now() + timeout;
@@ -106,7 +98,6 @@ async fn demo_single_node_chats_lists_skills_and_shuts_down_clean() -> Result<()
     let mock = MockChatEndpoint::start(&model, &reply)?;
     let port = allocate_port()?;
 
-    // status (node A live) → skill (list) → chat one turn → /back → down.
     let input = "status\nskill\nchat\nSay the configured token.\n/back\ndown\n";
     let output = run_demo(
         tempdir.path(),
@@ -145,7 +136,6 @@ async fn demo_single_node_chats_lists_skills_and_shuts_down_clean() -> Result<()
         "demo left an orphaned server listening on port {port}"
     );
 
-    // The persistent agent was written for a later resume.
     assert!(
         home.join("init.json").exists(),
         "expected the demo to persist init.json under its home"
@@ -265,13 +255,6 @@ fn list_entries_are_materialized(value: &Value, expected: usize) -> bool {
         })
 }
 
-/// #734/#735 regressions: the shipped `pair` -> `delegate` path must carry
-/// background spawn bridges to node B, expose both materialized live children
-/// through list/read on the parent, and let the worker claim and complete them.
-/// This uses the real two-process demo and document-driven pairing/config;
-/// only inference is hermetic. It intentionally stays in the default CLI suite
-/// as the process-level regression fence; event-driven child waits keep its
-/// expected runtime to roughly one worker hold plus fleet startup/teardown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     use support::mocks::fake_llm::{ChatAction, FakeLlm};
@@ -552,9 +535,6 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         "read_subagent inspected an unowned child: {read_result}"
     );
 
-    // The user-visible failure in #734 was `no_peer_claimed_spawn`. Prove the
-    // opposite from both durable stores. First recover the exact parent request
-    // and spawn tool-call lineage recorded on node A for each bridge.
     let coordinator_data_dir = home.join("data");
     let node_a = EmbeddedNode::builder()
         .data_path(&coordinator_data_dir)
@@ -624,8 +604,6 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     );
     drop(node_a);
 
-    // Every spawned child must materialize and complete on node B with lineage
-    // exactly matching its node-A bridge—not merely non-empty parent fields.
     let data_dir = home.join("node-b").join("data");
     let node_b = EmbeddedNode::builder()
         .data_path(&data_dir)
@@ -705,8 +683,6 @@ async fn demo_reconfigure_swaps_the_backend_live() -> Result<()> {
 
     let port = allocate_port()?;
 
-    // Chat on backend A, reconfigure to backend B via the custom-URL picker path
-    // (choice 3 → URL → model), then chat again and confirm the swap took hold.
     let input = format!(
         "chat\nhello A\n/back\nreconfigure\n3\n{}\n{}\nchat\nhello B\n/back\ndown\n",
         mock_b.endpoint(),
@@ -769,7 +745,6 @@ async fn demo_resume_reuses_the_saved_agent() -> Result<()> {
         ]
     };
 
-    // First run: set up and persist, then exit.
     let port1 = allocate_port()?;
     let first_args = args_for(&port1.to_string());
     let first_refs: Vec<&str> = first_args.iter().map(String::as_str).collect();
@@ -777,7 +752,6 @@ async fn demo_resume_reuses_the_saved_agent() -> Result<()> {
     require_success(&first)?;
     let did_after_first = read_agent_did(&home)?;
 
-    // Second run: same home reuses the saved agent rather than re-initializing.
     let port2 = allocate_port()?;
     let second_args = args_for(&port2.to_string());
     let second_refs: Vec<&str> = second_args.iter().map(String::as_str).collect();

@@ -11,16 +11,6 @@ use uuid::Uuid;
 #[path = "../../gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
-/// End-to-end test for `gents config task run --task-id --args`.
-///
-/// Seeds a `Task` + `AgentBehavior` via the standard apply path against a
-/// running agent, then invokes the `config task run` subcommand and verifies
-/// that it produces an `AgentRequest` with:
-///   * `caused_by_trigger_kind = "manual"`,
-///   * `caused_by_trigger_id = null`,
-///   * `execution_origin = "interactive"`,
-///   * `lifecycle_state` created as `pending`, possibly already advanced by the daemon,
-///   * the rendered content from `prompt_template` after binding `args.*`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let lean_case = lean_manual_dispatch_case()?;
@@ -151,7 +141,6 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(agent_did.as_str())
     );
 
-    // Fire the manual run via the new CLI subcommand.
     let fire = run_cli_json(
         &home_dir,
         &[
@@ -190,9 +179,6 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         .ok_or_else(|| anyhow!("fire output missing request_doc_id: {fire}"))?;
     assert!(!request_doc_id.is_empty());
 
-    // Verify lineage + rendered content on the AgentRequest row. We filter
-    // by request_id so we don't race any other requests that may have been
-    // written in parallel.
     let response = graphql_query(
         &graphql,
         &format!(
@@ -258,8 +244,6 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     Ok(())
 }
 
-/// Running against a disabled Task must fail with a clear error and not
-/// create an AgentRequest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_rejects_disabled_task() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -343,7 +327,6 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         "expected disabled-task error on stderr, got: {stderr}"
     );
 
-    // No AgentRequest should have been written for this task.
     let response = graphql_query(
         &graphql,
         r#"{ AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }, limit: 5) { request_id } }"#,

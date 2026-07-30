@@ -17,7 +17,6 @@ import {
 
 const CONTRACT_JSON_BEGIN = "---BEGIN GENTS LEAN CONTRACT JSON---";
 const CONTRACT_JSON_END = "---END GENTS LEAN CONTRACT JSON---";
-// The generated contract test shells out to Lake before reading Lean JSON.
 const GENERATED_CONTRACT_TEST_TIMEOUT_MS = 30000;
 
 type LeanClientShellCase = {
@@ -321,8 +320,6 @@ function expectedWorkflowFromContract(contractCase: LeanClientShellCase) {
 }
 
 function compactWorkflow(workflow: ChatWorkflowState) {
-  // The Lean frontend contract models rendered workflow fields; TypeScript keeps
-  // agentDid on submittingRequest for the API callback path.
   return Object.fromEntries(
     Object.entries(workflow).filter(
       ([key, value]) =>
@@ -572,14 +569,6 @@ describe("projectChatShell", () => {
   });
 });
 
-/**
- * Mirror of the Lean `projectActiveOverlay` decision (see
- * `Proofs/ClientShell/Projection.lean`) and of the Rust
- * `should_show_overlay` helper in
- * `crates/gents/tests/live_overlay_conformance.rs`. Kept inline so the
- * TypeScript live-delta render decision can fail loudly if either side drifts
- * from the contract.
- */
 function shouldShowLiveOverlay(c: LeanLiveOverlayCase): boolean {
   if (c.materialized) {
     return false;
@@ -587,9 +576,6 @@ function shouldShowLiveOverlay(c: LeanLiveOverlayCase): boolean {
   if (c.responseStatus === "complete" || c.responseStatus === "error") {
     return false;
   }
-  // The Lean predicate hides the overlay for any non-renderable turn label,
-  // including terminal labels (completed/failed/superseded/interrupted) and
-  // the unmodelled labels we may receive over the wire.
   if (c.turnLabel !== "streaming" && c.turnLabel !== "waitingForClaim") {
     return false;
   }
@@ -607,11 +593,8 @@ describe("LiveOverlay conformance (issue #64)", () => {
     it(`case ${raw.name} matches Lean expected decision`, () => {
       expect(shouldShowLiveOverlay(raw)).toBe(raw.expectOverlay);
       if (raw.turnTerminal) {
-        // Sanity: terminal turns must hide the overlay regardless of content,
-        // mirroring the Rust live_overlay_conformance integration test.
         expect(raw.expectOverlay).toBe(false);
       }
-      // Reference precedingToolCalls so a Lean column drop fails the snapshot.
       expect(typeof raw.precedingToolCalls).toBe("number");
     });
   }

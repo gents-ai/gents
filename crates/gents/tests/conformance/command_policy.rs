@@ -1,6 +1,3 @@
-//! CommandPolicy conformance home: generated policy/sandbox/env contract
-//! rows (fail-closed ordering, prefix matching, sandbox + env invariants).
-
 use super::*;
 
 #[test]

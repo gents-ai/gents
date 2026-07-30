@@ -38,9 +38,6 @@ pub fn assert_liveness_after_convergence(history: &[Observation]) {
     }
 }
 
-/// Crash/restart boundary checks. These bind the harness `Crash` action to an
-/// observable process-identity change (TLA `crashCount` / CrashA/CrashB) while
-/// durable bridge and child rows remain loadable from the reopened store.
 pub fn assert_crash_boundary(history: &[Observation]) {
     crash::assert_crashes_observed(history);
     crash::assert_durable_rows_survive_crash(history);
@@ -49,9 +46,6 @@ pub fn assert_crash_boundary(history: &[Observation]) {
 pub mod crash {
     use super::Observation;
 
-    /// Per-snapshot: if this observation followed a Crash action, that node's
-    /// process generation must be strictly positive. A no-op Crash leaves
-    /// generation at 0 and fails this check once any crash action is claimed.
     pub fn process_generation_advances_on_crash(o: &Observation) {
         let Some(crashed) = o.crashed_node.as_deref() else {
             return;
@@ -69,9 +63,6 @@ pub mod crash {
         }
     }
 
-    /// History-level: every Crash action must advance that node's generation
-    /// relative to the immediately preceding observation. Deleting the Crash
-    /// arm or restoring a no-op fails this.
     pub fn assert_crashes_observed(history: &[Observation]) {
         let mut crash_count = 0usize;
         for window in history.windows(2) {
@@ -105,10 +96,6 @@ pub mod crash {
         );
     }
 
-    /// Durable AgentToolCall bridges and child AgentRequest rows present just
-    /// before a Crash must still be loadable immediately after reopen. This is
-    /// the durable-vs-volatile split: process identity changes, rows do not
-    /// disappear with the process.
     pub fn assert_durable_rows_survive_crash(history: &[Observation]) {
         for window in history.windows(2) {
             let prev = &window[0];

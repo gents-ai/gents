@@ -46,10 +46,6 @@ impl RecordingGraphqlState {
         self.committed.lock().expect("committed lock").clone()
     }
 
-    /// Returns committed writes plus any still-pending in-tx writes (across all
-    /// open transactions). Useful for backward-compat assertions against
-    /// "every write attempted." **Use `committed_state()` to verify durability**
-    /// — e.g., to confirm a discard left no externally-observable state.
     fn observed_writes(&self) -> Vec<ObservedWrite> {
         let mut all = self.committed.lock().expect("committed lock").clone();
         let txs = self.transactions.lock().expect("tx lock").clone();
@@ -59,11 +55,6 @@ impl RecordingGraphqlState {
         all
     }
 
-    /// Returns in-flight writes across open transactions only. This excludes
-    /// committed state, so failure-path caps can measure per-tx writes after
-    /// an injected error and before discard removes the transaction. Callers
-    /// should use this when at most one transaction is open, or when an
-    /// aggregate across all open transactions is explicitly intended.
     fn pending_state(&self) -> Vec<ObservedWrite> {
         self.transactions
             .lock()
@@ -175,8 +166,6 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
                 start_recording_graphql_with_committed_state(initial_external_state).await;
             let access = ConfigAccess::Graphql(graphql);
 
-            // Begin a tx. The recorder hands out sequential numeric ids starting at 0;
-            // the first tx in this fresh recorder is "0".
             let txn = access
                 .begin_apply_txn()
                 .await
@@ -192,7 +181,6 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
             );
             let pending_after_failure = recorder.pending_state();
 
-            // discard errors are not under test here; the apply error path is what we're verifying.
             let _ = txn.discard().await;
 
             let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
@@ -204,10 +192,6 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
                 );
 
             let observed = recorder.committed_state();
-            // Today Lean emits `pre_live` here because apply has no live-write
-            // constructor; #57 can make this projection diverge without
-            // changing the Rust assertion shape. Lean's list order is the
-            // canonical order for this exact doc-for-doc comparison.
             let expected = case
                 .expected_external_state_after_abort
                 .iter()
@@ -587,10 +571,6 @@ async fn start_recording_graphql_with_committed_state(
     let addr = listener.local_addr().expect("recording GraphQL addr");
     let app = Router::new()
         .route("/api/v0/graphql", post(recording_graphql_handler))
-        // Go-compatible transaction routes (mirrors DefraDB HTTP API):
-        //   POST /api/v0/tx          → begin
-        //   POST /api/v0/tx/{id}     → commit
-        //   DELETE /api/v0/tx/{id}   → discard/rollback
         .route("/api/v0/tx", post(recording_tx_begin_handler))
         .route(
             "/api/v0/tx/{id}",
@@ -1332,7 +1312,6 @@ mod recorder_unit_tests {
                 .await
                 .unwrap();
 
-        // Before commit, committed window is empty.
         assert!(recorder.committed_state().is_empty());
 
         let commit = client
@@ -1428,9 +1407,6 @@ mod recorder_unit_tests {
                 .unwrap();
         assert!(ok.get("errors").is_none(), "first mutation should succeed");
 
-        // Confirm the first write was actually buffered into the tx's pending window —
-        // a broken recorder that ignored writes silently would still pass the
-        // `errors.is_none()` check above.
         let pending_after_first = recorder.observed_writes();
         assert_eq!(
             pending_after_first.len(),

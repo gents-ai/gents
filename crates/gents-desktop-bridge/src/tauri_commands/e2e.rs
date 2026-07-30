@@ -124,7 +124,6 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
     }
 }
 
-/// Stubs when the `native-e2e` feature is off (production / default builds).
 #[tauri::command]
 #[cfg(not(feature = "native-e2e"))]
 pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeError> {

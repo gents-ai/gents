@@ -2,27 +2,8 @@ import Proofs.Basic
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
-/-!
-# Runtime Reconciliation Model
-
-Models runtime reconciliation with the explicit control-plane and consumer
-observation boundaries exposed by the live runtime:
-
-1. A config write is acknowledged externally
-2. A control event is observed and the changed document is read directly
-3. The resolver makes a new `ResolvedSnapshot` visible
-4. The supervisor publishes a new `ActiveRuntimeSnapshot`
-5. The router observes that generation
-6. Only then may a request be accepted on that generation
-
-This keeps the storage/event consistency boundary explicit instead of assuming
-that an acknowledged write is already visible to every secondary-index query.
--/
-
-/-- Published runtime generation number. -/
 abbrev Generation := Nat
 
-/-- Reconcile control-plane phase. -/
 inductive ReconcilePhase where
   | idle
   | debouncing
@@ -33,7 +14,6 @@ inductive ReconcilePhase where
 
 namespace ReconcilePhase
 
-/-- String vocabulary persisted in `AgentRuntime.reconcile_phase`. -/
 def toDefraDB : ReconcilePhase → String
   | .idle => "idle"
   | .debouncing => "debouncing"
@@ -41,7 +21,6 @@ def toDefraDB : ReconcilePhase → String
   | .diffing => "diffing"
   | .applying => "applying"
 
-/-- Parse the persisted `AgentRuntime.reconcile_phase` vocabulary. -/
 def fromDefraDB? : String → Option ReconcilePhase
   | "idle" => some .idle
   | "debouncing" => some .debouncing
@@ -56,7 +35,6 @@ theorem fromDefraDB_toDefraDB (phase : ReconcilePhase) :
 
 end ReconcilePhase
 
-/-- Desired runtime state resolved from DefraDB documents. -/
 structure ResolvedSnapshot where
   defaultBehavior : BehaviorId
   runnable : Finset BehaviorId
@@ -71,7 +49,6 @@ instance : Repr ResolvedSnapshot where
 
 namespace ResolvedSnapshot
 
-/-- Runnable and unavailable behavior sets must not overlap. -/
 def wellFormed (s : ResolvedSnapshot) : Prop :=
   Disjoint s.runnable s.unavailable
 
@@ -81,7 +58,6 @@ instance (s : ResolvedSnapshot) : Decidable s.wellFormed := by
 
 end ResolvedSnapshot
 
-/-- Published runtime state visible to the router and scheduler. -/
 structure ActiveRuntimeSnapshot where
   generation : Generation
   defaultBehavior : BehaviorId
@@ -100,7 +76,6 @@ instance : Repr ActiveRuntimeSnapshot where
 
 namespace ActiveRuntimeSnapshot
 
-/-- Published snapshots are valid only once their dispatchers exist. -/
 def wellFormed (s : ActiveRuntimeSnapshot) : Prop :=
   0 < s.generation ∧
     s.dispatchers = s.runnable ∧
@@ -112,8 +87,6 @@ instance (s : ActiveRuntimeSnapshot) : Decidable s.wellFormed := by
 
 end ActiveRuntimeSnapshot
 
-/-- Installing a resolved snapshot yields an active snapshot whose dispatch map
-    exactly covers the runnable behavior set. -/
 def ResolvedSnapshot.activate
     (resolved : ResolvedSnapshot)
     (generation : Generation) :
@@ -134,8 +107,6 @@ theorem activate_wellFormed
   refine ⟨h_generation, rfl, ?_⟩
   simpa [ResolvedSnapshot.wellFormed] using h_resolved
 
-/-- Full runtime state, including control-plane visibility and consumer
-    observation boundaries. -/
 structure RuntimeState where
   phase : ReconcilePhase
   ackedResolved : Option ResolvedSnapshot
@@ -154,13 +125,11 @@ structure RuntimeState where
 
 namespace RuntimeState
 
-/-- Session routing is behavior-scoped. Unbound sessions use the current default. -/
 def selectedBehavior (s : RuntimeState) (sessionId : SessionId) : BehaviorId :=
   match s.sessionBehavior sessionId with
   | some behaviorId => behaviorId
   | none => s.active.defaultBehavior
 
-/-- Bind a session to a behavior if it is not already bound. -/
 def bindSessionIfNeeded
     (s : RuntimeState)
     (sessionId : SessionId)
@@ -201,8 +170,6 @@ theorem bindSessionIfNeeded_eq_self_of_bound
   unfold bindSessionIfNeeded
   simp [h_bound]
 
-/-- Successful admission requires the router to have observed the currently
-    active generation. -/
 def CanAdmitRequest
     (s : RuntimeState)
     (sessionId : SessionId)
@@ -220,8 +187,6 @@ instance
   unfold CanAdmitRequest
   infer_instance
 
-/-- Global runtime invariant for reconcile publication, consumer observation,
-    and request bindings. -/
 def coherent (s : RuntimeState) : Prop :=
   s.active.wellFormed ∧
     s.lastResolved.wellFormed ∧
@@ -240,7 +205,6 @@ def coherent (s : RuntimeState) : Prop :=
     (∀ rid, rid ∈ s.inFlight →
       s.sessionBehavior (s.requestSession rid) = some (s.requestBehavior rid))
 
-/-- Initial startup installation publishes and exposes generation `1`. -/
 def bootState (resolved : ResolvedSnapshot) : RuntimeState :=
   { phase := .idle
   , ackedResolved := none
@@ -278,6 +242,5 @@ theorem bootState_coherent
     simp [bootState] at h_rid
   · intro rid h_rid
     simp [bootState] at h_rid
-
 
 end RuntimeState

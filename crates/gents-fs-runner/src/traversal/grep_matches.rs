@@ -8,24 +8,14 @@ use crate::traversal::common::{
     admit_next, should_ignore_path, sorted_children, Admitted, GitignoreStack, WalkState,
 };
 
-/// Per-file bound: files larger than this are skipped (and counted) rather
-/// than read whole into memory — a home-directory tool root feeds multi-GB
-/// logs and model files to an otherwise unbounded grep (#729).
 const MAX_GREP_FILE_BYTES: u64 = 2 * 1024 * 1024;
-/// A NUL byte in this leading window classifies the file as binary.
 const BINARY_SNIFF_BYTES: usize = 4096;
 
-/// Search needle prepared once per grep (#732): the pattern is a
-/// Rust regex (linear-time finite automata — no catastrophic backtracking;
-/// literal and literal-prefixed patterns get memchr/aho-corasick prefilters,
-/// and case folding is full Unicode simple folding). A pattern that fails to
-/// parse as regex falls back to an escaped literal so `foo(` keeps working.
 struct Needle {
     regex: regex::Regex,
     syntax: &'static str,
 }
 
-/// Bound regex compilation so a hostile pattern cannot balloon memory.
 const REGEX_SIZE_LIMIT: usize = 10 * (1 << 20);
 
 impl Needle {
@@ -200,9 +190,6 @@ fn grep_file(
     let Ok(file_metadata) = std::fs::metadata(path) else {
         return Ok(());
     };
-    // The per-file size cap is a tree-walk guard. A file the caller named
-    // explicitly must be searched (the byte budget still bounds it, and an
-    // over-budget read reports exhaustion instead of silence).
     if !explicit_file && file_metadata.len() > MAX_GREP_FILE_BYTES {
         file_stats.skipped_large_files += 1;
         return Ok(());

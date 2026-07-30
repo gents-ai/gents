@@ -36,7 +36,6 @@ impl ClientTurnState {
         }
     }
 
-    /// Whether this state is terminal.
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -45,11 +44,6 @@ impl ClientTurnState {
     }
 }
 
-/// Persisted request lifecycle state, distinct from request `status`.
-///
-/// `InputRequired` is reserved protocol vocabulary. The current agent runtime
-/// parses it for forward compatibility but does not emit it as an active
-/// lifecycle transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestLifecycleState {
     Pending,
@@ -79,7 +73,6 @@ impl RequestLifecycleState {
     }
 }
 
-/// Parse error for invalid request lifecycle strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidRequestLifecycleState {
     state: String,
@@ -120,7 +113,6 @@ impl TryFrom<&str> for RequestLifecycleState {
     }
 }
 
-/// Response status as observed by the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseStatus {
     Streaming,
@@ -128,7 +120,6 @@ pub enum ResponseStatus {
     Error,
 }
 
-/// Snapshot of an AgentRequest, containing only derivation-relevant fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub request_id: String,
@@ -137,26 +128,17 @@ pub struct RequestSnapshot {
     pub is_superseded: bool,
 }
 
-/// Snapshot of an AgentResponse, containing only derivation-relevant fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseSnapshot {
     pub status: ResponseStatus,
 }
 
-/// A single attempt observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptView {
     pub request: RequestSnapshot,
     pub response: Option<ResponseSnapshot>,
 }
 
-/// Derive client turn state from a single attempt.
-///
-/// Priority:
-/// 1. Supersession flag → Superseded
-/// 2. Server terminal lifecycle → terminal client state
-/// 3. Non-terminal lifecycle + response → trust response
-/// 4. Non-terminal lifecycle + no response → WaitingForClaim
 pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     if view.request.is_superseded {
         return ClientTurnState::Superseded;
@@ -206,10 +188,6 @@ fn resolve_tip(attempts: &[AttemptView]) -> Option<&AttemptView> {
         })
 }
 
-/// Derive client turn state from a full retry chain.
-///
-/// Resolves the tip using `request_id` / `retry_parent_request` links and
-/// derives the state from that attempt. Returns `None` for empty chains.
 pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
     resolve_tip(attempts).map(derive_attempt)
 }

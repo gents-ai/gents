@@ -1,7 +1,5 @@
 import Proofs.StreamingResponse.Transition
 
-/-! Constructive terminal paths for streaming and stale-recovery response states. -/
-
 namespace StreamingResponse
 
 theorem streamIdle_eventually_terminal
@@ -31,10 +29,6 @@ theorem streaming_eventually_terminal
   · exact Transition.recoverInterrupted h_streaming rfl
   · exact Or.inr rfl
 
-/-- Parity: the streaming-stale recovery condition reaches an error
-state via the canonical `Transition.recoverInterrupted`. This is the
-formal statement that `responseRecoverySweep` in `Recovery/Sweeps.lean`
-is a degenerate instance of the transition relation. -/
 theorem recoverInterrupted_constructible
     (pre : ResponseContext)
     (h_streaming : pre.status = .streaming) :

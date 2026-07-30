@@ -46,25 +46,12 @@ use super::graphql_helpers::{
 use super::registry::REGISTRY_HEARTBEAT_INTERVAL;
 use super::templates::{resolve_template, ScopeTemplate};
 
-/// The scope template discovery prefers when a peer offers it: the everyday
-/// filtered-push of the peer's conversation slice. When a peer does not offer
-/// `conversation`, discovery falls back to the first offered template that
-/// resolves in the catalog.
 pub const PREFERRED_DISCOVERY_TEMPLATE: &str = "conversation";
 
-/// The `source` discriminator value for operator-authored desired rows.
 pub const SOURCE_OPERATOR: &str = "operator";
-/// Config-manifest rows are an explicitly-provenanced subpartition of
-/// operator intent. Discovery treats them as operator-owned for exclusion, but
-/// the suffix lets `config apply` remove only rows owned by its manifest root.
 pub const SOURCE_MANIFEST_PREFIX: &str = "manifest:";
-/// The `source` discriminator value for registry-derived (discovery-owned)
-/// desired rows.
 pub const SOURCE_REGISTRY: &str = "registry";
 
-/// A registry entry is considered stale (effectively offline) once its
-/// `updated_at` heartbeat is older than this. Set to 3× the heartbeat interval
-/// so a single missed heartbeat does not flap a peer out of discovery.
 pub const REGISTRY_STALE_AFTER: Duration =
     Duration::from_secs(REGISTRY_HEARTBEAT_INTERVAL.as_secs() * 3);
 
@@ -76,9 +63,7 @@ pub const REGISTRY_STALE_AFTER: Duration =
 /// slightly out of sync) is still tolerated as fresh.
 pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Duration) -> bool {
     match now.signed_duration_since(ts).to_std() {
-        // ts is in the past: fresh iff the age is within the window.
         Ok(age) => age <= stale_after,
-        // ts is in the future (clock skew): fresh iff within the window ahead.
         Err(_) => ts
             .signed_duration_since(now)
             .to_std()
@@ -87,7 +72,6 @@ pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Du
     }
 }
 
-/// One `PeerRegistry` row as seen by the join-admission membership gate.
 #[derive(Debug, Clone)]
 pub struct RegistryMemberRow {
     pub agent_did: String,
@@ -101,14 +85,8 @@ pub struct RegistryMemberRow {
 /// decides only the registry-membership half.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinAdmission {
-    /// Registry holds no peer members (excluding self): admit under TOFU
-    /// bootstrap. Mirrors `signedByMember … tofuBootstrap=true`.
     TofuBootstrap,
-    /// The invite issuer is a live registry member: admit. Mirrors
-    /// `isMember tok.issuer reg`.
     MemberAdmitted,
-    /// Registry is non-empty and the issuer is not a live member: reject.
-    /// Mirrors `non_member_invite_rejected` (the TOFU arm does not apply).
     Rejected,
 }
 
@@ -155,28 +133,12 @@ pub fn decide_join_admission(
     }
 }
 
-/// One `PeerRegistry` row as observed by the discovery reader, with liveness
-/// already resolved from `status` + `updated_at` age. This is the Rust analogue
-/// of the Lean `RegistryEntry` (which folds heartbeat-freshness and `status`
-/// into a single `live` bit).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredEntry {
-    /// The libp2p peer id of the registered node.
     pub peer_id: String,
-    /// The agent DID (principal identity) running on the registered node. Used
-    /// to stamp `agent_did` on the materialized desired row.
     pub agent_did: String,
-    /// Shareable multiaddrs (e.g. `/ip4/.../tcp/.../p2p/<peer_id>`) the peer
-    /// advertised. These become the desired row's `replicator_addresses` so the
-    /// pairing reconciler has somewhere to replicate.
     pub addresses: Vec<String>,
-    /// Scope templates the peer offers (the templates it is willing to
-    /// replicate). Discovery picks one and stamps it on the materialized
-    /// `PeerPairingDesired.template`; the pairing reconciler then resolves the
-    /// collection set, scope filter, and delivery mode from it.
     pub templates: Vec<String>,
-    /// Effective liveness: `status == "online"` AND heartbeat within
-    /// [`REGISTRY_STALE_AFTER`].
     pub live: bool,
 }
 
@@ -208,13 +170,6 @@ impl DiscoveredEntry {
         }
     }
 
-    /// The scope template discovery will stamp on the materialized desired row,
-    /// chosen from the peer's offered templates:
-    /// - prefer [`PREFERRED_DISCOVERY_TEMPLATE`] (`conversation`) if offered,
-    /// - else the first offered template that resolves in the built-in catalog,
-    /// - else `None` (the peer offers nothing we can honor — discovery skips it).
-    ///
-    /// Unknown/unresolvable offered ids are ignored, never stamped.
     pub fn chosen_template(&self) -> Option<&'static ScopeTemplate> {
         let offered: Vec<&str> = self
             .templates
@@ -231,14 +186,6 @@ impl DiscoveredEntry {
         offered.into_iter().find_map(resolve_template)
     }
 
-    /// The collection set for the materialized desired row's `collections`,
-    /// derived from the entry's [chosen template](Self::chosen_template).
-    ///
-    /// The pairing reconciler treats the stamped `template` as authoritative for
-    /// the collection set (it re-resolves from the template at reconcile time),
-    /// so this only needs to satisfy the non-nullable `collections` column with
-    /// a coherent, non-empty set. Returns `None` when the entry offers no
-    /// resolvable template — discovery skips materializing such an entry.
     pub fn desired_collections(&self) -> Option<BTreeSet<String>> {
         let template = self.chosen_template()?;
         Some(
@@ -270,13 +217,9 @@ pub fn derive_registry_desired(self_peer: &str, registry: &[DiscoveredEntry]) ->
         .collect()
 }
 
-/// Outcome of a discovery tick: which registry-owned desired rows were created
-/// and which were retracted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveryTickOutcome {
-    /// Peers for which a registry-owned desired row was upserted this tick.
     pub upserted: BTreeSet<String>,
-    /// Peers whose registry-owned desired row was deleted this tick.
     pub retracted: BTreeSet<String>,
 }
 
@@ -286,40 +229,16 @@ pub struct DiscoveryTickOutcome {
 /// whole point (mirrors Lean `ownership_safe`).
 #[async_trait]
 pub trait DiscoveryStore: Send + Sync {
-    /// This node's own peer id (excluded from derivation).
     async fn self_peer_id(&self) -> Result<String>;
 
-    /// Live, liveness-resolved registry entries.
     async fn load_registry(&self) -> Result<Vec<DiscoveredEntry>>;
 
-    /// Peers that currently have a **registry-owned** desired row.
     async fn list_registry_owned_peers(&self) -> Result<BTreeSet<String>>;
 
-    /// Peers that currently have an **operator-owned** desired row. Read-only:
-    /// discovery uses this purely to *exclude* peers where operator intent
-    /// already exists (operator intent wins), never to mutate them. This is the
-    /// single-row realization of the Lean `effectiveDesired = operatorDesired ∪
-    /// registryDesired` union: the `peer_id` unique index means at most one row
-    /// per peer, so a peer present in the operator partition is not also
-    /// materialized in the registry partition.
     async fn list_operator_owned_peers(&self) -> Result<BTreeSet<String>>;
 
-    /// Peers that currently have a **network-owned** desired row (`source =
-    /// "network"`, materialized by the membership reconciler). Read-only:
-    /// discovery *excludes* these so the registry-discovery partition never
-    /// collides with the network-membership mesh on the unique `peer_id` index.
-    /// This is the discovery-side mirror of the network reconciler's
-    /// `list_non_network_owned_peers` exclusion — the two partitions yield to
-    /// each other symmetrically. A peer that is both a network member and a
-    /// registry heartbeat publisher (the normal trusted-fleet case) is therefore
-    /// owned by exactly one source.
     async fn list_network_owned_peers(&self) -> Result<BTreeSet<String>>;
 
-    /// Upsert a **registry-owned** desired row for `entry`, stamping the offered
-    /// scope template (chosen by [`DiscoveredEntry::chosen_template`]) and
-    /// populating the template's collection set plus the replicator addresses the
-    /// peer advertised, so the pairing reconciler has a concrete scoped pairing
-    /// to install.
     async fn upsert_registry_desired(&self, entry: &DiscoveredEntry) -> Result<()>;
 
     /// Delete the **registry-owned** desired row for `peer_id`. Must not touch
@@ -339,8 +258,6 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
     let self_peer = store.self_peer_id().await.context("read self peer id")?;
     let registry = store.load_registry().await.context("load registry")?;
     let derived = derive_registry_desired(&self_peer, &registry);
-    // Index the entries by peer id so the upsert can populate the materialized
-    // row's collections/addresses from the entry the peer advertised.
     let entry_by_peer: std::collections::BTreeMap<&str, &DiscoveredEntry> = registry
         .iter()
         .map(|entry| (entry.peer_id.as_str(), entry))
@@ -353,14 +270,6 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
         .list_network_owned_peers()
         .await
         .context("list network-owned desired peers")?;
-    // Operator AND network intent win: realize the `operatorDesired ∪
-    // networkDesired ∪ registryDesired` union under the single-row-per-peer
-    // unique index by excluding any peer another source already authored. We
-    // never read further into or mutate those rows — exclusion only. Excluding
-    // the network partition is the symmetric counterpart to the network
-    // reconciler's `list_non_network_owned_peers`; without it a peer that is
-    // both a network member and a registry heartbeat publisher collides on the
-    // unique `peer_id` index (the index then rejects one writer per sweep).
     let blocked: BTreeSet<String> = operator_owned.union(&network_owned).cloned().collect();
     let desired = derived
         .difference(&blocked)
@@ -373,11 +282,6 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
 
     let mut outcome = DiscoveryTickOutcome::default();
 
-    // Materialize: registry-owned rows for newly-derived peers, each populated
-    // from the registry entry it was derived from. A derived peer that offers no
-    // resolvable scope template is skipped (not materialized) — there is no
-    // pairing intent the reconciler could honor, so stamping it would produce an
-    // inert row. The skip is a no-op, so it is stable across ticks.
     for peer in desired.difference(&existing) {
         let entry = entry_by_peer
             .get(peer.as_str())
@@ -398,9 +302,6 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
         outcome.upserted.insert(peer.clone());
     }
 
-    // Retract: registry-owned rows whose peer is no longer derived. This is the
-    // retraction-sound step — only registry-owned rows are deleted; operator
-    // rows are never named by this query.
     for peer in existing.difference(&desired) {
         store
             .delete_registry_desired(peer)
@@ -423,8 +324,6 @@ pub async fn reconcile_discovery_tick(store: &dyn DiscoveryStore) -> Result<Disc
 /// the replicated registry is trusted (see #490 review H4).
 pub const DISCOVERY_AUTO_PAIR_ENV: &str = "GENTS_DISCOVERY_AUTO_PAIR";
 
-/// Whether `discovery_auto_pair` is enabled. Read from
-/// [`DISCOVERY_AUTO_PAIR_ENV`]; truthy = `1`/`true`/`yes`/`on` (case-insensitive).
 pub fn discovery_auto_pair_enabled() -> bool {
     std::env::var(DISCOVERY_AUTO_PAIR_ENV)
         .ok()
@@ -437,13 +336,6 @@ pub fn discovery_auto_pair_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Background daemon: run the discovery reconciler sweep, mirroring
-/// [`super::engine::run_pairing_reconciler`]. Subscribes `EventName::Update` to
-/// react to registry replication, plus a periodic sweep.
-///
-/// Gated behind `discovery_auto_pair`: when OFF the daemon idles (the registry
-/// still replicates; no rows are materialized). Idle also when the embedded node
-/// has no P2P transport.
 pub async fn run_discovery_reconciler(
     node: Arc<EmbeddedNode>,
     cancel: CancellationToken,
@@ -528,7 +420,6 @@ async fn sweep_discovery(store: &dyn DiscoveryStore) {
     }
 }
 
-/// GraphQL-backed [`DiscoveryStore`] over the embedded node.
 #[derive(Clone)]
 pub struct GraphqlDiscoveryStore {
     node: Arc<EmbeddedNode>,
@@ -540,8 +431,6 @@ impl GraphqlDiscoveryStore {
         Self { node, self_peer_id }
     }
 
-    /// List the peers whose desired row carries the given `source`, queried as a
-    /// partition (`filter: { source: { _eq: "<source>" } }`).
     async fn list_peers_by_source(&self, source: &str) -> Result<BTreeSet<String>> {
         let source = escape_graphql_string(source);
         let query = format!(

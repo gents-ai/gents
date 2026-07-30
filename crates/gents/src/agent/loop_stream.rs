@@ -92,8 +92,6 @@ pub(crate) enum LoopStreamItem<R> {
     },
 }
 
-/// Per-request configuration for the loop, mirroring the agent-builder knobs we
-/// previously handed to rig (`completion_factory::configure_agent_builder`).
 #[derive(Clone)]
 pub(crate) struct LoopConfig {
     pub(crate) preamble: Option<String>,
@@ -105,9 +103,6 @@ pub(crate) struct LoopConfig {
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
     pub(crate) retry_policy: CompletionRetryPolicy,
     pub(crate) deadline: Option<DateTime<Utc>>,
-    /// Maximum number of tool round-trips before the loop fails with a
-    /// max-turns error. Matches rig's `default_max_turns` semantics: a turn
-    /// that produces a text response (no tool calls) always gets to run.
     pub(crate) max_turns: usize,
 }
 
@@ -130,9 +125,6 @@ pub(crate) fn assemble_new_messages(
     new_messages
 }
 
-/// True for a per-request `<context>...</context>` user message produced by the
-/// request-context templating layer (#497). Used to keep prior requests' stale
-/// context out of provider-bound history.
 pub(crate) fn is_request_context_message(message: &Message) -> bool {
     let Message::User { content } = message else {
         return false;
@@ -144,12 +136,6 @@ pub(crate) fn is_request_context_message(message: &Message) -> bool {
     trimmed.starts_with("<context>") && trimmed.ends_with("</context>")
 }
 
-/// Drive the owned multi-turn loop, producing a stream of `LoopStreamItem`s.
-///
-/// `prompt` is the new user message; `history` is the prior conversation
-/// (without the new prompt). `tools` are dispatched by name when the model
-/// calls them — they must be the *unwrapped* tools; the generator applies the
-/// deadline/cancellation envelope and result bounding itself.
 pub(crate) fn run_loop_stream<M>(
     model: M,
     hook: Option<DefraSessionHook>,
@@ -163,14 +149,6 @@ where
     M::StreamingResponse: 'static,
 {
     try_stream! {
-        // Provider-input chokepoint: every completion request in the system is
-        // born in this loop (daemon inference, oneshot, compaction summarize,
-        // title, subagent children), so sanitizing the caller-provided history
-        // ONCE at entry guarantees provider-valid input for every consumer —
-        // no call site can forget the boundary. Only the loaded history is
-        // sanitized: the loop's own threaded messages (`new_messages`) are
-        // provider-valid by construction, and sanitizing them mid-flight would
-        // mis-drop a tool call whose result rides as the next turn's prompt.
         let history = crate::compaction::sanitize_history_for_provider(history);
         // #497: prior requests' per-request `<context>` messages are durably
         // persisted (training capture), but must NOT be replayed to the provider:
@@ -197,15 +175,6 @@ where
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
 
         'turns: loop {
-            // rig semantics: `max_turns` is the number of tool round-trips, so up
-            // to `max_turns + 1` completions are allowed (the extra one produces
-            // the final text answer after the last tool call). Matches rig's
-            // `current_max_turns > self.max_turns + 1` break.
-            //
-            // Emit as `StreamingError::Prompt(MaxTurnsError)` — the same variant
-            // rig uses — so `classify_completion_error` treats turn exhaustion as a
-            // PERMANENT failure. A generic `Completion(ResponseError)` would be
-            // classified transient and retried, re-running tools on each attempt.
             if current_turn > config.max_turns + 1 {
                 let prompt = new_messages
                     .last()
@@ -229,10 +198,6 @@ where
                 .expect("new_messages always retains at least the initial prompt");
             let prior = &new_messages[..new_messages.len() - 1];
 
-            // Mirror rig's per-turn `on_completion_call` (prompt_request/streaming.rs
-            // fires it inside the turn loop): on turn 1 this creates the session and
-            // persists the user prompt; the hook's own state dedupes later turns.
-            // A `None` hook is a non-persisting call (compaction/title summaries).
             if let Some(hook) = hook.as_ref() {
                 let history_snapshot: Vec<Message> =
                     history.iter().chain(prior.iter()).cloned().collect();
@@ -539,17 +504,6 @@ where
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {
                         accumulator.push_tool_call(rig_compat::from_rig_tool_call(&tool_call));
-                        // Yield the tool call first (so the consumer registers its
-                        // stream-call identity), then execute it immediately — rig
-                        // runs each tool the moment its ToolCall arrives. Executing
-                        // here, rather than after the turn's stream drains, means
-                        // the lifecycle / AgentToolCall row exists before the
-                        // provider can stall on the rest of the stream; otherwise
-                        // the daemon liveness timeout fires with no in-flight call
-                        // to cancel and the tool is silently lost. The bounded
-                        // result is threaded and yielded only after the loop, so
-                        // the assistant turn (all its tool calls) still persists as
-                        // one message ahead of its results.
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                             StreamedAssistantContent::ToolCall {
                                 tool_call: tool_call.clone(),
@@ -560,9 +514,6 @@ where
                         let tool_name = tool_call.function.name.clone();
                         let tool_args = value_to_json_string(&tool_call.function.arguments);
 
-                        // on_tool_call: register the lifecycle / persist the call.
-                        // May veto (Skip) or abort the whole request (Terminate).
-                        // With no hook (non-persisting calls) the tool just runs.
                         let call_action = match hook.as_ref() {
                             Some(hook) => {
                                 hook.on_tool_call(
@@ -590,20 +541,9 @@ where
                                 unreachable!("Err(..)? above ends the stream");
                             }
                             ToolCallHookAction::Skip { reason } => {
-                                // Skipped: the rejection reason is the tool result;
-                                // no dispatch and no on_tool_result (matches rig).
                                 reason
                             }
                             _ => {
-                                // Dispatch the unwrapped tool inside our own
-                                // deadline/cancellation envelope, then bound the
-                                // model-facing result natively (#401) before
-                                // threading. An unparseable-args failure comes back
-                                // wrapped in the collision-free unparseable-args
-                                // marker; on_tool_result strips it and terminalizes
-                                // failed(ArgumentInvalid), and we strip it here too
-                                // so the model sees only the clean notice and
-                                // re-emits corrected arguments next turn.
                                 let live_output = hook.as_ref().map(|hook| {
                                     hook.foreground_live_output_writer(&internal_call_id)
                                 });
@@ -620,8 +560,6 @@ where
                                     &TruncationLimits::default(),
                                 );
 
-                                // on_tool_result persists/spills the FULL result
-                                // and drives the lifecycle to its terminal state.
                                 if let Some(hook) = hook.as_ref() {
                                     let result_action = hook
                                         .on_tool_result(
@@ -655,8 +593,6 @@ where
                         pending_results.push((rig_compat::from_rig_tool_call(&tool_call), internal_call_id, bounded_result));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
-                        // Informational only; the full `ToolCall` is emitted
-                        // separately and is what we accumulate.
                     }
                     StreamedAssistantContent::Final(raw) => {
                         if let Some(usage) = raw.token_usage() {
@@ -704,10 +640,6 @@ fn close_streaming_turn<R>(
         new_messages.push(assistant_message);
     }
 
-    // The tools already ran inline as their ToolCalls arrived; now that the
-    // assistant turn is complete, thread each bounded result into history and
-    // forward it to the consumer (which persists the assistant turn on the
-    // first tool result, so results must trail the whole turn).
     pending_results
         .into_iter()
         .map(|(tool_call, internal_call_id, bounded_result)| {
@@ -834,19 +766,6 @@ fn sanitize_provider_arg_string(text: &str) -> String {
     sanitized
 }
 
-/// Drive the owned loop to completion and return the final assistant text, for
-/// the non-streaming call sites (`oneshot`, `compaction`, title generation) that
-/// previously used rig's `Agent::prompt`.
-///
-/// When a hook is present (one-shot), this persists the transcript exactly as the
-/// daemon's `StreamProcessor` does — assistant turns and tool-result messages —
-/// so one-shot sessions store the full reply, not just the prompt. (The daemon
-/// path has its own `StreamProcessor`; this is the equivalent for the collected,
-/// non-streaming path, minus the live-streaming/response-doc bits.) With no hook
-/// (compaction/title) nothing is persisted. Persistence honors the hook's
-/// `FailurePolicy` via `apply_persistence_policy` — exactly as `StreamProcessor`
-/// does — so a fail-closed hook (one-shot's default) terminates the run on a
-/// persistence error rather than silently dropping the transcript.
 pub(crate) async fn run_loop_to_text<M>(
     model: M,
     hook: Option<DefraSessionHook>,
@@ -876,11 +795,6 @@ where
         })?;
         match item {
             LoopStreamItem::TurnRetracted { .. } => {
-                // Discard the retracted turn's accumulated content so the
-                // resample renders as the sole turn for this index. Mirrors
-                // `StreamProcessor`'s reset on the daemon path; without it the
-                // retracted partial concatenates into the persisted assistant
-                // message on the one-shot persisting path (#648).
                 accumulator = AssistantTurnAccumulator::default();
                 continue;
             }
@@ -953,21 +867,10 @@ where
     Ok(final_text)
 }
 
-/// Conversation for a terminal `PromptError` payload: the caller-provided
-/// history followed by the messages this loop has threaded. Mirrors rig, whose
-/// `MaxTurnsError` / `PromptCancelled` carry input history *plus* new messages —
-/// classification aside, this keeps prior context in an inspected error.
 fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
     history.iter().chain(new_messages.iter()).cloned().collect()
 }
 
-/// The rag/context text handed to each tool's `definition`, mirroring rig's
-/// selection (`completion.rs`): the current prompt's user text if it has any,
-/// otherwise the most recent user-text message across `history` + `prior`. A
-/// tool-result turn's prompt carries no text, so without the fallback a
-/// prompt-aware tool would lose the task/subagent/manual prompt the provider
-/// still sees. Built-in Gents tools ignore it; this preserves parity for custom
-/// or embedding tools.
 fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) -> String {
     if let Some(text) = prompt.rag_text() {
         return text;
@@ -980,8 +883,6 @@ fn current_rag_text(prompt: &Message, history: &[Message], prior: &[Message]) ->
         .unwrap_or_default()
 }
 
-/// Serialize tool-call arguments the way rig does (`json_utils::value_to_json_string`):
-/// a JSON string passes through unquoted, anything else is rendered as JSON.
 fn value_to_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(string) => string.clone(),
@@ -989,14 +890,6 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-/// Dispatch one tool call by name, applying the active request's
-/// deadline/cancellation envelope (when a tool runtime scope is in effect).
-///
-/// Returns the tool's full (unbounded) output, a managed-terminal marker string
-/// that `on_tool_result` classifies into a timed-out/cancelled outcome, or — for
-/// a [`ToolError::UnparseableArgs`] — a `JsonError:`-prefixed message (see
-/// [`tool_outcome_to_result`]). A tool's own error is rendered into the result
-/// string so the model can react to it, as before.
 async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -1023,8 +916,6 @@ async fn dispatch_tool(
         }
     });
 
-    // Re-enter the runtime scope with a per-call live-output writer so the
-    // exec producers stream this call's output under its own document id.
     let call = scope_request_tool_execution_with_workspace_and_live_output(
         scope.deadline_at,
         scope.cancellation_token.clone(),
@@ -1040,15 +931,6 @@ async fn dispatch_tool(
     }
 }
 
-/// Render a tool dispatch outcome into the model-facing result string. A
-/// [`ToolError::UnparseableArgs`] is wrapped in the collision-free
-/// [`unparseable_args_result`] marker: `on_tool_result` strips it, terminalizes
-/// the call `failed(ArgumentInvalid)`, and surfaces the (clean) notice to the
-/// model — which tells it whether its arguments were truncated (it hit the token
-/// cap) or malformed, so it re-emits a corrected tool call on its next turn
-/// instead of blindly repeating the broken payload. A bare human-readable prefix
-/// would risk colliding with a legitimate tool's output; the marker cannot. Every
-/// other error keeps the existing behavior of being surfaced as the result.
 fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
     match outcome {
         Ok(result) => result,
@@ -1077,10 +959,6 @@ fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> Str
     }
 }
 
-/// Build the per-turn [`CompletionRequest`], replicating rig's
-/// `agent::completion::build_completion_request` for the non-RAG path:
-/// the preamble becomes a leading `Message::System`, followed by the prior
-/// conversation, with `prompt` appended last by `completion_request`.
 async fn build_request<M: CompletionModel>(
     model: &M,
     prompt: Message,
@@ -1089,11 +967,6 @@ async fn build_request<M: CompletionModel>(
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
 ) -> Result<CompletionRequest, StreamingError> {
-    // The current prompt's rag text (with rig's history fallback) is handed to
-    // each tool's `definition` so prompt-aware (dynamic) tools can tailor their
-    // schema. Built-in tools ignore it; this preserves parity for custom tools.
-    // Definitions are native; converted to rig's at the provider boundary
-    // (Layer A) for the outgoing request.
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
     for tool in tools {
@@ -1101,8 +974,6 @@ async fn build_request<M: CompletionModel>(
         tool_defs.push(crate::llm::rig_compat::to_rig_tool_definition(&native));
     }
 
-    // Convert straight from the native borrows: building a native Vec first
-    // and then converting would clone every message twice per turn.
     let chat_history: Vec<rig::completion::Message> = config
         .preamble
         .as_ref()

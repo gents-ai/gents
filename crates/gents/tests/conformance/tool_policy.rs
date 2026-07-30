@@ -1,6 +1,3 @@
-//! ToolPolicy conformance home: feed the Lean-emitted inputs through the
-//! production Rust policy resolver and assert it equals Lean's expected output.
-
 use crate::lean_vocab_test::lean_tool_policy_cases;
 
 #[path = "tool_policy_mirror.rs"]
@@ -30,9 +27,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             );
         }
         if case.name == "disjoint_only_scopes_intersect_to_empty" {
-            // The behavior and ceiling scopes are both non-empty, disjoint
-            // `only` scopes. A correct key-intersection meet preserves the
-            // `only` kind but drops every key; a union bug would keep one.
             assert_eq!(case.behavior.mcp_scope_kind, "only");
             assert_eq!(case.ceiling.mcp_scope_kind, "only");
             assert!(case.behavior.mcp_services.contains(&"svc-x".to_string()));
@@ -54,9 +48,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                 case.expected.mcp_services.is_empty(),
                 "disjoint case: effective MCP Only scope must have no surviving keys"
             );
-            // Two disjoint non-empty allow-lists meet to Only(∅) (deny-all),
-            // which must serialize as "only" — never collapse to "all" (the
-            // empty-list = allow-all trap) nor optimize to "none".
             assert_eq!(
                 case.expected.bash_allowed_kind, "only",
                 "disjoint case: Only(∅) must stay \"only\""
@@ -65,9 +56,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                 case.expected.bash_allowed_prefixes.is_empty(),
                 "disjoint case: effective bash allowed-prefix scope must be Only(empty)"
             );
-            // defra_collections is the blocker category: a disjoint meet must
-            // produce Only(∅) deny-all, never collapse to "all" (which the
-            // runtime would read as every-collection-readable).
             assert_eq!(
                 case.expected.defra_collections_scope_kind, "only",
                 "disjoint case: defra_collections Only(∅) must stay \"only\", not \"all\""
@@ -78,10 +66,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             );
         }
         if case.name == "ceiling_clamps_each_category" {
-            // Every boolean capability the original 7-category view aliased away
-            // is independently clamped off by the ceiling here. An `||`-vs-`&&`
-            // wiring typo in any single one would leave it true and diverge from
-            // the Lean-computed expected.
             for (label, value) in [
                 ("memory", case.expected.memory),
                 ("session_history", case.expected.session_history),
@@ -97,7 +81,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
                     "each-category case: {label} must clamp off when the ceiling denies it"
                 );
             }
-            // The four keyed scopes key-intersect down to the ceiling's narrow set.
             assert_eq!(case.expected.cli_keys, vec!["svc-a".to_string()]);
             assert_eq!(
                 case.expected.defra_collections_keys,
@@ -113,8 +96,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             );
         }
         if case.name == "behavior_all_scopes_clamped_by_ceiling_only" {
-            // Behavior left these scopes `All`; the ceiling's `Only` must win
-            // (All ⊓ Only = Only) while the booleans stay on (no spurious clamp).
             assert!(case.expected.memory && case.expected.skills && case.expected.orchestration);
             assert_eq!(case.expected.cli_scope_kind, "only");
             assert_eq!(case.expected.defra_collections_scope_kind, "only");
@@ -126,10 +107,6 @@ pub(super) fn generated_tool_policy_cases_match_lean_composition() {
             );
         }
         if case.name == "write_tool_collection_mismatch_denies" {
-            // Behavior grants (wt, coll1); ceiling grants (wt, coll2). The
-            // collection is part of the KEY, so the keys don't intersect and the
-            // write tool is denied — effective fields empty. A tool-name-only
-            // keying would merge the two and silently keep it active.
             assert!(case
                 .behavior
                 .write_grants

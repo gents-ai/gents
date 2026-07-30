@@ -60,9 +60,6 @@ export function ChatTranscriptPanel({
   }, [selectedSessionId]);
 
   const lastItem = session?.timelineItems[session.timelineItems.length - 1];
-  // A send may be observed as pending or already materialized. Prefer the
-  // request identity so that pending -> materialized does not look like a
-  // second send; fall back to the user row identity for partial snapshots.
   const latestUserTurn = useMemo(() => {
     const items = session?.timelineItems ?? [];
     for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -97,10 +94,6 @@ export function ChatTranscriptPanel({
     }
 
     const frame = window.requestAnimationFrame(() => {
-      // Instant, not smooth: the panel's CSS smooth-scroll animates
-      // scrollIntoView, and a chunk landing mid-animation left the scroll
-      // short of the bottom — which the scroll handler then misread as the
-      // user scrolling away, silently disengaging follow.
       scrollTarget.scrollIntoView({ block: "end", behavior: "instant" });
     });
 
@@ -126,8 +119,6 @@ export function ChatTranscriptPanel({
     latestResponse?.cancelCause?.cause === "userCancelled";
   const showResponseError = Boolean(responseError) && !responseWasInterrupted;
 
-  // Animated placeholder between send and the assistant's first visible
-  // output — without it the transcript sits inert while the turn runs.
   const turnActive = Boolean(
     session?.turnState && !isTerminalTurnState(session.turnState),
   );
@@ -139,7 +130,6 @@ export function ChatTranscriptPanel({
       !(lastItem.content?.length || lastItem.reasoning?.length));
   const showThinking = turnActive && assistantSilent && !showResponseError;
 
-  // The failed turn's content, for the error card's Retry.
   const lastUserContent = useMemo(() => {
     const items = session?.timelineItems ?? [];
     for (let index = items.length - 1; index >= 0; index -= 1) {

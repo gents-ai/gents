@@ -402,7 +402,6 @@ async function waitForReadyMessage(child, timeoutMs) {
             return;
           }
         } catch {
-          // Logs can appear before the ready JSON.
         }
         newlineIndex = stdoutBuffer.indexOf("\n");
       }

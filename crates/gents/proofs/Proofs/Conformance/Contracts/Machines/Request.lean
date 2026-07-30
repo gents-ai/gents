@@ -2,10 +2,6 @@ import Proofs.Request
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Types
 
-/-!
-# Request Conformance Machine
--/
-
 namespace Conformance.Contracts
 
 open Conformance.ContractCases

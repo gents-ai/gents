@@ -1,12 +1,5 @@
 import Proofs.ToolPolicy.Instances
 
-/-!
-# Tool Policy Contract Cases
-
-Small executable witnesses carrying behavior, ceiling, runtime inputs and the
-Lean-computed effective output.
--/
-
 namespace ToolPolicy.ContractCases
 
 open ToolPolicy
@@ -17,12 +10,6 @@ structure WriteGrantView where
   fields : List String
   deriving Repr
 
-/-- Projection of a `Surface` carrying EVERY document-driven category
-    independently, so the conformance round-trip fences the production meet for
-    all 19 categories (not just the original 7). Each boolean capability and each
-    `EndpointScope` (kind + surviving keys) is observed directly — no category is
-    aliased to another, so a `||`-vs-`&&` typo or a wrong scope branch in any
-    single category diverges from the Lean-computed `expected`. -/
 structure SurfaceView where
   fileRank : Nat
   meta : Bool
@@ -87,8 +74,6 @@ def knownToolIds : List String :=
 def knownArgvPrefixes : List (List String) :=
   [["git", "status"], ["ls"]]
 
--- Known forbidden argv prefixes (sorted) for the bash forbidden-set projection,
--- and known read-only command heads for the read-only allowlist projection.
 def knownForbiddenPrefixes : List (List String) :=
   [["curl"], ["rm"], ["sudo"]]
 
@@ -98,13 +83,9 @@ def knownReadOnlyCmds : List String :=
 def knownWriteKeys : List (String × String) :=
   [("wt", "coll"), ("wt", "coll1"), ("wt", "coll2")]
 
--- Kept sorted to match the production `BTreeSet<String>` iteration order on
--- the Rust side (the round-trip compares the lists verbatim).
 def knownSelfConfigCategories : List String :=
   ["automation", "backend", "behavior", "mcp_service", "profile", "tools"]
 
--- Kept sorted so the filtered projection matches the production `BTreeMap`
--- key order on the Rust side (the round-trip compares the lists verbatim).
 def knownSubagentTargets : List (String × String) :=
   [("did-a", "beh-a"), ("did-b", "beh-b")]
 
@@ -125,9 +106,6 @@ def selfConfigScopeKeys {V : Type} : EndpointScope ToolId V → List String
   | .all => []
   | .none => []
 
--- Pair keys are observed as `"<did>::<behavior>"` strings; the separator is
--- absent from the controlled test keys, so the encoding is injective here and
--- matches the Rust mirror's `format!("{did}::{behavior}")`.
 def subagentScopeKeys {V : Type} : EndpointScope (String × String) V → List String
   | .only keys _ =>
       knownSubagentTargets.filterMap (fun key =>
@@ -140,8 +118,6 @@ def bashAllowedPrefixes : EndpointScope (List String) Unit → List (List String
   | .all => []
   | .none => []
 
--- Forbidden is a plain `Finset` (union meet), not an `EndpointScope`; project it
--- by filtering the known list so the round-trip order is deterministic.
 def bashForbiddenView (forbidden : Finset (List String)) : List (List String) :=
   knownForbiddenPrefixes.filter (fun key => decide (key ∈ forbidden))
 
@@ -201,8 +177,6 @@ def bashPolicy (mode : ExecMode) (network : NetMode)
 def readOnlyOnly (cmds : List String) : EndpointScope String Unit :=
   unitOnly cmds.toFinset
 
-/-- Bash policy with non-trivial forbidden + read-only factors, for the
-    union/intersection ceiling-narrowing case. -/
 def bashPolicyRich (forbidden : List (List String))
     (readOnly : EndpointScope String Unit) : BashPolicy :=
   { mode := .unrestricted
@@ -328,10 +302,6 @@ def ceilingWriteFieldsNarrowed : Surface :=
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeA
 
--- Same write tool, DIFFERENT collection: behavior grants `(wt, coll1)`, ceiling
--- grants `(wt, coll2)`. Because the collection is part of the KEY, the meet
--- intersects to an empty key set — the write tool is DENIED, not merged. Guards
--- against tool-name-only keying, which would silently keep it active.
 def writeCollA : EndpointScope (String × String) (Finset String) :=
   writeOnly ("wt", "coll1") ["field_a"]
 
@@ -348,10 +318,6 @@ def ceilingWriteCollB : Surface :=
     (bashPolicy .unrestricted .enabled .all)
     true true true .all writeCollB
 
--- Two disjoint, non-empty `.only` scopes on both bash-allowed and mcp:
--- behavior permits `svc-x` / `git status`, ceiling permits `svc-y` / `ls`.
--- Their meet intersects to empty, exercising the `only ∩ only` branch and the
--- `Only(∅)` deny-all trap (which must serialize as "only", never "all").
 def behaviorDisjointOnly : Surface :=
   { surface .readWrite
       (bashPolicy .unrestricted .enabled allowedOnlyGit)
@@ -364,10 +330,6 @@ def ceilingDisjointOnly : Surface :=
       true true true (toolOnly "svc-y") writeA with
     defraCollections := toolOnly "svc-y" }
 
--- Behavior with EVERY boolean capability on and every keyed scope a broad
--- `Only`. Paired with `ceilingClampsEachCategory` it fences all 12 categories
--- that the original 7-category view aliased away: the 8 booleans must clamp to
--- false, and the 4 scopes must key-intersect down to the ceiling's narrow set.
 def behaviorEachCategory : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a", "field_b"]), ("svc-x", ["field_a"])]
@@ -393,10 +355,6 @@ def ceilingClampsEachCategory : Surface :=
   , subagentTargets := subagentOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
--- Behavior leaves the four keyed scopes wide open (`All`); the ceiling narrows
--- each to a small `Only`. Fences the `All ⊓ Only = Only` branch — and the dual
--- direction from `behaviorEachCategory` — for cli/defra/subagent/background,
--- while the booleans stay true (no spurious clamp).
 def ceilingScopesOnly : Surface :=
   { wideOpen with
     cliTools := cliOnly [("svc-a", ["field_a"])]
@@ -405,10 +363,6 @@ def ceilingScopesOnly : Surface :=
   , subagentTargets := subagentOnly [("did-a", "beh-a")]
   , backgroundTools := toolOnly "svc-a" }
 
--- Bash forbidden (union) + read-only allowlist (intersection) ceiling-narrowing.
--- behavior forbids `rm` + read-only {cat,ls}; ceiling forbids `curl` + read-only
--- {ls,pwd}. Expect forbidden = {rm,curl} (union) and read-only = {ls}
--- (intersection) — exercising the two proven bash bounds end-to-end.
 def behaviorBashRich : Surface :=
   surface .readWrite
     (bashPolicyRich [["rm"]] (readOnlyOnly ["cat", "ls"]))

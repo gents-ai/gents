@@ -156,7 +156,6 @@ function nodePasses(
     if (depthOfRequest(node.node, depth) > max) return false;
   }
   if (state.liveOnly && !lifecycleIsLive(node.node.lifecycleState)) {
-    // Only keep if any descendant survives; that check happens at render time.
     return false;
   }
   if (state.deployments.size > 0) {

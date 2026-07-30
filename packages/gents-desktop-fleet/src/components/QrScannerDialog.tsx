@@ -74,8 +74,6 @@ export function decodePairingQrPayload(
   if (expectedSize > MAX_COMPACT_QR_CBOR_BYTES) return null;
 
   try {
-    // Supplying the bounded output buffer prevents fflate from allocating the
-    // untrusted gzip ISIZE advertised by a scanned QR payload.
     const cbor = gunzipSync(compressed, {
       out: new Uint8Array(expectedSize),
     });
@@ -153,9 +151,6 @@ export function QrScannerDialog({
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const image = context.getImageData(0, 0, canvas.width, canvas.height);
           const result = jsQR(image.data, image.width, image.height, {
-            // Terminal QR blocks inherit the terminal foreground/background.
-            // A dark terminal therefore presents an inverted (light-on-dark)
-            // code, while a light terminal presents the conventional polarity.
             inversionAttempts: "attemptBoth",
           });
           if (result) {

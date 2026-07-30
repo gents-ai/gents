@@ -1,17 +1,3 @@
-//! Bucket 3 — runtime integration tests for the subagent extensions to
-//! ToolCallLifecycle. Spins up a real EmbeddedNode via test_db() and exercises
-//! every new transition end-to-end. Mirrors R1's
-//! tool_call_lifecycle_conformance.rs structure.
-//!
-//! Tests 22-26 (in subsequent tasks) build on the two helpers defined here:
-//!   - `make_completed_request`: creates a child AgentRequest in `.completed`
-//!     state via direct DB writes, bypassing the normal request lifecycle.
-//!   - `make_terminal_request`: same but for any non-completed terminal state
-//!     ("failed", "dead", "interrupted", "superseded").
-
-// These imports are used by the helpers defined here and by the integration
-// tests that Tasks 22-26 add to this file. Allow unused-import lint until the
-// remainder of Bucket 3 is filled in.
 use crate::support::test_db;
 #[allow(unused_imports)]
 use gents::tool_call_lifecycle::{
@@ -19,22 +5,10 @@ use gents::tool_call_lifecycle::{
     FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 
-// ---------------------------------------------------------------------------
-// Internal test helpers
-// ---------------------------------------------------------------------------
-
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)
 }
 
-/// Test helper: directly constructs a child AgentRequest in `.completed`
-/// state via low-level DB writes, bypassing the normal request lifecycle.
-/// Used by bridge_complete tests to set up "the child has finished" state
-/// without R3's SubagentSource.
-///
-/// Uses the same full required-field set as `crate::support::create_request` so
-/// that DefraDB schema validation passes. Parent linkage fields are only
-/// written when `Some`.
 async fn make_completed_request(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
@@ -97,8 +71,6 @@ async fn make_completed_request(
     Ok(())
 }
 
-/// Test helper: same as `make_completed_request` but for non-completed terminal
-/// states: "failed", "dead", "interrupted", "superseded".
 async fn make_terminal_request(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
@@ -123,11 +95,6 @@ async fn make_terminal_request(
     let state_escaped = gents::graphql::escape_graphql_string(state);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now_escaped = gents::graphql::escape_graphql_string(&now);
-    // "dead"/"interrupted"/"superseded" are not valid `status` values in the
-    // existing schema — the `status` field uses the legacy R1 vocabulary
-    // ("pending", "processing", "completed", "error", "superseded") while
-    // `lifecycle_state` carries the full R2 vocabulary. We normalise `status`
-    // to the closest valid legacy value for schema compliance.
     let legacy_status = match state {
         "completed" => "completed",
         "superseded" => "superseded",
@@ -212,20 +179,10 @@ async fn fetch_tool_call_await_mode(
     rows[0]["await_mode"].as_str().unwrap().to_string()
 }
 
-// ---------------------------------------------------------------------------
-// Bucket 3 / R2 fix — load() round-trip: subagent fields survive restart
-// ---------------------------------------------------------------------------
-//
-// Regression guard for the bug where load() reconstructed via new(), which
-// defaulted await_mode=Foreground, cancel_policy=Cascade, child_request_id=None
-// regardless of what was persisted. After the fix, load() reads all three v3
-// fields from the SELECT projection and populates them directly.
-
 #[tokio::test]
 async fn integration_load_round_trip_preserves_subagent_fields() {
     let db = test_db("tc-sa-load-rt-1").await;
 
-    // Construct a subagent lifecycle with non-default values and persist it.
     let mut lc = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         "req-load-rt-1".to_string(),
@@ -243,23 +200,13 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
     );
     lc.start_running().await.unwrap();
 
-    // Reload from the DB — simulates a daemon restart picking up the row.
-    // The loaded lifecycle must correctly reconstruct the v3 subagent fields.
-    // Because await_mode/cancel_policy/child_request_id are pub(crate), we
-    // verify the round-trip by querying the DB directly — the same pattern used
-    // throughout this test file.
     let loaded = ToolCallLifecycle::load(db.node.clone(), "sess-load-rt-1", "tc-load-rt-1")
         .await
         .unwrap()
         .expect("row must exist after start_running");
 
-    // Confirm the returned lifecycle is non-None (i.e. load() succeeded).
-    // The live-state verification is below via a direct DB query.
     drop(loaded);
 
-    // Query the persisted row to confirm all three v3 fields were written by
-    // start_running and are readable back. This validates the SELECT projection
-    // added to load() picks up the correct values for a subagent row.
     let resp = db
         .node
         .execute(
@@ -295,8 +242,6 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
 
 #[tokio::test]
 async fn integration_load_round_trip_foreground_cascade_also_preserved() {
-    // Confirm the default-value case also works correctly (Foreground + Cascade).
-    // Distinct from the non-default test above.
     let db = test_db("tc-sa-load-rt-2").await;
 
     let mut lc = ToolCallLifecycle::new_subagent(
@@ -347,8 +292,6 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
 
 #[tokio::test]
 async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
-    // A native (non-subagent) tool loaded from DB should have child_request_id=None.
-    // After load(), the v3 fields should fall back to their v2 defaults.
     let db = test_db("tc-sa-load-rt-3").await;
 
     let mut lc = ToolCallLifecycle::new(
@@ -370,8 +313,6 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
         .expect("row must exist after start_running");
     drop(loaded);
 
-    // Native tool: the three v3 fields are not written by start_running, so
-    // they come back as null from the DB. The DB-level view:
     let resp = db
         .node
         .execute(
@@ -394,10 +335,6 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Integration: background → foreground round-trip persists await_mode
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn integration_background_then_foreground_persists_round_trip() {
     let db = test_db("tc-sa-int-1").await;
@@ -419,7 +356,6 @@ async fn integration_background_then_foreground_persists_round_trip() {
     );
     lc.start_running().await.unwrap();
 
-    // Flip to background and verify persisted await_mode.
     lc.background().await.unwrap();
     let resp = db
         .node
@@ -437,7 +373,6 @@ async fn integration_background_then_foreground_persists_round_trip() {
         "await_mode should be persisted as 'background' after background()"
     );
 
-    // Flip back to foreground and verify persisted await_mode.
     lc.foreground().await.unwrap();
     let resp = db
         .node
@@ -455,7 +390,6 @@ async fn integration_background_then_foreground_persists_round_trip() {
         "await_mode should be persisted as 'foreground' after foreground()"
     );
 
-    // Calling foreground() again returns ModeAlreadyForeground.
     let err = lc.foreground().await.unwrap_err();
     assert!(
         matches!(
@@ -512,11 +446,6 @@ async fn integration_mode_flips_tolerate_stale_same_target_owner() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Integration: detach one-way persists, and a detached tool is `Persistent`
-// (linked bridged subagent) — runtime fence for `AllToolsPersistent`.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn integration_detach_one_way_persists() {
     let db = test_db("tc-sa-det-1").await;
@@ -540,16 +469,6 @@ async fn integration_detach_one_way_persists() {
 
     lc.detach().await.unwrap();
 
-    // Runtime fence for the composed `ComposedState.Persistent` invariant
-    // (`AllToolsPersistent`), proved reachable-and-well-formed in Lean by
-    // `ReachabilityWitness.detached_reachable_domain_nonempty`:
-    //
-    //   Persistent s t  :=  t.requestId = s.requestId  ∧  t.childRequestId.isSome
-    //
-    // i.e. a detached tool (cancel_policy = detach) is a *linked bridged
-    // subagent* — it stays linked to its parent request AND carries a non-null
-    // child_request_id. We assert both clauses on the persisted row after
-    // detach(), not just that cancel_policy flipped.
     let resp = db
         .node
         .execute(
@@ -566,23 +485,17 @@ async fn integration_detach_one_way_persists() {
     assert_eq!(rows.len(), 1, "expected one row");
     let row = &rows[0];
 
-    // `IsDetached`: cancel_policy is persisted as "detach".
     assert_eq!(
         row["cancel_policy"].as_str(),
         Some("detach"),
         "cancel_policy should be persisted as 'detach' after detach()"
     );
-    // `Persistent` clause 1 (childRequestId.isSome): a detached tool carries a
-    // non-null child_request_id — it is a real bridged subagent, not a native
-    // tool (which would have child_request_id = null).
     assert_eq!(
         row["child_request_id"].as_str(),
         Some("child-req-det-1"),
         "a detached tool must persist a non-null child_request_id \
          (Persistent: childRequestId.isSome)"
     );
-    // `Persistent` clause 2 (requestId linkage): the detached tool remains
-    // linked to its parent request.
     assert_eq!(
         row["request_id"].as_str(),
         Some("req-det-1"),
@@ -590,7 +503,6 @@ async fn integration_detach_one_way_persists() {
          (Persistent: requestId = parent request id)"
     );
 
-    // detach again errors.
     let err = lc.detach().await.unwrap_err();
     assert!(
         matches!(
@@ -601,17 +513,10 @@ async fn integration_detach_one_way_persists() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Negative: a native (child-less) tool may NOT detach — the implication side of
-// `Persistent` (`AllToolsPersistent`). Brackets integration_detach_one_way_persists:
-// together they fence `IsDetached ⟺ (linked ∧ childRequestId.isSome)` at runtime.
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn integration_detach_rejects_native_tool() {
     let db = test_db("tc-sa-det-native-1").await;
 
-    // A native tool constructed via `new()` carries child_request_id = None.
     let mut lc = ToolCallLifecycle::new(
         db.node.clone(),
         "req-det-native-1".to_string(),
@@ -625,11 +530,6 @@ async fn integration_detach_rejects_native_tool() {
     );
     lc.start_running().await.unwrap();
 
-    // The composed model forbids a detached tool without a child link
-    // (`Persistent: childRequestId.isSome`, enforced by the `tool_step` detach
-    // guard). The runtime must therefore reject detach() on a native tool rather
-    // than persist `cancel_policy=detach ∧ child_request_id=null`, a state
-    // `AllToolsPersistent` rules out.
     let err = lc.detach().await.unwrap_err();
     assert!(
         matches!(
@@ -639,7 +539,6 @@ async fn integration_detach_rejects_native_tool() {
         "expected DetachRequiresChildLink when detaching a native tool, got: {err:?}"
     );
 
-    // The rejected detach persisted nothing: the row is not detached.
     let resp = db
         .node
         .execute(
@@ -664,10 +563,6 @@ async fn integration_detach_rejects_native_tool() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Sanity test: make_completed_request creates a row with the expected state
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn test_make_completed_request_creates_row() {
     let db = test_db("tc-sa-sanity-1").await;
@@ -676,7 +571,6 @@ async fn test_make_completed_request_creates_row() {
         .await
         .unwrap();
 
-    // Verify a row exists with lifecycle_state == "completed".
     let query = r#"{
         AgentRequest(filter: { request_id: { _eq: "req-sanity-1" } }) {
             request_id
@@ -704,10 +598,6 @@ async fn test_make_completed_request_creates_row() {
         "top-level request should have subagent_depth 0"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Sanity test: make_completed_request with parent linkage sets depth=1
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_make_completed_request_child_sets_depth_and_parent_fields() {
@@ -762,15 +652,10 @@ async fn test_make_completed_request_child_sets_depth_and_parent_fields() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Integration: bridge_complete end-to-end with real child request
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn integration_bridge_complete_with_real_child() {
     let db = test_db("tc-sa-bc-1").await;
 
-    // 1. Create a child AgentRequest already in .completed state.
     let child_request_id = "child-bc-1";
     make_completed_request(
         &db.node,
@@ -782,7 +667,6 @@ async fn integration_bridge_complete_with_real_child() {
     .await
     .unwrap();
 
-    // 2. Construct the parent bridge tool call and start_running.
     let mut bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         "parent-req-bc1".to_string(),
@@ -800,7 +684,6 @@ async fn integration_bridge_complete_with_real_child() {
     );
     bridge.start_running().await.unwrap();
 
-    // 3. Call bridge_complete with the projected child output.
     let projected_output = "child final assistant message".to_string();
     let transitioned = bridge
         .bridge_complete(projected_output.clone())
@@ -811,8 +694,6 @@ async fn integration_bridge_complete_with_real_child() {
         "bridge_complete should win the running compare"
     );
 
-    // 4. Verify the bridge tool's persisted lifecycle_state, result, and
-    //    child_request_id.
     let resp = db
         .node
         .execute(
@@ -899,10 +780,6 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
     assert_eq!(result, "tool call cancelled");
 }
 
-// ---------------------------------------------------------------------------
-// Bucket 3 — bridge_failure projection tests for all 4 child terminals
-// ---------------------------------------------------------------------------
-
 async fn run_bridge_failure_case(
     name_suffix: &str,
     terminal_state: &str,
@@ -948,7 +825,6 @@ async fn run_bridge_failure_case(
         "bridge_failure should win the running compare for {terminal_state}"
     );
 
-    // Verify persistence — read the bridge tool back from DB.
     let tc_id_escaped = gents::graphql::escape_graphql_string(&tc_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tc_id_escaped}" }} }}) {{ lifecycle_state }} }}"#
@@ -1066,10 +942,6 @@ async fn integration_bridge_failure_superseded_projects_to_failed() {
     .await;
 }
 
-// ---------------------------------------------------------------------------
-// Integration: cascade intent — bridge_cancel_cascade after real cancel_during_run
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
     let db = test_db("tc-sa-cas-1").await;
@@ -1148,10 +1020,6 @@ async fn integration_cascade_intent_for_native_returns_none() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Sanity test: make_terminal_request creates rows in each terminal state
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn test_make_terminal_request_all_states() {
     let db = test_db("tc-sa-sanity-3").await;
@@ -1213,9 +1081,6 @@ async fn test_make_terminal_request_all_states() {
 async fn integration_v3_schema_defaults_populate_correctly() {
     let db = test_db("tc-sa-mig-1").await;
 
-    // Insert a minimal AgentToolCall row with only v1/v2 fields populated.
-    // All v3 subagent fields (await_mode, cancel_policy, child_request_id,
-    // request_id) are deliberately omitted.
     let mutation = r#"mutation {
         create_AgentToolCall(input: {
             tool_call_key: "mig-test-1",
@@ -1234,9 +1099,6 @@ async fn integration_v3_schema_defaults_populate_correctly() {
         resp.errors
     );
 
-    // Read back and observe what the v3 fields contain on a directly-inserted
-    // row (i.e. one that did not pass through the v2->v3 Lens forward
-    // transform).
     let query = r#"{
         AgentToolCall(filter: { tool_call_key: { _eq: "mig-test-1" } }) {
             tool_call_key
@@ -1257,7 +1119,6 @@ async fn integration_v3_schema_defaults_populate_correctly() {
 
     eprintln!("v3 schema default-population observed behavior: {row}");
 
-    // The row's v1/v2 fields are present as written.
     assert_eq!(row["tool_call_key"].as_str(), Some("mig-test-1"));
     assert_eq!(row["lifecycle_state"].as_str(), Some("running"));
 
@@ -1296,14 +1157,6 @@ async fn integration_v3_schema_defaults_populate_correctly() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Bucket 3 / Task 26 — `create_subagent_request` end-to-end depth + coherence
-// ---------------------------------------------------------------------------
-//
-// These complement the unit-level tests in `subagent_request.rs` (which only
-// verify the precondition arithmetic via #[test] blocks that don't touch the
-// DB). Here we exercise the helper through a real EmbeddedNode.
-
 #[tokio::test]
 async fn integration_create_subagent_request_at_max_depth_succeeds() {
     let db = test_db("tc-sa-csr-1").await;
@@ -1329,8 +1182,6 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
     .await
     .expect("create_subagent_request at MAX-1 should succeed");
 
-    // The helper returns a freshly minted UUID; verify by reading the row
-    // back out of the DB and checking the stored fields.
     assert!(!new_id.is_empty(), "expected non-empty request_id");
     let new_id_escaped = gents::graphql::escape_graphql_string(&new_id);
     let query = format!(
@@ -1401,7 +1252,6 @@ async fn integration_create_subagent_request_above_max_depth_fails() {
 async fn integration_create_subagent_request_empty_parent_fields_fails() {
     let db = test_db("tc-sa-csr-3").await;
 
-    // Empty parent_request_id triggers ParentLinkageIncoherent.
     let err = create_subagent_request(
         &db.node,
         "".to_string(),
@@ -1422,7 +1272,6 @@ async fn integration_create_subagent_request_empty_parent_fields_fails() {
         "expected ParentLinkageIncoherent for empty parent_request_id, got: {err:?}"
     );
 
-    // Empty parent_tool_call_id also triggers ParentLinkageIncoherent.
     let err = create_subagent_request(
         &db.node,
         "parent-req".to_string(),

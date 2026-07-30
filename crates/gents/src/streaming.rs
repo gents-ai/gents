@@ -1,7 +1,3 @@
-// Soft-cap justified: StreamWriter trait + its only production impl
-// (DefraStreamWriter) are tightly coupled through shared DB mutation patterns.
-// Splitting the impl from the trait would fragment what is functionally a
-// single coherent unit.
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -214,14 +210,6 @@ impl DefraStreamWriter {
         }))
     }
 
-    /// Reset the live-tail buffer at a commit boundary.
-    ///
-    /// Clears the in-memory content/reasoning, leaves token_count cumulative
-    /// (metering field), and persists empty content/reasoning on the
-    /// streaming response row. progress_seq is not bumped here — it is
-    /// owned by `RequestLifecycle::advance` and bumps at lifecycle
-    /// boundaries (which are exactly the call sites that invoke
-    /// reset_tail).
     pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {
         tracing::debug!(
             doc_id = %doc_id,
@@ -319,9 +307,6 @@ impl DefraStreamWriter {
         Ok(true)
     }
 
-    /// Persist the response error and owner request failure in one guarded
-    /// terminal mutation. This removes the old dependency on a separate
-    /// best-effort `failure_reason` write.
     pub async fn finalize_error(&self, doc_id: &str, error_message: &str) -> Result<StreamResult> {
         self.finalize_inner(
             doc_id,
@@ -351,9 +336,6 @@ impl DefraStreamWriter {
         .await
     }
 
-    /// Mark an existing response row as interrupted. Writes `interrupted_at`
-    /// to the doc; does NOT change `status`. Called by the daemon's interrupt
-    /// flow, sequenced BEFORE the terminal `AgentRequest.lifecycle_state` write.
     pub async fn write_interrupted_at(&self, doc_id: &str, at: &str) -> Result<bool> {
         let Some(current) = load_response_state(&self.node, doc_id).await? else {
             return Ok(false);
@@ -785,9 +767,6 @@ fn build_finalize_mutation(
             .or_else(|| existing.and_then(|response| response.error_message.as_deref())),
         StreamStatus::Complete | StreamStatus::Streaming => None,
     };
-    // Repair classifies the interrupt on `interrupted_at`, so an interrupt
-    // finalize must guarantee the stamp durably — but never move an earlier,
-    // more accurate one.
     let interrupted_at_already_set = existing
         .and_then(|response| response.interrupted_at.as_deref())
         .is_some_and(|value| !value.trim().is_empty());
@@ -814,12 +793,6 @@ fn build_finalize_mutation(
         .map(escape_graphql_string)
         .map(|message| format!(r#"error_message: "{message}","#))
         .unwrap_or_default();
-    // content / reasoning are always cleared on finalize because they
-    // represent the live tail (issue #64). token_count is preserved as a
-    // cumulative metering field — only updated when the in-memory buffer
-    // is present (the snapshot path); on the crash-recovery path
-    // (`snapshot = None`) the previously-flushed token_count is left
-    // untouched.
     match snapshot {
         Some(snapshot) => format!(
             r#"mutation {{

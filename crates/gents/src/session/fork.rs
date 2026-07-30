@@ -226,15 +226,11 @@ async fn fork_with_executor(
     executor: &(impl GraphqlExecutor + ?Sized),
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
-    // Step 1: load parent conversation (validates existence).
     let parent = load_parent_conversation(executor, params.source_session_id)
         .await
         .map_err(ForkError::ForkCopyFailed)?
         .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_string()))?;
 
-    // Step 1b: reject callers that are not the same principal as the parent conversation.
-    // A parent with an empty/missing agent_did is a malformed source — reject as not-found
-    // rather than silently matching an empty caller DID.
     let parent_agent_did = parent.agent_did.as_deref().unwrap_or("");
     if parent_agent_did.is_empty() {
         return Err(ForkError::ForkSourceNotFound(
@@ -245,7 +241,6 @@ async fn fork_with_executor(
         return Err(ForkError::ForkNotSameAgent);
     }
 
-    // Step 1c: reject busy sources before doing any copy work.
     if !verify_source_idle(executor, params.source_session_id)
         .await
         .map_err(ForkError::ForkCopyFailed)?
@@ -253,7 +248,6 @@ async fn fork_with_executor(
         return Err(ForkError::ForkSourceBusy);
     }
 
-    // Step 2: compute cut_seq from the Nth user message.
     let (cut_seq, cut_ts) =
         match compute_cut(executor, params.source_session_id, params.fork_at_user_turn)
             .await
@@ -268,7 +262,6 @@ async fn fork_with_executor(
             }
         };
 
-    // Step 3: resolve child behavior (inherit parent, or swap to validated target).
     let resolved_behavior_id = if let Some(target) = params.target_behavior_id {
         if let Some(err) = resolve_target_behavior(executor, target, parent_agent_did)
             .await
@@ -281,7 +274,6 @@ async fn fork_with_executor(
         parent.behavior_id.clone().unwrap_or_default()
     };
 
-    // Step 4 & 5: copy messages, create child session + conversation.
     let child_session_id = uuid::Uuid::new_v4().to_string();
     let copied_messages = copy_messages(
         executor,
@@ -303,8 +295,6 @@ async fn fork_with_executor(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
-    // Child rows inherit the parent's principal (agent_did) and display name.
-    // parent_agent_did is already validated non-empty in step 1b.
     let parent_agent_name = parent.agent_name.as_deref().unwrap_or("");
     let copied_tool_results = copy_tool_results(
         executor,
@@ -494,7 +484,6 @@ async fn copy_messages(
             .ok_or_else(|| anyhow::anyhow!("sequence missing"))?;
         let role = row.get("role").and_then(|v| v.as_str()).unwrap_or("");
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        // #492: carry the durable reasoning copy across forks.
         let reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
         let message_key = format!("{child_session_escaped}:{sequence}");
@@ -826,10 +815,6 @@ async fn create_child_session_and_conversation(
     let agent_did_escaped = escape_graphql_string(parent_agent_did);
     let agent_name_escaped = escape_graphql_string(parent_agent_name);
 
-    // Write AgentSession first, then AgentConversation. Callers supply the
-    // pre-resolved parent principal fields so there is no intervening query
-    // between the two mutations — that keeps the crash window minimal and
-    // ensures the child rows are consistent (same agent_name on both).
     let session_mutation = format!(
         r#"mutation {{
             create_AgentSession(input: {{

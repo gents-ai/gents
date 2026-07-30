@@ -15,8 +15,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("desktop render error", error, info.componentStack);
-    // The packaged app has no visible console — the details panel is the
-    // only route these diagnostics have into a bug report.
     this.setState({ componentStack: info.componentStack ?? null });
   }
 

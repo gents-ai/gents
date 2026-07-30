@@ -112,7 +112,7 @@ async fn preview_returns_four_classified_groups_and_a_signature() {
     assert_eq!(preview.will_detach.len(), 1);
     assert_eq!(preview.already_terminal.len(), 1);
     assert_eq!(preview.unknown_policy.len(), 1);
-    assert_eq!(preview.preview_signature.len(), 64); // blake3 hex
+    assert_eq!(preview.preview_signature.len(), 64);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -133,9 +133,6 @@ async fn walk_returns_no_rows_for_standalone_root() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn walk_excludes_unlinked_rows_owned_by_different_agent_did() {
-    // The root is scoped by agent_did, but the walk only follows AgentToolCall
-    // bridge edges. A foreign row that is not linked by a tool edge must not
-    // appear just because it points at the root in lineage fields.
     let (core, _tmp) = super::support::seed_cascade_fixture_with_foreign_request().await;
     let req = CascadeWalkRequest {
         root_request_id: "req_root".into(),
@@ -144,14 +141,12 @@ async fn walk_excludes_unlinked_rows_owned_by_different_agent_did() {
     };
     let result = crate::cascade::walk(&core, &req).await.expect("walk ok");
 
-    // The foreign request must not appear in any walked row.
     let has_foreign = result.rows.iter().any(|r| r.request_id == "req_foreign");
     assert!(
         !has_foreign,
         "walk should not include unlinked foreign request rows"
     );
 
-    // The operator's own rows must still be present.
     let operator_count = result
         .rows
         .iter()

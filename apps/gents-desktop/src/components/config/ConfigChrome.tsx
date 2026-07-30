@@ -28,8 +28,6 @@ export function ConfigEditorHeader({
   );
 }
 
-/** One save-state vocabulary for every editor, including the custom-header
- * Agent/Behavior panels: dirty outranks saved. */
 export function EditorStatusChip({ dirty, saved }: { dirty: boolean; saved: boolean }) {
   useReportConfigDirty(dirty);
 
@@ -46,8 +44,6 @@ export function EditorStatusChip({ dirty, saved }: { dirty: boolean; saved: bool
   return null;
 }
 
-/** Inline validation reason — invalid input must explain itself, not just
- * disable Save. */
 export function FieldHint({
   show,
   children,
