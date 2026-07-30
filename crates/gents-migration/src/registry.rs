@@ -293,7 +293,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreidm25txacrwuypexjpvvxqyekewsw352ftqjohsf267cvlsklxu4y"
+        "bafyreiee2kapqft4xy73z2eyavwcgr2cwvz5now65dhq7inpuwaet6vteq"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -323,7 +323,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreihjkmrocfh7zk5wl5hloawnerbalu6d5e7ovx5kod4kcb7yopbsui"
+        "bafyreifgbfkl6ticsz3bhgpt2blojeexb7hmu7vybtmanglcnbem2kubsq"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,
