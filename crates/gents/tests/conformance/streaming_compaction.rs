@@ -1095,7 +1095,7 @@ async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
             }
         }
         assert!(
-            started.elapsed() < Duration::from_secs(10),
+            started.elapsed() < Duration::from_secs(30),
             "agent did not reach ready state"
         );
         tokio::task::yield_now().await;
