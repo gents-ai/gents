@@ -8,11 +8,6 @@ export type MemoryTransportOptions = {
   handlers?: Record<string, (args?: unknown) => unknown | Promise<unknown>>;
 };
 
-/**
- * Deterministic in-memory transport for DesktopClient/DesktopStore consumers.
- * The resulting DesktopClient exposes a full instance-bound `api` adapter that
- * reusable component providers can consume without touching global state.
- */
 export function createMemoryTransport(
   options: MemoryTransportOptions = {},
 ): DesktopTransport & {

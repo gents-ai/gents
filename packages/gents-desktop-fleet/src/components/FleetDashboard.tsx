@@ -16,8 +16,6 @@ import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
 
-/** A deployment lacks a usable inference backend — the onboarding moment where
- *  the guided setup is worth surfacing. */
 function needsInferenceSetup(deployment: DeploymentView): boolean {
   const behavior =
     deployment.behaviors.find((entry) => entry.isDefault) ??
@@ -50,17 +48,11 @@ export type FleetDashboardProps = {
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
-  /** Host branding; omitted by reusable/white-label consumers. */
   brand?: ReactNode;
-  /** Instance-bound bridge API for package-owned reads such as network status. */
   api?: DesktopApiAdapter;
-  /** Host-owned product and operational copy. */
   copy?: FleetCopy;
-  /** Host-owned controls such as a theme switcher. */
   headerLeadingActions?: ReactNode;
-  /** Opt-in runtime-admin surface. The base fleet package never invokes it. */
   localRuntimeSetup?: ReactNode;
-  /** Opt-in inference/runtime-admin surface rendered only when setup is needed. */
   renderInferenceSetup?: (
     deployment: DeploymentView,
     close: () => void,
@@ -107,15 +99,10 @@ export function FleetDashboard({
   const hasDeployments = deployments.length > 0;
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
-  // Keep the open wizard bound to the freshest copy of its deployment so a
-  // background snapshot refresh (post-save) flows into it.
   const activeWizardDeployment = wizardDeployment
     ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
       wizardDeployment)
     : null;
-  // The repair command re-dials the desktop client's P2P connections as a
-  // whole, so it lives here at fleet level — a per-row placement would lie
-  // about its scope. Shown only when something actually needs repairing.
   const needsP2PRepair =
     deployments.some(
       (deployment) =>
@@ -163,8 +150,7 @@ export function FleetDashboard({
             </p>
           </div>
           {localRuntimeSetup}
-          {/* Remote connection needs DIDs/multiaddrs — keep it behind a
-              disclosure so first-run isn't a wall of connection JSON. */}
+          { }
           <details
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"

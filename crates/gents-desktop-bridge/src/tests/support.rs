@@ -4,7 +4,6 @@ use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::TempDir;
 
-/// Minimal projection of an `AgentRequest` row used in interrupt tests.
 pub struct AgentRequestRowLite {
     pub interrupt_requested_at: Option<String>,
 }
@@ -18,7 +17,6 @@ pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     (Arc::new(core), tempdir)
 }
 
-/// Seeds a single `AgentRequest` with no children — the standalone fixture.
 pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = boot_core().await;
 
@@ -47,20 +45,9 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
-/// Seeds the "5 children across 2 deployments" cascade fixture.
-///
-/// Parent: `req_root` (processing)
-/// Children via AgentToolCall edges:
-///   tc_1 → req_b91  processing  cancel_policy=cascade   → WillInterrupt
-///   tc_2 → req_b92  claimed     cancel_policy=cascade   → WillInterrupt
-///   tc_3 → req_b93  processing  cancel_policy=detach    → WillDetach
-///   tc_4 → req_c01  processing  cancel_policy=cascade   → WillInterrupt
-///   tc_5 → req_c02  processing  cancel_policy=(omitted) → UnknownPolicy
-///   tc_6 → req_a17_old completed cancel_policy=cascade  → AlreadyTerminal
 pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = boot_core().await;
 
-    // ── Root request ──────────────────────────────────────────────────────────
     let mutation = r#"mutation {
         create_AgentRequest(input: {
             request_id: "req_root",
@@ -82,7 +69,6 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
         response.errors
     );
 
-    // ── Child requests ────────────────────────────────────────────────────────
     let child_requests = r#"mutation {
         r_b91: create_AgentRequest(input: {
             request_id: "req_b91",
@@ -176,7 +162,6 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
         response.errors
     );
 
-    // ── AgentToolCall edges on req_root ───────────────────────────────────────
     let tool_calls = r#"mutation {
         tc1: create_AgentToolCall(input: {
             tool_call_key: "sess_root:tc_1",
@@ -284,14 +269,9 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
-/// Seeds the cascade fixture PLUS one unlinked `AgentRequest` owned by
-/// `did:test:other` to verify that walks only follow bridge edges.
 pub async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = seed_cascade_fixture().await;
 
-    // Seed one extra request owned by a different agent DID. It references the
-    // root lineage fields, but no AgentToolCall points at it, so the walk must
-    // not include it.
     let mutation = r#"mutation {
         create_AgentRequest(input: {
             request_id: "req_foreign",
@@ -318,8 +298,6 @@ pub async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, Te
     (core, tmp)
 }
 
-/// Seeds the cascade fixture PLUS one cascade-linked `AgentRequest` owned by
-/// `did:test:other`, matching live cross-deployment subagent edges.
 pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = seed_cascade_fixture().await;
 
@@ -366,9 +344,6 @@ pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore
     (core, tmp)
 }
 
-/// Fetches a single `AgentRequest` row by `request_id` and returns a
-/// `AgentRequestRowLite` for assertions in interrupt tests. Panics if the
-/// request is not found.
 pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRowLite {
     let escaped = escape_graphql_string(request_id);
     let query = format!(

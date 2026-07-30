@@ -1,11 +1,6 @@
 use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use p2p::sync::{CidRetrySnapshot, PeerBacklogSnapshot, PushBacklogSnapshot, SyncStatus};
 
-/// Compile-time + wire-shape fence for the pinned DefraDB diagnostics API.
-///
-/// These exhaustive upstream struct literals intentionally fail to compile if
-/// a dependency bump adds, drops, or renames a field. Serialization followed
-/// by the production adapter then fences the JSON names and value mapping.
 #[test]
 fn pinned_defradb_sync_status_satisfies_agent_observability_contract() {
     let upstream = SyncStatus {

@@ -40,8 +40,6 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Spawn convergence (#377): the background receipt no longer carries the
-    // child session id; SubagentSource materializes the child asynchronously.
     assert!(
         receipt["child_session_id"].is_null(),
         "background receipt must not carry the child session id post-convergence"
@@ -51,9 +49,6 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-1").await;
     assert_eq!(tool.request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(tool.tool_name.as_deref(), Some("spawn_subagent"));
-    // Spawn-by-name (#377): the persisted bridge args are normalized to carry
-    // the RESOLVED target (agent_did + behavior_id) alongside the model-facing
-    // name, so SubagentSource can write the child without re-resolving the name.
     let persisted_args: serde_json::Value =
         serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
     assert_eq!(persisted_args["name"], CHILD_BEHAVIOR_ID);
@@ -193,19 +188,6 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     );
 }
 
-// Cross-deployment cancel-cascade coverage under the immutable `agent_did`
-// scope key. The spawn's resolved target carries a REMOTE `agent_did`, so the
-// bridge is cross-deployment BY CONSTRUCTION (#377): SubagentSource's
-// single-creator gate refuses to materialize a B-owned child, so A only ever
-// holds the bridge. Cancel must therefore record the durable cancel intent on
-// the BRIDGE (remote-ack pending) rather than interrupt a (nonexistent) local
-// child.
-//
-// The resolved target DID comes from the parent's tool-selection
-// `subagent_targets`, NOT the child behavior doc — re-pointing the behavior doc
-// alone leaves the bridge resolving to the LOCAL owner (and SubagentSource then
-// races to create a local child). So we re-upsert the tool selection to point
-// the target at a remote DID and opt the behavior into cross-deployment.
 #[tokio::test]
 async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     const REMOTE_DID: &str = "did:test:remote";
@@ -221,9 +203,6 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
 
-    // Re-point the parent's subagent target at a REMOTE owner DID and enable
-    // cross-deployment spawning. The bridge resolves the target's `agent_did`
-    // from this tool selection, so the spawned bridge is remote by construction.
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
@@ -265,8 +244,6 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
         .expect("child_request_id")
         .to_string();
 
-    // The bridge resolved to a remote owner, so SubagentSource's single-creator
-    // gate refuses to materialize the B-owned child — A only holds the bridge.
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-xdep-cancel").await;
     let persisted_args: serde_json::Value =
         serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
@@ -345,8 +322,6 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Cascade dispatch reads the child's agent_did to classify local vs remote,
-    // so wait for SubagentSource to materialize the child first (#377).
     wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let mut lifecycle =

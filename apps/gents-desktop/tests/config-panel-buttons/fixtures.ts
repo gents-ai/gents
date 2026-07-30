@@ -43,7 +43,6 @@ export const toolSelection: ToolSelectionView = {
   delegateTo: [],
   enableDefraQuery: true,
   defraQueryCollections: ["AgentRequest"],
-  // Each entry is a JSON-serialized WriteToolDecl, as the real bridge emits.
   writeTools: [
     '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
   ],

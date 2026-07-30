@@ -515,8 +515,6 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
     .await;
     create_response_with_status(&db.node, "dup-req", "dup-req", "session-dup", "complete").await;
 
-    // The canonical doc: newest, and the richest (title + preview + parent
-    // request). The thin duplicate is older and carries no parent link.
     let canonical = create_conversation_row(
         &db.node,
         "session-dup",
@@ -545,14 +543,10 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
         .await
         .expect("recovery must not fail on a duplicate store");
 
-    // One SESSION recovered — not one per duplicate row.
     assert_eq!(report.conversations_recovered, 1);
     assert_eq!(report.conversations_failed, 0);
     assert_eq!(report.duplicate_conversation_sessions, 1);
 
-    // The canonical doc actually moved (pre-fix it stayed "processing"), and the
-    // duplicate is converged onto the same terminal status so the group stops
-    // being stale.
     assert_eq!(
         conversation_status_by_doc_id(&db.node, &canonical).await,
         "completed",
@@ -562,8 +556,6 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
         "completed",
     );
 
-    // Idempotent: a second pass finds nothing stuck. Pre-fix every restart
-    // re-reported the same phantom "recovery".
     let second = RequestLifecycle::recover_all(&db.node, AGENT_DID)
         .await
         .expect("second pass");
@@ -571,12 +563,6 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
     assert_eq!(second.conversations_failed, 0);
 }
 
-/// The live request path must also survive a duplicate store.
-///
-/// It shares the conversation write path with recovery, so the pre-fix
-/// `session_id`-filtered upsert bricked ordinary request handling too: the
-/// affected hosts were degraded, not merely un-bootable. Driving the real
-/// lifecycle (`claim` → `prepare_session_with_identity`) is what proves it.
 #[tokio::test]
 async fn live_request_path_survives_a_duplicated_session() {
     let db = test_db_with_duplicate_tolerant_conversations("lifecycle-duplicate-live").await;
@@ -629,15 +615,11 @@ async fn live_request_path_survives_a_duplicated_session() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    // Pre-fix this failed with "cannot upsert multiple matching documents",
-    // taking the whole request down with it.
     lifecycle
         .prepare_session_with_identity()
         .await
         .expect("live conversation write must survive a duplicate store");
 
-    // The live write lands on the canonical document, and leaves the duplicate
-    // alone (a filtered update would have written both).
     assert_eq!(
         conversation_status_by_doc_id(&db.node, &canonical).await,
         "processing",

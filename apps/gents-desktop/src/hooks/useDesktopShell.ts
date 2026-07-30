@@ -325,7 +325,6 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
         foregroundRepairEnabledRef.current
       ) {
         void foregroundRepairRef.current().catch(() => {
-          // The peer action renders the actionable error in the shell.
         });
       }
     }

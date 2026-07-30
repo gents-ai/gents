@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
-# Packed-artifact gate: npm pack each package into a clean dir (phase 5).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_INPUT="${1:-$ROOT/target/npm-pack}"
 mkdir -p "$OUT_INPUT"
-# The clean consumer below changes directories. Resolve the caller-provided
-# output path first so relative release-workflow paths keep pointing at the
-# tarballs after that directory change.
 OUT="$(cd "$OUT_INPUT" && pwd)"
 find "$OUT" -maxdepth 1 -type f -name 'source-inc-gents-desktop-*.tgz' -delete
 cd "$ROOT"

@@ -39,11 +39,6 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
                 &gents::chatgpt_codex::ChatGptAuthProblem::Missing,
             ))
         })?;
-    // Read-only: the probe NEVER refreshes the token. Refreshing here would make the probe a
-    // second, uncoordinated writer of the rotating refresh token (concurrent with the owning
-    // runtime), which the provider's reuse-detection would treat as a leak and REVOKE the
-    // credential. If the stored access token is expired, the /models call below 401s and we
-    // surface actionable guidance; the owning runtime is the single writer that refreshes.
 
     let backend_url = gents::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));

@@ -1,7 +1,3 @@
-//! The running demo fleet and its operations: node lifecycle (spawn / health /
-//! teardown), `pair` (bring up and pair a 2nd node), `delegate` (cross-node
-//! subagent delegation), and `desktop` (launch the paired desktop client).
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -18,7 +14,6 @@ use super::backend::BackendChoice;
 use super::setup::init_agent;
 use super::util::{cli, path_arg, run_cli_json, run_cli_text};
 
-/// The running demo fleet: node A (always) plus an optional paired node B.
 pub(super) struct Fleet {
     pub(super) bin: PathBuf,
     pub(super) home_a: PathBuf,
@@ -47,8 +42,6 @@ impl Fleet {
     }
 }
 
-// ---- node lifecycle ---------------------------------------------------------
-
 pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Result<Child> {
     let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
     let errfile = file.try_clone()?;
@@ -69,9 +62,7 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
         "--p2p-discovery",
         "disabled",
     ]);
-    // The demo backends use the OpenAI chat-completions wire.
     cmd.env("GENTS_OPENAI_CHAT_COMPLETIONS", "1");
-    // Fast pairing reconcile so `pair` converges in seconds, not minutes.
     cmd.env("GENTS_REGISTRY_HEARTBEAT_MS", "1000");
     cmd.env("GENTS_PAIRING_SWEEP_MS", "1000");
     cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
@@ -100,8 +91,6 @@ pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
     }
     bail!("timed out waiting for the demo server at {url}")
 }
-
-// ---- pair (2-node fleet) ----------------------------------------------------
 
 pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     if fleet.node_b.is_some() {
@@ -201,9 +190,6 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a, "conversation").await?;
 
     println!("  waiting for conversation data-plane replicators…");
-    // #875 scoped conversation rules by the *peer's* signed agent DID (each
-    // side pushes the peer the transcript rows that peer requested), so each
-    // wait expects the other node's DID in the applied filter.
     wait_conversation_replicator(&graphql_b, &peer_a, &fleet.did_a).await?;
     wait_conversation_replicator(&fleet.graphql_a, &peer_b, &did_b).await?;
 
@@ -248,11 +234,6 @@ async fn upsert_data_plane(
     let template = escape_graphql_string(template);
     let source = escape_graphql_string(SOURCE_OPERATOR);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    // Stamp `source: "operator"` on both branches: the filter is peer_id-only,
-    // so an operator upsert deliberately takes ownership of a reciprocal- or
-    // legacy-null-sourced row for the same peer. Taking ownership is what
-    // protects the row — the reciprocal reconciler only refreshes/deletes rows
-    // whose source is "reciprocal" and treats every other source as blocked.
     let mutation = format!(
         r#"mutation {{
   upsert_DataPlanePairingDesired(
@@ -369,8 +350,6 @@ async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]
     bail!("timed out waiting for the data-plane filter for peer {peer_id}")
 }
 
-// ---- delegate (cross-node subagent) -----------------------------------------
-
 pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     let Some(worker) = &fleet.node_b else {
         bail!("not paired — run `pair` first");
@@ -406,7 +385,6 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    // The host's return leg is requester-scoped to the coordinator DID.
     wait_replicator_filter(
         &worker.graphql,
         &peer_a,
@@ -414,7 +392,6 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     )
     .await?;
 
-    // Worker (node B) must accept cross-deployment spawns from the orchestrator.
     let worker_gen = runtime_generation(&worker.graphql).await;
     config_tools(
         &fleet.bin,
@@ -434,7 +411,6 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         .await
         .context("worker runtime did not reconcile cross-node delegation tools")?;
 
-    // Orchestrator (node A): background spawn of a remote `worker` target.
     let target = format!(
         r#"{{"name":"worker","agent_did":"{}","behavior_id":"{}:default","description":"Remote worker subagent"}}"#,
         worker.did, worker.did
@@ -535,8 +511,6 @@ async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<(
     )
 }
 
-// ---- desktop (paired desktop client) ----------------------------------------
-
 pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {
     let Some(desktop_bin) = resolve_desktop_bin() else {
         println!("  The desktop app (`gents-desktop`) was not found.");
@@ -572,7 +546,6 @@ pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {
     println!("  launching the desktop app…");
     let mut cmd = std::process::Command::new(&desktop_bin);
     cmd.env("GENTS_DESKTOP_HOME", path_arg(&desktop_home));
-    // Loopback demo nodes are already paired by the CLI; don't re-pair remotely.
     cmd.env("GENTS_DESKTOP_PAIR_REMOTE_P2P", "0");
     cmd.spawn().context("launching the desktop app")?;
 
@@ -605,8 +578,6 @@ async fn seed_desktop(
     Ok(())
 }
 
-/// Locate the `gents-desktop` launcher: explicit env, then a sibling of
-/// this binary, then PATH.
 fn resolve_desktop_bin() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("GENTS_DESKTOP_BIN") {
         let path = PathBuf::from(explicit);

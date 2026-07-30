@@ -249,8 +249,6 @@ export function ConfigWorkspace({
           className="config-screen-nav"
           role="tablist"
           aria-label="Configuration"
-          // Roving tabindex needs the arrow keys to actually rove (WAI-ARIA
-          // tabs pattern): Left/Right cycle, Home/End jump, focus follows.
           onKeyDown={(event) => {
             const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
             if (!keys.includes(event.key)) {

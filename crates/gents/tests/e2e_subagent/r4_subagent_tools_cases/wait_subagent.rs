@@ -35,8 +35,6 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Spawn convergence (#377): resolve the child session id from the DB once
-    // SubagentSource has materialized the child.
     let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let hook_for_wait = hook.clone();
@@ -184,8 +182,6 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
             Some("running")
         );
 
-        // Wait for SubagentSource to materialize the child before invoking
-        // wait_subagent (#377): the child is created asynchronously now.
         wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
         let hook_for_wait = hook.clone();
@@ -282,10 +278,6 @@ async fn wait_subagent_rejects_unlinked_child_without_lifecycle_row() {
     );
 }
 
-/// #593: waiting on a background child whose `AgentRequest` has not
-/// materialized (remote spawn target — the local `SubagentSource` skips it)
-/// must explain the bridge state with a RETRYABLE payload instead of a bare
-/// not-available error.
 #[tokio::test]
 async fn wait_subagent_explains_unmaterialized_child_bridge() {
     let fixture = setup_spawn_fixture(
@@ -348,10 +340,6 @@ async fn wait_subagent_explains_unmaterialized_child_bridge() {
     );
 }
 
-/// #593 boundary: the bridge fallback is gated on RESOLUTION failures only.
-/// A child row that exists but is corrupt (here: empty `behavior_id`) must
-/// keep the original non-retryable error — never be masked as
-/// materialization lag.
 #[tokio::test]
 async fn wait_subagent_preserves_error_for_corrupt_materialized_child() {
     let fixture = setup_spawn_fixture(
@@ -479,7 +467,6 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Wait for SubagentSource to materialize the child (#377).
     wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let resumed_hook = DefraSessionHook::resume_or_create_with_identity_policy(
@@ -587,7 +574,6 @@ async fn wait_subagent_returns_background_receipt_when_bridge_is_backgrounded() 
         .as_str()
         .expect("child_request_id")
         .to_string();
-    // Wait for SubagentSource to materialize the child (#377).
     wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let hook_for_wait = hook.clone();

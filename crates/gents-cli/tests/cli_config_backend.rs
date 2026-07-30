@@ -179,9 +179,6 @@ async fn config_backend_set_preset_and_discover_models_from_backend_id() -> Resu
     Ok(())
 }
 
-/// #706 regression for the imperative writers: rm leaves a terminal,
-/// content-addressed document, so an identical set must vary only the add
-/// branch's `updated_at` identity and create a new document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imperative_config_writers_recreate_after_remove() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

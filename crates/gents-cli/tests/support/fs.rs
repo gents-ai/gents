@@ -536,11 +536,6 @@ pub async fn assert_runtime_init_state(
             .and_then(Value::as_bool),
         Some(true)
     );
-    // An empty MCP allowlist may be stored as `null` rather than `[]`: the
-    // GraphQL writer renders empty string-lists as `null` to avoid corrupting
-    // DefraDB NillableStringArray columns, and the runtime collapses both
-    // `null` and `[]` to an empty `Vec` (`unwrap_or_default`), so they are
-    // semantically identical. Accept null/absent/[] as "empty".
     let mcp_allowlist = tool_selection.get("allowed_mcp_service_ids");
     assert!(
         mcp_allowlist
@@ -551,7 +546,6 @@ pub async fn assert_runtime_init_state(
     Ok(())
 }
 
-/// Workspace root resolved from this crate's manifest directory.
 pub fn workspace_root() -> Result<std::path::PathBuf> {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -560,12 +554,10 @@ pub fn workspace_root() -> Result<std::path::PathBuf> {
         .ok_or_else(|| anyhow!("unable to resolve workspace root"))
 }
 
-/// Read and decode a JSON file addressed relative to the workspace root.
 pub fn read_workspace_json(relative_path: &str) -> Result<Value> {
     read_json_file(&workspace_root()?.join(relative_path))
 }
 
-/// Parse newline-delimited JSON, skipping blank lines.
 pub fn parse_jsonl(output: &str, label: &str) -> Result<Vec<Value>> {
     output
         .lines()
@@ -576,7 +568,6 @@ pub fn parse_jsonl(output: &str, label: &str) -> Result<Vec<Value>> {
         .collect()
 }
 
-/// Validate `instance` against a JSON Schema, reporting every violation.
 pub fn assert_json_schema_valid(schema: &Value, instance: &Value, label: &str) -> Result<()> {
     let validator =
         jsonschema::validator_for(schema).with_context(|| format!("compiling {label} schema"))?;

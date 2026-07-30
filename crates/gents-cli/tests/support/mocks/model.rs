@@ -1,7 +1,3 @@
-//! `MockModelEndpoint`: a thin wrapper over the shared robust [`FakeLlm`] fake
-//! that only needs to answer the `/v1/models` discovery probe (optionally
-//! bearer-gated). Public API is unchanged.
-
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -22,8 +18,6 @@ impl MockModelEndpoint {
         model_name: &str,
         required_bearer: Option<&str>,
     ) -> Result<Self> {
-        // Discovery-only endpoint; chat is never driven through it, so the chat
-        // responder is inert.
         let inner = FakeLlm::start(
             model_name,
             required_bearer,

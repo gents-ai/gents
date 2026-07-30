@@ -1,13 +1,3 @@
-//! Hermetic (always-run) fence for the durable workflow barrier path (#378).
-//!
-//! `barrier-1` wires `fan_out_and_synthesize` synthesis behind
-//! `workflow_barrier_projection_legal` evaluated over the DURABLE `AgentToolCall`
-//! bridge rows of a `workflow_group_id`. This test seeds those rows directly and
-//! drives the *exact* engine surface — `load_workflow_group_bridges` +
-//! `fan_out_barrier_satisfied` — so a regression that deleted the durable re-read,
-//! inverted the role filter, or dropped a NULL-state row is caught under the
-//! default `cargo test -p gents` gate (not only the env-gated live e2e).
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::workflow::{fan_out_barrier_satisfied, load_workflow_group_bridges};
@@ -59,7 +49,6 @@ async fn durable_barrier_gate_refuses_synthesis_until_all_fan_out_terminal() {
     let node = db.node.as_ref();
     let session = "sess-barrier";
 
-    // Group A: 3 fan-out children, one still running, + a synthesis bridge.
     seed_bridge(
         node,
         session,
@@ -92,7 +81,6 @@ async fn durable_barrier_gate_refuses_synthesis_until_all_fan_out_terminal() {
     .await;
     seed_bridge(node, session, 4, "a-syn", "group-a", "synthesis", "running").await;
 
-    // Group B: 3 fan-out children, all terminal (incl. a failure terminal).
     seed_bridge(
         node,
         session,
@@ -124,7 +112,6 @@ async fn durable_barrier_gate_refuses_synthesis_until_all_fan_out_terminal() {
     )
     .await;
 
-    // The durable query is group-scoped: each group sees only its own rows.
     let rows_a = load_workflow_group_bridges(node, session, "group-a")
         .await
         .expect("load group-a");
@@ -138,8 +125,6 @@ async fn durable_barrier_gate_refuses_synthesis_until_all_fan_out_terminal() {
         .expect("load group-b");
     assert_eq!(rows_b.len(), 3, "group-b has 3 fan-out bridges");
 
-    // Barrier is enforced from the durable rows: group-a has a running child, so
-    // synthesis is refused; group-b is all-terminal, so it is admitted.
     assert!(
         !fan_out_barrier_satisfied(&rows_a, 3),
         "synthesis must be refused while a fan-out bridge is still running"
@@ -149,8 +134,6 @@ async fn durable_barrier_gate_refuses_synthesis_until_all_fan_out_terminal() {
         "synthesis must be admitted once every fan-out bridge is terminal"
     );
 
-    // Fail-closed: if the engine expected more fan-out bridges than the durable
-    // rows show (a partial/lost cohort), the barrier refuses synthesis.
     assert!(
         !fan_out_barrier_satisfied(&rows_b, 4),
         "a row-count shortfall must refuse synthesis, never pass open"

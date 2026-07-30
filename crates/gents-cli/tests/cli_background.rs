@@ -6,7 +6,6 @@ use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 
-// Feature matrix tag: background-tools / operatorCli.
 #[tokio::test]
 async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

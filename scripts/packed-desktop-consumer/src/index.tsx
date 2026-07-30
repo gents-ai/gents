@@ -79,8 +79,6 @@ const publicComponents: ReactNode[] = [
   <BackgroundedToolsPanel />,
 ];
 
-// Compile-only references prove the main and opt-in subpath declaration maps
-// survive npm pack. Runtime invocation is intentionally left to host tests.
 void FleetDashboard;
 void InferenceSetupWizard;
 void LocalRuntimeConnect;

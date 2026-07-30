@@ -33,7 +33,6 @@ async fn holds(args: ToolsHoldsArgs) -> Result<()> {
     } else {
         match args.agent_did.as_deref() {
             Some(did) => Some(did.to_string()),
-            // Scope to the home agent when one resolves; otherwise list all.
             None => resolve_agent_did(args.home.as_deref(), None).ok(),
         }
     };
@@ -181,18 +180,10 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         };
         let explanation =
             config.explain_with_runtime(mcp_services_online, &agent_did, &active_behavior_id_set);
-        // Surface the unified tool-policy version + its decoded decode-semantics so
-        // an operator can see whether this behavior's selection resolves under
-        // legacy-permissive or secure-minimal defaults (SP2 §5 surfacing).
         let tool_policy_version = tool_selection_id
             .as_deref()
             .and_then(|id| selection_rows.get(id))
             .and_then(|selection| selection.tool_policy_version.clone());
-        // A selection with an unrecognized version fails to decode earlier
-        // (`from_tool_selection_document` propagates `ToolPolicyVersion::parse`'s
-        // error → the behavior is already in `unavailable_behaviors`), so the
-        // `Err` arm is a defensive fallback rather than a reachable label — kept
-        // because the alternative (unwrap on document-derived data) is worse.
         let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
             Ok(ToolPolicyVersion::LegacyDefaults) => "legacy-permissive",
             Ok(ToolPolicyVersion::V1) => "tool-policy/v1",

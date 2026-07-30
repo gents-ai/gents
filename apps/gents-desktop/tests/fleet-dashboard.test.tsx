@@ -9,8 +9,6 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-// The guided-inference props are exercised by their own suite below; the
-// connection-flow and P2P tests only need inert stubs to satisfy the contract.
 const inferenceProps = {
   onSaveBackendConfig: vi.fn(async () => undefined),
   onSaveBehaviorConfig: vi.fn(async () => undefined),

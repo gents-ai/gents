@@ -174,11 +174,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* ---------------------------------------------------------------
-   * Command-policy denial — inline render per the panel-286 prototype.
-   * Amber/warning treatment; deliberately distinct from the red
-   * .tool-item-dot-error path. A denial is a guardrail, not a failure.
-   * ------------------------------------------------------------- */
   .tool-item-dot-denied {
     background: var(--color-warning);
     box-shadow: 0 0 0 3px rgb(var(--color-warning-rgb) / 0.18);
@@ -274,7 +269,6 @@
     border-radius: 4px;
   }
 
-  /* ---- code-aware tool rendering (diffs + terminal) ---- */
   .code-tool > summary .code-tool-kind {
     text-transform: uppercase;
     font-size: var(--text-xs);

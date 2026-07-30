@@ -1,8 +1,3 @@
-//! One output-format vocabulary for every command.
-//!
-//! Commands declare their default and supported subset, but `--output`
-//! values mean the same thing everywhere.
-
 use anyhow::Result;
 use clap::ValueEnum;
 

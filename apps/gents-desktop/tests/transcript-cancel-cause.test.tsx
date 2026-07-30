@@ -53,7 +53,6 @@ describe("Transcript cancel cause surfacing", () => {
             status: "completed",
             args: null,
             result: null,
-            // cancelCause omitted
           },
         ],
       },
@@ -126,7 +125,6 @@ describe("Transcript assistant-turn cancel cause", () => {
         responseMaterializedSequence={2}
       />,
     );
-    // Badge appears once, attached to the assistant turn
     expect(
       screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
     ).toBeInTheDocument();
@@ -156,7 +154,6 @@ describe("Transcript assistant-turn cancel cause", () => {
         responseMaterializedSequence={4}
       />,
     );
-    // Exactly one badge — on the second message only
     expect(screen.getAllByText(/interrupted/i)).toHaveLength(1);
   });
 

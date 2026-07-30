@@ -18,13 +18,6 @@ use identity::Did;
 mod identity_stubs;
 use identity_stubs::StubAgentIdentity;
 
-/// Build `Arc<AgentPrincipal>` instances (one per Lean principal row)
-/// and `Arc<AgentBehavior>` instances with the matching principal
-/// back-ref. The Lean rows may include multiple principals (e.g., the
-/// `separate_principal_*` cases), so this helper legitimately produces
-/// a multi-principal world. The single-principal-per-snapshot
-/// invariant from the spec applies to the production loader (fenced
-/// by the proptest in task 12), not to these test fixtures.
 fn build_runtime_behaviors_from_lean_case(
     case: &LeanIdentityPermissionCase,
 ) -> Vec<Arc<AgentBehavior>> {
@@ -64,9 +57,6 @@ fn build_runtime_behaviors_from_lean_case(
         .collect()
 }
 
-/// Construct an `AgentBehavior` populated with default routing-test
-/// values; only behavior_id and principal are load-bearing for the
-/// routing tests.
 fn build_agent_behavior_for_routing_test(
     behavior_id: String,
     principal: Arc<AgentPrincipal>,
@@ -188,13 +178,6 @@ fn host_deployment_for_case<'a>(
         })
 }
 
-/// Rust mirror of `Identity.World.WellFormed` from
-/// `Proofs/Identity/State.lean`. Returns true iff:
-///   - principal DIDs are unique
-///   - behavior ids are unique
-///   - deployment ids are unique
-///   - every behavior.principal references an existing principal
-///   - every deployment.principal references an existing principal
 fn rust_well_formed(case: &LeanIdentityStructuralCase) -> bool {
     let principal_dids: HashSet<&str> = case.principals.iter().map(|p| p.did.as_str()).collect();
     if principal_dids.len() != case.principals.len() {
@@ -291,9 +274,6 @@ async fn identity_permission_cases_pin_runtime_permission_contract_shape() -> an
     }
 
     for case in cases {
-        // Fixture integrity: guard against a malformed Lean export. These
-        // assertions verify the IdentityPermissionCase row is internally
-        // consistent before the runtime-witness assertions run.
         let principal_dids: std::collections::HashSet<&str> =
             case.principals.iter().map(|p| p.did.as_str()).collect();
         assert!(
@@ -318,9 +298,6 @@ async fn identity_permission_cases_pin_runtime_permission_contract_shape() -> an
             );
         }
 
-        // Drive runtime types from the Lean fixture. The assertions go
-        // through AgentBehavior::principal.agent_did rather than the
-        // local Rust mirror that this test used to maintain.
         let runtime_behaviors = build_runtime_behaviors_from_lean_case(case);
         let by_id: std::collections::HashMap<&str, &AgentBehavior> = runtime_behaviors
             .iter()
@@ -417,11 +394,6 @@ fn identity_respects_principal_contract_enforced_by_runtime_routing() {
              — this is the runtime routing witness for #193",
         );
 
-    // After #193 lands, the contract is enforced by the runtime: the
-    // AgentBehavior::principal back-reference makes behavior -> principal
-    // -> Identity::Authenticated(did) routing single-valued by
-    // construction. DefraDB ACP, being DID-keyed, returns identical
-    // results for behaviors sharing a principal.
     assert!(
         target.enforced,
         "identity.respects_principal_boundary must be enforced=true \
@@ -449,7 +421,6 @@ fn identity_respects_principal_contract_enforced_by_runtime_routing() {
         target.statement
     );
 
-    // Exercise the runtime routing witness over every Lean row.
     for case in lean_identity_permission_cases() {
         let runtime_behaviors = build_runtime_behaviors_from_lean_case(case);
         let by_id: std::collections::HashMap<&str, &AgentBehavior> = runtime_behaviors
@@ -460,8 +431,6 @@ fn identity_respects_principal_contract_enforced_by_runtime_routing() {
         let actor = by_id[case.actor_behavior.as_str()];
         let peer = by_id[case.peer_behavior.as_str()];
 
-        // The structural claim: behaviors with the same Lean principal
-        // resolve to the same agent_did at the runtime layer.
         assert_eq!(
             actor.principal.agent_did, case.expected_actor_principal,
             "case {:?}: actor.principal.agent_did mismatch",

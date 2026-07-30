@@ -1037,7 +1037,6 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
     let snapshot =
         build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
 
-    // Response-side: interrupted_at present → cause == "interrupted", source == "responseInterruptedAt"
     let response_cancel_cause = snapshot
         .latest_response
         .as_ref()
@@ -1052,8 +1051,6 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         "interrupted response source should be 'responseInterruptedAt'"
     );
 
-    // Tool-call side: lifecycle_state == "cancelled" + interrupt_requested_at on root request (no parent)
-    // → cause == "userCancelled", source == "requestInterrupt"
     let tool_group = snapshot
         .timeline_items
         .iter()
@@ -1082,10 +1079,6 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
 
 #[test]
 fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_policy() {
-    // Seed: a child AgentRequest with caused_by_parent_request_id set,
-    // and a cancelled AgentToolCall with cancel_policy="cascade".
-    // Assert: the timeline tool group's tool.cancelCause has
-    // cause="interrupted" and source="parentCascade".
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
@@ -1205,8 +1198,6 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
     let snapshot =
         build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
 
-    // Tool-call side: lifecycle_state == "cancelled" + cancel_policy == "cascade"
-    // + caused_by_parent_request_id set → cause == "interrupted", source == "parentCascade"
     let tool_group = snapshot
         .timeline_items
         .iter()
@@ -1328,8 +1319,6 @@ fn transcript_contract_messages(case: &LeanTranscriptCase) -> Vec<AgentMessageRo
             transcript_assistant_tool_call_message_json("result-drain"),
         )],
         "drop_abandon_not_strong_drain" => Vec::new(),
-        // Three parallel tool calls accumulate in ONE assistant turn (sequence 2),
-        // then each streamed result appends its own user row (sequences 3..5).
         "parallel_results_share_assistant_turn" => {
             let result_ids = transcript_contract_result_ids(case);
             let mut rows = vec![
@@ -1498,9 +1487,6 @@ fn transcript_contract_result_id(case: &LeanTranscriptCase) -> String {
     }
 }
 
-/// Result ids for a case's tool calls. Single-result cases reuse the one logical
-/// result id; the parallel case derives its siblings by offset from the first
-/// (`logical_result_id`, `+1`, `+2`), matching the Lean driver's parallel turn.
 fn transcript_contract_result_ids(case: &LeanTranscriptCase) -> Vec<String> {
     if case.post_tool_call_count <= 1 {
         return vec![transcript_contract_result_id(case)];

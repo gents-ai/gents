@@ -97,7 +97,7 @@ pub(crate) struct DesiredSchedule {
     #[serde(default)]
     pub(crate) missed_run_policy: Option<String>,
     pub(crate) enabled: bool,
-    pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
+    pub(crate) concurrency: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,7 +111,7 @@ pub(crate) struct DesiredEventTrigger {
     #[serde(default)]
     pub(crate) filter: Option<String>,
     pub(crate) enabled: bool,
-    pub(crate) concurrency: String, // "parallel" | "serial" | "latest_only"
+    pub(crate) concurrency: String,
 }
 
 fn default_event_kind() -> String {
@@ -128,11 +128,6 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) selection_id: String,
     pub(crate) agent_did: String,
     pub(crate) display_name: Option<String>,
-    /// Unified tool-policy schema version (e.g. `tool-policy/v1`). Decides
-    /// whether unset/nullable fields decode under legacy-permissive or
-    /// secure-minimal semantics; carried through export/apply so the live row's
-    /// version is not silently dropped (which would force every comparison to
-    /// re-decode `None` and drift the diff forever).
     #[serde(default)]
     pub(crate) tool_policy_version: Option<String>,
     pub(crate) enable_file_tools: bool,
@@ -148,14 +143,8 @@ pub(crate) struct DesiredToolSelection {
     /// replacing the base. See `docs/macos-bash-sandbox.md`.
     #[serde(default)]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
-    /// Argv prefixes always denied (wins over allowed prefixes and the
-    /// read-only allowlist).
     #[serde(default)]
     pub(crate) command_forbidden_argv_prefixes: Vec<String>,
-    /// When non-empty, **replaces** the hardcoded default read-only command
-    /// heads (whole-executable). Use to narrow or fully customize the base;
-    /// use `command_allowed_argv_prefixes` to extend with argv precision.
-    /// See `docs/macos-bash-sandbox.md`.
     #[serde(default)]
     pub(crate) read_only_command_allowlist: Vec<String>,
     #[serde(default)]
@@ -181,13 +170,6 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) defra_query_collections: Vec<String>,
     #[serde(default)]
     pub(crate) subagent_targets: Vec<String>,
-    /// Declarative bounded-write tools. Authored in the manifest as a list of
-    /// `WriteToolDecl` objects, but carried (and stored) in the same `[String]`
-    /// storage form as `subagent_targets`: each entry is the canonical JSON
-    /// serialization of one decl. The custom deserializer accepts BOTH the
-    /// manifest object-list shape and the live `[String]` shape and normalizes
-    /// to storage strings, so a desired manifest and the live row it produced
-    /// compare equal (no spurious apply/diff drift).
     #[serde(default, deserialize_with = "deserialize_write_tools_storage")]
     pub(crate) write_tools: Vec<String>,
     #[serde(default)]
@@ -204,8 +186,6 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) subagent_allow_cross_deployment: bool,
     #[serde(default)]
     pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
-    /// Self-configuration gate (#654): opt-in, defaults off (unlike
-    /// `enable_defra_query`, no legacy `default_true`).
     #[serde(default)]
     pub(crate) enable_self_config: bool,
     #[serde(default)]
@@ -216,19 +196,6 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) self_config_dry_run: bool,
 }
 
-/// Normalize the `write_tools` field to the `[String]` storage form regardless
-/// of input shape:
-///   * a list of `WriteToolDecl` objects (manifest authoring shape) →
-///     each object re-serialized to canonical JSON,
-///   * a list of strings, each already the JSON of one decl (live `[String]`
-///     row, or an already-normalized manifest) → re-parsed + re-serialized so
-///     both paths produce byte-identical canonical JSON,
-///   * `null` / missing → empty list.
-///
-/// Re-serializing through `WriteToolDecl` (not passing strings through verbatim)
-/// guarantees field ordering and defaults are canonical on both the manifest
-/// and live sides, which is what makes the `DesiredToolSelection` `PartialEq`
-/// diff converge.
 fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -253,9 +220,7 @@ where
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         let decl: WriteToolDecl = match item {
-            // Live `[String]` row: each entry is the JSON of one decl.
             Value::String(s) => serde_json::from_str(&s).map_err(D::Error::custom)?,
-            // Manifest authoring shape: each entry is a decl object.
             other => serde_json::from_value(other).map_err(D::Error::custom)?,
         };
         out.push(serde_json::to_string(&decl).map_err(D::Error::custom)?);
@@ -358,8 +323,6 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) max_output_tokens: Option<i64>,
     pub(crate) max_turns: Option<i64>,
     pub(crate) temperature: Option<f64>,
-    /// Sampling knobs beyond temperature (#649). Absent = inherit the served
-    /// model's `generation_config.json` default.
     pub(crate) top_p: Option<f64>,
     pub(crate) top_k: Option<i64>,
     pub(crate) min_p: Option<f64>,
@@ -448,11 +411,6 @@ pub(crate) struct DesiredProjectionAcpBinding {
     pub(crate) enabled: bool,
 }
 
-/// Manifest-authoring shape for one declaratively owned control-plane pairing.
-///
-/// `peer_id` is derived from `addresses` during validation and is not part of
-/// the checked-in document. Live rows populate it directly so removals remain
-/// possible even if a stale row has malformed or empty addresses.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredPeerPairing {
@@ -607,9 +565,6 @@ impl DesiredStateDiffCollections {
         }
     }
 
-    /// Record proven-safe prune deletes: move each pruned id from its
-    /// collection's `live_only` into `delete`. The deletes come from
-    /// `prune::prune_safe_deletes`, i.e. `apply_model::diff_prune`.
     pub(crate) fn record_prune_deletes(&mut self, deletes: &[gents::apply_model::DocRef]) {
         for doc in deletes {
             let diff = self.get_mut(doc.collection);
@@ -818,11 +773,6 @@ impl DesiredFields for DesiredEventTrigger {
     }
 }
 
-/// Trait implemented by `Desired*` structs that live in a per-document
-/// directory form. Used by the loader to cross-check directory names
-/// against the unique-id field inside `object.json`.
-// Consumed by the loader rewrite in Task 4 (per-agent manifest roots, #67);
-// #[allow(dead_code)] suppresses the unused-trait warning until then.
 #[allow(dead_code)]
 pub(crate) trait HasUniqueId {
     fn unique_id(&self) -> &str;

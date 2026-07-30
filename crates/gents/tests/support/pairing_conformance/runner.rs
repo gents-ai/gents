@@ -1,11 +1,3 @@
-//! Two-node orchestration scaffold for pairing reconcile conformance.
-//!
-//! Desired state is written through real embedded DefraDB nodes. The production
-//! supervisor and HTTP remote-admin implementation are covered in
-//! `gents-desktop-core`; this harness keeps the TLA-style scenario IR
-//! executable from `gents` without introducing a workspace dependency
-//! cycle back to desktop-core.
-
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
@@ -31,16 +23,8 @@ pub struct HarnessNode {
     actual_connected: bool,
     applied_collections: BTreeSet<String>,
     applied_replicator_addresses: BTreeSet<String>,
-    /// Scope filter last installed for this node's managed replicators. Tracked
-    /// alongside the applied address set so the next reconcile can detect a
-    /// desired filter change as divergence (Lean `filter_change_forces_reinstall`).
     applied_replicator_filter: PairingFilters,
     drop_next_reconcile: bool,
-    /// Operator-set scope filter for this node's outbound pairing. The
-    /// `PeerPairingDesired` schema has no filter column (production resolves it
-    /// from the template + peer DID), so the harness carries the operator's
-    /// chosen filter in-memory and merges it into the desired state it reads
-    /// back. Part of the replicator identity: a change forces reinstall.
     desired_replicator_filter: PairingFilters,
 }
 
@@ -110,9 +94,6 @@ impl Harness {
         self.history.clone()
     }
 
-    /// Every reconcile op the harness emitted, in order. Used by scenario tests
-    /// to assert the *shape* of reconciliation (e.g. a filter change really
-    /// tears down then reinstalls the replicator rather than mutating in place).
     pub fn emitted_ops(&self) -> &[DiffOp] {
         &self.emitted_ops
     }
@@ -126,9 +107,6 @@ impl Harness {
                 replicator_addresses,
                 replicator_filter,
             } => {
-                // The scope filter is part of the replicator identity but has no
-                // column in PeerPairingDesired; carry the operator's choice
-                // in-memory so a later filter change is detected as divergence.
                 self.node_mut(node)?.desired_replicator_filter =
                     scenario_filter_to_pairing_filters(replicator_filter);
                 write_peer_pairing_desired(
@@ -298,10 +276,6 @@ async fn apply_desired_state(
         peer.actual_connected = true;
     }
 
-    // The harness does not model which collections each installed replicator
-    // carries; leaving the map empty means "unobservable", which the diff
-    // treats as no collections-identity divergence (matching the documented
-    // `PairingActual.replicator_collections` semantics).
     let actual = RuntimePairingActual {
         collections: peer.actual_collections.clone(),
         replicator_addresses: peer.actual_replicator_addresses.clone(),
@@ -384,9 +358,6 @@ async fn read_desired_state(node: &HarnessNode, peer: &str) -> Result<PairingDes
             .unwrap_or_default()
             .into_iter()
             .collect(),
-        // Merge the operator-set scope filter the harness carries in-memory:
-        // the schema has no filter column, but the filter is part of the
-        // replicator identity the reconciler diffs against `applied`.
         replicator_filter: node.desired_replicator_filter.clone(),
         ..Default::default()
     })
@@ -534,9 +505,6 @@ async fn write_peer_pairing_applied(
     } else {
         let collections = graphql_string_set_literal(&applied.collections);
         let replicator_addresses = graphql_string_set_literal(&applied.replicator_addresses);
-        // Mirror the production writer's recreate identity: preserving
-        // subsecond precision prevents an immediate reinstall from deriving
-        // the same docID as the row that was just tombstoned.
         let now = chrono::Utc::now().to_rfc3339();
         let now = escape_graphql_string(&now);
         format!(

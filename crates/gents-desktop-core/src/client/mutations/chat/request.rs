@@ -25,27 +25,14 @@ pub struct SubmittedRequest {
     pub behavior_id: Option<String>,
 }
 
-/// Optional submission-time controls. All fields default to "unset"; the
-/// caller opts in to TTL enforcement or retry threading by populating them.
 #[derive(Debug, Clone, Default)]
 pub struct SubmitRequestOptions {
-    /// When set, written to the request's `valid_until` field. The runtime's
-    /// admission/scheduler layers treat requests past this deadline as `Stale`.
-    /// None means no TTL is recorded on this row.
     pub valid_until: Option<DateTime<Utc>>,
-    /// When this submission is a resend (or otherwise links to a prior
-    /// request), the parent request id is threaded into `retry_parent_request`
-    /// and the parent's retry root is carried forward into `retry_root_request`.
     pub retry_parent_request: Option<String>,
-    /// Sampling override: if set, written to the request's `temperature` field.
     pub temperature: Option<f64>,
-    /// Sampling override: if set, written to the request's `top_p` field.
     pub top_p: Option<f64>,
-    /// Sampling override: if set, written to the request's `top_k` field.
     pub top_k: Option<i64>,
-    /// Sampling override: if set, written to the request's `max_tokens` field.
     pub max_tokens: Option<i64>,
-    /// Free-form metadata attached to the request (submitter-defined JSON/string).
     pub metadata: Option<String>,
 }
 
@@ -68,8 +55,6 @@ pub async fn submit_request(
     let created_at = Utc::now().to_rfc3339();
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
 
-    // Thread retry linkage: carry parent's retry root forward, else this row is
-    // the root of its own retry chain.
     let (retry_parent_request, retry_root_request) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
             let root = fetch_retry_root(node, parent_id)
@@ -326,9 +311,6 @@ async fn retry_request_with_request_id(
     // primitive here, so Rust enforces the same predicate as a database-backed
     // preflight immediately before the coalesced write.
     ensure_latest_retry_parent(node, parent_session_id, parent_request_id).await?;
-    // Lean also requires the new request id to be fresh. This preflight catches
-    // injected-id tests and UUID collisions; a schema uniqueness constraint is
-    // still the hard concurrent guarantee.
     ensure_new_retry_request_id_available(node, &request_id).await?;
     let session_id = parent_session_id.to_string();
     let created_at = Utc::now().to_rfc3339();
@@ -398,10 +380,6 @@ fn ensure_retry_parent_eligible(
     parent_retry_count: i64,
     max_retries: i64,
 ) -> Result<()> {
-    // The Lean `.released` admission predicate is not persisted on
-    // `AgentRequestRow`; on this desktop surface it is represented by requiring
-    // the parent to be terminal failed/error. Non-terminal rows, including rows
-    // still waiting on admission, fail this lifecycle/status gate.
     let lifecycle_state = normalize_required(
         "lifecycle_state",
         parent
@@ -565,11 +543,6 @@ fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {
         None => String::new(),
     };
 
-    // Only emit sampling override + metadata fields when the caller actually
-    // set them. Omitting a field leaves the schema default (null) in place;
-    // emitting `null` explicitly also works but leaving the field out keeps
-    // the mutation shape identical to what previously-submitted rows used
-    // before the override plumbing landed.
     let mut override_parts: Vec<String> = Vec::new();
     if let Some(temperature) = options.temperature {
         override_parts.push(format!("temperature: {temperature}"));
@@ -662,10 +635,6 @@ fn build_coalesced_submit_mutation(fields: &[String; 3]) -> String {
     )
 }
 
-/// Resend a stale-terminal request by reading its inputs and submitting a
-/// fresh row whose `retry_parent_request` points back at the stale one.
-/// Only `lifecycle_state=dead` with `failure_reason=Stale` is eligible — any
-/// other state would risk bypassing legitimate terminal classifications.
 pub async fn resend_request(
     node: &EmbeddedNode,
     store: &ClientStore,
@@ -692,8 +661,6 @@ pub async fn resend_request(
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
             retry_parent_request: Some(stale_request_id.to_string()),
-            // Preserve sampling overrides + metadata from the stale row.
-            // Dropping them would silently change model behavior on retry.
             temperature: stale.temperature,
             top_p: stale.top_p,
             top_k: stale.top_k,
@@ -704,8 +671,6 @@ pub async fn resend_request(
     .await
 }
 
-/// Minimal projection of an AgentRequest used by resend to copy over inputs.
-/// Carries sampling overrides + metadata so resend preserves submitter intent.
 struct StaleRequestView {
     agent_did: String,
     behavior_id: Option<String>,
@@ -1480,9 +1445,6 @@ mod tests {
     }
 
     fn expected_illegal_guard_fragment(case: &LeanSessionRecoveryCase) -> &'static str {
-        // Generated cases assert the first surfaced denial in this production
-        // guard order, so future multi-violation cases should choose the same
-        // precedence deliberately.
         if !case.pre_failed_exists {
             "not found"
         } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {

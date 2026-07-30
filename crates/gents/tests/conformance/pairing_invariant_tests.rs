@@ -1,8 +1,3 @@
-//! Unit coverage for the pairing conformance invariant evaluator.
-//!
-//! These tests live in the conformance integration binary rather than the
-//! shared `support` module so Cargo executes each assertion exactly once.
-
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot, SafetyViolation,
 };

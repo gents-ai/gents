@@ -1,13 +1,3 @@
-//! Conformance fence for `Proofs/PeerRegistryDiscovery/BearerClaim.lean`.
-//!
-//! The Lean model admits a bearer claim iff the token verifies under the
-//! authority DID, the token is fresh, the claimant signed the claim, and the
-//! nonce is not bound to a different claimant (`admits`); an admitted claim
-//! atomically binds the nonce and mints the membership plus — for
-//! `conversation` tokens — the reciprocal intent (`claimStep`). These tests
-//! pin the Rust decision (`decide_bearer_claim`) and tick to the model's six
-//! theorem groups.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
@@ -37,17 +27,12 @@ fn claim(nonce: &str, claimant: &str, template: &str) -> PreparedBearerClaim {
     }
 }
 
-/// Partitioned store: `claim_minted` is the claim-owned membership partition,
-/// `operator_minted` the operator-authored one (Lean `operatorMemberships`).
 #[derive(Default)]
 struct ClaimPartitionStore {
     claims: Vec<PreparedBearerClaim>,
     bindings: Mutex<BTreeMap<String, String>>,
     claim_minted: Mutex<BTreeSet<String>>,
     intents: Mutex<BTreeSet<String>>,
-    /// member_did -> template recorded on its intent row (mirrors the
-    /// upgrade-in-place semantics of the real store: a re-claim with a
-    /// different conversation-like template overwrites the template here).
     intent_templates: Mutex<BTreeMap<String, String>>,
     operator_minted: BTreeSet<String>,
     operator_touched: Mutex<bool>,
@@ -97,9 +82,6 @@ impl BearerClaimStore for ClaimPartitionStore {
     }
 }
 
-/// Mirrors Lean `unsigned_token_grants_nothing`, `stale_token_grants_nothing`,
-/// and `unsigned_claim_grants_nothing`: every missing conjunct rejects, and a
-/// rejected claim changes no state.
 #[tokio::test]
 async fn missing_signature_or_freshness_grants_nothing() {
     assert_eq!(
@@ -130,9 +112,6 @@ async fn missing_signature_or_freshness_grants_nothing() {
     assert!(store.intents.lock().unwrap().is_empty());
 }
 
-/// Mirrors Lean `claimStep_binds_nonce` + `replay_rejected_across_claimants`:
-/// the first admitted claim binds the nonce; a different claimant presenting
-/// the same nonce is rejected in every subsequent state.
 #[tokio::test]
 async fn nonce_is_single_use_across_claimants() {
     let store = ClaimPartitionStore {
@@ -161,7 +140,6 @@ async fn nonce_is_single_use_across_claimants() {
         .unwrap()
         .contains("did:key:second"));
 
-    // And in the post state (a later tick), the second claimant stays rejected.
     let second = reconcile_bearer_claim_tick(&store, "did:key:server")
         .await
         .expect("second tick");
@@ -169,9 +147,6 @@ async fn nonce_is_single_use_across_claimants() {
     assert!(!second.repaired.contains("did:key:second"));
 }
 
-/// Mirrors Lean `claimStep_readmits_same_claim` + `claimStep_idempotent`:
-/// re-processing an admitted claim converges (repairs) instead of wedging or
-/// double-granting.
 #[tokio::test]
 async fn reprocessing_is_idempotent_convergence() {
     let store = ClaimPartitionStore {
@@ -202,10 +177,6 @@ async fn reprocessing_is_idempotent_convergence() {
     );
 }
 
-/// Mirrors Lean `claimStep_binding_sound` + `claimStep_intent_iff_conversation_like`:
-/// an admitted claim mints for exactly the presented claimant, and the intent
-/// exists iff the token template is conversation-like (`conversation` or
-/// `machine`) — the fleet no-crosswise invariant holds through the bearer path.
 #[tokio::test]
 async fn binding_is_exact_and_intent_iff_conversation() {
     let store = ClaimPartitionStore {
@@ -236,11 +207,6 @@ async fn binding_is_exact_and_intent_iff_conversation() {
     );
 }
 
-/// Mirrors the intent-upgrade half of `claimStep_intent_iff_conversation_like`:
-/// a member who previously recorded a `conversation` intent and later
-/// re-claims with a `machine` bearer token must have the intent row upgraded
-/// in place, not left stuck on the narrower template (Task 6's drift test
-/// depends on this).
 #[tokio::test]
 async fn machine_reclaim_upgrades_existing_conversation_intent_template() {
     let store = ClaimPartitionStore {
@@ -269,12 +235,6 @@ async fn machine_reclaim_upgrades_existing_conversation_intent_template() {
     );
 }
 
-/// A newer claim in the other direction (I2, #714): a member previously
-/// recorded on the wider `machine` template who re-claims with a narrower
-/// `conversation` bearer token must have the intent row narrowed in place.
-/// This is deliberate, not a bug: re-pairing with a QR is an explicit
-/// operator action, and the operator minted that QR — upgrade-only
-/// semantics would make narrowing impossible without manual row surgery.
 #[tokio::test]
 async fn conversation_reclaim_narrows_machine_intent_template() {
     let store = ClaimPartitionStore {
@@ -303,9 +263,6 @@ async fn conversation_reclaim_narrows_machine_intent_template() {
     );
 }
 
-/// Mirrors Lean `preferredClaim_newer_wins` and
-/// `preferredClaim_older_or_equal_cannot_overwrite`: all fresh claim rows may
-/// remain replicated, so their read order cannot determine the final intent.
 #[tokio::test]
 async fn preferred_claim_is_stable_across_input_order() {
     for reverse in [false, true] {
@@ -334,9 +291,6 @@ async fn preferred_claim_is_stable_across_input_order() {
     }
 }
 
-/// Mirrors Lean `claimStep_ownership_safe`: claim processing never mutates
-/// operator-authored memberships (ensure-if-absent leaves existing rows
-/// untouched; the tick only ever writes for its own admitted claimants).
 #[tokio::test]
 async fn claim_processing_is_ownership_safe() {
     let store = ClaimPartitionStore {
@@ -355,8 +309,6 @@ async fn claim_processing_is_ownership_safe() {
     );
 }
 
-/// Mirrors Lean `membership_growth_requires_admission`: the only DIDs the tick
-/// can add are claimants of admitted claims.
 #[tokio::test]
 async fn membership_growth_requires_admission() {
     let mut rejected = claim("n1", "did:key:forger", "conversation");

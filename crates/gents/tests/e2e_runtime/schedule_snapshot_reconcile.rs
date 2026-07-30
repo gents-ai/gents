@@ -1,31 +1,3 @@
-//! Event-driven reconcile coverage for Task + Schedule inserts.
-//!
-//! # Expected status vs the plan
-//!
-//! This test is written at the end of Task 20 and is **expected to FAIL**
-//! until Task 21 lands: the control watcher only subscribes to
-//! AgentPrincipal / AgentBehavior / ToolSelectionDocument / InferenceProfile /
-//! InferenceBackend updates today. Task + Schedule update events hit
-//! `apply_control_update` and return `ControlUpdateOutcome::Irrelevant`, so
-//! the snapshot is never re-resolved and `active_generation` stays flat.
-//!
-//! Task 21 extends `apply_control_update` (and the event subscription) to
-//! recognize Task and Schedule updates — at which point inserting a Task +
-//! Schedule after startup drives the debounce + resolve + activate pipeline,
-//! which bumps `active_generation` and grows `active_schedules`.
-//!
-//! # What this test actually asserts
-//!
-//! Integration tests live outside the `gents` crate, so they cannot
-//! observe `ActiveRuntimeSnapshot::active_schedules()` directly (that
-//! accessor is `pub(crate)`). The public observable is the `AgentRuntime`
-//! doc's `active_generation` field, which bumps 1:1 with every activated
-//! snapshot. The in-crate counterpart to `active_schedules.len() == 1`
-//! already lives in `src/agent/document_view/tests.rs`
-//! (`resolve_returns_active_schedule_for_enabled_task_and_schedule`); the
-//! new thing Task 20 / 21 validate is the **event-driven reload path**,
-//! which is exactly what `active_generation` observes.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,8 +9,6 @@ use gents::{
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
 
-// These tests never execute inference; they pre-mark the backend healthy so
-// startup can resolve an active behavior without standing up an HTTP fake.
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
 fn test_identity(name: &str) -> KeyIdentity {
@@ -185,7 +155,6 @@ async fn wait_for_runtime_snapshot<F>(
 where
     F: Fn(&RuntimeSnapshot) -> bool,
 {
-    // Generous deadline: control watcher debounce is 5s plus a settle window.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
@@ -201,9 +170,6 @@ where
     }
 }
 
-/// Task + Schedule inserts after startup should drive a snapshot reload and
-/// bump `active_generation`. Fails until Task 21 wires `apply_control_update`
-/// for Task / Schedule events.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schedule_insert_bumps_active_generation() {
     let db = test_db("schedule-snapshot-reconcile").await;
@@ -231,9 +197,6 @@ async fn schedule_insert_bumps_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    // Capture the baseline snapshot generation after startup. This is the
-    // `generation` value that a post-startup Task + Schedule insert must
-    // exceed if the event-driven reload is wired.
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -248,9 +211,6 @@ async fn schedule_insert_bumps_active_generation() {
         startup.last_reconcile_error
     );
 
-    // Insert one Task + one Schedule post-startup. The Task binds to the
-    // default behavior so the Schedule resolves as *active* (not unavailable)
-    // once the control watcher triggers a reload.
     create_task(
         db.node.as_ref(),
         "task-reconcile-alpha",
@@ -265,10 +225,6 @@ async fn schedule_insert_bumps_active_generation() {
     )
     .await;
 
-    // Expected verdict: FAIL today (Task 20) because `apply_control_update`
-    // treats Task / Schedule as `Irrelevant` — no debounce, no reload, no
-    // generation bump. PASS after Task 21 wires the Task / Schedule update
-    // path, at which point `active_generation` bumps to `initial + 1`.
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -292,9 +248,6 @@ async fn schedule_insert_bumps_active_generation() {
     handle.await.unwrap().unwrap();
 }
 
-// This test exercises the control_watcher -> apply_control_update ->
-// generation_bump pipeline for EventTrigger documents. Expected to pass
-// after Task 16 landed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_insert_bumps_active_generation() {
     let db = test_db("event-trigger-snapshot-reconcile").await;
@@ -322,9 +275,6 @@ async fn event_trigger_insert_bumps_active_generation() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    // Capture the baseline snapshot generation after startup. This is the
-    // `generation` value that a post-startup EventTrigger insert must exceed
-    // if the event-driven reload is wired.
     let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
@@ -339,9 +289,6 @@ async fn event_trigger_insert_bumps_active_generation() {
         startup.last_reconcile_error
     );
 
-    // Insert one Task + one EventTrigger post-startup. The Task binds to the
-    // default behavior so the EventTrigger resolves as *active* once the
-    // control watcher triggers a reload.
     create_task(
         db.node.as_ref(),
         "task-event-trigger-alpha",
@@ -358,9 +305,6 @@ async fn event_trigger_insert_bumps_active_generation() {
     )
     .await;
 
-    // After Task 16 wires `apply_control_update` to dispatch on EventTrigger
-    // doc IDs, the post-insert reload bumps `active_generation` beyond the
-    // startup baseline and marks the reconcile as "applied".
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"

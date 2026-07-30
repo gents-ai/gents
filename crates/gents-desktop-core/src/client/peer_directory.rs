@@ -19,8 +19,6 @@ pub struct PeerRecord {
     pub pairing_network_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_template: Option<String>,
-    /// Bearer peers earn readiness only after the active membership and the
-    /// issuer-signed reciprocal-replicator acknowledgement are both verified.
     #[serde(default)]
     pub pairing_ready: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,9 +211,6 @@ impl PeerDirectory {
         let mut record = self
             .peers
             .iter()
-            // A fresh Iroh ticket for the same principal can carry different
-            // direct-address hints. Re-pairing must rotate that address on the
-            // existing deployment instead of creating a duplicate row.
             .find(|existing| existing.agent_did == agent_did)
             .cloned()
             .unwrap_or_else(|| PeerRecord::new(label, addr, agent_did));
@@ -227,8 +222,6 @@ impl PeerDirectory {
         record.pairing_network_id = Some(network_id.to_string());
         record.pairing_template = Some(template.to_string());
         record.pairing_ready = false;
-        // Bearer pairing is transport-native. An unauthenticated HTTP endpoint
-        // discovered earlier must not remain attached to the trusted record.
         record.graphql = None;
 
         self.upsert(record.clone()).await?;

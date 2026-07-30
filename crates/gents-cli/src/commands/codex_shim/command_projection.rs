@@ -50,16 +50,8 @@ pub(super) fn tool_projection_status_with_settled(
                 && link_settle_expired
                 && status == codex::McpToolCallStatus::Completed)
         {
-            // A rejected control call may never create a child edge. Likewise,
-            // once the enclosing projection is terminal and its bounded link
-            // settle window has expired, an unresolved completed bridge has
-            // no remaining retry window. Preserve the durable tool result as
-            // MCP instead of hiding it forever.
             ToolProjectionStatus::Mcp(status)
         } else {
-            // The child request and its reciprocal bridge may replicate just
-            // after the parent tool row. Do not publish the wrong item kind in
-            // that window; the live projection retries these rows.
             ToolProjectionStatus::DeferredCollab
         }
     } else if is_gents_file_change_tool(tool) {

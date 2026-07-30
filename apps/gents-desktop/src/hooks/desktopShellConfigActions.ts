@@ -260,16 +260,12 @@ export function createDesktopShellConfigActions({
   async function onProbeInferenceEndpoint(
     endpoint: string,
   ): Promise<InferenceProbeResult> {
-    // A probe failing is the expected answer for an offline local server, not
-    // an app-level error — let the wizard render "not detected" itself.
     return api.probeInferenceEndpoint(endpoint);
   }
 
   async function onCodexLogin(agentDid: string): Promise<CodexLoginResult> {
     setError(null);
     try {
-      // The credential upsert emits a client-updated event, so the shell's
-      // listener refetches the snapshot (and backend health) on its own.
       return await api.codexLogin(agentDid);
     } catch (err) {
       setError(String(err));
@@ -283,7 +279,6 @@ export function createDesktopShellConfigActions({
     try {
       await api.cancelCodexLogin();
     } catch {
-      // Ignored.
     }
   }
 

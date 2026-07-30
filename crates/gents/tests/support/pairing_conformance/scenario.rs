@@ -1,12 +1,5 @@
-//! Scenario IR for the pairing conformance harness.
-
 use serde::Deserialize;
 
-/// A single-field equality predicate carried by a scenario's `OperatorWrite`.
-///
-/// Mirrors the production `FilterPredicate`: the scope filter is part of the
-/// replicator's identity, so changing it forces a teardown+install of the
-/// affected replicator (Lean `PairingReconcile.filter_change_forces_reinstall`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioFilterPredicate {
     pub field: String,
@@ -23,10 +16,6 @@ pub enum Action {
         collections: Vec<String>,
         #[serde(default)]
         replicator_addresses: Vec<String>,
-        /// Optional per-collection scope filter applied to this pairing's
-        /// replicators. Absent (the common case) leaves the pairing unfiltered;
-        /// changing it on an already-converged pairing reinstalls the
-        /// replicator. Backward-compatible: existing fixtures omit it.
         #[serde(default)]
         replicator_filter: std::collections::BTreeMap<String, ScenarioFilterPredicate>,
     },

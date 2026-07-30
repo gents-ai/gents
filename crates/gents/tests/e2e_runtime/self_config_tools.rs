@@ -1,8 +1,3 @@
-//! End-to-end lifecycle for the self-configuration tool family (#654):
-//! seeded config documents, tools built exactly as the runtime surface builds
-//! them, calls through the dyn tool boundary, and assertions on the stored
-//! documents — identity-scoped transactional writes included.
-
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
@@ -130,7 +125,6 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
         &tool_config(&["behavior"], false, false),
     );
 
-    // Happy path: prompt + model patch lands.
     let output = call_tool(
         &tools,
         "configure_behavior",
@@ -148,7 +142,6 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
     assert_eq!(behavior.model_name.as_deref(), Some("model-large"));
     assert_eq!(behavior.agent_did, AGENT_DID, "identity untouched");
 
-    // Identity fields are inadmissible; nothing may change.
     let error = call_tool(
         &tools,
         "configure_behavior",
@@ -167,7 +160,6 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
         "rejected patch must leave every field unchanged (transactional totality)"
     );
 
-    // Dangling reference fails validation and aborts wholesale.
     let error = call_tool(
         &tools,
         "configure_behavior",
@@ -189,7 +181,6 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     let db = test_db("self-config-tools").await;
     seed_config(&db.node).await;
 
-    // Guarded surface: disabling the gate is refused.
     let guarded = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
@@ -212,7 +203,6 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     .expect_err("no-lockout guard must refuse gate removal");
     assert!(error.contains("no-lockout"), "{error}");
 
-    // Operator/apply-managed fields stay protected.
     let error = call_tool(
         &guarded,
         "configure_tools",
@@ -229,7 +219,6 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     assert_eq!(selection.enable_defra_query, Some(true));
     assert_eq!(selection.enable_self_config, Some(true));
 
-    // Unguarded surface: the agent may deliberately turn its own gate off.
     let unguarded = build_self_config_tools(
         db.node.clone(),
         AGENT_DID.to_string(),
@@ -273,7 +262,6 @@ async fn get_my_config_reports_documents_and_never_the_api_key() {
         "the backend secret must never round-trip through get_my_config"
     );
 
-    // Dry-run preview returns the diff without committing.
     let preview = call_tool(
         &tools,
         "get_my_config",
@@ -331,7 +319,6 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     .await
     .expect("schedule create commits");
 
-    // Runtime bookkeeping fields are protected.
     let error = call_tool(
         &tools,
         "configure_automation",
@@ -343,7 +330,6 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     .expect_err("runtime-owned schedule fields are protected");
     assert!(error.contains("protected"), "{error}");
 
-    // A schedule may not point at another behavior's task.
     let foreign_task = r#"mutation {
         create_Task(input: {
             task_id: "foreign-task",
@@ -365,7 +351,6 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     .expect_err("cross-behavior automation must be rejected");
     assert!(error.contains("owned"), "{error}");
 
-    // Task ownership link is immutable via patch.
     let error = call_tool(
         &tools,
         "configure_automation",
@@ -380,9 +365,6 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
 
 #[tokio::test]
 async fn writes_carry_the_agent_identity() {
-    // Every self-config statement must execute under the agent DID (the ACP
-    // actor), not anonymously: a non-`did:key` identity therefore fails
-    // closed instead of falling back to a root write.
     let db = test_db("self-config-identity").await;
     seed_config(&db.node).await;
 
@@ -412,8 +394,6 @@ async fn self_only_boundaries_hold_across_behaviors_and_agents() {
     let db = test_db("self-config-boundaries").await;
     seed_config(&db.node).await;
 
-    // A foreign behavior owns a task, a schedule pointing at it, and its own
-    // (other-agent) tool selection.
     for mutation in [
         r#"mutation { create_Task(input: {
             task_id: "victim-task", behavior_id: "victim-behavior", enabled: true
@@ -437,8 +417,6 @@ async fn self_only_boundaries_hold_across_behaviors_and_agents() {
         &tool_config(&["behavior", "tools", "automation"], false, false),
     );
 
-    // Seizure guard: patching a foreign schedule is rejected even when the
-    // patch re-points task_id at a task this behavior owns.
     call_tool(
         &tools,
         "configure_automation",
@@ -457,7 +435,6 @@ async fn self_only_boundaries_hold_across_behaviors_and_agents() {
     .expect_err("re-pointing a foreign schedule must be rejected");
     assert!(error.contains("not owned by this behavior"), "{error}");
 
-    // Cross-agent selection: binding another agent's ToolSelection is invalid.
     let error = call_tool(
         &tools,
         "configure_behavior",
@@ -467,8 +444,6 @@ async fn self_only_boundaries_hold_across_behaviors_and_agents() {
     .expect_err("binding a foreign selection must be rejected");
     assert!(error.contains("self only"), "{error}");
 
-    // Even with a stale foreign binding already present, configure_tools
-    // refuses to patch the foreign selection.
     let rebind = format!(
         r#"mutation {{
             update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "{BEHAVIOR_ID}" }} }},

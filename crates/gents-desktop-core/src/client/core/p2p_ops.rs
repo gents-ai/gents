@@ -76,8 +76,6 @@ pub(super) async fn p2p_add_replicator(
 ) -> Result<()> {
     match timeout(
         P2P_OPERATION_TIMEOUT,
-        // Raw desktop helper installs an unfiltered replicator; filtered
-        // (scope-template) replication flows through the shared reconcile engine.
         p2p.add_replicator(
             collections,
             Some(addr),

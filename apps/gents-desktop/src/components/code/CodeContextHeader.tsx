@@ -3,17 +3,6 @@ import type {
   ToolSelectionView,
 } from "@source-inc/gents-desktop-client";
 
-// The multi-agent crux: an agent codes in ITS OWN tool root on ITS host, within
-// its permission/sandbox boundary. This header makes that boundary explicit
-// before the operator directs a coding task — resolved entirely from data
-// already on DeploymentView (no bridge work).
-//
-// Honesty notes: the boundary shown is the selection governing the behavior the
-// next send will use (the selected behavior, falling back to the deployment
-// default). If that behavior resolves no tool selection, file/bash tools are
-// off — we say so rather than showing some other selection's boundary. What's
-// shown is the PERSISTED selection; the host's operator ceiling may clamp it
-// further at reconcile time.
 function governingToolSelection(
   deployment: DeploymentView | null,
   selectedBehaviorId: string | null,
@@ -93,9 +82,6 @@ export function CodeContextHeader({
   onBackToChat: () => void;
 }) {
   const selection = governingToolSelection(deployment, selectedBehaviorId ?? null);
-  // The P2P identity is the honest "where it runs" answer: saved GraphQL
-  // endpoints can be agent-relative (loopback on the AGENT's machine), so an
-  // endpoint host would misleadingly read as the operator's machine.
   const host = deployment
     ? `${deployment.label} · ${shortPeerId(deployment.peerId)}`
     : null;

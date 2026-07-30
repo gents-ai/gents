@@ -1,11 +1,3 @@
-//! Table-driven conformance tests pinning the Rust `apply_model` diff/apply
-//! outputs to the semantics expected by the Lean `ApplyReconcile` module.
-//!
-//! Each case is `(initial_live_state, manifest) → expected_behavior`. Keep
-//! the case count small — exhaustive checking is the property tests' job;
-//! this file anchors the model to specific concrete inputs an engineer can
-//! reason about without running proptest.
-
 use gents::apply_model::{
     apply_all, apply_prefix, desired_references_closed, diff, diff_prune, manifest_realized,
     prefix_referrers_closed, references_of, retry_after_prefix, retry_after_prune_prefix,
@@ -474,7 +466,6 @@ fn manifest_with_behavior_referencing_backend_orders_backend_first() {
     let backend = r(Collection::InferenceBackend, "b1");
     let behavior = r(Collection::AgentBehavior, "a1");
 
-    // a1 references b1 — so b1 must be written first.
     let m = Manifest {
         docs: {
             let mut docs = BTreeMap::new();
@@ -500,7 +491,6 @@ fn manifest_with_behavior_referencing_backend_orders_backend_first() {
     );
     assert_eq!(steps[1].target(), &behavior);
 
-    // After full apply, the behavior's reference resolves in acc.desired.
     let after = apply_all(&l, &steps);
     assert!(after.desired.contains_key(&backend));
     assert!(after.desired.contains_key(&behavior));
@@ -515,10 +505,6 @@ fn manifest_with_behavior_referencing_backend_orders_backend_first() {
 
 #[test]
 fn manifest_with_principal_referencing_behavior_orders_behavior_first() {
-    // Models AgentPrincipal.default_behavior_id as a structural reference.
-    // Principal (rank 3) must be written AFTER its referenced behavior
-    // (rank 1) so the control watcher does not observe a principal
-    // pointing at a missing behavior.
     let behavior = r(Collection::AgentBehavior, "a1");
     let principal = r(Collection::AgentPrincipal, "did:x");
 
@@ -547,7 +533,6 @@ fn manifest_with_principal_referencing_behavior_orders_behavior_first() {
     );
     assert_eq!(steps[1].target(), &principal);
 
-    // After full apply, the principal's default-behavior reference resolves.
     let after = apply_all(&l, &steps);
     assert!(after.desired.contains_key(&behavior));
     assert!(after.desired.contains_key(&principal));

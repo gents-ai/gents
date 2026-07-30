@@ -32,8 +32,6 @@ pub(crate) struct BoundDesiredManifest {
 }
 
 #[derive(Debug, Clone)]
-// Provision orchestration will consume the full context; config validate/diff/apply
-// currently only need the target DID after loading.
 #[allow(dead_code)]
 pub(crate) struct ManifestBindingContext {
     pub(crate) bind_mode: ManifestBindMode,
@@ -369,11 +367,6 @@ fn insert_nonempty(values: &mut BTreeSet<String>, value: &str) {
 }
 
 fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &str) {
-    // Capture source/local DIDs before overwriting so same-deployment
-    // `subagent_targets` entries can be recognized after the top-level rewrite.
-    // Only DIDs this function already treats as local (principal, behaviors,
-    // selections) are candidates — genuine cross-deployment target DIDs are
-    // left unchanged.
     let source_local_dids = manifest_agent_dids(manifest);
 
     manifest.agent_principal.agent_did = target_did.to_string();
@@ -390,13 +383,6 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
     }
 }
 
-/// Rewrite DIDs embedded in `subagent_targets` JSON entries that match a
-/// source/local DID being rebound. Malformed entries are preserved so desired-
-/// state validation can still report the precise parse error.
-///
-/// Only the `agent_did` field is mutated on the raw JSON object so unknown
-/// fields, key order, and optional extensions survive rebind (and so already-
-/// bound entries that already equal `target_did` are left byte-identical).
 fn rebind_subagent_target_dids(
     entries: &mut [String],
     source_local_dids: &BTreeSet<String>,
@@ -574,7 +560,6 @@ mod tests {
         assert_eq!(targets[1].behavior_id, "glm52");
         assert_eq!(targets[1].description, None);
 
-        // Post-bind validation must not misclassify same-deployment targets as remote.
         let mut errors = Vec::new();
         desired_state::validate::validate_manifest(&manifest, &mut errors);
         assert!(
@@ -634,15 +619,12 @@ mod tests {
             }),
             "malformed entry must still produce an actionable validation error, got {errors:?}"
         );
-        // The well-formed same-deployment target was still rebound.
         let ok = SubagentTarget::parse(&selection.subagent_targets[0]).unwrap();
         assert_eq!(ok.agent_did, TARGET_DID);
     }
 
     #[test]
     fn rebind_preserves_unknown_subagent_target_fields() {
-        // Future optional fields / author extensions must survive rebind; only
-        // agent_did is rewritten on the raw JSON object.
         let entry_with_extension = format!(
             r#"{{"name":"helper","agent_did":"{SOURCE_DID}","behavior_id":"helper","description":"keeps me","future_flag":true,"extra_meta":{{"k":1}}}}"#
         );
@@ -678,7 +660,6 @@ mod tests {
             Some(1)
         );
 
-        // Already-bound entry must not be reserialized (byte-identical).
         let already_bound = rewritten.clone();
         rebind_manifest_agent_did(&mut manifest, TARGET_DID);
         assert_eq!(
@@ -727,7 +708,6 @@ mod tests {
                 None,
             )],
         );
-        // Guard remains off: a truly remote target must still be rejected.
         selection.subagent_allow_cross_deployment = false;
         manifest.tool_selections.push(selection);
 

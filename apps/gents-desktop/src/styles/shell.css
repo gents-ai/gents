@@ -1,6 +1,4 @@
 @layer shell {
-  /* macOS overlay titlebar: reserved strip is drag surface + traffic-light
-     clearance. Inert outside the packaged app (no data-shell stamp). */
   .titlebar-drag-region {
     display: none;
   }
@@ -286,7 +284,6 @@
     display: grid;
     gap: var(--space-5);
     justify-items: start;
-    /* .centered-panel centers text; wrapped error output must stay left. */
     text-align: left;
   }
 

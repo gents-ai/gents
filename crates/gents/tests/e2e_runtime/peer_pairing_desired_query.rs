@@ -1,6 +1,3 @@
-//! Integration test for reading PeerPairingDesired docs via the runtime
-//! GraphQL surface.
-
 use crate::support::test_db;
 
 #[tokio::test]

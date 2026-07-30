@@ -142,7 +142,6 @@ export function ActiveChatWorkspace({
   const [forking, setForking] = useState(false);
 
   async function forkConversation(sessionId: string) {
-    // Fork at the currently rendered user-turn count = "as of now".
     const atUserTurn = (session?.timelineItems ?? []).filter(
       (item) => item.kind === "userMessage",
     ).length;
@@ -182,12 +181,8 @@ export function ActiveChatWorkspace({
       });
     }
   }
-  // Set when a background-tools row asks to focus the lineage view on its
-  // parent request; falls back to the session's latest request.
   const [lineageRootOverride, setLineageRootOverride] = useState<string | null>(null);
 
-  // Reset on deployment switch too: the session id can stay null across a
-  // switch, and the override must not pin another agent's request.
   useEffect(() => {
     setLineageRootOverride(null);
   }, [selectedSessionId, selectedDeployment.agentDid]);
@@ -235,8 +230,6 @@ export function ActiveChatWorkspace({
     [interrupt, onInterruptAccepted, previewInterrupt, selectedDeployment.agentDid],
   );
 
-  // Workspace-level poll so the closed drawer can still raise attention —
-  // the panels only poll while mounted inside the open drawer.
   const opsSnapshotRequest = useMemo(
     () => ({ agentDid: selectedDeployment.agentDid, rootRequestId: null }),
     [selectedDeployment.agentDid],
@@ -249,8 +242,6 @@ export function ActiveChatWorkspace({
     opsSnapshot?.agentDid === selectedDeployment.agentDid
       ? opsSnapshot.stuckDiagnostics.length
       : 0;
-  // Held-approval count for the Holds tab badge. The panel runs its own
-  // instance of this hook; both poll the same cheap indexed query.
   const { holds: heldToolCalls } = useToolCallHolds(selectedDeployment.agentDid, api);
   const heldCount = heldToolCalls?.length ?? 0;
 

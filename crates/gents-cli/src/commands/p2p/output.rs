@@ -124,10 +124,6 @@ pub(crate) async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &str
     }
 }
 
-/// Live multi-hop P2P status via the node's own HTTP API using the process-wide
-/// shared client ([`super::p2p_http_client`]). Prefer
-/// [`load_live_http_p2p_status`] for CLI/status surfaces; `/metrics` uses
-/// [`fetch_live_http_p2p_status_with_client`] under a hard overall timeout.
 pub(crate) async fn fetch_live_http_p2p_status(
     home: Option<&Path>,
     graphql: &str,
@@ -136,8 +132,6 @@ pub(crate) async fn fetch_live_http_p2p_status(
     fetch_live_http_p2p_status_with_client(home, graphql, &client).await
 }
 
-/// Like [`fetch_live_http_p2p_status`], but reuses a caller-owned client (the
-/// serve-path `RuntimeHttpState` holds one for scrapes).
 pub(crate) async fn fetch_live_http_p2p_status_with_client(
     home: Option<&Path>,
     graphql: &str,
@@ -176,15 +170,11 @@ pub(crate) async fn fetch_live_http_p2p_status_with_client(
     let peer_rows: Vec<P2pPeerRow> =
         http_get_json(client, &format!("{api_base}/p2p/peers")).await?;
     let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
-    // Replicator list is best-effort: older nodes or permission gaps should not
-    // fail the whole P2P status surface used by /status and /metrics.
     let replicator_count =
         match http_get_json::<Vec<Value>>(client, &format!("{api_base}/p2p/replicators")).await {
             Ok(rows) => rows.len(),
             Err(_) => 0,
         };
-    // Best-effort for compatibility with older DefraDB pins. The typed agent
-    // adapter validates this value before it reaches Prometheus.
     let sync_status = http_get_json::<Value>(client, &format!("{api_base}/p2p/sync/status"))
         .await
         .unwrap_or(Value::Null);

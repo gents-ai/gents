@@ -12,8 +12,5 @@ export function conversationBelongsToBehavior(
     return conversation.behaviorId === selectedBehaviorId;
   }
 
-  // Conversations created before behavior routing was persisted belonged to
-  // the principal's default behavior. Keep that history visible without
-  // mixing it into every other behavior.
   return selectedBehaviorId === defaultBehaviorId;
 }

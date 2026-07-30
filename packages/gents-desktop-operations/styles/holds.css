@@ -1,5 +1,3 @@
-/* Holds strip: tool calls parked in awaitingApproval (ops rail tab). */
-
 @layer holds {
   .holds-panel {
     display: flex;

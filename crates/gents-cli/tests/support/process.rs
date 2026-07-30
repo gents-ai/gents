@@ -114,9 +114,6 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-/// The Codex shim is on by default and binds a fixed port, which parallel
-/// test servers would fight over. Disable it unless the test configures the
-/// shim explicitly.
 fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
     if extra_args.iter().any(|arg| arg.starts_with("--codex-shim")) {
         &[]
@@ -131,16 +128,6 @@ pub fn spawn_server_with_ready_json(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
-    // Capture stdout/stderr to temp files rather than pipes. The previous
-    // approach drained stdout on a reader thread that STOPPED at the readiness
-    // JSON; after that the OS pipe buffer fills under verbose RUST_LOG and
-    // blocks the daemon, and stderr was never drained on the success path at
-    // all. Files never block writers, and they preserve the FULL logs for
-    // post-hoc diagnosis on failure (`ServeProcess::captured_output`) — which is
-    // essential for debugging multi-node P2P, where the interesting output
-    // arrives long after readiness. We then poll the stdout log for readiness:
-    // the daemon prints the readiness JSON with Rust's `println!`, which is
-    // line-buffered even when redirected to a file, so the line lands promptly.
     let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
     let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
     let stdout = stdout_log.reopen().context("opening gents stdout log")?;
@@ -165,8 +152,6 @@ pub fn spawn_server_with_ready_json(
 
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        // Readiness JSON is on stdout; tracing logs go to stderr — poll only the
-        // stdout log so logging verbosity never affects readiness detection.
         let stdout_so_far = read_captured_log(serve.stdout_log.as_ref())?;
         if let Some(value) = server_readiness_json(&stdout_so_far) {
             return Ok((serve, value));

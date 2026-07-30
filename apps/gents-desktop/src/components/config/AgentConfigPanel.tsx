@@ -69,7 +69,6 @@ export function AgentConfigEditor({
     setDisplayName(agent.displayName ?? "");
     setEditingDisplayName(false);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [agent.agentDid]);
 
   const dirty = editingDisplayName && displayName !== (agent.displayName ?? "");
@@ -85,8 +84,6 @@ export function AgentConfigEditor({
     try {
       await onSaveAgentConfig({
         agentDid: agent.agentDid,
-        // Only an in-progress rename may override the live document value —
-        // a save without one must not resurrect a stale hydration.
         displayName: editingDisplayName ? displayName : (agent.displayName ?? ""),
         defaultBehaviorId,
         enabled: agent.enabled ?? true,
@@ -113,8 +110,6 @@ export function AgentConfigEditor({
                 value={displayName}
               />
             ) : (
-              // Live document value: remote renames stay visible while no
-              // edit is in progress.
               <h3>{agent.displayName || "Agent"}</h3>
             )}
             {!editingDisplayName ? (
@@ -171,7 +166,6 @@ export function AgentConfigEditor({
             onClick={() => {
               setDisplayName(agent.displayName ?? "");
               setEditingDisplayName(false);
-              // An abandoned rename must not leave its failure on screen.
               setSaveError(null);
             }}
             type="button"

@@ -2,7 +2,6 @@
 
 import type { ClientUpdateEvent as GeneratedClientUpdateEvent } from "./generated/ClientUpdateEvent.js";
 
-/** Empty payload remains tolerated for older/test event emitters. */
 export type ClientUpdateEvent = Partial<GeneratedClientUpdateEvent>;
 
 export type Unlisten = () => void;
@@ -23,7 +22,6 @@ export function bridgeCommand(command: string): string {
   return `plugin:${BRIDGE_PLUGIN}|${command}`;
 }
 
-/** Default Tauri transport. */
 export function tauriTransport(): DesktopTransport {
   return {
     async invoke<T>(command: string, args?: unknown): Promise<T> {

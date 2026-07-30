@@ -64,14 +64,6 @@ pub(super) async fn generated_streaming_response_cases_pin_lifecycle_contract() 
         expected_names
     );
 
-    // #492 durable-reasoning contract: on a finalize-complete materialize step
-    // the live tail STILL clears (`post_live_tail == "empty"`, #64) WHILE the
-    // reasoning present in the tail is durably copied
-    // (`pre_durable_reasoning == "empty"`, `post_durable_reasoning ==
-    // "nonEmpty"`). Both the direct and bridge finalize-complete cases encode
-    // this co-held invariant. The durable copy itself lands in `AgentMessage`
-    // and is exercised end-to-end by
-    // `hook::tests::assistant_turn_materializes_durable_reasoning_into_agent_message`.
     for finalize_name in [
         "finalize_complete_clears_and_materializes",
         "bridge_completed_pairs_request_committed",
@@ -304,10 +296,6 @@ async fn wait_for_backend_chunks_realtime(
             started.elapsed() < Duration::from_secs(10),
             "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
         );
-        // This test pauses Tokio time so it can trigger the five-second idle
-        // deadline deterministically below. Do not advance that clock before
-        // the mock's first real network chunk arrives: doing so can fire the
-        // idle timer while the request is still traversing the I/O reactor.
         tokio::task::yield_now().await;
     }
 }
@@ -320,10 +308,6 @@ async fn wait_for_response_content_contains_realtime(
     let started = std::time::Instant::now();
     loop {
         let row = load_streaming_response_row(node, response_doc_id).await;
-        // The content flush becomes query-visible before StreamProcessor
-        // performs the lifecycle progress write and returns to the poll that
-        // installs the idle deadline. Waiting for both keeps paused-time
-        // advancement from racing that first item boundary under load.
         if row.content.contains(expected) && row.progress_seq >= 2 {
             return row;
         }

@@ -14,14 +14,6 @@ const TX_RECLAIM_DEADLINE: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PER_COLLECTION_SLEEP_MS: &str = "200";
 
-/// SIGKILL the CLI mid-apply and assert that transaction **atomicity** leaves
-/// the database at the pre-apply snapshot — a transaction that never sees a
-/// `commit` produces no externally-visible mutations. The orphaned handle on
-/// the server is reclaimed via connection drop / per-request HTTP timeout
-/// (not an active idle-GC sweep — see
-/// `docs/superpowers/audits/2026-05-20-defradb-tx-idle-timeout-audit.md` (removed from the tree; see git history)).
-/// This test exercises the operationally-meaningful failure mode (Ctrl-C,
-/// OOM, container restart) against a real node, not the recorder.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -61,8 +53,6 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    // Snapshot row counts for every collection in CONFIG_APPLY_ORDER so the
-    // atomicity assertion covers the full apply surface, not just a subset.
     let collections = [
         "InferenceBackend",
         "InferenceProfile",
@@ -83,7 +73,6 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
 
-    // No `spawn_cli` helper takes env vars today; spawn directly.
     let mut cli = std::process::Command::new(support::cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
@@ -95,20 +84,10 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .spawn()
         .context("spawning gents config apply with apply-sleep env")?;
 
-    // With per-collection sleep = 200 ms and CONFIG_APPLY_ORDER having 9
-    // collections, full apply takes at least 1.8 s. Sleep 400 ms — past
-    // begin and at least the first batched collection mutation, well before
-    // commit. The sleep widens the kill window deterministically; without
-    // it a fast local apply could complete in under our delay.
     thread::sleep(KILL_DELAY);
     cli.kill().context("SIGKILL CLI")?;
     cli.wait().context("reap CLI")?;
 
-    // Allow the orphaned tx handle to be reclaimed via connection drop /
-    // per-request HTTP timeout (not an active idle-GC sweep — see audit
-    // doc 2026-05-20-defradb-tx-idle-timeout-audit.md). Atomicity already
-    // guarantees the pre-apply snapshot is what readers see; this poll just
-    // waits for that visibility to stabilize.
     let deadline = Instant::now() + TX_RECLAIM_DEADLINE;
     loop {
         let mut current = std::collections::BTreeMap::new();
@@ -120,7 +99,6 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
             return Ok(());
         }
         if Instant::now() > deadline {
-            // Build a diff line for collections whose counts changed.
             let drift: Vec<String> = collections
                 .iter()
                 .filter_map(|c| {

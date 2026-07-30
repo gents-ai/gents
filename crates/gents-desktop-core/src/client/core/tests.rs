@@ -587,10 +587,8 @@ async fn refresh_store_succeeds_with_selection_set() {
         .await
         .expect("client core");
 
-    // Without selection: should hit load_full_snapshot path.
     core.refresh_store().await.expect("refresh full");
 
-    // With selection: should hit scoped path.
     core.set_selected_agent_did(Some("did:any".to_string()));
     core.refresh_store().await.expect("refresh scoped");
 
@@ -671,7 +669,6 @@ async fn observer_metrics_returns_snapshot() {
 
     core.shutdown().await.expect("shutdown");
 
-    // After shutdown the observer is gone; metrics should be None.
     let metrics = core.observer_metrics().await;
     assert!(
         metrics.is_none(),

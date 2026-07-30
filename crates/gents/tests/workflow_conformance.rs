@@ -22,9 +22,6 @@ fn barrier_cases_match_projection() {
     }
 }
 
-/// #837: Lean composite-interrupt cleanup cases pin that after bounded
-/// interrupt cleanup (or terminal-parent recovery) the outer composite is
-/// not eligible as active and carries a consistent interrupt cancel cause.
 #[test]
 fn composite_interrupt_cases_pin_cleanup_invariant() {
     let cases = lean_vocab_test::lean_workflow_composite_interrupt_cases();

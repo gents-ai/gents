@@ -8,9 +8,6 @@ import {
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { formatRelativeTime } from "../fleetMetrics.js";
 
-/// Live P2P state for this desktop node: own addresses, connected peers
-/// matched against saved deployments, and replicator collection sets.
-/// Collapsed by default; fetched on expand and on explicit refresh only.
 export function NetworkPanel({ api }: { api?: DesktopApiAdapter } = {}) {
   const desktopApi = getDesktopApiAdapter(api);
   const [open, setOpen] = useState(false);

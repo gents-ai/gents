@@ -125,9 +125,6 @@ pub(super) fn build_rendered_timeline(
     pending_turn: Option<&PendingTurnView>,
     active_response_overlay: Option<&ResponseView>,
 ) -> Vec<RenderedTimelineItem> {
-    // Group tool calls by their owning message sequence (rich lookup for the
-    // mapping-back step); the presentation-neutral ORDER is decided by the
-    // shared, Lean-fenced skeleton, not here.
     let mut tool_groups: BTreeMap<Option<i64>, Vec<ToolCallView>> = BTreeMap::new();
     for tool in tool_calls.iter().cloned() {
         tool_groups
@@ -137,10 +134,6 @@ pub(super) fn build_rendered_timeline(
     }
     let group_sequences: Vec<Option<i64>> = tool_groups.keys().copied().collect();
 
-    // Candidate messages (step-2 filter: drop tool-result rows and rows with no
-    // rendered content/reasoning/tool-calls — a presentation decision). For each
-    // candidate, project the ordering-relevant fields the skeleton consumes, and
-    // remember the rich content by key for mapping the slots back.
     let mut inputs: Vec<TimelineMessageInput> = Vec::new();
     let mut rendered_message: BTreeMap<String, RenderedTimelineItem> = BTreeMap::new();
     for message in messages.iter() {
@@ -193,9 +186,6 @@ pub(super) fn build_rendered_timeline(
                 .entry(message.message_key.clone())
                 .or_insert(item);
         }
-        // Presentation dedup token: the desktop only dedups by presentation when
-        // the message carries a sequence (None opts out). Serialize the same
-        // tuple the old `message_presentation_key` used, as an opaque token.
         let dedup_token =
             message_presentation_key(message, role, &normalized_content, &normalized_reasoning)
                 .map(|key| format!("{key:?}"));
@@ -212,9 +202,6 @@ pub(super) fn build_rendered_timeline(
         });
     }
 
-    // The parity-critical ordering + partition, computed once in the shared
-    // skeleton. Overlay is decided in the adapter (below) against the assembled
-    // rich items, so pass `None` here.
     let order = build_timeline_order(&inputs, &group_sequences, pending_turn.is_some(), None);
 
     let mut timeline = Vec::with_capacity(order.len());
@@ -248,15 +235,10 @@ pub(super) fn build_rendered_timeline(
                     });
                 }
             }
-            // The skeleton was called with `overlay: None`, so it emits no
-            // overlay slot; the live overlay is appended below.
             TimelineSlot::Overlay => {}
         }
     }
 
-    // Overlay: appended last iff present and not a duplicate of the trailing
-    // assistant. Identical to the pre-#608 behavior; the skeleton also models
-    // this (`OverlayInput`) for a shell that prefers to pass the bit in.
     let overlay_content =
         active_response_overlay.and_then(|overlay| normalize_optional(overlay.content.as_deref()));
     let overlay_reasoning = active_response_overlay

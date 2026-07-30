@@ -1,11 +1,3 @@
-//! Conformance fence for `Proofs/PeerRegistryDiscovery/ReciprocalConversation.lean`.
-//!
-//! The Lean model derives reciprocal conversation data-plane rows from the
-//! product of server-side `ReciprocalConversationIntent` rows and signed
-//! `PeerEndpoint` rows. These tests pin the Rust derivation and store seam to
-//! the four model properties: idempotence, convergence, ownership safety, and
-//! retraction soundness.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
@@ -24,8 +16,6 @@ fn endpoint(did: &str, peer: &str, address: &str) -> NetworkEndpointEntry {
     }
 }
 
-/// Mirrors Lean `mem_deriveReciprocal`: a row is derived iff a conversation
-/// intent's member DID matches a live, dialable endpoint DID.
 #[test]
 fn reciprocal_derivation_matches_intent_endpoint_join() {
     let intents = BTreeSet::from(["did:key:phone".to_string()]);
@@ -44,8 +34,6 @@ fn reciprocal_derivation_matches_intent_endpoint_join() {
     assert_eq!(derived[0].address, "/ticket/phone");
 }
 
-/// Mirrors Lean `deriveReciprocal_idempotent` and
-/// `deriveReciprocal_convergent`: stable inputs produce a stable derived set.
 #[test]
 fn reciprocal_derivation_is_idempotent_and_convergent() {
     let intents = BTreeSet::from(["did:key:phone".to_string()]);
@@ -168,10 +156,6 @@ impl ReciprocalStore for ReciprocalPartitionStore {
     }
 }
 
-/// Mirrors Lean `deriveReciprocal_ownership_safe`: the reciprocal sweep mutates
-/// only the reciprocal-owned partition, never operator-authored data-plane rows
-/// — including when an operator-owned row exists for the very peer the
-/// derivation would otherwise wire.
 #[tokio::test]
 async fn reciprocal_reconcile_is_ownership_safe() {
     let store = ReciprocalPartitionStore::new(
@@ -211,11 +195,6 @@ async fn reciprocal_reconcile_is_ownership_safe() {
     }
 }
 
-/// Mirrors Lean `ReciprocalState.settled` + `deriveReciprocal_convergent`:
-/// `settled` is full-row equality with the derived set, not peer-id membership,
-/// so a drifted address converges in one sweep and a settled state is a
-/// fixpoint (no writes — the reconciler sweeps on Update events, so a settled
-/// sweep must not itself produce another Update).
 #[tokio::test]
 async fn reciprocal_reconcile_converges_row_contents_then_quiesces() {
     let store = ReciprocalPartitionStore::new(
@@ -254,9 +233,6 @@ async fn reciprocal_reconcile_converges_row_contents_then_quiesces() {
     );
 }
 
-/// Mirrors Lean `deriveReciprocal_retraction_sound_*`: removing an intent or
-/// endpoint retracts exactly the reciprocal-owned row it derived and leaves
-/// unrelated/operator-owned rows untouched.
 #[tokio::test]
 async fn reciprocal_retraction_removes_only_derived_rows() {
     let store = ReciprocalPartitionStore::new(
@@ -287,8 +263,6 @@ async fn reciprocal_retraction_removes_only_derived_rows() {
         .contains(&"peer-operator".to_string()));
 }
 
-/// Mirrors Lean `deriveReciprocal_retraction_sound_revocation`: a verified
-/// revocation retracts only rows derived for that member DID.
 #[tokio::test]
 async fn reciprocal_revocation_retracts_only_the_revoked_member() {
     let mut store = ReciprocalPartitionStore::new(
@@ -321,9 +295,6 @@ async fn reciprocal_revocation_retracts_only_the_revoked_member() {
         .contains_key("peer-b"));
 }
 
-/// A machine re-claim upgrades an existing conversation-template row: settled
-/// is full-row equality including template, so the drifted row refreshes in
-/// one sweep and the refreshed row carries the machine template.
 #[tokio::test]
 async fn reciprocal_reconcile_converges_template_drift() {
     let store = ReciprocalPartitionStore::new(

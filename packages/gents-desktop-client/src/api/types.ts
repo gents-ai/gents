@@ -70,9 +70,7 @@ export type DesktopApiAdapter = {
   pairBearer: (request: BearerPairingRequest) => Promise<BearerPairingResponse>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
-  /** Fetch status for a saved peer by id. */
   fetchPeerStatus: (peerId: string) => Promise<unknown>;
-  /** Fleet-admin: probe an arbitrary address before the peer is saved. */
   probePeerAddress: (serverAddress: string) => Promise<unknown>;
   repairP2P: () => Promise<DesktopClientSnapshot>;
   listWorkspace: (subpath?: string | null) => Promise<WorkspaceListingView>;

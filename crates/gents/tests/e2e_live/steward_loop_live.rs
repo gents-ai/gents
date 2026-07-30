@@ -58,12 +58,6 @@ use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::{first_optional_row, test_db, TestDb};
 
-// ---------------------------------------------------------------------------
-// Gate + d4f connection constants
-// ---------------------------------------------------------------------------
-
-/// Returns whether the explicit live prerequisite is enabled. Ignored tests
-/// assert this before starting local or remote setup.
 fn d4f_enabled() -> bool {
     std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
 }
@@ -72,21 +66,6 @@ const D4F_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
 const D4F_MODEL: &str = "d4f";
 const D4F_BACKEND_ID: &str = "backend-d4f-live";
 
-// ---------------------------------------------------------------------------
-// Reusable harness (2a-2 / 2a-3 call these)
-// ---------------------------------------------------------------------------
-
-/// Bind the agent's default behavior to the live d4f backend.
-///
-/// Modeled on `crate::support::fixtures::bind_default_behavior_backend`, but pointed at
-/// the real d4f endpoint: the `InferenceBackend` doc advertises `models: ["d4f"]`
-/// and `probe_status: "healthy"`, and the default behavior is updated to use
-/// `backend_id = D4F_BACKEND_ID` AND `model_name = "d4f"` (the mock helper leaves
-/// `model_name` untouched; a real backend rejects an unknown model, so we MUST
-/// set it).
-///
-/// Returns `(agent_did, default_behavior_id)` for the caller to drive work
-/// against. Reusable by the emit (2a-2) and triage (2a-3) qualifications.
 pub async fn bind_d4f_backend(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
@@ -99,9 +78,6 @@ pub async fn bind_d4f_backend(
 
     upsert_d4f_backend(node).await;
 
-    // Point the default behavior at d4f. Load the bootstrapped document and
-    // overwrite backend_id + model_name (a live backend rejects an unknown
-    // model id, so model_name MUST be "d4f", not the bootstrap default).
     let mut behavior = load_agent_behavior(node, &behavior_id)
         .await
         .expect("load default behavior")
@@ -118,7 +94,6 @@ pub async fn bind_d4f_backend(
     (agent_did, behavior_id)
 }
 
-/// Upsert the live d4f `InferenceBackend` document (OpenAI-compatible vLLM).
 async fn upsert_d4f_backend(node: &EmbeddedNode) {
     let escaped_backend_id = escape_graphql_string(D4F_BACKEND_ID);
     let escaped_endpoint = escape_graphql_string(D4F_ENDPOINT);
@@ -163,9 +138,6 @@ async fn upsert_d4f_backend(node: &EmbeddedNode) {
     );
 }
 
-/// Boot a full `Gents` from the behavior documents owned by `identity`'s
-/// DID and wait for it to reach `ready`. Returns a `BootedAgent` whose
-/// `.shutdown()` cleanly stops the daemon. Reusable by 2a-2 / 2a-3.
 pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
@@ -183,8 +155,6 @@ pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Re
     Ok(BootedAgent::new(shutdown_tx, handle, agent_did))
 }
 
-/// Assert the endpoint answers `GET /models` before we spend a full agent run on
-/// an unreachable backend. Fails fast with a clear message.
 async fn assert_d4f_reachable() {
     let url = format!("{}/models", D4F_ENDPOINT.trim_end_matches('/'));
     let client = reqwest::Client::builder()
@@ -224,9 +194,6 @@ async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Optio
     first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
 }
 
-/// Wait for `request_id`'s `lifecycle_state` to reach a terminal value (the
-/// daemon ran it against d4f and finished). Returns the terminal state.
-/// Reusable by 2a-2 / 2a-3 to await a full real-backend run.
 pub async fn wait_for_request_terminal(
     node: &EmbeddedNode,
     request_id: &str,
@@ -249,9 +216,6 @@ pub async fn wait_for_request_terminal(
     }
 }
 
-/// Read the assistant answer for `request_id`: prefer the `AgentResponse`
-/// content, fall back to the latest assistant `AgentMessage` on the request's
-/// session. Mirrors the helper in `subagent_delegation_live.rs`. Reusable.
 async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
@@ -300,8 +264,6 @@ async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String
         .unwrap_or_default()
 }
 
-/// Poll until a non-empty assistant answer is available for `request_id`, or the
-/// deadline passes (returns whatever was last seen). Reusable by 2a-2 / 2a-3.
 pub async fn wait_for_assistant_answer(
     node: &EmbeddedNode,
     request_id: &str,
@@ -320,14 +282,6 @@ pub async fn wait_for_assistant_answer(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Smoke test (Step 2)
-// ---------------------------------------------------------------------------
-
-/// Boot an agent bound to d4f, submit one trivial unit of work, and prove the
-/// REAL model actually completes it: the request terminalizes `completed` and a
-/// non-empty assistant answer lands. This is the foundation 2a-2 / 2a-3 build on
-/// (it exercises bind + boot + full-run-and-wait against d4f end to end).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
 async fn d4f_backend_probes_healthy_and_completes() {
@@ -358,8 +312,6 @@ async fn d4f_backend_probes_healthy_and_completes() {
     )
     .await;
 
-    // Wait for the daemon to actually claim the request, call d4f, and finish.
-    // Generous deadline: d4f is a real model with real latency.
     let terminal =
         wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
     let elapsed = started.elapsed();
@@ -376,9 +328,6 @@ async fn d4f_backend_probes_healthy_and_completes() {
         !answer.trim().is_empty(),
         "d4f must produce a non-empty assistant response; got empty"
     );
-    // Tolerant content check: the model was asked to reply "ok". Don't assert
-    // exact text (real models add punctuation/casing), just that it answered and
-    // ideally acknowledged.
     if answer.to_lowercase().contains("ok") {
         eprintln!("[d4f-smoke] OK: answer contains 'ok'");
     } else {

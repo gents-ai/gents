@@ -27,7 +27,6 @@ use super::pairings::{
 pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let remote = decode(&args.token)?;
 
-    // Verify the issuer's signature over the token payload (TOFU bootstrap arm).
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for invite verification")?;
     let payload = signing_payload(&remote);
@@ -51,22 +50,9 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
         "pairing invite signature verified"
     );
 
-    // Freshness gate: reject a token whose signed `issued_at` is outside the max
-    // age, bounding the replay window of a leaked invite. (Coarse — not single-use;
-    // see check_freshness.)
     check_freshness(&remote, Utc::now(), DEFAULT_INVITE_MAX_AGE)
         .context("pairing invite failed the freshness check")?;
 
-    // Single-use gate (Task C2 / #16): `remote.nonce` is the token's single-use
-    // nonce. The replay check + nonce burn happen below, after `access` is
-    // resolved and the membership gate has run — atomically with admission, so a
-    // replayed token can never be wired twice (mirrors Lean `admitsJoin` +
-    // `replay_rejected`, which consume the nonce in the admit transition).
-
-    // Resolve the template: explicit --template wins; otherwise use the token's
-    // template. The template is the sole source of the pairing's collection scope
-    // (v4 dropped the token's `profiles` field); the reconciler also resolves
-    // collections from `template`, so this set is informational on the row.
     let template = resolve_join_template(args.template.as_deref(), &remote.template)?;
     let collections = template_collections(&template);
     let addresses = vec![remote.ticket.clone()];
@@ -74,10 +60,6 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // v5 admission is membership-gated by two admin-signed records carried in
-    // the token: the AgentNetwork root and an active NetworkMembership grant for
-    // this local DID. The old registry TOFU arm is intentionally retired here:
-    // PeerRegistry rows are discovery state, not cryptographic authorization.
     if args.reciprocal {
         tracing::debug!(
             issuer_did = %remote.issuer_did,
@@ -88,24 +70,13 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     enforce_local_network_match(&access, &remote).await?;
     enforce_local_membership_can_import_grant(&access, &remote).await?;
 
-    // Single-use enforcement (Task C2 / #16): consume the token's nonce against
-    // the `ConsumedInviteNonce` ledger before importing any token-carried
-    // control-plane documents. A replayed invite must be rejected without
-    // mutating local AgentNetwork / NetworkMembership state.
     consume_invite_nonce(&access, &remote.nonce, &remote.issuer_did).await?;
 
-    // Keep a durable copy of the signed network root and grant on the joiner so
-    // subsequent network-derived discovery has local membership context before
-    // the desired pairing is reconciled.
     write_agent_network(&access, &remote.network).await?;
     write_membership(&access, &remote.grant).await?;
 
     let existed = peer_pairing_exists(&access, &remote.peer_id).await?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    // Thread issuer_did through as the `invited_by` value on the desired row. The
-    // template alone scopes the pairing (v4 dropped the token's profiles field);
-    // the mutation always writes the dead `profiles` column `null` (never `[]`,
-    // per the DefraDB nillable-array sharp edge).
     let doc_id = write_pairing_desired(
         &access,
         &remote.peer_id,
@@ -150,20 +121,6 @@ pub(super) async fn p2p_join(args: P2pJoinArgs) -> Result<()> {
     Ok(())
 }
 
-/// Single-use invite enforcement (Task C2 / #16). Consume `nonce` against the
-/// `ConsumedInviteNonce` ledger: reject the join if the nonce was already
-/// redeemed, otherwise record it and let the join proceed.
-///
-/// Ordering is record-then-wire: this runs before the `PeerPairingDesired` row is
-/// written, so a replayed token cannot be wired a second time. Two backstops
-/// against a concurrent double-redeem:
-///   1. a presence query (clear "already used" error in the common case), and
-///   2. the unique index on `nonce` (declared in the SDL) — if two joins race
-///      past the query, the second insert fails the unique constraint and we
-///      treat that as a replay rejection.
-///
-/// Mirrors the Lean `admitsJoin` precondition (`tok.nonce ∉ s.consumedNonces`)
-/// and the nonce burn in the admit transition (`replay_rejected`).
 async fn consume_invite_nonce(access: &ConfigAccess, nonce: &str, issuer_did: &str) -> Result<()> {
     let nonce = nonce.trim();
     if nonce.is_empty() {
@@ -172,7 +129,6 @@ async fn consume_invite_nonce(access: &ConfigAccess, nonce: &str, issuer_did: &s
         );
     }
 
-    // 1) Presence check: a nonce already in the ledger is a replay.
     let escaped = escape_graphql_string(nonce);
     let query = format!(
         r#"query {{
@@ -191,8 +147,6 @@ async fn consume_invite_nonce(access: &ConfigAccess, nonce: &str, issuer_did: &s
         );
     }
 
-    // 2) Record the nonce. The unique index on `nonce` is the race backstop: a
-    //    concurrent second redeem that slipped past the query above fails here.
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mutation = create_consumed_invite_nonce_mutation(nonce, issuer_did, &now);
     match access.execute(&mutation).await {
@@ -211,9 +165,6 @@ async fn consume_invite_nonce(access: &ConfigAccess, nonce: &str, issuer_did: &s
     }
 }
 
-/// Build the `ConsumedInviteNonce` create mutation. Every interpolated value is
-/// escaped; there are no list fields, so the empty-list-`[]` sharp edge does not
-/// apply here.
 fn create_consumed_invite_nonce_mutation(nonce: &str, issuer_did: &str, now: &str) -> String {
     let nonce = escape_graphql_string(nonce);
     let issuer_did = escape_graphql_string(issuer_did);
@@ -237,9 +188,6 @@ fn is_unique_nonce_violation(error: &anyhow::Error) -> bool {
     message.contains("unique") && (message.contains("nonce") || message.contains("index"))
 }
 
-/// Resolve the template for a join: explicit `--template` wins over the token's
-/// template. The token's template is used when `--template` is not provided.
-/// An unknown template id is a hard error.
 fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Result<String> {
     match cli_template {
         Some(template) => resolve_pairing_template(template),
@@ -250,27 +198,17 @@ fn resolve_join_template(cli_template: Option<&str>, token_template: &str) -> Re
     }
 }
 
-/// Enforce v5 join admission: the runtime side of Lean `admitsV5Join`. The
-/// structural + signature + grantee decision is the conformance-fenced
-/// [`decide_v5_admission`]; this function resolves its inputs (the async
-/// signature verifications and the deterministic network-id recompute) and maps
-/// a rejection to a descriptive error. Single-use / replay of the nonce is
-/// enforced separately by [`consume_invite_nonce`].
 async fn enforce_v5_membership(identity: &dyn AgentIdentity, remote: &InviteToken) -> Result<()> {
     if remote.network.default_template.trim().is_empty() {
         anyhow::bail!("signed AgentNetwork default_template is empty");
     }
 
-    // Deterministic-id recompute + token/network/grant network_id agreement,
-    // folded into the decision's `network_id_consistent`.
     let expected_network_id =
         derive_network_id(&remote.network.admin_did, &remote.network.display_name);
     let network_id_consistent = remote.network.network_id == expected_network_id
         && remote.network_id == remote.network.network_id
         && remote.grant.network_id == remote.network.network_id;
 
-    // Async signature verifications. An unverifiable/malformed signature counts
-    // as not-valid and surfaces as the matching rejection from the decision.
     let network_sig_valid = identity
         .verify(
             &remote.network.admin_did,
@@ -320,9 +258,6 @@ async fn enforce_v5_membership(identity: &dyn AgentIdentity, remote: &InviteToke
     Ok(())
 }
 
-/// Reject an invite whose signed network conflicts with an existing local
-/// AgentNetwork. A fresh joiner with no AgentNetwork yet is admitted and then
-/// persists the signed network root from the token.
 async fn enforce_local_network_match(access: &ConfigAccess, remote: &InviteToken) -> Result<()> {
     let Some(local) = load_optional_network_record(access)
         .await
@@ -349,9 +284,6 @@ async fn enforce_local_network_match(access: &ConfigAccess, remote: &InviteToken
     Ok(())
 }
 
-/// Do not let an invite-carried active grant regress a locally known revocation
-/// tombstone. A future re-grant is accepted only when the token's `granted_at`
-/// is strictly newer than the local `revoked_at`.
 async fn enforce_local_membership_can_import_grant(
     access: &ConfigAccess,
     remote: &InviteToken,
@@ -402,10 +334,6 @@ fn parse_rfc3339(value: &str, label: &str) -> Result<DateTime<Utc>> {
         .with_context(|| format!("parsing {label} timestamp {value:?}"))
 }
 
-/// Resolve the collection set a template scopes, as owned strings for the
-/// `PeerPairingDesired` row. The reconciler independently resolves collections
-/// from `template`, so this is informational; the template id is authoritative.
-/// `template` is assumed already validated by `resolve_pairing_template`.
 pub(super) fn template_collections(template: &str) -> Vec<String> {
     resolve_template(template)
         .map(|t| t.collections.iter().map(|&c| c.to_string()).collect())

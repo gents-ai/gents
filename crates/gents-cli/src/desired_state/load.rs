@@ -50,7 +50,6 @@ pub(crate) fn load_manifest_root(
     let event_triggers: Vec<DesiredEventTrigger> =
         load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
 
-    // Hydrate sidecars AFTER collection parse but BEFORE normalize/validate.
     for behavior in &mut agent_behaviors {
         let dir = per_doc_dir(root, Collection::AgentBehavior, behavior.unique_id());
         if let Err(error) = hydrate_sidecar(&mut behavior.system_prompt, &dir) {
@@ -123,12 +122,6 @@ pub(crate) fn load_manifest_root(
     )
 }
 
-/// Load `peer-pairings/<handle>/object.json` documents.
-///
-/// Pairing handles are intentionally human-readable labels (for example
-/// `coding-steward`), while the stable document identity is `peer_did`; unlike
-/// the other per-document collections, the directory name therefore does not
-/// have to equal a field inside `object.json`.
 fn load_peer_pairings(root: &Path, errors: &mut Vec<String>) -> Vec<DesiredPeerPairing> {
     let collection_path = root.join(
         Collection::PeerPairingDesired
@@ -255,11 +248,6 @@ fn per_doc_dir(root: &Path, collection: Collection, handle: &str) -> std::path::
     root.join(dir_name).join(handle)
 }
 
-/// Scan `<root>/<collection.dir_name()>/` for per-document subdirectories
-/// of the form `<handle>/object.json` and parse each into `T`.
-///
-/// Errors are accumulated into `errors`; the function always returns a
-/// `Vec<T>` containing every document it could successfully parse.
 pub(crate) fn load_per_doc_collection<T>(
     root: &Path,
     collection: Collection,
@@ -321,10 +309,6 @@ where
     subdirs.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut docs: Vec<T> = Vec::with_capacity(subdirs.len());
-    // Maps unique_id (from JSON body) -> first handle that produced it, for
-    // duplicate detection. Populated regardless of whether the handle matched,
-    // so that two mismatched dirs with the same inner id still produce a
-    // duplicate error.
     let mut id_to_handle: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
 
@@ -352,9 +336,6 @@ where
             }
         };
 
-        // Check for duplicate unique IDs across all successfully-parsed docs,
-        // regardless of whether the handle matches. This ensures two different
-        // handle dirs that both embed the same unique_id both produce errors.
         if let Some(prior) = id_to_handle.get(parsed.unique_id()) {
             errors.push(format!(
                 "duplicate {} '{}' across {}/ and {}/",
@@ -382,16 +363,6 @@ where
     docs
 }
 
-/// Hydrate a sidecar-eligible string field. If `value` is `Some(s)` where
-/// `s` starts with `./`, treat the rest as a path relative to `json_dir`,
-/// read the file as UTF-8, and replace `*value` with the file contents.
-/// Any other case (None, absolute path, `../` prefix, literal string) is
-/// a no-op.
-///
-/// The relative portion is validated against path escape: any component that
-/// is `..` (ParentDir), a root separator, or an absolute prefix is rejected
-/// with an error. This prevents `./../secret.md` and similar tricks from
-/// reading files outside the document directory.
 pub(crate) fn hydrate_sidecar(value: &mut Option<String>, json_dir: &Path) -> Result<(), String> {
     use std::path::Component;
 
@@ -403,7 +374,6 @@ pub(crate) fn hydrate_sidecar(value: &mut Option<String>, json_dir: &Path) -> Re
     }
     let rel = &current[2..];
 
-    // Reject any component that would escape the document directory.
     let rel_path = std::path::Path::new(rel);
     for comp in rel_path.components() {
         match comp {

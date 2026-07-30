@@ -1,5 +1,3 @@
-/* Guided inference setup wizard modal. The dashboard callout is base fleet UI. */
-
 @layer fleet {
   .inference-wizard {
     width: min(520px, 100%);

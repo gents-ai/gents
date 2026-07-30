@@ -24,8 +24,6 @@ pub(super) async fn generated_inference_slot_accounting_cases_drive_db_backed_re
         "Lean should emit the finite InferenceCall slot-accounting cases"
     );
 
-    // One node for all cases; rows are namespaced by case via the call_id
-    // prefix so each case reconstructs over exactly its own seeded rows.
     let db = test_db("inference-slot-accounting").await;
 
     for case in cases {

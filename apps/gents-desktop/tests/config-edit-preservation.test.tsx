@@ -85,7 +85,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
     const endpoint = screen.getByTestId("backend-endpoint");
     fireEvent.change(endpoint, { target: { value: "http://edited:9999/v1" } });
 
-    // Background refresh: same data, fresh object identities.
     rerender(
       <BackendConfigPanel
         deployment={makeDeployment()}
@@ -95,7 +94,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
     );
     expect(screen.getByTestId("backend-endpoint")).toHaveValue("http://edited:9999/v1");
 
-    // Selecting a different document still resets the form.
     rerender(
       <BackendConfigPanel
         deployment={makeDeployment()}
@@ -173,8 +171,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
       target: { value: "edited prompt" },
     });
 
-    // A remote profile registration must not wipe the in-progress edit; the
-    // valid current profile pick must survive too.
     rerender(
       <BehaviorConfigEditor
         {...editorProps}
@@ -220,8 +216,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
       target: { value: "Edited Tools" },
     });
 
-    // A replicated service registration changes the legacy-delegate
-    // projection, but must not rehydrate the selected document's whole form.
     rerender(
       <ToolSelectionConfigEditor {...props} toolServiceRegistries={[lateService]} />,
     );

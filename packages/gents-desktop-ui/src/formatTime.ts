@@ -1,6 +1,3 @@
-/// Transcript timestamps: time-of-day for today's messages, dated otherwise.
-/// Returns null for missing/unparsable values — the row simply omits its
-/// <time> rather than showing a broken label.
 export function formatMessageTime(value?: string | null): string | null {
   if (!value) {
     return null;

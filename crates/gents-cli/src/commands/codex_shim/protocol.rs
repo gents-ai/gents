@@ -179,8 +179,6 @@ pub(super) fn turn_value(
     let now = now_seconds();
     let completed_at = (!matches!(status, codex::TurnStatus::InProgress)).then_some(now);
     let mut turn = turn_value_with_timing(turn_id, status, items, error, Some(now), completed_at);
-    // Message-only compatibility turns do not have a durable runtime interval.
-    // Keep the historical absence instead of presenting an invented zero latency.
     turn.duration_ms = None;
     turn
 }
@@ -276,9 +274,6 @@ pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
         .iter()
         .filter_map(|item| match item {
             codex::UserInput::Text { text, .. } => Some(text.as_str()),
-            // Explicit skill selections are resolved separately and injected as
-            // full skill bodies (see `resolve_explicit_skill_injections`), so
-            // they are NOT folded into the plain text here.
             codex::UserInput::Skill { .. }
             | codex::UserInput::Image { .. }
             | codex::UserInput::LocalImage { .. }
@@ -288,11 +283,6 @@ pub(super) fn user_text_from_input(input: &[codex::UserInput]) -> String {
         .join("\n")
 }
 
-/// Skill ids for explicitly-selected skills (the Codex "pill"), extracted as a
-/// REFERENCE only. The synthetic path `/gents/skills/<skill_id>` carries the id
-/// in its last segment; fall back to the display name. No DB access, no
-/// resolution — the runtime resolves the body against the behavior's effective
-/// set and injects it (see `LayeredPromptBuilder::selected_skill_reminders`).
 pub(super) fn selected_skill_ids_from_input(input: &[codex::UserInput]) -> Vec<String> {
     input
         .iter()
@@ -409,9 +399,6 @@ mod tests {
 
     #[test]
     fn user_text_extraction_ignores_skill_selections() {
-        // Explicit skill selections are resolved + injected as full bodies
-        // elsewhere (resolve_explicit_skill_injections), so the plain-text
-        // extractor must not fold them in.
         let input = vec![
             codex::UserInput::Text {
                 text: "summarize this".to_string(),
@@ -437,9 +424,7 @@ mod tests {
                 path: std::path::PathBuf::from("/gents/skills/research"),
             },
         ];
-        // The id comes from the synthetic path's last segment, not the body.
         assert_eq!(selected_skill_ids_from_input(&input), vec!["research"]);
-        // No skill selection -> empty.
         assert!(selected_skill_ids_from_input(&input[..1]).is_empty());
     }
 

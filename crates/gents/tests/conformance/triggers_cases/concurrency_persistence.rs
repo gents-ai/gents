@@ -1,9 +1,5 @@
 use super::*;
 
-/// Serial concurrency: when an active runtime request already exists for the
-/// event-kind lineage tuple, the engine's gating query sees it → `FireResult::Skipped`.
-/// No second `AgentRequest` materializes for the same tuple. Asserted at the
-/// persistence-layer contract (PR 1 pattern).
 #[tokio::test]
 async fn serial_skips_when_prior_active_runtime() {
     let db = test_db("trigger-conformance-event-serial-skip").await;
@@ -41,8 +37,6 @@ async fn serial_skips_when_prior_active_runtime() {
         "seeded count should be 1"
     );
 
-    // The engine's FireResult::Skipped decision: no materialize call, so no
-    // additional AgentRequest for the lineage tuple.
     let after =
         count_agent_requests_for_trigger(db.node.as_ref(), "trigger-event-serial", "event").await;
     assert_eq!(
@@ -51,9 +45,6 @@ async fn serial_skips_when_prior_active_runtime() {
     );
 }
 
-/// LatestOnly concurrency: the engine's supersede mutation transitions the
-/// in-flight event-kind request to `superseded`; a new materialize lands
-/// with the same lineage tuple. Asserted at the persistence-layer contract.
 #[tokio::test]
 async fn latest_only_supersedes_prior_fire() {
     let db = test_db("trigger-conformance-event-latest-only").await;
@@ -96,7 +87,6 @@ async fn latest_only_supersedes_prior_fire() {
         "prior event-kind AgentRequest must be (lifecycle_state=superseded, status=superseded)"
     );
 
-    // Materialize the new fire with the same trigger lineage.
     let new_lineage = TriggerLineage {
         trigger_id: Some("trigger-event-latest".into()),
         trigger_kind: Some("event".into()),

@@ -104,9 +104,6 @@ describeLive("Tauri app live subagent backgrounding", () => {
             `expected at least one subagent child to reach a completed terminal state; nodes=${JSON.stringify(childNodes)}`,
           ).toBe(true);
 
-          // When subagent inference is configured separately, parent and child
-          // nodes must resolve to distinct backend ids. When it falls back to the
-          // primary, the assertion still validates that backend_id is populated.
           const parentNode = tree.nodes.find(
             (node) => node.requestId === submitted.requestId,
           );
@@ -167,8 +164,6 @@ describeLive("Tauri app live subagent backgrounding", () => {
       expect(followUpSession.pendingTurn).toBeNull();
       expect(followUpSession.activeResponseOverlay).toBeNull();
 
-      // The follow-up prompt forbids tools and asks for the sentinel phrase.
-      // Verify the model honored both constraints.
       const followUpToolGroupsAfterParent = followUpSession.timelineItems.filter(
         (item) => item.kind === "toolGroup",
       ).length;

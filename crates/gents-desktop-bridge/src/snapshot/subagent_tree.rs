@@ -93,15 +93,11 @@ pub fn effective_subagent_tree_max_depth(max_depth: Option<u32>) -> usize {
         .unwrap_or(DEFAULT_SUBAGENT_TREE_MAX_DEPTH)
 }
 
-/// One queryable deployment for the lineage walk. `label: None` is the
-/// local node; remote peers carry their saved-peer label for attribution.
 pub struct SubagentTreeAccess {
     pub label: Option<String>,
     pub access: TreeQueryAccess,
 }
 
-/// Independent of the runtime's ConfigAccess so this ships without the
-/// (unmerged) Arc-based Local variant; same two transports.
 pub enum TreeQueryAccess {
     Local(Arc<EmbeddedNode>),
     Graphql(String),
@@ -132,9 +128,6 @@ impl TreeQueryAccess {
     }
 }
 
-/// Local-only wrapper kept for the runner's HTTP endpoint, which serves this
-/// node's view to other desktops and knows nothing of our peer directory.
-/// (Only the runner bin calls it; the lib target sees it as dead.)
 #[allow(dead_code)]
 pub async fn build_local_subagent_tree(
     node: Arc<EmbeddedNode>,
@@ -154,10 +147,6 @@ pub async fn build_local_subagent_tree(
     .await
 }
 
-/// Cross-node lineage: every level of the walk fans out to every known
-/// deployment and unions the rows, so a child spawned on another peer
-/// resolves instead of dangling. A dead peer degrades to a partial error,
-/// never a failed tree.
 pub async fn build_subagent_tree(
     accesses: &[SubagentTreeAccess],
     root_request_id: &str,

@@ -143,11 +143,6 @@ export function createBridgeHttpAdapter(
   };
 }
 
-/**
- * Test-only fixture helpers that are NOT part of DesktopApiAdapter (production
- * interface).  Kept here, close to the runner, so they never bleed into the
- * Tauri bridge or the browser bundle.
- */
 export function createFixtureHelpers(runner: {
   postJson: <T>(path: string, body: unknown) => Promise<T>;
 }) {

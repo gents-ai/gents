@@ -26,8 +26,6 @@ export function useSubagentLineageData({
     new Set(),
   );
 
-  // The lineage observes a live turn, so keep polling while mounted. Background
-  // refreshes preserve operator choices and only expand genuinely new nodes.
   useEffect(() => {
     let cancelled = false;
     if (!rootRequestId) {
@@ -89,7 +87,6 @@ export function useSubagentLineageData({
     return { rootBuilt: root, deployments };
   }, [tree]);
 
-  // A changing scenario must not retain ids that silently hide every node.
   useEffect(() => {
     setDeploymentFilter((current) => {
       const available = new Set(deployments);

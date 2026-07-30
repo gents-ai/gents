@@ -1,12 +1,3 @@
-//! Signed bearer pairing for desktop and Tauri mobile clients.
-//!
-//! The legacy desktop peer form discovers transport metadata through `/status`
-//! and writes pairing intent directly.  A bearer pairing is different: the
-//! invite is authenticated before any local state changes, the desktop
-//! principal publishes a signed endpoint and claim, and one combined
-//! replicator carries the filtered conversation/routing plane and the
-//! unfiltered claim/endpoint control plane to the issuer.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -119,8 +110,6 @@ impl ClientCore {
             .unwrap_or("Paired Agent")
             .to_string();
 
-        // Verify reachability before committing the signed network root or
-        // claim locally. A retry after any later failure is idempotent.
         connect_peer_with_retry_until(
             &self.p2p,
             &token.ticket,
@@ -155,11 +144,6 @@ impl ClientCore {
                 )
                 .await?
         };
-        // Persist the secure source before replacing any prior replicator so a
-        // crash or foreground suspension cannot make bootstrap reinstall the
-        // legacy unfiltered collection set. Remove both possible shapes:
-        // pairing may be upgrading an existing `/status` record, and a retry
-        // may be replacing an earlier bearer replicator whose ticket changed.
         let mut replicator_addresses = previous_addresses;
         if !replicator_addresses.contains(&record.addr) {
             replicator_addresses.push(record.addr.clone());
@@ -226,8 +210,6 @@ impl ClientCore {
             endpoint_published: true,
             replication_configured: true,
             membership_observed: true,
-            // Earned only after verifying the issuer-signed acknowledgement
-            // written after its reciprocal conversation replicator applied.
             bidirectional_replication_observed: true,
         })
     }
@@ -267,9 +249,6 @@ async fn wait_for_bearer_readiness(
     }
 }
 
-/// Re-check the durable evidence used by both the foreground pairing flow and
-/// the supervisor after a relaunch. Missing rows mean "not ready yet"; present
-/// but invalid or revoked rows are hard failures and must close the chat gate.
 pub(super) async fn observe_bearer_pairing_readiness(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
@@ -679,9 +658,6 @@ pub(super) async fn install_bearer_replicator_for_record(
     record: &PeerRecord,
     requester_did: &str,
 ) -> Result<()> {
-    // `add_replicator` may merge with an existing peer replicator. Always
-    // clear both the legacy and bearer collection shapes first so bootstrap
-    // and repair can never silently preserve an old unfiltered policy.
     remove_incompatible_replicators(p2p, &record.addr).await?;
     let template = record.pairing_template.as_deref().unwrap_or("conversation");
     install_bearer_replicator(
@@ -739,9 +715,6 @@ fn bearer_replicator_filters(
         )
     })
     .collect::<ReplicationFilters>();
-    // The combined bootstrap channel must not expose other claimants' bearer
-    // tokens or endpoint metadata when an issuer pairs with multiple clients.
-    // Both records authored by this client carry its principal DID.
     filters.insert(
         "PairingBearerClaim".to_string(),
         ReplicationFilter::eq(

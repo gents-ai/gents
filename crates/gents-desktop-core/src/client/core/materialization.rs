@@ -21,15 +21,6 @@ const MATERIALIZATION_REPAIR_COOLDOWN: Duration = Duration::from_secs(5);
 const MATERIALIZATION_REFRESH_DELAY: Duration = Duration::from_millis(250);
 const MATERIALIZATION_P2P_REPAIR_ENV: &str = "GENTS_DESKTOP_MATERIALIZATION_P2P_REPAIR";
 
-/// Stall-detector signature for in-flight streaming responses.
-///
-/// Under the issue #64 live-tail contract, `response_content_len` and
-/// `response_reasoning_len` measure the *current tail* — bytes streamed
-/// since the most recent commit boundary in this turn. They reset to 0
-/// at every boundary and grow during active streaming, which is the
-/// signal the detector consumes. `progress_seq` advances at lifecycle
-/// boundaries (`RequestLifecycle::advance`) but not on every flush, so
-/// it alone is insufficient as a within-boundary signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MaterializationSignature {
     response_status: Option<String>,
@@ -511,7 +502,6 @@ mod tests {
         let mut tracker = MaterializationTracker::default();
         let now = Instant::now();
 
-        // Active streaming: tail grew from 128 to 256 bytes — no stall.
         assert!(tracker
             .observe_for_test(vec![make_candidate(128, 7, 4)], now)
             .is_empty());
@@ -522,8 +512,6 @@ mod tests {
             )
             .is_empty());
 
-        // Tail length plateaued at 256 with no boundary advance — stall.
-        // Timer reset at now+1s when signature changed; must exceed STALL_THRESHOLD from there.
         let stalled = tracker.observe_for_test(
             vec![make_candidate(256, 7, 4)],
             now + Duration::from_secs(1)

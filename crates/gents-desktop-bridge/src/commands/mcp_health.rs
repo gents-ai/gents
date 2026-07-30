@@ -95,15 +95,6 @@ fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
     }
 }
 
-/// One-shot probe of a single registered MCP service. Mirrors
-/// `gents mcp probe` (see `crates/gents-cli/src/commands/mcp.rs`):
-/// reads the `ToolServiceRegistry` entry, runs `run_health_check_cycle`
-/// once against a fresh `McpPool` + `ServiceHealthMap`, and reports the
-/// snapshot.
-///
-/// A failed one-shot probe reports `unreachable` immediately. For accumulated
-/// K-state across many background probe cycles, the desktop reads the
-/// persisted `ToolServiceHealthState` row via `load_mcp_services_with_health`.
 pub async fn probe_mcp_service(
     core: &ClientCore,
     service_id: &str,
@@ -130,9 +121,6 @@ pub async fn probe_mcp_service(
     let started = std::time::Instant::now();
     let options = one_shot_probe_options();
     let timeout = options.probe_timeout * 2;
-    // Resolve the local hostname so `resolve_mcp_url` substitutes 127.0.0.1
-    // for services advertised on this host. Mirrors the CLI's
-    // `gents mcp probe` (crates/gents-cli/src/commands/mcp.rs).
     let local_hostname = hostname::get()
         .map(|host| host.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
@@ -194,10 +182,6 @@ async fn load_registry_entry(
     service_id: &str,
 ) -> Result<ToolServiceRegistryRow> {
     let escaped = escape_graphql_string(service_id);
-    // Match `gents mcp probe`'s scoping: only online registry rows are
-    // probe targets; an offline/dropped row should fail loudly with "no
-    // online MCP service matched ..." rather than be probed and reported as
-    // unreachable.
     let query = format!(
         r#"{{
             ToolServiceRegistry(

@@ -1,5 +1,3 @@
-//! R6 agent-facing background tool integration tests.
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;
@@ -359,10 +357,6 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
 
 #[tokio::test]
 async fn wait_envelope_bounds_oversized_background_tool_result() {
-    // Model-input correctness: the wait_process envelope is threaded to the
-    // model as a tool result, so an oversized background tool output must be
-    // bounded there — the same way the owned loop bounds foreground results.
-    // The FULL output still lands on the AgentToolCall row (spill semantics).
     let big_line = "x".repeat(200);
     let big_output = std::iter::repeat(big_line)
         .take(5_000)
@@ -393,8 +387,6 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
     assert_eq!(receipt["status"], "running");
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    // skip_reason_json doubles as the structural assertion: an envelope the
-    // outer bounding sliced mid-JSON fails the parse here.
     let waited = skip_reason_json(
         hook.on_tool_call(
             "wait_process",
@@ -417,7 +409,6 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
         "bounded result must be non-empty"
     );
 
-    // The durable row keeps the full output (spill semantics unchanged).
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(

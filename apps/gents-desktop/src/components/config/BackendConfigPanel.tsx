@@ -112,7 +112,6 @@ export function BackendConfigEditor({
       await onDeleteBackendConfig({ backendId: backend.backendId, agentDid });
       onDeleted();
     } catch {
-      // Surfaced by the shell error banner; the editor stays put.
     }
   }
   const [backendId, setBackendId] = useState("");
@@ -157,10 +156,6 @@ export function BackendConfigEditor({
       apiKey,
       apiKeyEnvVar,
       clearApiKey,
-      // The field accepts comma- or newline-separated models, while storage
-      // projects them back as newline-separated text. Compare the submitted
-      // list so an acknowledged save cannot become "unsaved" on formatting
-      // alone.
       models: linesToArray(models),
       maxConcurrent,
       maxQueueDepth,
@@ -193,8 +188,6 @@ export function BackendConfigEditor({
         maxQueueDepth: parseOptionalInt(maxQueueDepth),
         enabled,
       });
-      // Never retain a successfully persisted secret in the DOM, and render
-      // list formatting exactly as the persisted view will project it.
       setApiKey("");
       setClearApiKey(false);
       setModels(nextModels.join("\n"));
@@ -376,7 +369,6 @@ export function BackendConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function backendFormValues(backend: InferenceBackendView | null) {
   return {
     backendId: backend?.backendId ?? "",

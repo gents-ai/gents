@@ -6,8 +6,6 @@
 @import "@source-inc/gents-desktop-fleet/styles.css";
 @import "@source-inc/gents-desktop-operations/styles.css";
 
-/* Deliberately unlike the Source palette: this fixture is the executable
-   proof that a host can remap every reusable surface without package forks. */
 @layer tokens {
   :root {
     color-scheme: dark;

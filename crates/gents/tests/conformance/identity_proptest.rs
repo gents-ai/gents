@@ -1,17 +1,3 @@
-//! Loader-dedup proptest.
-//!
-//! Drives the production helper `assemble_principal_and_behaviors` (from
-//! `crates/gents/src/agent/principal_assembly.rs`) — the same
-//! helper that both `resolve_document_runtime_snapshot_from_view` and
-//! `GentsBuilder::build` funnel through. Asserts `Arc::ptr_eq`
-//! across all behaviors in arbitrarily-generated worlds.
-//!
-//! **Regression class fenced:** if a future change moves the
-//! `Arc::new(AgentPrincipal { ... })` inside the factory loop in
-//! `assemble_principal_and_behaviors`, every behavior would receive
-//! a distinct Arc and `Arc::ptr_eq` would fail. The deliberate-
-//! regression experiment demonstrates the failure mode.
-
 use std::sync::Arc;
 
 use proptest::prelude::*;
@@ -78,9 +64,6 @@ fn arb_behavior_id() -> impl Strategy<Value = String> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// For any snapshot built via the production helper
-    /// `assemble_principal_and_behaviors`, every behavior's principal
-    /// Arc is pointer-equal to the returned snapshot principal.
     #[test]
     fn snapshot_behaviors_share_principal_arc(
         agent_did in arb_did(),
@@ -114,9 +97,6 @@ proptest! {
         }
     }
 
-    /// For any pair of behaviors in the snapshot, their principal Arcs
-    /// are pointer-equal — the runtime-layer form of Lean's
-    /// `behavior_id_determines_principal`.
     #[test]
     fn pairs_in_snapshot_share_principal_arc(
         agent_did in arb_did(),

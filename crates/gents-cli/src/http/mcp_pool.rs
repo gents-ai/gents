@@ -1,8 +1,3 @@
-//! `/mcp/pool` surfacing: registered MCP services plus this agent's
-//! persisted health-probe view. This is an operator-oriented projection over
-//! `ToolServiceRegistry` and `ToolServiceHealthState`; it does not call remote
-//! MCP servers itself.
-
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};

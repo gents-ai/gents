@@ -389,7 +389,6 @@ pub async fn wait_for_connected_peer(
     }
 }
 
-/// Read the `PeerPairingDesired` row for `peer_id` (operator- or registry-owned).
 pub async fn peer_pairing_row(graphql: &str, peer_id: &str) -> Result<Value> {
     let peer_id = escape_graphql_string(peer_id);
     let response = graphql_query(
@@ -411,7 +410,6 @@ pub async fn peer_pairing_row(graphql: &str, peer_id: &str) -> Result<Value> {
     Ok(first_graphql_row(&response, "PeerPairingDesired")?.clone())
 }
 
-/// Poll until a `PeerPairingApplied` row exists for `peer_id`, or time out.
 pub async fn wait_for_pairing_applied(
     graphql: &str,
     peer_id: &str,

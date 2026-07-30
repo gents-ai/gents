@@ -91,9 +91,6 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         &["AgentToolCall"],
     )
     .await;
-    // The parent deliberately has no pairing row for B. Production R5 routing
-    // treats the missing local target behavior as a remote bridge write; the
-    // installed replicator carries that bridge to B.
     let (parent_db, hook, parent_session_id, _parent_behavior_id) = setup_parent_hook_on_db(
         case,
         false,
@@ -155,7 +152,6 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
         _endpoint,
     } = child_agent;
     booted.shutdown().await;
-    // BootedAgent only stops Gents::run; P2P belongs to the embedded node.
     parent_db.node.shutdown().await;
     child_db.node.shutdown().await;
 }
@@ -171,10 +167,6 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
 
     let (parent_db, hook, parent_session_id, parent_behavior_id) =
         setup_parent_hook(case, true).await;
-    // After spawn convergence (#377) the child AgentRequest is materialized by
-    // SubagentSource, not synchronously by the hook.  Start a standalone source
-    // against the parent node so it can observe the bridge row and materialize
-    // the child before we assert on wait_for_child_request.
     let _source = super::support::fixtures::spawn_subagent_source(
         parent_db.node.clone(),
         PARENT_AGENT_DID,
@@ -262,9 +254,6 @@ async fn setup_parent_hook_on_db(
     let parent_session_id = format!("{}-session", case.parent_request_id);
     let selection_id = format!("{parent_behavior_id}-tools");
 
-    // The target's owning DID is the parent (local case) or the child
-    // deployment (cross case). The friendly target name equals the behavior id
-    // so the spawn args (which pass `name`) resolve.
     let target_owner_did = if target_is_local {
         PARENT_AGENT_DID.to_string()
     } else {
@@ -286,8 +275,6 @@ async fn setup_parent_hook_on_db(
             )]),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
-            // Cross-deployment delegation is deferred behind a default-OFF flag
-            // (#377). The R5 substrate stays proven by opting in here.
             subagent_allow_cross_deployment: Some(true),
             cross_deployment_spawn_timeout_seconds: Some(60),
             enable_defra_query: None,
@@ -425,11 +412,6 @@ async fn upsert_active_child_behavior_from_default(
         .expect("load default child behavior")
         .expect("default child behavior");
     let child_agent_did = behavior.agent_did.clone();
-    // Cross-deployment delegation is deferred behind a default-OFF flag (#377).
-    // The receiver-side trusted-paired-peer claim path now gates on the TARGET
-    // behavior's `subagent_allow_cross_deployment` flag, so the R5 substrate must
-    // opt the target behavior in on the receiving node for the cross-deployment
-    // child to be materialized.
     let selection_id = format!("{target_behavior_id}-r5-cross-deployment-tools");
     upsert_tool_selection(
         node,
@@ -552,8 +534,6 @@ async fn install_one_way_replicator(
         .add_collections(collection_names.clone())
         .await
         .expect("add receiver p2p collections");
-    // DefraDB needs both the sender-side push target and the receiver-side
-    // authorization record. The data-flow under test remains sender -> receiver.
     receiver_p2p
         .add_replicator(
             collection_names.clone(),

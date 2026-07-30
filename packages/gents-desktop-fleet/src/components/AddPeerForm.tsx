@@ -15,7 +15,6 @@ export type AddPeerFormProps = {
   localError: string | null;
   peerForm: PeerAddRequest;
   onPeerFormChange: (value: PeerAddRequest) => void;
-  /** Fleet-admin address probe (not the saved-peer-id read path). */
   onProbePeerAddress: (serverAddress: string) => Promise<unknown>;
   onPairBearer: (
     request: BearerPairingRequest,

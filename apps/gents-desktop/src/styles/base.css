@@ -68,7 +68,6 @@
 }
 
 @layer base {
-  /* Motion is an enhancement, never a requirement. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

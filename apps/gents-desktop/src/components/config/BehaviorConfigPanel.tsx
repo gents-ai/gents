@@ -192,7 +192,6 @@ export function BehaviorConfigEditor({
       await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId, agentDid });
       onDeleted();
     } catch {
-      // Surfaced by the shell error banner; the editor stays put.
     }
   }
 
@@ -210,22 +209,12 @@ export function BehaviorConfigEditor({
     setSkillRefs(base.skillRefs);
     setSkillExcludes(base.skillExcludes);
     setSaveError(null);
-    // Id-keyed only: background snapshot refreshes (including profile-list
-    // churn) must not wipe in-progress edits.
   }, [behavior?.behaviorId]);
 
-  // The profile fallback is derived, not stored: profileId holds only what
-  // hydration or the user put there, so profile-list churn can never bake a
-  // fallback into state (a stored fallback both defeats dirty tracking and
-  // gets silently persisted over the document's own selection on Save).
   const effectiveProfileId = pickValidProfile(
     [profileId, behavior?.inferenceProfileId ?? ""],
     inferenceProfiles,
   );
-  // The select needs an available value to render, but a temporary profile
-  // registry dropout must not rewrite the document's actual reference when an
-  // operator saves an unrelated field. A deliberate selection updates
-  // profileId and therefore still wins here.
   const submittedProfileId =
     profileId || behavior?.inferenceProfileId || effectiveProfileId;
 
@@ -266,8 +255,6 @@ export function BehaviorConfigEditor({
     max: 1,
   });
 
-  // Baseline applies the same derived-profile fallback; skill arrays compare
-  // as sets — toggling off and back on must not read as an edit.
   const base = behaviorFormValues(behavior);
   const dirty = isDirty(
     {
@@ -603,7 +590,6 @@ export function BehaviorConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function behaviorFormValues(behavior: BehaviorView | null) {
   return {
     behaviorId: behavior?.behaviorId ?? "",
@@ -623,7 +609,6 @@ function behaviorFormValues(behavior: BehaviorView | null) {
   };
 }
 
-/** First candidate that names an available profile, else the first profile. */
 function pickValidProfile(candidates: string[], profiles: InferenceProfileView[]) {
   for (const candidate of candidates) {
     if (candidate && profiles.some((profile) => profile.profileId === candidate)) {

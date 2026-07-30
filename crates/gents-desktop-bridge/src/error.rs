@@ -1,40 +1,20 @@
-//! Typed bridge errors for the phase-3 plugin boundary.
-//!
-//! Commands expose the closed `BridgeErrorCode` taxonomy below. Legacy
-//! string-returning implementation seams are classified at the command
-//! boundary while new call sites construct codes directly.
-
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Closed set of bridge error codes. Additive codes bump contract MINOR;
-/// rename/removal/meaning change bumps MAJOR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum BridgeErrorCode {
-    /// Client store / bridge state is not started.
     ClientNotRunning,
-    /// Client start / bootstrap failed.
     ClientStartFailed,
-    /// Requested resource was not found (task, schedule, tool call, …).
     NotFound,
-    /// Caller-supplied argument failed validation.
     InvalidArgument,
-    /// Operation is not supported in this host/policy configuration.
     Unsupported,
-    /// Peer / runtime HTTP endpoint was unreachable.
     EndpointUnreachable,
-    /// Cascade preview signature was missing or drifted.
     StalePreview,
-    /// Cascade walk exceeded the safety depth limit.
     CascadeDepthExceeded,
-    /// Path escaped an authorized workspace root.
     PathEscapesRoot,
-    /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
-    /// Bearer pairing / peer-directory pairing family failures.
     Pairing,
-    /// Catch-all for uncategorized legacy string errors during migration.
     Unknown,
 }
 
@@ -56,7 +36,6 @@ impl BridgeErrorCode {
         }
     }
 
-    /// Whether the client may usefully retry without changing inputs.
     pub fn retryable(self) -> bool {
         matches!(
             self,
@@ -68,9 +47,6 @@ impl BridgeErrorCode {
         )
     }
 
-    /// Best-effort classification of today's stringly errors so phase 3 can
-    /// migrate call sites incrementally. Prefer constructing `BridgeError`
-    /// directly at new sites.
     pub fn classify_legacy_message(message: &str) -> Self {
         fn contains_pairing_word(message: &str) -> bool {
             message
@@ -155,7 +131,6 @@ impl BridgeErrorCode {
     }
 }
 
-/// Serialized error shape returned by bridge commands after phase 3.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeError {

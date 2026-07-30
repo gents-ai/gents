@@ -35,7 +35,6 @@ export function listenToDesktopClientUpdates(
       try {
         onError(error);
       } catch {
-        // Error reporting must not create another unhandled event rejection.
       }
     });
   return (

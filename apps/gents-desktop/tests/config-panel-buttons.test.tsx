@@ -282,15 +282,12 @@ describe("config panel action buttons", () => {
       />,
     );
 
-    // Editable allowlist round-trips the loaded value; facts render read-only.
     expect(screen.getByTestId("tool-defra-query-collections")).toHaveValue(
       "AgentRequest",
     );
     expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
       "tool-policy/v1",
     );
-    // The managed write-tools row decodes the WriteToolDecl JSON — a friendly
-    // "name → collection", never the raw JSON blob.
     const writeToolsRow = screen.getByTestId("tool-write-tools");
     expect(writeToolsRow).toHaveTextContent("upsert_note → Note");
     expect(writeToolsRow).not.toHaveTextContent("tool_name");
@@ -307,7 +304,6 @@ describe("config panel action buttons", () => {
         }),
       ),
     );
-    // write_tools / tool_policy_version are preserve-only — never sent.
     const [[request]] = onSaveToolSelectionConfig.mock.calls;
     expect(request).not.toHaveProperty("writeTools");
     expect(request).not.toHaveProperty("toolPolicyVersion");

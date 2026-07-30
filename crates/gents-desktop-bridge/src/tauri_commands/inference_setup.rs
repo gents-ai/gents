@@ -23,14 +23,8 @@ use crate::error::BridgeError;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::ClientUpdateEvent;
 
-/// How long a probe waits before treating a local endpoint as unreachable.
-/// A touch longer than the CLI's 700ms so a cold local server still answers,
-/// but short enough that the wizard stays responsive.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Upper bound on how long a ChatGPT sign-in waits for the browser callback
-/// before giving up, so an abandoned sign-in can never hang forever even if the
-/// user never clicks Cancel.
 const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -46,12 +40,6 @@ pub(crate) struct InferenceProbeResult {
     pub models: Vec<String>,
 }
 
-/// Probe an OpenAI-compatible endpoint for the models it advertises.
-///
-/// Mirrors the CLI init picker's local-server detection: a short-timeout
-/// `GET {base}/models`, reading the advertised ids out of `data[].id`. Never
-/// errors on an unreachable server — an offline local server is an expected,
-/// non-exceptional answer the wizard renders as "not detected".
 #[tauri::command]
 pub(crate) async fn desktop_probe_inference_endpoint(
     request: InferenceProbeRequest,
@@ -108,8 +96,6 @@ pub(crate) struct CodexLoginRequest {
     pub provider: Option<String>,
 }
 
-/// A redacted view of a stored credential. Tokens never cross the bridge into
-/// the webview — only the metadata the UI needs to confirm the login worked.
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CodexLoginResult {
@@ -140,18 +126,6 @@ impl CodexLoginResult {
     }
 }
 
-/// Drive a ChatGPT/Codex OAuth login and persist the credential for `agentDid`.
-///
-/// Replicates `gents codex-login` against the desktop client's embedded node:
-/// runs the loopback + PKCE login server (which opens the system browser),
-/// reads the resulting tokens from codex's ephemeral in-process store, and
-/// upserts a native `OAuthCredential` document. The runtime picks the document
-/// up on reconcile and thereafter mints and auto-refreshes the Responses client
-/// for any ChatGptCodex-preset backend on that DID.
-///
-/// The auth URL is emitted as `desktop://codex-login-url` before the flow
-/// blocks, so the wizard can offer a manual-open fallback if the browser did
-/// not launch on its own.
 #[tauri::command]
 pub(crate) async fn desktop_codex_login<R: Runtime>(
     app: AppHandle<R>,
@@ -169,10 +143,6 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
 
-    // codex's ephemeral auth store is process-global and keyed by the codex
-    // home path, so the login server (writer) and the AuthManager (reader) must
-    // share this synthetic throwaway path within this one process. Nothing ever
-    // touches the user's real ~/.codex.
     let synthetic_home = std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
     let server_opts = ServerOptions::new(
         synthetic_home.clone(),
@@ -191,8 +161,6 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         },
     );
 
-    // Publish a cancel handle so `desktop_codex_login_cancel` (a closed browser,
-    // an explicit Cancel) can abort the callback wait and free the loopback port.
     let cancel = server.cancel_handle();
     {
         let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
@@ -210,7 +178,6 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
             })?;
         }
         Err(_elapsed) => {
-            // Stop the still-listening server so its port is released, then bail.
             cancel.shutdown();
             return Err(BridgeError::from_legacy_message(
                 "ChatGPT sign-in timed out waiting for the browser",
@@ -220,9 +187,9 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
 
     let manager = AuthManager::new(
         synthetic_home,
-        /* enable_codex_api_key_env */ false,
+        false,
         AuthCredentialsStoreMode::Ephemeral,
-        /* chatgpt_base_url */ None,
+        None,
     )
     .await;
     let auth = manager
@@ -270,11 +237,6 @@ pub(crate) struct CodexLoginUrl {
     pub url: String,
 }
 
-/// Abort an in-flight ChatGPT/Codex sign-in (e.g. the user closed the browser).
-///
-/// Signals the login server to stop, which unblocks the pending
-/// `desktop_codex_login` call — it then falls through to a "no auth" error and
-/// returns. A no-op when no sign-in is in progress.
 #[tauri::command]
 pub(crate) fn desktop_codex_login_cancel(
     state: State<'_, DesktopAppState>,

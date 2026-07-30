@@ -19,10 +19,6 @@ export type { TaskView } from "../generated/TaskView.js";
 export type { ToolSelectionView } from "../generated/ToolSelectionView.js";
 export type { ToolServiceRegistryView } from "../generated/ToolServiceRegistryView.js";
 
-/**
- * Raw runtime tool-surface explanation: camelCase envelope from the bridge,
- * snake_case `surface` payload straight from the runtime serializer.
- */
 export type ToolSurfaceExplanationView = {
   behaviorId: string;
   enabled: boolean;

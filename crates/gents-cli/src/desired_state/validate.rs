@@ -433,10 +433,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             );
         }
 
-        // skill_refs / skill_excludes must resolve to skills in this manifest.
-        // Because every skill is validated above to belong to this principal,
-        // this also enforces D6 (no live cross-principal skill references —
-        // share by importing a copy instead).
         for skill_ref in &behavior.skill_refs {
             let skill_ref = skill_ref.trim();
             if !skill_ref.is_empty() && !skill_ids.contains(skill_ref) {
@@ -588,10 +584,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             )),
         }
 
-        // Schedule scope supplies `event.*` plus the task catalog scope
-        // (`node.*`, `ctx.now`) — reject any `doc.*` or `args.*` references
-        // in the linked task's prompt template so the trigger cannot fail at
-        // render time with a missing scope.
         if !task_id.is_empty() {
             if let Some(task) = manifest.tasks.iter().find(|task| task.task_id == task_id) {
                 match parse_template_for_validation(&task.prompt_template) {
@@ -648,7 +640,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
-        // v1 only supports "created"
         if trig.event_kind != "created" {
             errors.push(format!(
                 "event_trigger {} uses unsupported event_kind {:?} (v1 supports only \"created\")",
@@ -664,7 +655,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             )),
         }
 
-        // Cross-ref: task_id must exist in manifest.tasks
         if !task_id.is_empty() && !manifest.tasks.iter().any(|t| t.task_id == task_id) {
             errors.push(format!(
                 "event_trigger {} references unknown task_id {}",
@@ -672,7 +662,6 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             ));
         }
 
-        // Template scope validation: doc.* IS allowed for event triggers; args.* is NOT.
         if !task_id.is_empty() {
             if let Some(task) = manifest.tasks.iter().find(|t| t.task_id == task_id) {
                 match parse_template_for_validation(&task.prompt_template) {
@@ -992,16 +981,12 @@ pub(crate) async fn validate_manifest_against_live(
 ) -> Result<Vec<String>> {
     let mut errors = validate_peer_pairing_ownership_against_live(manifest, access).await?;
     for trig in &manifest.event_triggers {
-        // Skip triggers that failed basic structural validation; the pure
-        // validator already reported those and live probes on empty
-        // source_collection / trigger_id would only add noise.
         let source_collection = trig.source_collection.trim();
         let trigger_id = trig.trigger_id.trim();
         if source_collection.is_empty() || trigger_id.is_empty() {
             continue;
         }
 
-        // 1. Filter syntax probe.
         if let Some(filter) = trig.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
                 let probe = format!(
@@ -1021,10 +1006,6 @@ pub(crate) async fn validate_manifest_against_live(
             }
         }
 
-        // 2. Template doc.* path resolution.
-        //
-        // Locate the referenced Task. If it is missing the pure validator
-        // already reported the broken cross-ref; skip the live probe here.
         let task_id = trig.task_id.trim();
         if task_id.is_empty() {
             continue;
@@ -1035,8 +1016,6 @@ pub(crate) async fn validate_manifest_against_live(
         let refs = match parse_template_for_validation(&task.prompt_template) {
             Ok(refs) => refs,
             Err(_) => {
-                // parse_template_for_validation failure is already
-                // reported by the pure validator; don't duplicate.
                 continue;
             }
         };
@@ -1049,7 +1028,6 @@ pub(crate) async fn validate_manifest_against_live(
             continue;
         }
 
-        // Introspect the source collection.
         let introspect = format!(
             r#"query {{ __type(name: "{name}") {{ fields {{ name }} }} }}"#,
             name = source_collection,
@@ -1064,9 +1042,6 @@ pub(crate) async fn validate_manifest_against_live(
                 continue;
             }
         };
-        // `__type(name: "Missing")` returns `{ "data": { "__type": null } }`
-        // — not a GraphQL error. Detect it explicitly so we can produce a
-        // friendly message instead of silently passing.
         let type_node = response.get("data").and_then(|d| d.get("__type"));
         let fields = type_node
             .filter(|v| !v.is_null())
@@ -1085,9 +1060,6 @@ pub(crate) async fn validate_manifest_against_live(
             .collect();
         let mut reported: BTreeSet<String> = BTreeSet::new();
         for path in &doc_paths {
-            // path is ["doc", field1, field2, ...]. Skip the "doc" root;
-            // a bare `{{ doc }}` (path == ["doc"]) has no sub-field to
-            // verify — nothing to do.
             let Some(first) = path.get(1).map(String::as_str) else {
                 continue;
             };
@@ -1103,13 +1075,6 @@ pub(crate) async fn validate_manifest_against_live(
             ));
         }
     }
-
-    // NOTE: subagent_targets are NOT resolved against local AgentBehavior docs.
-    // A delegation target is a named (agent_did, behavior_id) pair; a target may
-    // legitimately live on a remote deployment that never replicates its
-    // AgentBehavior locally. Structural validation (JSON shape, non-empty
-    // fields, unique names) happens in `validate_manifest`; cross-node
-    // resolution is handled out-of-band via P2P at runtime.
 
     Ok(errors)
 }
@@ -1199,9 +1164,6 @@ fn validate_argv_prefixes(
             continue;
         }
 
-        // Bare prefixes are split with `split_ascii_whitespace` at runtime;
-        // after the non-empty trim check above, that cannot create empty
-        // tokens. JSON prefixes can contain empty strings, so validate them.
         if trimmed.starts_with('[') {
             match serde_json::from_str::<Vec<String>>(trimmed) {
                 Ok(tokens)
@@ -1217,11 +1179,6 @@ fn validate_argv_prefixes(
     }
 }
 
-/// Validate `subagent_targets` entries. Each entry must be a JSON
-/// [`SubagentTarget`] with non-empty `name`/`agent_did`/`behavior_id`, and the
-/// model-facing `name` must be unique within the selection. Remote targets are
-/// NOT resolved against local AgentBehavior docs (they legitimately do not
-/// resolve locally and reach the owning node via P2P).
 fn validate_subagent_targets(
     selection_id: &str,
     selection_agent_did: &str,
@@ -1252,9 +1209,6 @@ fn validate_subagent_targets(
                 target.name
             ));
         }
-        // Cross-deployment (remote-DID) delegation is deferred behind an opt-in
-        // flag. When the flag is false (default), reject any target whose DID
-        // differs from the selection's own agent_did.
         if !allow_cross_deployment
             && !selection_agent_did.is_empty()
             && target.agent_did.trim() != selection_agent_did
@@ -1267,26 +1221,12 @@ fn validate_subagent_targets(
     }
 }
 
-/// Validate `write_tools` entries pre-apply, mirroring the runtime checks in
-/// `ToolSelectionDocument::validate()` so a malformed decl is rejected by
-/// `config validate` instead of failing only when the runtime ingests it.
-///
-/// Entries are stored as JSON-encoded [`WriteToolDecl`] strings (the same
-/// `[String]` storage form as `subagent_targets`). Each entry must:
-///   * parse as a [`WriteToolDecl`],
-///   * have a non-empty `tool_name` and `collection`,
-///   * have a non-empty `name` on every field,
-///   * and have a `tool_name` that is unique within the selection.
 fn validate_write_tools(
     selection_id: &str,
     entries: &[String],
     cli_tool_names: &[String],
     errors: &mut Vec<String>,
 ) {
-    // Sibling cli_tool_names are advertised as individually-named tools in the
-    // same selection; a write tool reusing one is the same dispatch collision
-    // as reusing a built-in name. Mirrors the runtime check in
-    // `ToolSelectionDocument::validate()`.
     let cli_tool_names: HashSet<&str> = cli_tool_names.iter().map(|name| name.trim()).collect();
     let mut seen_tool_names: HashSet<String> = HashSet::new();
     for entry in entries {
@@ -1310,9 +1250,6 @@ fn validate_write_tools(
                 decl.tool_name
             ));
         }
-        // A declared write tool may not reuse a built-in tool name: doing so
-        // silently shadows the built-in at registration. Mirrors the runtime
-        // check in `ToolSelectionDocument::validate()`.
         if is_reserved_builtin_tool_name(&decl.tool_name) {
             errors.push(format!(
                 "tool selection {selection_id} write_tools tool_name {:?} collides with a \
@@ -1489,8 +1426,6 @@ mod tests {
 
     #[test]
     fn request_context_template_validated_at_apply() {
-        // request-context templates may read ctx.* but not task/system-only or
-        // unknown refs; a misconfigured one must fail apply, not first request.
         let ok = validate_errors(manifest_with_request_context(
             "seat at {{ ctx.now }} on {{ node.node_did }}",
         ));
@@ -1506,8 +1441,6 @@ mod tests {
             "expected unknown ctx ref rejection at apply, got {bad:?}"
         );
 
-        // Refs hidden inside a {% set %} must also be rejected at apply — the
-        // complete walker closes the "passes apply, fails first request" gap.
         let hidden = validate_errors(manifest_with_request_context(
             "{% set x = ctx.bogus_unknown %}{{ x }}",
         ));
@@ -1521,8 +1454,6 @@ mod tests {
 
     #[test]
     fn task_template_raw_block_is_not_scope_checked() {
-        // The documented {% raw %} escape hatch must be honored by the task
-        // scope validator too: a task-unavailable var inside raw is literal text.
         let errors = validate_errors(manifest(
             None,
             Some("{% raw %}{{ ctx.collection_summary }}{% endraw %} at {{ ctx.now }}"),
@@ -1574,10 +1505,6 @@ mod live_tests {
     use super::*;
     use crate::config_writes::ConfigAccess;
 
-    /// Build a minimal `DesiredStateManifest` whose only content is a single
-    /// tool selection with the given `subagent_targets` list and
-    /// `subagent_spawn_enabled` flag.  All other collections are empty (the
-    /// live validator only iterates `event_triggers` and `tool_selections`).
     fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateManifest {
         use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
         let targets: Vec<String> = targets.iter().map(SubagentTarget::to_entry).collect();
@@ -1640,11 +1567,6 @@ mod live_tests {
         }
     }
 
-    /// Live-validator does NOT resolve subagent targets against local
-    /// AgentBehavior docs: a target whose behavior lives on a remote deployment
-    /// (and never replicates locally) must not produce a live-validation error.
-    /// This is the post-#377 contract that removed the cross-node resolution
-    /// seam.
     #[tokio::test]
     async fn live_validate_does_not_resolve_remote_subagent_target() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -1656,7 +1578,6 @@ mod live_tests {
             .await?;
         ensure_runtime_schemas(&node).await?;
 
-        // No local AgentBehavior is seeded; the target names a remote agent_did.
         let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         let manifest = manifest_with_subagent_targets(vec![SubagentTarget {
@@ -1676,8 +1597,6 @@ mod live_tests {
         Ok(())
     }
 
-    /// Live-validator does NOT report an error for a local subagent target
-    /// either: target resolution is no longer a live-validation concern.
     #[tokio::test]
     async fn live_validate_passes_for_known_subagent_target() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -1761,9 +1680,6 @@ mod live_tests {
                 && error.contains("refusing to overwrite or delete")
         }));
 
-        // Diff remains available as an observability command. The collision
-        // marks the report non-OK and is carried next to the planned drift
-        // instead of replacing the entire report with an error.
         let owner_did = manifest.agent_principal.agent_did.clone();
         let bound = BoundDesiredManifest {
             context: ManifestBindingContext {
@@ -1786,9 +1702,6 @@ mod live_tests {
                 && error.contains("refusing to overwrite or delete")
         }));
 
-        // Removing the manifest entry entirely does not make the operator row
-        // managed: the live projection only includes this root's provenance,
-        // so apply plans no pairing deletion and leaves the row intact.
         manifest.peer_pairings.clear();
         manifest.tool_selections.clear();
         let live_bundle = build_desired_state_live_bundle(&access, &manifest).await?;
@@ -1894,8 +1807,6 @@ mod live_tests {
         assert_eq!(repeated.peer_pairings, 0);
         drop(access);
 
-        // A freshly-created reconciler store (the restart boundary) reads the
-        // exact desired document seeded before any runtime was started.
         let identity = Arc::new(KeyIdentity::load_or_create(
             tempdir.path().join("restart-identity.key"),
             None,
@@ -2084,15 +1995,6 @@ mod live_tests {
         Ok(())
     }
 
-    /// Apply a tool selection with all subagent fields set, then:
-    ///   (a) read the ToolSelection back and assert all persisted, and
-    ///   (b) recompute the apply diff and assert it shows UNCHANGED (idempotent).
-    ///
-    /// Before the fix this test fails because:
-    ///  - `DesiredToolSelection` was missing the three new fields → manifest
-    ///    deserialization with `deny_unknown_fields` would reject them.
-    ///  - `EXPORT_TOOL_SELECTION_FIELDS` omitted subagent fields → live read
-    ///    always saw them as `None` → diff never converged.
     #[tokio::test]
     async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
         use std::path::PathBuf;
@@ -2112,8 +2014,6 @@ mod live_tests {
 
         let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
-        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
-        // find the agent on the second (post-apply) read.
         {
             use gents::graphql::escape_graphql_string;
             let did = escape_graphql_string("did:key:test-subagent-idempotency");
@@ -2124,7 +2024,6 @@ mod live_tests {
                 .await?;
         }
 
-        // Build the desired manifest with all subagent fields set.
         let desired_manifest = {
             use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
             DesiredStateManifest {
@@ -2195,7 +2094,6 @@ mod live_tests {
         let root = PathBuf::from(".");
         let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
 
-        // ── First apply ──────────────────────────────────────────────────────
         let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (live_principal, live_manifest) =
             live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
@@ -2212,7 +2110,6 @@ mod live_tests {
         apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
         txn.commit().await?;
 
-        // ── (a) Read back and assert all subagent fields persisted ────────────
         let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (remaining_principal, remaining_manifest) =
             live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
@@ -2265,7 +2162,6 @@ mod live_tests {
             "cross_deployment_spawn_timeout_seconds must persist through apply"
         );
 
-        // ── (b) Re-diff: tool selection must show as UNCHANGED ────────────────
         let second_diff = diff_manifests(
             &root,
             "local",
@@ -2293,17 +2189,6 @@ mod live_tests {
         Ok(())
     }
 
-    /// Apply a manifest with an `AgentBehavior` that has `description` and
-    /// `summary` set, then:
-    ///   (a) read the `AgentBehavior` back and assert both fields persisted, and
-    ///   (b) recompute the apply diff and assert the behavior is UNCHANGED
-    ///       (idempotent).
-    ///
-    /// Before the fix this test fails because the fields were absent from:
-    ///  - `DesiredAgentBehavior` → manifest deserialization would lose them.
-    ///  - `EXPORT_AGENT_BEHAVIOR_FIELDS` → live read always saw `None` → diff
-    ///    never converged.
-    ///  - the `convert.rs` whitelist → fields stripped during export→manifest.
     #[tokio::test]
     async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> Result<()> {
         use std::path::PathBuf;
@@ -2323,8 +2208,6 @@ mod live_tests {
 
         let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
-        // Seed a minimal AgentPrincipal so build_desired_state_live_bundle can
-        // find the agent on the second (post-apply) read.
         {
             use gents::graphql::escape_graphql_string;
             let did = escape_graphql_string("did:key:test-behavior-desc-idempotency");
@@ -2335,7 +2218,6 @@ mod live_tests {
                 .await?;
         }
 
-        // Build the desired manifest with description and summary set.
         let desired_manifest = {
             use super::super::{DesiredAgentBehavior, DesiredAgentPrincipal, DesiredStateManifest};
             DesiredStateManifest {
@@ -2381,7 +2263,6 @@ mod live_tests {
         let root = PathBuf::from(".");
         let desired_bundle = export_bundle_from_manifest(&desired_manifest, "local")?;
 
-        // ── First apply ──────────────────────────────────────────────────────
         let live_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (live_principal, live_manifest) =
             live_manifest_from_bundle(&desired_manifest, &live_bundle)?;
@@ -2398,7 +2279,6 @@ mod live_tests {
         apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
         txn.commit().await?;
 
-        // ── (a) Read back and assert description + summary persisted ─────────
         let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
         let (remaining_principal, remaining_manifest) =
             live_manifest_from_bundle(&desired_manifest, &remaining_bundle)?;
@@ -2420,7 +2300,6 @@ mod live_tests {
             "summary must persist through apply"
         );
 
-        // ── (b) Re-diff: behavior must show as UNCHANGED ─────────────────────
         let second_diff = diff_manifests(
             &root,
             "local",

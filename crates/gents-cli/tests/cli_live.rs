@@ -1,4 +1,3 @@
-// Soft-cap justified: 3 live-network tests with long conversational assertions. Fragmentation doesn't help readability.
 mod support;
 use support::*;
 

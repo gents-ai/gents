@@ -1,7 +1,3 @@
-//! `MockChatEndpoint`: a thin wrapper over the shared robust [`FakeLlm`] fake
-//! that replies to chat completions with a fixed behavior (text completion,
-//! routed-by-content-with-delay, or hang). Public API is unchanged.
-
 use std::sync::Arc;
 use std::time::Duration;
 

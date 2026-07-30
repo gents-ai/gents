@@ -102,10 +102,7 @@ fn assert_task_run_args(args: ConfigTaskRunArgs) {
 
 #[test]
 fn enable_defra_query_flag_accepts_false_true_and_omission() {
-    // Omitted -> None, so an unrelated `config tools set` preserves the
-    // existing document setting rather than re-enabling it.
     assert_eq!(parse_tools_set(&[]).enable_defra_query, None);
-    // Operators can actually disable it.
     assert_eq!(
         parse_tools_set(&["--enable-defra-query", "false"]).enable_defra_query,
         Some(false)
@@ -182,7 +179,6 @@ fn init_tool_audit_flags_parse() {
 #[test]
 fn init_write_and_yolo_flags_parse() {
     assert!(parse_init(&["--write"]).write_tools);
-    // Compatibility alias for the old flag name.
     assert!(parse_init(&["--write-tools"]).write_tools);
     let yolo = parse_init(&["--yolo"]);
     assert!(yolo.yolo);
@@ -532,9 +528,6 @@ fn p2p_invite_member_did_parses() {
     assert_eq!(args.member_did.as_deref(), Some("did:key:zMember"));
 }
 
-/// `--template` is the sole scope input on the pairing front door: the dead
-/// `--collection`/`--profile` flags were removed, so clap must now reject
-/// them as unknown arguments rather than silently parsing inert data.
 #[test]
 fn p2p_pairing_front_door_rejects_removed_scope_flags() {
     for argv in [
@@ -601,10 +594,8 @@ fn p2p_invite_template_accepts_known_templates() {
 
 #[test]
 fn p2p_join_template_is_optional_override() {
-    // Without --template, field is None (uses token's template).
     let no_override = parse_p2p_join(&[]);
     assert_eq!(no_override.template, None);
-    // With --template, field is Some.
     let with_override = parse_p2p_join(&["--template", "backup"]);
     assert_eq!(with_override.template.as_deref(), Some("backup"));
 }
@@ -644,11 +635,6 @@ fn every_deprecated_path_warns() {
             "warning did not mention replacement for {argv:?}: {warning}"
         );
 
-        // Some deprecated paths are still valid clap commands that merely
-        // warn (renamed, both spellings parse). Others were *removed* from
-        // clap entirely — the deprecation entry is the only guidance the
-        // user gets before clap rejects the unknown subcommand. We assert
-        // parseability only for the former group.
         if deprecated_path_still_parses(path) {
             Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
         } else {
@@ -660,8 +646,6 @@ fn every_deprecated_path_warns() {
     }
 }
 
-/// Whether a deprecated path is still a parseable clap command (renamed,
-/// not removed). Removed paths only carry a deprecation warning.
 fn deprecated_path_still_parses(path: &[&str]) -> bool {
     !matches!(path, ["p2p", "pair"] | ["p2p", "unpair"])
 }
@@ -670,8 +654,6 @@ fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
     match path {
         ["config", "task"] => vec!["list".to_string()],
         ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
-        // Removed paths: args are irrelevant (clap rejects the subcommand),
-        // but provide harmless placeholders so the warning path is exercised.
         ["p2p", "pair"] | ["p2p", "unpair"] => {
             vec!["--peer".to_string(), "peer-1".to_string()]
         }

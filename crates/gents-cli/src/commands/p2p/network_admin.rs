@@ -1,5 +1,3 @@
-//! Admin-signed `p2p network create|grant|revoke` control-plane writes.
-
 use std::io::{self, Write};
 use std::path::Path;
 

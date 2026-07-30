@@ -1,17 +1,8 @@
-//! Pure projection functions over runtime liveness + AgentToolCall rows.
-//!
-//! The Tauri command body lives in `bridge::tauri_commands::operations` and
-//! is responsible for I/O (DefraDB query + in-process executor snapshot);
-//! this module is pure for testability.
-
 use super::super::types::{
     ActiveToolCallView, BackgroundedToolView, NativeExecutorStatusView, RuntimeLivenessView,
     StuckWorkDiagnosticView,
 };
 
-/// Internal shape representing one row pulled from the `AgentToolCall`
-/// collection in DefraDB. The Tauri command parses GraphQL JSON into this
-/// type before passing to the projection functions.
 #[derive(Debug, Clone)]
 pub struct ToolCallRow {
     pub request_id: String,

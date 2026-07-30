@@ -68,15 +68,8 @@ impl ClientCore {
         ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
 
-        // Open the EventName::Update subscription BEFORE reading the
-        // bootstrap snapshot. Writes that land between subscribe and the
-        // snapshot read are buffered in the bounded mpsc and drained by
-        // the observer on first tick. merge_snapshot is idempotent so
-        // duplicates are harmless.
         let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
 
-        // Create the selection channel BEFORE the observer is spawned so the
-        // observer can use the receiver for scoped drop-recovery reloads.
         let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
 
         let initial_snapshot = {
@@ -171,10 +164,6 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
 }
 
 async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    // Run the exact same migration set as the daemon. Enumerating migrations
-    // here previously omitted the conversation `@immutable` scope keys and the
-    // PeerRegistry collection, so upgraded desktop databases silently lost
-    // filtered replication. The shared entry point keeps the two hosts in lockstep.
     gents::migration::ensure_all_runtime_migrations(node)
         .await
         .context("ensure desktop runtime schema migrations")?;

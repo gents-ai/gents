@@ -1,11 +1,3 @@
-//! End-to-end test for the log-rate ceiling (#588): a flooding callsite is
-//! capped and the suppressed count is reported via a summary event.
-//!
-//! This lives in its own integration binary because suppression summaries
-//! are emitted through the process-global dispatcher (see
-//! `gents::log_rate`), so the test must own `set_global_default` —
-//! which cannot be done inside the shared `--lib` test binary.
-
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -16,7 +8,6 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
 
-/// Controllable clock: a fixed base instant plus a test-adjustable offset.
 static CLOCK_BASE: OnceLock<Instant> = OnceLock::new();
 static CLOCK_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -75,9 +66,6 @@ fn filter_caps_a_flood_and_reports_suppression_on_rollover() {
     );
     tracing::subscriber::set_global_default(subscriber).expect("sole global subscriber");
 
-    // 1000 events in one window, then one more from the same callsite in a
-    // fresh window: that first admitted event triggers the suppression
-    // summary (emitted asynchronously from the summariser thread).
     for i in 0..=1_000 {
         if i == 1_000 {
             CLOCK_OFFSET_MS.fetch_add(61_000, Ordering::SeqCst);
@@ -99,7 +87,6 @@ fn filter_caps_a_flood_and_reports_suppression_on_rollover() {
         "post-rollover event should be admitted"
     );
 
-    // The summary arrives asynchronously; wait for it, bounded.
     let deadline = Instant::now() + Duration::from_secs(10);
     let summary_seen = loop {
         if output

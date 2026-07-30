@@ -1,43 +1,17 @@
-// Pure-Rust classifier that maps a cancelled tool call or response onto one of
-// four `CancelCause` variants with an evidence trail.
-//
-// Derivation precedence (operator-surfaces spec §470-491):
-//  1. `deadline`   — tool lifecycle_state == "timedOut" (or timed_out flag).
-//  2. `interrupted` — request has caused_by_parent_request_id AND tool's
-//                     cancel_policy == "cascade" (parent cascade wins over
-//                     user-cancel evidence on the child).
-//  3. `userCancelled` — root request has interrupt_requested_at and no parent.
-//  4. `unknown`    — cancelled terminal row without attributable evidence;
-//                     evidence field enumerates what was checked and found empty.
-//
-// Inner doc-comments (//!) intentionally avoided — this module used to be
-// `include!`-ed into bridge_runner and inner docs at the top of an include!
-// body trip E0753. The runner now depends on this crate directly; keep the
-// plain `//` style for continuity.
-// No IO. All inputs are plain Rust structs.
-
 use crate::types::DerivedCancelCauseView;
-
-// ---------------------------------------------------------------------------
-// Evidence input structs
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestEvidence {
-    /// Carried for Debug-trace evidence (the unknown-cause case logs the
-    /// full evidence struct), not read by derivation itself.
     #[allow(dead_code)]
     pub request_id: String,
     pub interrupt_requested_at: Option<String>,
     pub caused_by_parent_request_id: Option<String>,
-    /// Carried for Debug-trace evidence; derivation reads the tool-side flag.
     #[allow(dead_code)]
     pub deadline_breached: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallEvidence {
-    /// Carried for Debug-trace evidence, not read by derivation itself.
     #[allow(dead_code)]
     pub tool_call_id: String,
     pub lifecycle_state: Option<String>,
@@ -50,17 +24,10 @@ pub struct ToolCallEvidence {
 #[derive(Debug, Clone, Default)]
 pub struct ResponseEvidence {
     pub interrupted_at: Option<String>,
-    /// Carried for Debug-trace evidence, not read by derivation itself.
     #[allow(dead_code)]
     pub completed_at: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/// Returns `true` when the lifecycle_state string represents a cancelled
-/// terminal — i.e., one that warrants cause derivation.
 fn is_cancelled_terminal(state: &Option<String>) -> bool {
     matches!(
         state.as_deref(),
@@ -68,14 +35,6 @@ fn is_cancelled_terminal(state: &Option<String>) -> bool {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Public derivation functions
-// ---------------------------------------------------------------------------
-
-/// Classify why a tool call ended in a cancelled terminal state.
-///
-/// Returns `None` when the tool call is not in a cancelled terminal state
-/// (e.g., it completed normally).
 pub fn derive_tool_call_cause(
     req: &RequestEvidence,
     tool: &ToolCallEvidence,
@@ -84,7 +43,6 @@ pub fn derive_tool_call_cause(
         return None;
     }
 
-    // ---- Precedence 1: deadline ----
     if tool.timed_out || tool.lifecycle_state.as_deref() == Some("timedOut") {
         return Some(DerivedCancelCauseView {
             cause: "deadline".into(),
@@ -105,7 +63,6 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    // ---- Precedence 2: interrupted (parent cascade wins over user-cancel on child) ----
     if req.caused_by_parent_request_id.is_some() && tool.cancel_policy.as_deref() == Some("cascade")
     {
         let parent = req.caused_by_parent_request_id.clone().unwrap_or_default();
@@ -121,7 +78,6 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    // ---- Precedence 3: userCancelled ----
     if req.interrupt_requested_at.is_some() && req.caused_by_parent_request_id.is_none() {
         let at = req.interrupt_requested_at.clone();
         return Some(DerivedCancelCauseView {
@@ -139,7 +95,6 @@ pub fn derive_tool_call_cause(
         });
     }
 
-    // ---- Precedence 4: unknown — enumerate all checks ----
     Some(DerivedCancelCauseView {
         cause: "unknown".into(),
         source: "unresolved".into(),
@@ -154,10 +109,6 @@ pub fn derive_tool_call_cause(
     })
 }
 
-/// Classify why a streaming response was interrupted.
-///
-/// Returns `Some` only when `resp.interrupted_at` is present — meaning the
-/// response stream was cut short. Returns `None` for completed responses.
 pub fn derive_response_cause(
     _req: &RequestEvidence,
     resp: &ResponseEvidence,

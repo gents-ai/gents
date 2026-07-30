@@ -5,10 +5,6 @@ export type { P2PHealthView as P2PHealth } from "../generated/P2PHealthView.js";
 export type { SavedPeerView as SavedPeer } from "../generated/SavedPeerView.js";
 export type { BearerPairingRequest, PeerAddRequest } from "./requests.js";
 
-/**
- * The local-runtime initializer comes from gents-desktop-core rather than the
- * bridge view-model layer. Its legacy snake_case normalization remains in api.ts.
- */
 export type InitSummary = {
   status: string;
   source: string;

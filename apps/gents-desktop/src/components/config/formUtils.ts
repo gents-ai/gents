@@ -65,5 +65,4 @@ export function isOptionalFloat(
 }
 
 export function ignoreHandledActionError(_error: unknown) {
-  // Shell-level action handlers set the shared error banner before rethrowing.
 }

@@ -1,13 +1,3 @@
-//! Bridge-side consumer for the Lean `mcp_health_cases` contract.
-//!
-//! For every Lean transition that produces a surviving service model, this
-//! test constructs the `ToolServiceHealthStateRow` the agent's
-//! `health_checker` would persist for that next-state and verifies that the
-//! desktop bridge's `MCPServiceHealthView` round-trips the K-model bookkeeping
-//! (status / failure_count / k_max) without lossy projection — the panel
-//! depends on the full state survival to render the K-model badge and the
-//! evicted-vs-reconnecting distinction.
-
 #[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
@@ -64,11 +54,6 @@ fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealt
     }
 }
 
-/// The view conversion lives in `crate::commands::mcp_health::view_from_row`
-/// but that function is private. We re-implement the (one-line) field-copy
-/// projection here so the test can assert against `MCPServiceHealthView`
-/// directly without exposing internal helpers; the actual production
-/// projection is exercised by the live-bridge integration tests.
 fn view_from_row(row: &ToolServiceHealthStateRow) -> MCPServiceHealthView {
     MCPServiceHealthView {
         service_id: row.service_id.clone(),
@@ -101,9 +86,6 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
     for case in cases {
         let (Some(next_state), Some(next_count)) = (case.next_state.as_deref(), case.next_count)
         else {
-            // Lean's `registryAbsent` event removes the service from the
-            // state machine; the bridge view collection naturally drops
-            // these via DefraDB delete — no view-side projection to verify.
             continue;
         };
 
@@ -129,11 +111,6 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
             "view k_max should mirror the row's k_max",
         );
 
-        // `rust_projection` is the public HealthStatus collapse
-        // (healthy | stale | unreachable). The view's `status` is finer-grained
-        // — evicted and reconnecting both project to unreachable but the view
-        // must keep them distinct so the operator UI can render back-off vs
-        // in-flight retry.
         if let Some(projection) = case.rust_projection.as_deref() {
             let view_projection = match view.status.as_deref().unwrap_or("") {
                 "healthy" => "healthy",

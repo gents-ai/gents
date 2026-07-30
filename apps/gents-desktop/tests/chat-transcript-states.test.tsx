@@ -129,7 +129,6 @@ describe("ChatTranscriptPanel states", () => {
   });
 
   it("follows the transcript with instant (not smooth) scrolling on a fresh send", async () => {
-    // tests/setup.ts installs a no-op on HTMLElement.prototype — spy there.
     const scrollSpy = vi
       .spyOn(HTMLElement.prototype, "scrollIntoView")
       .mockImplementation(() => {});

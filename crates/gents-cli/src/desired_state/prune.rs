@@ -1,45 +1,3 @@
-//! Production bridge from the CLI desired-state manifest to the proven
-//! `apply_model` so that config-apply `--prune` deletes live-only documents
-//! through the **same** delete-safety logic the Lean `ApplyReconcile` model
-//! pins (`t_delete_safety` / `delete_safe`), rather than an ad-hoc path.
-//!
-//! We build an `apply_model::LiveState` whose per-document `refs` capture the
-//! structural cross-document references declared by each config doc, then call
-//! `apply_model::diff_prune`. Its `.delete` is exactly the live-only set that
-//! no live document references — the proven-safe deletes.
-//!
-//! ## Reference map (REVIEW THIS — it is the safety boundary)
-//! A doc is protected from pruning while any live doc references it. We take a
-//! deliberately **conservative superset**: any FK that names another config
-//! doc counts, regardless of apply-order rank. `delete_safe` is monotone in
-//! refs, so over-inclusion can only ever *refuse* an otherwise-safe delete (the
-//! safe direction) — it can never permit deleting a referenced doc.
-//!
-//! | referrer | field(s) | referee |
-//! |---|---|---|
-//! | AgentPrincipal | `default_behavior_id` | AgentBehavior |
-//! | AgentBehavior | `backend_id` | InferenceBackend |
-//! | AgentBehavior | `inference_profile_id` | InferenceProfile |
-//! | AgentBehavior | `tool_selection_id` | ToolSelection |
-//! | AgentBehavior | `skill_refs[]` | Skill |
-//! | Task | `behavior_id` | AgentBehavior |
-//! | Schedule | `task_id` | Task |
-//! | EventTrigger | `task_id` | Task |
-//! | ToolSelection | `allowed_mcp_service_ids[]` | ToolServiceRegistry |
-//! | ProjectionAcpBinding | `behavior_id` | AgentBehavior |
-//!
-//! ### Open questions for review
-//! - **Schedule → Task is same-rank** (both apply_order 2), so it is NOT a
-//!   `WellFormed` strictly-lower-rank reference in the Lean model. We include it
-//!   anyway for runtime safety (don't delete a task a schedule still fires).
-//!   `delete_safe` doesn't depend on rank, so this is sound at runtime; it just
-//!   means a same-rank protection lives outside the proven WellFormed invariant.
-//! - **`Skill.tool_refs[]` is EXCLUDED**: its entries are tool identifiers whose
-//!   correspondence to a config doc id is not established here. If they can name
-//!   a ToolServiceRegistry, add that edge.
-//! - `agent_did` ownership fields are excluded (they name the principal, which
-//!   is the apply root, not a prunable lower-rank dependency).
-
 use std::collections::BTreeMap;
 
 use gents::apply_model::{self, DesiredFields, DocRef, LiveState, Manifest};
@@ -54,8 +12,6 @@ fn doc(collection: Collection, id: &str) -> DocRef {
     }
 }
 
-/// Build the live `apply_model::LiveState`, projecting structural references
-/// (see module docs) into each doc's `refs` so `delete_safe` is faithful.
 fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
     let mut desired: BTreeMap<DocRef, DesiredFields> = BTreeMap::new();
 
@@ -134,7 +90,6 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
         );
     }
 
-    // Leaf dependencies (no outgoing structural references for prune safety).
     for s in &m.skills {
         desired.insert(
             doc(Collection::Skill, &s.skill_id),
@@ -166,9 +121,6 @@ fn live_state_from_manifest(m: &DesiredStateManifest) -> LiveState {
     }
 }
 
-/// The desired manifest as an `apply_model::Manifest`. Only DocRef identity
-/// matters for delete selection (a live doc is prunable iff absent here), so
-/// payloads are opaque.
 fn manifest_from_desired(m: &DesiredStateManifest) -> Manifest {
     let mut docs: BTreeMap<DocRef, DesiredFields> = BTreeMap::new();
     docs.insert(
@@ -235,10 +187,6 @@ fn manifest_from_desired(m: &DesiredStateManifest) -> Manifest {
     Manifest { docs }
 }
 
-/// Proven-safe live-only deletes for pruning, in `apply_model` delete order
-/// (reverse apply-order). Routes through `apply_model::diff_prune`, so the
-/// selection is identical to what the Lean model and the apply conformance
-/// fence prove safe.
 pub(crate) fn prune_safe_deletes(
     desired: &DesiredStateManifest,
     live: &DesiredStateManifest,

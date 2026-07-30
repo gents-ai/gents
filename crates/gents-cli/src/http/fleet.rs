@@ -1,8 +1,3 @@
-//! `/fleet` surfacing: a per-`agent_did` reshape of data already loaded for
-//! `/metrics` and `/fleet/slots` — each agent's `process_state`, active
-//! (processing) and pending request counts, and `last_seen`
-//! (`AgentRuntime.updated_at`). No new data; just a fleet-oriented projection.
-
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
@@ -84,7 +79,6 @@ fn decode_fleet_response(response: Value) -> Result<FleetEnvelope> {
 }
 
 fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) -> FleetSnapshot {
-    // (active, pending) per agent_did.
     let mut counts = BTreeMap::<String, (i64, i64)>::new();
     for request in &envelope.requests {
         let agent_did = request

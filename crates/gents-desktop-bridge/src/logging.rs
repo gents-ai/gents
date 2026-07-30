@@ -5,17 +5,10 @@ use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use gents_desktop_core::client::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
-/// Per-callsite log-rate ceiling: no code path may flood the desktop log
-/// file or the host journal, however hot its failure loop (#588).
 fn log_rate_ceiling() -> RateLimitFilter {
     RateLimitFilter::new(RateLimitConfig::default())
 }
 
-/// Legacy convenience: discover log path via DesktopPaths (Gents defaults).
-///
-/// **Do not use from multi-home hosts** (fixture, Amygdala) — it writes into
-/// Gents' default data dir. Prefer [`init_tracing_with_config`] with an
-/// explicit path under the host-resolved home.
 #[deprecated(note = "pass TracingConfig with an explicit log_path via init_tracing_with_config")]
 pub fn init_tracing() {
     let log_path = DesktopPaths::discover()
@@ -28,7 +21,6 @@ pub fn init_tracing() {
     });
 }
 
-/// Initialize tracing with an explicit log path (plugin host contract).
 pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
     let env_filter = match config.filter {
         Some(ref filter) => EnvFilter::try_new(filter).unwrap_or_else(|_| default_env_filter()),

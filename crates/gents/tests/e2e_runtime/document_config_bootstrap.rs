@@ -116,8 +116,6 @@ async fn load_inference_profile_reads_document_fields() {
     assert_eq!(profile.context_window, Some(32768));
     assert_eq!(profile.max_output_tokens, Some(4096));
     assert_eq!(profile.temperature, Some(0.2));
-    // #649: sampling knobs beyond temperature must survive the document
-    // round-trip — before this they could not even be stored.
     assert_eq!(profile.top_p, Some(0.95));
     assert_eq!(profile.top_k, Some(40));
     assert_eq!(profile.min_p, Some(0.05));
@@ -128,13 +126,6 @@ async fn load_inference_profile_reads_document_fields() {
     assert_eq!(profile.deadline_duration_secs, Some(120));
 }
 
-/// #649 end to end: a profile's pinned sampling knobs must reach the behavior's
-/// `SamplingConfig`, and from there the provider request body.
-///
-/// This is the hop that was broken: `behavior_config_from_documents` hardcoded
-/// `top_p: None, top_k: None`, so a profile could not express them at all and
-/// every agent silently inherited whatever the served checkpoint's
-/// `generation_config.json` happened to bake in.
 #[tokio::test]
 async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
     let db = test_db("profile-sampling-knobs").await;

@@ -458,7 +458,6 @@ async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
 }
 
-// ===== Absorbed standalone conformance binaries (one binary, mirrors Proofs/) =====
 #[path = "conformance/apply_reconcile.rs"]
 mod apply_reconcile;
 #[path = "conformance/docs.rs"]

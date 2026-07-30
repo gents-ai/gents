@@ -1,15 +1,3 @@
-//! SelfConfig conformance home: pin the production patch layer
-//! (`gents::config_client::patch`) against the Lean `SelfConfig` model.
-//!
-//! Two fences:
-//! - the per-target field tables (all/writable/protected, unique key,
-//!   category) must equal the Lean contract tables, and the Lean `all_fields`
-//!   must equal the bundled SDL field lists — a schema field added without a
-//!   self-config classification fails here;
-//! - the generated patch-merge witness cases must replay identically through
-//!   the production merge (identity immutability, field containment,
-//!   admissibility, transactional accept/reject shape, no-lockout gate).
-
 use std::collections::BTreeMap;
 
 use gents::config_client::patch::{
@@ -22,7 +10,6 @@ use crate::lean_vocab_test::{
     lean_self_config_cases, lean_self_config_field_tables, LeanSelfConfigCase,
 };
 
-/// Field names of a bundled SDL type declaration, in declaration order.
 fn sdl_field_names(sdl: &str) -> Vec<String> {
     sdl.lines()
         .filter_map(|line| {
@@ -164,8 +151,6 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
 
         let merged = apply_patch(target, &stored, &patch);
 
-        // Mirror of the Lean `step`: validation is an oracle flag; the
-        // no-lockout guard observes the merged gate field.
         let guard_ok = !case.guarded
             || merged.get("enable_self_config") == Some(&Value::String("true".to_string()));
         let accepted = admissible && case.validates && guard_ok;

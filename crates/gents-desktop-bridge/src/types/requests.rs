@@ -1,8 +1,6 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-/// Local-runtime init request. Filesystem paths are **not** accepted from the
-/// webview — they come from `BridgeConfig` resolved at plugin init.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopInitRequest {
@@ -23,16 +21,12 @@ pub struct PeerAddRequest {
     pub default_behavior_id: Option<String>,
 }
 
-/// Fetch peer runtime status by **saved peer id** only — read grants never
-/// accept arbitrary addresses (SSRF).
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerStatusFetchRequest {
     pub peer_id: String,
 }
 
-/// Fleet-admin probe of an arbitrary address before the peer is saved.
-/// Lives only in `fleet-admin` — not a read grant.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PeerProbeRequest {
@@ -226,21 +220,12 @@ pub struct ToolSelectionSaveRequest {
     pub enable_context_budget: Option<bool>,
     #[serde(default)]
     pub enable_defra_query: Option<bool>,
-    /// Editable query allowlist. `None` = field absent → preserve the stored
-    /// value (so a save that doesn't touch it can't wipe it); `Some(list)` sets
-    /// it (empty list clears). This is the field whose silent revert was the SP2
-    /// data-loss bug.
     #[serde(default)]
     pub defra_query_collections: Option<Vec<String>>,
     #[serde(default)]
     pub subagent_default_await_mode: Option<String>,
     #[serde(default)]
     pub orchestration_enabled: Option<bool>,
-    // NOTE: `write_tools` and `tool_policy_version` are intentionally NOT in the
-    // save request. write_tools is apply-managed and editing raw WriteToolDecl
-    // JSON through the UI would risk bricking the fail-closed runtime loader;
-    // tool_policy_version is backfill-owned. Both are preserved from the loaded
-    // row (the read query now fetches them), never set from the UI.
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -334,16 +319,12 @@ pub struct EventTriggerSaveRequest {
     pub concurrency: Option<String>,
 }
 
-// --- operator-surfaces request params (issue #302) ---
-
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
-    /// Accepted from the client but not yet consumed: snapshot filtering by
-    /// root request / terminal inclusion is staged (operator-surfaces spec).
     #[allow(dead_code)]
     pub root_request_id: Option<String>,
     #[serde(default)]
@@ -395,8 +376,6 @@ pub struct DesktopInterruptRequest {
     pub request_id: String,
     #[serde(default)]
     pub agent_did: Option<String>,
-    /// Currently always `"userCancelled"` per spec line 907. Kept as a String
-    /// so future cause variants don't require an enum migration here.
     pub cause: String,
     pub cascade: bool,
     #[serde(default)]

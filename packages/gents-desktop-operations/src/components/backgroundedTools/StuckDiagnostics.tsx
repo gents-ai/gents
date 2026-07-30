@@ -42,7 +42,6 @@ export function StuckDiagnostics({
   );
 }
 
-/** The bridge's diagnosis, in operator language. */
 function diagnosticSentence(diagnostic: StuckWorkDiagnosticView): string {
   const tool = diagnostic.toolName ?? "a tool";
   switch (diagnostic.reason) {

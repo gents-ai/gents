@@ -1,20 +1,13 @@
 import type { BehaviorView, SkillView } from "@source-inc/gents-desktop-client";
 
-/// Composer support for the runtime's slash-skill convention: leading lines
-/// of a prompt shaped like `/skill-id` are consumed as skill selection
-/// (gents skills::prompt_slash_skill_selection). This module only
-/// decides when to SUGGEST — the runtime remains the parser of record.
 
 export type SlashSkillSuggestion = {
-  /** The partial token typed after "/" on the caret line. */
   query: string;
-  /** Caret line's start/end offsets in the draft, for replacement. */
   lineStart: number;
   lineEnd: number;
   items: SkillView[];
 };
 
-/** Mirror the runtime's per-behavior skill candidate resolution. */
 export function effectiveBehaviorSkills(
   skills: SkillView[],
   behavior: BehaviorView | null | undefined,
@@ -47,11 +40,6 @@ function lineBoundsAt(
 
 const SELECTOR_LINE = /^\s*\/[\w.-]*\s*$/;
 
-/**
- * Suggest skills when the caret sits on a leading selector line: every line
- * above must be blank or itself a selector (mirroring the runtime, which
- * only honors the leading block), and the caret line must be `/partial`.
- */
 export function slashSkillSuggestion(
   draft: string,
   caret: number,
@@ -85,7 +73,6 @@ export function slashSkillSuggestion(
     : null;
 }
 
-/** Replace the caret line with the chosen selector, keeping the body below. */
 export function applySkillSelection(
   draft: string,
   suggestion: SlashSkillSuggestion,

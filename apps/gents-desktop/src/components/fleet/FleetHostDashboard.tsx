@@ -30,12 +30,6 @@ export type FleetHostDashboardProps = Omit<
   onCancelCodexLogin: () => Promise<unknown>;
 };
 
-/**
- * Gents-specific fleet composition.
- *
- * Branding, theme controls, and runtime-admin capabilities stay in the host;
- * reusable discovery, pairing, health, and peer management live in the package.
- */
 export function FleetHostDashboard({
   onInitLocalRuntime,
   onSaveBackendConfig,

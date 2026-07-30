@@ -74,7 +74,6 @@ fn deadline_when_tool_lifecycle_is_timedout() {
 
 #[test]
 fn deadline_wins_over_interrupted_when_both_signals_present() {
-    // Per spec precedence rule 1: deadline check runs FIRST.
     let req = RequestEvidence {
         request_id: "req_child".into(),
         caused_by_parent_request_id: Some("req_parent".into()),
@@ -93,8 +92,6 @@ fn deadline_wins_over_interrupted_when_both_signals_present() {
 
 #[test]
 fn interrupted_wins_over_user_cancelled_when_both_signals_present_on_child() {
-    // Per spec precedence rule 2: parent cascade evidence wins over user-cancel
-    // evidence on the *child*.
     let req = RequestEvidence {
         request_id: "req_child".into(),
         interrupt_requested_at: Some("2026-05-20T10:32:14Z".into()),
@@ -121,7 +118,6 @@ fn unknown_when_cancelled_but_no_evidence() {
     let cause = derive_tool_call_cause(&req_default(), &tool).expect("derives");
     assert_eq!(cause.cause, "unknown");
     assert_eq!(cause.source, "unresolved");
-    // Evidence should enumerate what was checked.
     assert!(cause
         .evidence
         .iter()
@@ -145,7 +141,6 @@ fn none_for_non_cancelled_tool_calls() {
 
 #[test]
 fn none_for_failed_tool_calls() {
-    // "failed" is an error terminal — not a cancellation. Must return None.
     let tool = ToolCallEvidence {
         tool_call_id: "tc_8".into(),
         lifecycle_state: Some("failed".into()),

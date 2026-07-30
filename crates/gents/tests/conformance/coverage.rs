@@ -942,7 +942,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert(("follow_up_hook".to_string(), hook.clone()));
     }
 
-    // Keep this mirrored with the category strings in CoverageLedger.lean.
     let valid_categories = [
         "vocabulary",
         "state_machine",

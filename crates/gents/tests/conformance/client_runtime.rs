@@ -154,8 +154,6 @@ fn generated_runtime_reconcile_cases_pin_generation_and_admission_contract() {
         apply_failed.post_active_generation
     );
 
-    // Completeness pin: every emitted runtime-reconcile case is asserted
-    // above; a new Lean case fails here until this consumer covers it.
     let covered = [
         "publish_changed_snapshot",
         "router_observe_published_generation",

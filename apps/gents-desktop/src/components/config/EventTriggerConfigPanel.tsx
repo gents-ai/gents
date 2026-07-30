@@ -128,7 +128,6 @@ export function EventTriggerConfigEditor({
       });
       onDeleted();
     } catch {
-      // Surfaced by the shell error banner; the editor stays put.
     }
   }
   const [triggerId, setTriggerId] = useState("");
@@ -151,7 +150,6 @@ export function EventTriggerConfigEditor({
     setEnabled(b.enabled);
     setConcurrency(b.concurrency);
     setSaveError(null);
-    // Id-keyed: background snapshot refreshes must not wipe in-progress edits.
   }, [eventTrigger?.triggerId, selectedTask?.taskId]);
 
   async function submitEventTrigger(event: FormEvent) {
@@ -343,7 +341,6 @@ export function EventTriggerConfigEditor({
   );
 }
 
-/** View→form hydration, shared by the reset effect and dirty comparison. */
 function eventTriggerFormValues(
   eventTrigger: EventTriggerView | null,
   fallbackTaskId: string | null,

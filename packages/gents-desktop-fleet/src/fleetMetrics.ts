@@ -16,7 +16,6 @@ export type ToolIcon = {
 export function deploymentStatus(deployment: DeploymentView): {
   title: string;
   tone: StatusTone;
-  /** Visible one-word status — health must not be a hover-only dot. */
   label: string;
   lastError: string | null;
 } {
@@ -80,8 +79,6 @@ export function toolCeilingIcons(
         );
   const source = activeSelections.length ? activeSelections : selections;
   const icons: ToolIcon[] = [];
-  // Only claim a server ceiling when the caller could actually know it —
-  // init.json is a fact about the local machine, not remote peers.
   const ceilingSuffix = serverCeiling
     ? ` Server ceiling: ${displayToolCeiling(serverCeiling)}.`
     : "";
@@ -197,12 +194,6 @@ function uniqueValues(values: Array<string | null | undefined>) {
   ).sort();
 }
 
-/**
- * The init.json tool ceiling describes THIS machine's runtime — only
- * deployments sourced from the local runtime may claim it in their tooltip.
- * "server-status" is NOT local: the peer directory stamps any graphql-bearing
- * peer with it, including remote agents added by endpoint.
- */
 export function isLocalRuntimeSource(source?: string | null): boolean {
   return source === "local-standard";
 }

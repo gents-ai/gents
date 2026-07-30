@@ -1,5 +1,3 @@
-//! R6 background-tool recovery tests.
-
 use gents::tool_call_lifecycle::ToolCallLifecycle;
 use serde::Deserialize;
 

@@ -1,10 +1,3 @@
-//! `p2p network` subcommands: register, list, rm.
-//!
-//! `p2p network` is a top-level declarative noun (alongside `p2p pairings`).
-//! It targets the `PeerRegistry` collection, which is the foundation of the
-//! service-discovery layer described in
-//! `docs/superpowers/specs/2026-06-13-peer-registry-service-discovery-design.md` (removed from the tree; see git history).
-
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
@@ -22,10 +15,6 @@ use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
 use super::output::load_live_http_p2p_status;
-
-// ---------------------------------------------------------------------------
-// Row types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerRegistryRow {
@@ -45,16 +34,11 @@ struct PeerRegistryRow {
     paired: bool,
 }
 
-// ---------------------------------------------------------------------------
-// p2p network register
-// ---------------------------------------------------------------------------
-
 pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Resolve peer_id + addresses from the live runtime.
     let p2p_status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
     let peer_id = p2p_status
         .get("p2p_peer_id")
@@ -84,12 +68,9 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         })
         .unwrap_or_default();
 
-    // Resolve agent DID from home identity or init config.
     let agent_did = crate::resolve_agent_did(args.home.as_deref(), None)
         .context("resolving local agent DID")?;
 
-    // Validate offered templates against the built-in catalog; an empty/unknown
-    // set falls back to the default offer (conversation + agent-config).
     let templates = validate_offered_templates(args.templates.iter().map(String::as_str));
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
     let display_name = args
@@ -110,8 +91,6 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         invited_by: None,
     };
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    // Full variant: the operator explicitly supplied display_name and profiles,
-    // so the update branch must write them (overwriting any stale heartbeat value).
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Full);
     access
         .execute(&mutation)
@@ -138,20 +117,14 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// p2p network list
-// ---------------------------------------------------------------------------
-
 pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Load PeerRegistry rows.
     let registry_rows = graphql_rows(&access, "PeerRegistry", registry_list_query())
         .await
         .context("loading PeerRegistry rows")?;
 
-    // Load the set of peer_ids that have a PeerPairingDesired row.
     let desired_rows = graphql_rows(
         &access,
         "PeerPairingDesired",
@@ -189,16 +162,11 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// p2p network rm
-// ---------------------------------------------------------------------------
-
 pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Resolve peer_id for this node.
     let p2p_status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
     let peer_id = p2p_status
         .get("p2p_peer_id")
@@ -231,10 +199,6 @@ pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
     }))?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// GraphQL helpers
-// ---------------------------------------------------------------------------
 
 fn registry_list_query() -> &'static str {
     r#"query {
@@ -270,10 +234,6 @@ fn delete_registry_mutation(peer_id: &str) -> String {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Parsing helpers
-// ---------------------------------------------------------------------------
-
 fn parse_registry_rows(
     rows: Vec<Value>,
     paired_peers: &std::collections::BTreeSet<String>,
@@ -292,8 +252,6 @@ fn parse_registry_rows(
             let status = optional_string(&row, "status");
             let updated_at = optional_string(&row, "updated_at");
 
-            // Liveness: status=="online" AND heartbeat within REGISTRY_STALE_AFTER.
-            // Mirrors DiscoveredEntry::from_row in discovery.rs.
             let status_online = status.as_deref() == Some("online");
             let fresh = updated_at
                 .as_deref()
@@ -363,10 +321,6 @@ fn count_deleted(response: &Value, field_name: &str) -> usize {
         .unwrap_or(0)
 }
 
-// ---------------------------------------------------------------------------
-// Table rendering
-// ---------------------------------------------------------------------------
-
 fn print_network_table(rows: &[PeerRegistryRow]) -> Result<()> {
     let headers = [
         "PEER".to_string(),
@@ -429,18 +383,12 @@ fn print_table_row<const N: usize>(
     writeln!(writer, "{line}").context("writing p2p network table row")
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::args::Cli;
     use clap::Parser;
     use serde_json::json;
-
-    // ---- parse tests ----
 
     #[test]
     fn p2p_network_list_table_parses() {
@@ -542,7 +490,7 @@ mod tests {
             } => match command {
                 crate::cli::args::P2pNetworkCommand::Register(args) => {
                     assert_eq!(args.display_name.as_deref(), Some("x"));
-                    assert!(args.network_id.is_none()); // defaults to "default" at runtime
+                    assert!(args.network_id.is_none());
                 }
                 _ => panic!("expected network register"),
             },
@@ -621,8 +569,6 @@ mod tests {
         }
     }
 
-    // ---- row parsing / liveness tests ----
-
     fn make_row(
         peer_id: &str,
         status: Option<&str>,
@@ -649,7 +595,6 @@ mod tests {
     #[test]
     fn fresh_online_row_is_online() {
         let now = now_rfc3339();
-        // 10 seconds ago — well within REGISTRY_STALE_AFTER (90s)
         let rows = vec![make_row(
             "peer-a",
             Some("online"),
@@ -663,7 +608,6 @@ mod tests {
     #[test]
     fn stale_online_row_is_offline() {
         let now = now_rfc3339();
-        // 200 seconds ago — beyond REGISTRY_STALE_AFTER (90s)
         let rows = vec![make_row(
             "peer-a",
             Some("online"),
@@ -737,8 +681,6 @@ mod tests {
 
     #[test]
     fn registry_upsert_mutation_fields_are_correct() {
-        // Verify that registry_upsert_mutation (from registry.rs) is called
-        // with the correct fields when called from register logic.
         let entry = RegistryEntry {
             peer_id: "test-peer-1".to_string(),
             agent_did: "did:key:test".to_string(),

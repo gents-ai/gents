@@ -1,5 +1,3 @@
-//! Integration tests for R4c list_background_tools.
-
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;

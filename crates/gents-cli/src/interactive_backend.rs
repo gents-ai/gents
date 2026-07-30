@@ -1,17 +1,3 @@
-//! Interactive first-run backend picker for `gents init`.
-//!
-//! When `init` runs in a terminal with no backend selection at all — no
-//! `--inference-url`/`--backend-preset`/`--api-key`/`--model-name` and no
-//! `INFERENCE_ENDPOINT` — it falls through to this picker instead of silently
-//! defaulting to a local llama-server that may not be running. Non-interactive
-//! runs (pipes, CI, `--identity-only`) skip it entirely and keep the historical
-//! default, so every existing script and test is unaffected.
-//!
-//! Prompts are written to stderr so `init`'s machine-readable JSON on stdout
-//! stays clean. The probe/echo logic mirrors the `demo` first-run picker
-//! (`commands/demo/backend.rs`); a future change should collapse the two onto
-//! this shared module (see docs/onboarding-improvements.md #1).
-
 use std::io::{IsTerminal, Write as _};
 use std::time::Duration;
 
@@ -24,7 +10,6 @@ const OPENAI_DEFAULT_MODEL: &str = "gpt-5.4-mini";
 const OLLAMA_DEFAULT_URL: &str = "http://127.0.0.1:11434/v1";
 const LOCAL_PROBE_URLS: [&str; 2] = ["http://127.0.0.1:8080/v1", "http://127.0.0.1:11434/v1"];
 
-/// The backend fields an interactive pick resolves onto `InitArgs`.
 struct BackendSelection {
     inference_url: Option<String>,
     backend_preset: Option<BackendPresetArg>,
@@ -42,11 +27,6 @@ impl BackendSelection {
     }
 }
 
-/// Interactively resolve a backend for `init` when nothing was specified.
-///
-/// A no-op that returns `Ok(())` when a backend signal was already given, when
-/// stdin/stderr is not a terminal, or under `--identity-only`. Otherwise it
-/// prompts and writes the chosen backend onto `args` before normal resolution.
 pub(crate) async fn resolve_backend_interactively(args: &mut InitArgs) -> Result<()> {
     if !should_prompt(args) {
         return Ok(());
@@ -65,8 +45,6 @@ fn should_prompt(args: &InitArgs) -> bool {
         && !inference_endpoint_env_set()
 }
 
-/// True when the invocation already names a backend, so prompting would only
-/// override an explicit choice.
 fn has_backend_arg(args: &InitArgs) -> bool {
     args.resolved_inference_endpoint().is_some()
         || args.backend_preset.is_some()
@@ -155,9 +133,6 @@ async fn pick_backend() -> Result<BackendSelection> {
             })
         }
         "4" => {
-            // The credential is stored against the agent DID and node that only
-            // exist after `init` completes, so we seed the backend here and hand
-            // off to `codex-login` (also surfaced in the init next_steps).
             eprintln!(
                 "\nAfter init, run `gents codex-login` to store the subscription\n\
                  credential for this agent. `gents init` only seeds the backend."
@@ -174,8 +149,6 @@ async fn pick_backend() -> Result<BackendSelection> {
     }
 }
 
-/// GET `{base}/models` on the well-known local ports; return the first that
-/// answers together with its first advertised model id.
 async fn detect_local_server() -> Option<(String, String)> {
     for url in LOCAL_PROBE_URLS {
         if let Some(model) = probe_models(url).await {
@@ -185,7 +158,6 @@ async fn detect_local_server() -> Option<(String, String)> {
     None
 }
 
-/// GET `{base}/models`; return the first advertised model id if reachable.
 async fn probe_models(base: &str) -> Option<String> {
     let response = reqwest::Client::new()
         .get(format!("{base}/models"))
@@ -202,8 +174,6 @@ async fn probe_models(base: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-/// Ask a yes/no question on the terminal. An empty answer takes `default_yes`;
-/// a read error also falls back to it so a closed stdin never wedges a caller.
 pub(crate) async fn confirm(question: &str, default_yes: bool) -> bool {
     let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
     eprint!("{question} {hint} ");
@@ -224,7 +194,6 @@ async fn prompt_line(text: &str) -> Result<String> {
     read_line().await
 }
 
-/// Prompt showing a default in brackets; an empty answer takes the default.
 async fn prompt_line_default(label: &str, default: &str) -> Result<String> {
     eprint!("{label} [{default}]: ");
     let _ = std::io::stderr().flush();
@@ -237,7 +206,6 @@ async fn prompt_line_default(label: &str, default: &str) -> Result<String> {
     })
 }
 
-/// Read one line without echoing it (best-effort via `stty`).
 async fn prompt_secret(text: &str) -> Result<String> {
     eprint!("{text}");
     let _ = std::io::stderr().flush();
@@ -258,7 +226,6 @@ fn set_terminal_echo(on: bool) -> bool {
         .unwrap_or(false)
 }
 
-/// Read one line from stdin off the async runtime's worker threads.
 async fn read_line() -> Result<String> {
     tokio::task::spawn_blocking(|| -> Result<String> {
         let mut buf = String::new();
@@ -369,7 +336,6 @@ mod tests {
         assert_eq!(args.model_name.as_deref(), Some("gpt-5.4-mini"));
         assert_eq!(args.api_key.as_deref(), Some("sk-test"));
         assert_eq!(args.inference_endpoint, None);
-        // Non-backend fields are untouched.
         assert_eq!(args.agent_name, "keep-me");
         assert!(args.enable_memory);
     }
@@ -387,8 +353,6 @@ mod tests {
         .apply_to(&mut args);
 
         assert_eq!(args.backend_preset, Some(BackendPresetArg::ChatGptCodex));
-        // No key and no explicit model: the preset default model and the
-        // OAuthCredential carry those at resolve time.
         assert_eq!(args.api_key, None);
         assert_eq!(args.model_name, None);
         assert_eq!(args.inference_endpoint, None);

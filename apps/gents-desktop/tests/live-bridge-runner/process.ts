@@ -41,7 +41,6 @@ export async function waitForReadyMessage(
           stderr,
         });
       } catch {
-        // The Rust side can emit tracing/log lines before the ready JSON.
       }
     };
 

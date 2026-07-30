@@ -6,22 +6,9 @@
     font-size: var(--text-2xs);
   }
 
-  /*
- * Scoped styles for BackgroundedToolsPanel.
- * All rules are wrapped under .background-tools-panel to avoid bleeding
- * into other parts of the app shell.
- *
- * All standard tokens (colors, borders, radii, fonts) come from the app
- * shell's tokens.css (@layer tokens). Only panel-specific variables that
- * are not defined there are declared here, scoped to .background-tools-panel.
- */
-
   .background-tools-panel {
-    /* --border-warning is not present in tokens.css; declare it here only. */
     --border-warning: rgb(var(--color-warning-rgb) / 0.55);
   }
-
-  /* ── Chip row / filter row ─────────────────────────────────────────────── */
 
   .background-tools-panel .stuck-diagnostics {
     display: grid;
@@ -133,8 +120,6 @@
     color: var(--color-accent-strong);
   }
 
-  /* ── Toggle ─────────────────────────────────────────────────────────────── */
-
   .background-tools-panel .toggle {
     display: inline-flex;
     align-items: center;
@@ -148,8 +133,6 @@
   .background-tools-panel .toggle input {
     accent-color: var(--color-accent-strong);
   }
-
-  /* ── Panel summary ───────────────────────────────────────────────────────── */
 
   .background-tools-panel .panel-summary {
     display: flex;
@@ -176,8 +159,6 @@
     font-family: var(--font-mono);
     font-size: var(--text-sm);
   }
-
-  /* ── Table wrapper ───────────────────────────────────────────────────────── */
 
   .background-tools-panel .tools-table-wrap {
     border: 1px solid var(--border-default);
@@ -254,8 +235,6 @@
     color: var(--color-text-soft);
   }
 
-  /* ── Cell variants ───────────────────────────────────────────────────────── */
-
   .background-tools-panel .cell-tool {
     font-family: var(--font-mono);
     color: var(--color-text);
@@ -278,8 +257,6 @@
   .background-tools-panel .cell-process.is-empty {
     color: var(--color-text-muted);
   }
-
-  /* ── Pills ───────────────────────────────────────────────────────────────── */
 
   .background-tools-panel .pill {
     display: inline-flex;
@@ -337,8 +314,6 @@
     background: rgb(var(--color-error-strong-rgb) / 0.08);
   }
 
-  /* ── Row actions ─────────────────────────────────────────────────────────── */
-
   .background-tools-panel .row-actions {
     display: flex;
     gap: var(--space-2);
@@ -370,8 +345,6 @@
     border-color: var(--border-warning);
     color: var(--color-warning);
   }
-
-  /* ── Empty state ─────────────────────────────────────────────────────────── */
 
   .background-tools-panel .empty-state {
     padding: 28px var(--space-5);

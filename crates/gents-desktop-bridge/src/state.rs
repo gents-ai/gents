@@ -10,7 +10,6 @@ use crate::config::{AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, Hom
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
-/// Resolved native policies bound at plugin init. Webview cannot override these.
 #[derive(Debug, Clone)]
 pub struct ResolvedBridgePolicy {
     pub desktop_paths: DesktopPaths,
@@ -22,8 +21,6 @@ pub struct ResolvedBridgePolicy {
 
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
-    /// Serializes init/start/shutdown so concurrent host calls cannot create an
-    /// untracked second ClientCore or mutate storage while one is live.
     pub client_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
 }
@@ -86,7 +83,6 @@ pub fn current_core(state: &State<'_, DesktopAppState>) -> Option<Arc<ClientCore
         .clone()
 }
 
-/// Resolve [`HomePolicy`] / [`BootstrapPolicy`] into concrete paths once.
 pub fn resolve_policy(
     config: &BridgeConfig,
     app_data_dir: Option<PathBuf>,
@@ -120,7 +116,6 @@ pub fn resolve_policy(
     })
 }
 
-/// Agent home from bridge state, or fail closed when local runtime is disallowed.
 pub fn require_agent_home(
     state: &State<'_, DesktopAppState>,
 ) -> Result<PathBuf, crate::error::BridgeError> {

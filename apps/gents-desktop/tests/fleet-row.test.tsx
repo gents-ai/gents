@@ -31,8 +31,6 @@ describe("FleetRow", () => {
     renderRow();
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();
-    // P2P repair is a desktop-client-wide action; it must not masquerade as a
-    // per-agent row action (it lives in the fleet header instead).
     expect(screen.queryByTestId("fleet-repair-peer-1")).not.toBeInTheDocument();
   });
 

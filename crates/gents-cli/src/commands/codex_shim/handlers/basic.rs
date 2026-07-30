@@ -240,17 +240,12 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-/// Synthetic absolute path Codex uses as the skill identifier. The final
-/// segment is the `skill_id`, which `SkillsConfigWrite` parses back out.
 fn skill_doc_path(skill_id: &str) -> codex_utils_absolute_path::AbsolutePathBuf {
     std::path::PathBuf::from(format!("/gents/skills/{skill_id}"))
         .try_into()
         .expect("synthetic skill path is absolute")
 }
 
-/// Query the bound agent's `Skill` documents and project them to Codex
-/// `SkillMetadata`. Gents' `scope` maps `principal` -> `System` (shared across
-/// the agent's behaviors) and `behavior` -> `User`.
 async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetadata>> {
     let query = format!(
         r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{did}" }} }}) {{
@@ -306,8 +301,6 @@ async fn load_skill_metadata(state: &ShimState) -> Result<Vec<codex::SkillMetada
     Ok(skills)
 }
 
-/// Enable/disable a `Skill` document (Codex `skills/config/write`). Resolves the
-/// target by the synthetic path's final segment, or by matching `name`.
 pub(super) async fn handle_skills_config_write(
     outbound: &Outbound,
     state: &ShimState,
@@ -334,9 +327,6 @@ pub(super) async fn handle_skills_config_write(
         skill_id = escape_graphql_string(&skill_id),
         enabled = params.enabled,
     );
-    // Commit in a transaction so the COMMIT emits the DefraDB `Update` event
-    // the runtime control watcher reconciles on -- a Codex-driven enable/disable
-    // then reaches a running agent without a restart (#340).
     if let Err(error) = execute_committed(state.node.as_ref(), &mutation).await {
         return send_error(
             outbound,
@@ -374,7 +364,6 @@ async fn resolve_skill_id(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        // Match by display name OR skill_id.
         let metadata = load_skill_metadata(state).await?;
         if let Some(found) = metadata.iter().find(|skill| {
             skill.name == name
@@ -402,7 +391,6 @@ async fn apply_config_writes(
 ) -> Result<()> {
     for (key_path, value) in writes {
         if key_path != "model" {
-            // Other keys keep the existing no-op ack semantics.
             continue;
         }
         let new_model_id = match value.as_str() {

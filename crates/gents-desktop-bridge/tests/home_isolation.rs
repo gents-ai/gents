@@ -1,5 +1,3 @@
-//! Phase-4 home isolation: FixedRoot policies never share storage.
-
 use std::sync::Arc;
 
 use gents_desktop_bridge::{
@@ -8,9 +6,6 @@ use gents_desktop_bridge::{
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::tempdir;
-
-// Re-export resolve_policy for integration tests — make it public if needed.
-// resolve_policy is already pub in state module.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fixed_root_homes_do_not_collide() {
@@ -45,9 +40,6 @@ async fn fixed_root_homes_do_not_collide() {
         "domain home must stay distinct"
     );
 
-    // Keep two real ClientCore/DefraDB stores live concurrently under distinct
-    // roots. This catches process-global or path-resolution collisions that a
-    // sequential marker-file assertion cannot.
     let bridge_core = Arc::new(
         ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&bridge_root),
@@ -65,7 +57,6 @@ async fn fixed_root_homes_do_not_collide() {
         .expect("second store starts concurrently under domain root"),
     );
 
-    // Marker file only under domain root.
     std::fs::write(domain_root.join("domain-marker"), b"domain").unwrap();
     assert!(
         !bridge_root.join("domain-marker").exists(),
@@ -104,11 +95,6 @@ async fn local_runtime_allowed_binds_fixed_agent_home() {
     assert_eq!(policy.agent_home.as_deref(), Some(agent_root.as_path()));
     assert_eq!(policy.desktop_paths.root(), bridge_root.as_path());
 }
-
-// The capability-vs-snapshot-grants consistency fence lives in the fixture
-// crate (gents-fixture-host `capability_grants_match_declared_snapshot_grants`),
-// where it parses the real capabilities/default.json against the real
-// BridgeConfig instead of restating expected values.
 
 #[test]
 fn bridge_config_default_is_fail_closed_core_only() {

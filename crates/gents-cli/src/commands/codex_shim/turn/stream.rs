@@ -1032,11 +1032,6 @@ fn reasoning_item_id(request_id: &str, segment: u64) -> String {
     }
 }
 
-/// Longest byte length which is both a suffix of `previous` and a prefix of
-/// `current`. This is the KMP prefix function over `current + sentinel +
-/// previous`; 0xFF cannot occur in valid UTF-8, so it is an unambiguous
-/// separator. The result is a UTF-8 boundary because the matching suffix ends
-/// at the boundary at the end of `previous`.
 fn suffix_prefix_overlap(previous: &str, current: &str) -> usize {
     if previous.is_empty() || current.is_empty() {
         return 0;

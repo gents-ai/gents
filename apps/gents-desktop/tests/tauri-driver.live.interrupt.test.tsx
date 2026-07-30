@@ -19,7 +19,6 @@ describeLive("Tauri app live interrupt flow", () => {
       await driver.openChat();
       logTurn(`driver ready agentDid=${runner.agentDid}`);
 
-      // Submit a turn and immediately interrupt it.
       await driver.typeComposer(FIRST_PROMPT);
       await driver.pressEnter();
       await waitFor(() => {
@@ -30,9 +29,6 @@ describeLive("Tauri app live interrupt flow", () => {
         `turn submitted sessionId=${submitted.sessionId} requestId=${submitted.requestId}`,
       );
 
-      // Wait briefly for the turn to register so the cancel button becomes
-      // enabled. The cancel button is rendered by CancelButton with
-      // data-testid="cancel-button" (added in Plan B Task 2).
       await waitFor(
         () => {
           const btn = driver.cancelButton();
@@ -43,22 +39,13 @@ describeLive("Tauri app live interrupt flow", () => {
       );
       logTurn("cancel button enabled");
 
-      // Click Interrupt. For a turn with no children, the bridge latches
-      // directly without opening the cascade dialog (cascade=false path).
       await driver.clickCancel();
       logTurn("interrupt clicked");
 
-      // If the response was interrupted before completion, verify the badge
-      // appears in the rendered transcript. If the turn finished naturally
-      // before our click, log that and move on — we still verified the
-      // bridge call did not throw.
       const finalSession = await runner.waitForRequestCompletion(submitted);
       if (finalSession?.latestResponse?.cancelCause) {
         const cause = finalSession.latestResponse.cancelCause;
         logTurn(`interrupt latched: cause=${cause.cause}`);
-        // The response has a cancel cause — the interrupt landed mid-flight.
-        // The transcript should render the same badge text users see in the
-        // cancelled turn.
         await waitFor(
           () => {
             const labels = [...document.querySelectorAll(".cause-badge")].map(
@@ -69,9 +56,6 @@ describeLive("Tauri app live interrupt flow", () => {
           { timeout: 30_000 },
         );
       } else {
-        // Turn finished before our click could take effect. This is a valid
-        // race outcome — the bridge HTTP call still succeeded (no throw above),
-        // and the test documents that the interrupt window was too narrow.
         logTurn(
           "turn finished before interrupt could affect it — " +
             "bridge call succeeded without error (race outcome: turn completed first)",

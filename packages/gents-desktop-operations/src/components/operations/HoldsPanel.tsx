@@ -41,10 +41,6 @@ function deadlineLabel(deadlineAt: string | null) {
   return `${Math.max(1, Math.floor(remainingMs / 1000))}s left`;
 }
 
-/// Ops-rail Holds strip: tool calls parked in `awaitingApproval`. Approve
-/// dispatches the tool on the owning runtime; Deny fails it with the given
-/// reason. Both write an AgentToolApproval document — the runtime's verdict
-/// watcher does the rest.
 export type HoldsPanelProps = {
   agentDid: string | null;
   api?: DesktopApiAdapter;

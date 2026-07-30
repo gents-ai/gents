@@ -19,9 +19,7 @@ import { OperationsRailTabs } from "./OperationsRailTabs.js";
 
 export type OperationsRailProviderProps = {
   tabs: OperationsRailTabDescriptor[];
-  /** Initial active tab id. Defaults to the first registered tab. */
   initialActiveTabId?: OperationsRailTabId | null;
-  /** Instance-bound bridge API used by all package panels in this rail. */
   api?: DesktopApiAdapter;
   children: ReactNode;
 };
@@ -29,7 +27,6 @@ export type OperationsRailProviderProps = {
 export type OperationsRailProps = {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** Count of stuck/at-risk operations; badges the collapsed handle. */
   attentionCount?: number;
 };
 
@@ -78,8 +75,6 @@ export function OperationsRail({
 }: OperationsRailProps = {}) {
   const value = useContext(OperationsRailContext);
   if (!value || value.tabs.length === 0) {
-    // Either no provider (foundation default) or no registered tabs:
-    // render nothing so the chat shell layout doesn't get a phantom column.
     return null;
   }
   const activeTab =

@@ -189,7 +189,6 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
             }),
         )?;
     }
-    // Empty collections: no subdirectories needed (missing dir = zero docs)
 
     let output = run_cli_failure_stdout_json(
         &home_dir,
@@ -618,9 +617,6 @@ async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force()
     Ok(())
 }
 
-/// Regression for #876: same-deployment `subagent_targets` DIDs must rebind
-/// with the selection DID so post-bind validation no longer misclassifies them
-/// as remote cross-deployment targets.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_validate_bind_home_rebinds_same_deployment_subagent_target_dids() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -688,8 +684,6 @@ async fn config_validate_bind_home_rebinds_same_deployment_subagent_target_dids(
     Ok(())
 }
 
-/// Cross-deployment guard must still reject a truly remote target after rebind
-/// when `subagent_allow_cross_deployment` is false.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_validate_bind_home_still_rejects_remote_subagent_target() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

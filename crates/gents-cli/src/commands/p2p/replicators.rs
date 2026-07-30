@@ -66,7 +66,6 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     http_post_json(&client, &format!("{api_base}/p2p/replicators"), &request).await?;
     let p2p = fetch_live_http_p2p_status(args.home.as_deref(), &graphql).await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
-    // Echo the filters that were forwarded so callers can confirm what was applied.
     let filters_json: serde_json::Map<String, Value> = filters
         .iter()
         .map(|(col, pred)| {
@@ -93,10 +92,6 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
     Ok(())
 }
 
-/// Parse `--filter <collection>:<field>=<value>` entries into a `PairingFilters` map.
-///
-/// Each entry must have the form `Collection:field=value`. A missing `:` or `=`
-/// separator, or an empty collection/field/value is a hard parse error.
 pub(super) fn parse_replicator_filters(filters: &[String]) -> Result<PairingFilters> {
     let mut map = PairingFilters::new();
     for raw in filters {
@@ -259,7 +254,6 @@ mod tests {
 
     #[test]
     fn parse_replicator_filters_value_may_contain_equals() {
-        // DID values like "did:key:z=abc" should work; only the first '=' is split on.
         let filters =
             parse_replicator_filters(&["AgentRequest:agent_did=did:key:z=abc".to_string()])
                 .expect("filter value with = should parse");

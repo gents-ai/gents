@@ -1,9 +1,3 @@
-//! Tier-1 end-to-end test: enabled agent -> spawn local background child ->
-//! list_subagents reflects it.
-//!
-//! Validates the subagent enablement runtime path and serves as a regression
-//! anchor for C2 state (running-subagent listing completeness).
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,16 +17,12 @@ use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, 
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{first_optional_row, test_db};
 
-// ── Minimal agent boot helper (mirrors subagent_source_conformance.rs) ──────
-
 struct RunningAgent {
     booted: BootedAgent,
     _endpoint: MockModelEndpoint,
     behavior_id: String,
 }
 
-/// Boot an agent with spawn_enabled + background_enabled and `behavior_id`
-/// as its own allowed subagent target (self-spawn).
 async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> RunningAgent {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
     let agent_did = identity.did().to_string();
@@ -47,7 +37,6 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     )
     .await;
 
-    // Allow behavior to spawn itself as a subagent with background mode.
     let selection_id = format!("{behavior_id}-e2e-spawn-tools");
     upsert_tool_selection(
         db.node.as_ref(),
@@ -120,8 +109,6 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     }
 }
 
-// ── Poll helper ──────────────────────────────────────────────────────────────
-
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     request_id: String,
@@ -155,8 +142,6 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     }
 }
 
-// ── Test ─────────────────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
     let db = test_db("e2e-subagent-enablement").await;
@@ -167,7 +152,6 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
     let parent_tool_call_id = "e2e-tc-list";
     let child_request_id = "e2e-child-list";
 
-    // Create the parent request that the tool call will be linked to.
     create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
@@ -178,7 +162,6 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
     )
     .await;
 
-    // Drive a BACKGROUND spawn directly via ToolCallLifecycle (no model scripting required).
     let args = serde_json::json!({
         "behavior_id": running.behavior_id.clone(),
         "prompt": "child work",
@@ -202,7 +185,6 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
     );
     lifecycle.start_running().await.unwrap();
 
-    // Assert child AgentRequest materializes with correct lineage.
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(
         child.request_id, child_request_id,
@@ -213,9 +195,6 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         "child behavior_id must match parent behavior"
     );
 
-    // Assert handle_list_subagents reflects the running background child.
-    // This is the C2 completeness assertion: the enabled path must be
-    // end-to-end queryable.
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,

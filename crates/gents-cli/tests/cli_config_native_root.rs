@@ -21,9 +21,6 @@ fn run_validate(root: &std::path::Path) -> Result<Value> {
     Ok(serde_json::from_str(&stdout)?)
 }
 
-/// Write a minimal valid principal + matching default behavior so that
-/// `validate_manifest` does not reject the root for a missing
-/// `default_behavior_id` reference.
 fn write_principal_with_behavior(root: &std::path::Path) -> Result<()> {
     let agent_did = "did:key:example";
     let default_behavior_id = "default";
@@ -64,8 +61,6 @@ fn validate_accepts_minimal_per_doc_root() -> Result<()> {
 fn validate_rejects_handle_mismatch() -> Result<()> {
     let tmp = tempdir()?;
     write_principal_with_behavior(tmp.path())?;
-    // Add a second behavior where the directory name (on-disk) does not match
-    // the behavior_id field inside the object.json.
     let dir = tmp.path().join("agent-behaviors").join("on-disk");
     fs::create_dir_all(&dir)?;
     write_json_file(
@@ -96,7 +91,6 @@ fn validate_rejects_handle_mismatch() -> Result<()> {
 #[test]
 fn validate_rejects_missing_sidecar() -> Result<()> {
     let tmp = tempdir()?;
-    // Write a principal with the default behavior referencing a sidecar file.
     let agent_did = "did:key:example";
     let default_behavior_id = "default";
     write_json_file(
@@ -118,7 +112,6 @@ fn validate_rejects_missing_sidecar() -> Result<()> {
             "enabled": true,
         }),
     )?;
-    // Deliberately do NOT write system_prompt.md — validate should reject this.
     let report = run_validate(tmp.path())?;
     assert_eq!(report.get("ok").and_then(Value::as_bool), Some(false));
     let joined = report
@@ -140,7 +133,6 @@ fn validate_rejects_missing_sidecar() -> Result<()> {
 fn validate_accepts_stray_readme_in_doc_dir() -> Result<()> {
     let tmp = tempdir()?;
     write_principal_with_behavior(tmp.path())?;
-    // Add a README.md alongside object.json — validate should ignore it.
     let dir = tmp.path().join("agent-behaviors").join("default");
     fs::write(dir.join("README.md"), "notes")?;
     let report = run_validate(tmp.path())?;

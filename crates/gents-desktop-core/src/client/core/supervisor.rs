@@ -51,8 +51,6 @@ pub(super) fn spawn_p2p_supervisor_task(
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let endpoint_refresh_interval = endpoint_interval();
-        // Publish immediately after launch so a saved pending pairing can
-        // resume without waiting a full heartbeat interval.
         let mut last_endpoint_refresh = Instant::now() - endpoint_refresh_interval;
 
         loop {
@@ -535,9 +533,6 @@ async fn run_pairing_reconcile_for_peer(
     };
     let admin =
         match HttpRemoteP2pAdmin::new_with_actor(graphql_url, Arc::clone(&remote_admin_actor)) {
-            // Collection ids are content-addressed, so the local schema resolves the
-            // same name → id the remote tracks; this lets the reconcile diff compare
-            // desired (names) against the remote subscription set (ids) correctly.
             Ok(admin) => admin.with_local_resolver(Arc::clone(node)),
             Err(error) => {
                 tracing::warn!(
@@ -778,8 +773,6 @@ mod pairing_reconcile_tests {
         }
 
         async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
-            // This stub exercises `compute_pairing_diff` directly in name-space
-            // (not the engine's id-resolution), so it resolves identity.
             Ok(Some(name.to_string()))
         }
 

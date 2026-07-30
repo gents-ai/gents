@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Release gate: production capability set must not grant native-e2e.
-# Spec: production enumerates "capabilities": ["default"] only; E2E uses overlay.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONF="$ROOT/apps/gents-desktop/src-tauri/tauri.conf.json"
@@ -35,9 +33,7 @@ if [[ -f "$MANIFEST" ]]; then
 import json, sys
 from pathlib import Path
 data = json.loads(Path(sys.argv[1]).read_text())
-# Flatten for search: production "default" capability must not include native-e2e.
 blob = json.dumps(data)
-# Prefer structured walk when shape is known.
 def walk(obj, path=""):
     if isinstance(obj, dict):
         ident = obj.get("identifier")

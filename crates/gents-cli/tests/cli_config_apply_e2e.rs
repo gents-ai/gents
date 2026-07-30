@@ -170,7 +170,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         Some(1)
     );
 
-    // --- Task reconciled with apply-owned fields ---
     let task_response = graphql_query(
         &graphql,
         &format!(
@@ -217,8 +216,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         .ok_or_else(|| anyhow!("Task row missing _docID: {task_row}"))?
         .to_string();
 
-    // --- Schedule reconciled with apply-owned fields; runtime-owned fields
-    //     start unset (the scheduler has not yet run) ---
     let schedule_response = graphql_query(
         &graphql,
         &format!(
@@ -379,7 +376,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         Some(0)
     );
 
-    // Confirm runtime-owned Schedule fields are preserved.
     let schedule_after_noop = graphql_query(
         &graphql,
         &format!(
@@ -427,8 +423,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         "runtime-owned fire_count must survive apply"
     );
 
-    // Edit the manifest; apply should reconcile apply-owned fields while
-    // leaving runtime-owned Schedule fields untouched.
     let mut task_manifest = read_json_file(&task_path)?;
     task_manifest["prompt_template"] =
         Value::String("Audit the fleet state for drift and incidents.".to_string());
@@ -469,7 +463,6 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         Some(1)
     );
 
-    // Confirm apply-owned fields updated AND runtime-owned fields preserved.
     let schedule_after_update = graphql_query(
         &graphql,
         &format!(
@@ -640,8 +633,6 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("Empty list regression".to_string());
-    // A non-empty read_only_command_allowlist must round-trip through the
-    // `config apply` manifest path and read back equal (sorted by normalize).
     selection["read_only_command_allowlist"] = Value::Array(vec![
         Value::String("jq".into()),
         Value::String("echo".into()),
@@ -826,11 +817,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         .join(&trigger_id)
         .join("object.json");
 
-    // Use InferenceBackend as the source collection — it's registered on
-    // every gents server, so the apply-time live validation (filter
-    // syntax probe + `doc.*` field resolution) can succeed against a
-    // known-good schema. `name` and `enabled` are real fields on
-    // InferenceBackend.
     write_json_file(
         &task_path,
         &serde_json::json!({
@@ -890,7 +876,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(1)
     );
 
-    // --- Initial apply: creates Task + EventTrigger ---
     let applied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(
         applied.get("status").and_then(Value::as_str),
@@ -908,8 +893,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(1)
     );
 
-    // --- EventTrigger reconciled with apply-owned fields; runtime-owned
-    //     fields start unset (the trigger engine has not yet fired) ---
     let trigger_response = graphql_query(
         &graphql,
         &format!(
@@ -963,7 +946,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         trigger_row.get("concurrency").and_then(Value::as_str),
         Some("serial")
     );
-    // Runtime-owned fields must be null before the trigger engine fires.
     assert!(
         trigger_row
             .get("last_status")
@@ -991,7 +973,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         .ok_or_else(|| anyhow!("EventTrigger row missing _docID: {trigger_row}"))?
         .to_string();
 
-    // --- Reapply with no manifest change: noop, no counts incremented ---
     let noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(noop.get("status").and_then(Value::as_str), Some("noop"));
     assert_eq!(
@@ -1000,15 +981,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(0)
     );
 
-    // --- Simulate the trigger engine writing runtime-owned fields ---
-    //
-    // Note: DefraDB's GraphQL layer rejects string literals for `DateTime`
-    // via `update_*` in this test (same limitation documented in the
-    // Schedule e2e). We exercise the apply-ownership boundary with the
-    // non-DateTime runtime fields — `last_status`, `last_error`,
-    // `fire_count`, `last_fired_source_doc_id`. `last_attempt_at`
-    // ownership is covered by the trigger_engine e2e tests which drive
-    // the real write path.
     graphql_query(
         &graphql,
         &format!(
@@ -1028,7 +1000,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     )
     .await?;
 
-    // --- Reapply: runtime-owned fields must not trigger apply-side drift ---
     let runtime_noop = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(
         runtime_noop.get("status").and_then(Value::as_str),
@@ -1042,7 +1013,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(0)
     );
 
-    // Confirm runtime-owned EventTrigger fields survive the noop reapply.
     let trigger_after_noop = graphql_query(
         &graphql,
         &format!(
@@ -1087,12 +1057,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         "runtime-owned last_fired_source_doc_id must survive noop apply"
     );
 
-    // --- Edit the manifest; apply should reconcile apply-owned fields
-    //     while leaving runtime-owned fields untouched ---
     let mut trigger_manifest = read_json_file(&trigger_path)?;
-    // Stay within a valid GraphQL filter literal so the apply-time live
-    // validation still passes. `provider_kind` is a real field on
-    // InferenceBackend.
     trigger_manifest["filter"] =
         Value::String("{ enabled: { _eq: true }, provider_kind: { _eq: \"openai\" } }".to_string());
     trigger_manifest["enabled"] = Value::from(false);
@@ -1111,7 +1076,6 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         Some(1)
     );
 
-    // Confirm apply-owned fields updated AND runtime-owned fields preserved.
     let trigger_after_update = graphql_query(
         &graphql,
         &format!(
@@ -1177,35 +1141,14 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Apply-time EventTrigger live-schema validation (Task 25 / PR 2).
-//
-// The three tests below cover the LIVE half of EventTrigger apply-time
-// validation, which probes the running node's GraphQL schema:
-//   * malformed `filter` syntax is caught by a `limit:1` probe query;
-//   * `{{ doc.<field> }}` references in the Task's `prompt_template` are
-//     checked against the source collection's introspected field list;
-//   * valid filter + valid `doc.*` paths apply cleanly.
-//
-// All three use `InferenceBackend` as the source collection — it is one of
-// the runtime-registered agent schemas on any gents server, so the
-// probe and introspection queries hit a known-good type without requiring
-// an external schema-registration path.
-// ---------------------------------------------------------------------------
-
-/// Seed a manifest root into `home_dir` and return paths + ids for the
-/// EventTrigger + Task the live-validation tests below manipulate.
 struct LiveValidationFixture {
     home_dir: std::path::PathBuf,
     root: std::path::PathBuf,
     trigger_id: String,
     task_path: std::path::PathBuf,
     trigger_path: std::path::PathBuf,
-    // Keep the server process alive for the duration of the test.
     _serve: ServeProcess,
-    // Holding the mock endpoint alive keeps the model reachable during init.
     _mock_endpoint: MockModelEndpoint,
-    // Hold the tempdir so the filesystem root survives until drop.
     _tempdir: tempfile::TempDir,
 }
 
@@ -1251,8 +1194,6 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
         .join(&trigger_id)
         .join("object.json");
 
-    // Seed the Task + Trigger with a VALID baseline. Individual tests
-    // overwrite fields to exercise specific failure modes.
     write_json_file(
         &task_path,
         &serde_json::json!({
@@ -1295,14 +1236,10 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
     })
 }
 
-/// Apply-time live validation rejects an EventTrigger whose `filter` is
-/// syntactically broken. The DefraDB filter probe returns a GraphQL error
-/// which we propagate into the apply failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_rejects_event_trigger_with_malformed_filter() -> Result<()> {
     let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
 
-    // Overwrite trigger with a malformed filter.
     let mut trigger_manifest = read_json_file(&fx.trigger_path)?;
     trigger_manifest["filter"] = Value::String("{ not_a_field: }".to_string());
     write_json_file(&fx.trigger_path, &trigger_manifest)?;
@@ -1323,16 +1260,10 @@ async fn apply_rejects_event_trigger_with_malformed_filter() -> Result<()> {
     Ok(())
 }
 
-/// Apply-time live validation rejects a Task `prompt_template` whose
-/// `{{ doc.* }}` references a field that does not exist on the configured
-/// source collection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_rejects_event_trigger_template_referencing_unknown_doc_field() -> Result<()> {
     let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
 
-    // Rewrite the Task prompt to reference a doc field that does NOT exist
-    // on InferenceBackend. Keep the trigger's filter valid so the failure
-    // is unambiguously the template check.
     let mut task_manifest = read_json_file(&fx.task_path)?;
     task_manifest["prompt_template"] = Value::String("Greet {{ doc.nonexistent }}.".to_string());
     write_json_file(&fx.task_path, &task_manifest)?;
@@ -1353,15 +1284,10 @@ async fn apply_rejects_event_trigger_template_referencing_unknown_doc_field() ->
     Ok(())
 }
 
-/// Apply-time live validation accepts an EventTrigger whose filter is
-/// syntactically valid GraphQL and whose `doc.*` references exist on the
-/// source collection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result<()> {
     let fx = prepare_live_validation_fixture(&Uuid::new_v4().simple().to_string()).await?;
 
-    // The fixture seeds a valid filter (`{ enabled: { _eq: true } }`) and a
-    // valid doc.* reference (`doc.name` is a field on InferenceBackend).
     let root_str = fx
         .root
         .to_str()
@@ -1385,17 +1311,6 @@ async fn apply_accepts_event_trigger_with_valid_filter_and_doc_paths() -> Result
     Ok(())
 }
 
-/// End-to-end regression for the `write_tools` config round-trip (Task B5).
-///
-/// A ToolSelection manifest fragment that declares a `write_tools` entry
-/// (a structured `WriteToolDecl` with fields) must:
-///   * apply once (status applied, 1 tool_selection written),
-///   * re-apply as a noop (the decl persisted in storage form matches the
-///     desired manifest → NO drift), and
-///   * `config diff` clean (`ok: true`, the selection counts as unchanged).
-///
-/// This proves the CLI desired-state/diff layer carries `write_tools`
-/// through apply→diff, not just the document encoder (B1).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -1448,8 +1363,6 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("write_tools round-trip".to_string());
-    // A structured WriteToolDecl, authored in the manifest as an object list
-    // (not the storage `[String]` form).
     selection["write_tools"] = serde_json::json!([
         {
             "tool_name": "request_action",
@@ -1493,9 +1406,6 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         "first apply must touch exactly the one tool selection: {applied}"
     );
 
-    // The decisive assertion: re-apply must be a noop. If the CLI desired-state
-    // dropped or mis-encoded `write_tools`, the live row would differ from the
-    // desired manifest and apply would report drift / re-write.
     let reapplied = run_cli_json(&home_dir, &["config", "apply", "--root", root_str])?;
     assert_eq!(
         reapplied.get("status").and_then(Value::as_str),
@@ -1510,7 +1420,6 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         "re-apply must not re-write the selection: {reapplied}"
     );
 
-    // And `config diff` must report the selection as unchanged (no drift).
     let exact = run_cli_json(&home_dir, &["config", "diff", "--root", root_str])?;
     assert_eq!(
         exact.get("ok").and_then(Value::as_bool),
@@ -1532,7 +1441,6 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         "no spurious update for the write_tools selection: {exact}"
     );
 
-    // The decl persisted to storage form (`[String]` of JSON-encoded decls).
     let response = graphql_query(
         &graphql,
         &format!(
