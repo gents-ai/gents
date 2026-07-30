@@ -86,12 +86,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     // 2. Resolve GraphQL / local access the same way every other config
     //    subcommand does. Ensures local schemas if we fell back to an
     //    embedded node.
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ true,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // 3. Fetch the Task doc.
     let task_query = format!(

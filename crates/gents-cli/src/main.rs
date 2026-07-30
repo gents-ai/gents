@@ -557,7 +557,6 @@ pub(crate) async fn http_delete_json<B: Serialize>(
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
-    ensure_local_schemas: bool,
 ) -> Result<(ConfigAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit_graphql
@@ -586,11 +585,8 @@ pub(crate) async fn resolve_config_access(
                 })?,
         );
         // Single schema entry point (baseline + chain + lineage verify). Always
-        // runs — including when ensure_local_schemas is false — so absent
-        // collections are bootstrapped rather than rejected as UnknownLineage.
-        // `ensure_local_schemas` is retained as a call-site flag for documentation
-        // only; both paths share one lineage.
-        let _ = ensure_local_schemas;
+        // runs so absent collections are bootstrapped rather than rejected as
+        // UnknownLineage.
         gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
         // Unwrap the Arc: at this point the only live Arc is node_arc itself, so
         // try_unwrap always succeeds. The unwrap_or_else fallback is unreachable

@@ -5,8 +5,7 @@ use crate::desired_state;
 use crate::{build_config_export_bundle, resolve_config_access};
 
 pub(super) async fn config_export(args: ConfigExportArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = super::binding::resolve_target_agent_did(
         args.agent_did.as_deref(),
         args.bind_agent_did,

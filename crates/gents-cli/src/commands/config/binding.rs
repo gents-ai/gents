@@ -227,7 +227,7 @@ async fn resolve_bound_agent_did(
             if let Some(access) = access {
                 return resolve_live_agent_did(access).await;
             }
-            let (access, _) = crate::resolve_config_access(home, graphql, false).await?;
+            let (access, _) = crate::resolve_config_access(home, graphql).await?;
             resolve_live_agent_did(&access).await
         }
     }

@@ -29,7 +29,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     )
     .await?;
 
-    let (access, _) = resolve_config_access(Some(&home_dir), None, true).await?;
+    let (access, _) = resolve_config_access(Some(&home_dir), None).await?;
     let bound = binding::load_bound_manifest(binding::ManifestBindingOptions {
         root: &args.root,
         home: Some(&home_dir),

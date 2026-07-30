@@ -93,7 +93,7 @@ pub(super) async fn p2p_claim(args: P2pClaimArgs) -> Result<()> {
     let addresses = vec![token.ticket.clone()];
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // Same local-network match gate as v5 join: a node already bound to a
     // different network (or a different admin for the same id) must refuse the

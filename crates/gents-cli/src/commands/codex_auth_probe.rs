@@ -27,7 +27,7 @@ struct OpenAiModelSummary {
 
 pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
     let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
     let credential = load_oauth_credential(&access, &agent_did, &provider)

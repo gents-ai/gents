@@ -30,8 +30,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         None => false,
     };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let schema_checks = diagnose_schema_presence(&access).await;
     let bundle_result = build_config_export_bundle(&access, &agent_did).await;

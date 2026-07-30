@@ -52,7 +52,7 @@ struct PeerRegistryRow {
 pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // Resolve peer_id + addresses from the live runtime.
     let p2p_status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;
@@ -144,7 +144,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
 
 pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // Load PeerRegistry rows.
     let registry_rows = graphql_rows(&access, "PeerRegistry", registry_list_query())
@@ -196,7 +196,7 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
 pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
     let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     // Resolve peer_id for this node.
     let p2p_status = load_live_http_p2p_status(args.home.as_deref(), &graphql).await;

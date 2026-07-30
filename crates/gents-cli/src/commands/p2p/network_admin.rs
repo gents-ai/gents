@@ -23,7 +23,7 @@ use super::output::load_live_http_p2p_status;
 pub(super) async fn p2p_network_create(args: P2pNetworkCreateArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for network creation")?;
     let admin_did = identity.did().to_string();
@@ -99,7 +99,7 @@ pub(super) async fn p2p_network_create(args: P2pNetworkCreateArgs) -> Result<()>
 
 pub(super) async fn p2p_network_grant(args: P2pNetworkGrantArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for network grant")?;
     let network = load_single_network_record(&access).await?;
@@ -135,7 +135,7 @@ pub(super) async fn p2p_network_grant(args: P2pNetworkGrantArgs) -> Result<()> {
 
 pub(super) async fn p2p_network_revoke(args: P2pNetworkRevokeArgs) -> Result<()> {
     let (access, home_dir) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), true).await?;
+        resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let identity = resolve_home_identity(args.home.as_deref())
         .context("resolving local agent identity for network revoke")?;
     let network = load_single_network_record(&access).await?;

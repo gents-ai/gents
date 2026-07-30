@@ -43,12 +43,7 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
     let cause = parse_cancel_cause(&args.cause)?;
     let wait_timeout = resolve_wait_timeout(args.wait, args.timeout.as_deref())?;
 
-    let (access, _) = resolve_config_access(
-        args.home.as_deref(),
-        args.graphql.as_deref(),
-        /* ensure_local_schemas */ true,
-    )
-    .await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
     let snapshots = match access {
         ConfigAccess::Graphql(graphql) => {
@@ -672,8 +667,7 @@ struct SubagentCancelRender {
 }
 
 async fn subagent_list(args: SubagentListArgs) -> Result<()> {
-    let (access, _) =
-        resolve_config_access(args.home.as_deref(), args.graphql.as_deref(), false).await?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let rows = match args.root.as_deref().and_then(non_empty_str) {
         Some(root) => load_rooted_lineage(&access, root, args.depth).await?,
         None => load_lineage_forest(&access, args.depth).await?,
