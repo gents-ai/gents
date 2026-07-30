@@ -13,6 +13,7 @@ use super::{
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
+const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -56,9 +57,10 @@ impl Drop for BootedAgent {
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
+        let snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
                 && snapshot.runnable_behavior_count >= 1
@@ -68,7 +70,8 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "agent did not reach ready state"
+            "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
+             last runtime snapshot: {snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

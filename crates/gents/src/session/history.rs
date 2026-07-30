@@ -385,7 +385,10 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }}
+                    await_mode: {{ _eq: "background" }}
+                }}
             ) {{ message_sequence }}
         }}"#
     );
@@ -405,6 +408,10 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
+    // Background spawns reserve one result position after their assistant
+    // turn so an independently appended completion cannot overtake the
+    // immediate receipt. Foreground results do not reserve a position: they
+    // append when the owned loop observes completion.
     let mut counts = std::collections::BTreeMap::<u32, u32>::new();
     for row in rows {
         *counts.entry(row.message_sequence).or_default() += 1;

@@ -354,10 +354,6 @@ def restartDispositionCase
   , terminalState := disposition.terminalStateContract
   , notificationReason :=
       disposition.notification.map RestartNotificationObligation.notificationReason
-  , queueSource :=
-      disposition.notification.map RestartNotificationObligation.queueSource
-  , queueKeyPrefix :=
-      disposition.notification.map RestartNotificationObligation.queueKeyPrefix
   , theoremName := theoremName
   }
 
@@ -420,18 +416,13 @@ theorem restartDispositionCases_cover_both_dispositions :
   native_decide
 
 /-- Exactly one row owes the restart notification, and it is the native
-    background live-parent interrupt with the pinned reason and queue
-    vocabulary. -/
+    background live-parent interrupt with the pinned reason. -/
 theorem restartDispositionCases_notification_unique :
     (restartDispositionCases.filter
         (fun witness => witness.notificationReason.isSome)).map
-        (fun witness =>
-          (witness.name, witness.notificationReason, witness.queueSource,
-            witness.queueKeyPrefix)) =
+        (fun witness => (witness.name, witness.notificationReason)) =
       [ ("restart_native_background_live_parent_interrupted"
         , some "interrupted_on_restart"
-        , some "background_completion"
-        , some "background_completion:"
         ) ] := by
   native_decide
 

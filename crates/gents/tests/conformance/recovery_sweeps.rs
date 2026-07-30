@@ -1536,7 +1536,7 @@ async fn drive_duplicate_conversation_outcome_case() {
 /// the contract: `recover_all` must preserve a running background subagent
 /// bridge under a live parent (R5) while interrupting a native background
 /// tool under the same parent (R6), and the interrupt owes a durable
-/// `interrupted_on_restart` notification plus one coalesced wake.
+/// `interrupted_on_restart` notification without creating a synthetic wake.
 pub(super) async fn generated_restart_disposition_cases_drive_recover_all() {
     let cases = lean_restart_disposition_cases();
     assert_eq!(
@@ -1728,7 +1728,6 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
     }
 
     let notifications = load_restart_notification_messages(&db.node, &parent_session_id).await;
-    let wakes = load_restart_wake_rows(&db.node, &parent_session_id).await;
     if let Some(reason) = case.notification_reason.as_deref() {
         assert_eq!(
             notifications.len(),
@@ -1753,34 +1752,16 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             case.name
         );
 
-        let queue_source = case
-            .queue_source
-            .as_deref()
-            .expect("restart interrupt case must pin the queue source");
-        let queue_key = format!(
-            "{}{}",
-            case.queue_key_prefix
-                .as_deref()
-                .expect("restart interrupt case must pin the queue key prefix"),
-            parent_session_id
-        );
-        assert_eq!(
-            wakes.len(),
-            1,
-            "restart interrupt case {} must enqueue exactly one coalesced wake",
+        assert!(
+            load_restart_wake_rows(&db.node, &parent_session_id)
+                .await
+                .is_empty(),
+            "restart interrupt case {} must not create a synthetic wake",
             case.name
         );
-        let metadata: serde_json::Value = serde_json::from_str(
-            wakes[0]
-                .as_deref()
-                .expect("wake request must carry queue metadata"),
-        )
-        .expect("wake metadata must be JSON");
-        assert_eq!(metadata["queue"]["source"], queue_source, "{}", case.name);
-        assert_eq!(metadata["queue"]["key"], queue_key, "{}", case.name);
 
-        // Idempotence: a second startup pass finds no running row, appends no
-        // duplicate notification, and enqueues no second wake.
+        // Idempotence: a second startup pass finds no running row and appends
+        // no duplicate notification or synthetic wake.
         let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
             .await
             .unwrap();
@@ -1793,22 +1774,25 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             "{}: second recovery pass must not duplicate the notification",
             case.name
         );
-        assert_eq!(
+        assert!(
             load_restart_wake_rows(&db.node, &parent_session_id)
                 .await
-                .len(),
-            1,
-            "{}: second recovery pass must not duplicate the wake",
+                .is_empty(),
+            "{}: second recovery pass must not create a wake",
             case.name
         );
     } else {
+        // The classifier contract only pins the restart-interrupt
+        // notification. Other terminal native tools are repaired by the
+        // general background-notification delivery pass; regardless of which
+        // delivery path applies, neither may create an AgentRequest.
         assert!(
-            notifications.is_empty(),
-            "case {} owes no restart notification, found {:?}",
-            case.name,
-            notifications
+            load_restart_wake_rows(&db.node, &parent_session_id)
+                .await
+                .is_empty(),
+            "case {} owes no restart wake",
+            case.name
         );
-        assert!(wakes.is_empty(), "case {} owes no restart wake", case.name);
     }
 }
 

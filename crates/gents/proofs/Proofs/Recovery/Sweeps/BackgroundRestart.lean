@@ -168,23 +168,18 @@ def restartDisposition (row : RestartRow) : RestartDisposition :=
   else
     .leaveRunning
 
-/-- Durable side effects owed after terminalizing a native background tool on
-    restart: the `<tool-completion status="cancelled">` notification reason
-    and the coalesced wake queue vocabulary
-    (`background_completion:<parent session>`). -/
+/-- Durable side effect owed after terminalizing a native background tool on
+    restart: the `<tool-completion status="cancelled">` notification reason.
+    Delivery is transcript-only: recovery must not create a synthetic request
+    or wake an agent turn. -/
 structure RestartNotificationObligation where
   notificationReason : String
-  queueSource : String
-  queueKeyPrefix : String
   deriving DecidableEq, Repr
 
 def restartNotificationObligation : RestartNotificationObligation :=
-  { notificationReason := "interrupted_on_restart"
-  , queueSource := "background_completion"
-  , queueKeyPrefix := "background_completion:"
-  }
+  { notificationReason := "interrupted_on_restart" }
 
-/-- The notification + wake are owed exactly on the restart-interrupt arm. -/
+/-- The transcript notification is owed exactly on the restart-interrupt arm. -/
 def RestartDisposition.notification :
     RestartDisposition → Option RestartNotificationObligation
   | .terminalize .terminalizeBackgroundedAsInterrupted =>
@@ -195,7 +190,7 @@ def RestartDisposition.notification :
 
 /-- RB1: a native background tool with a live parent and no expiry is
     interrupted on restart — terminal `cancelled` plus the durable
-    notification/wake obligation. -/
+    transcript-notification obligation. -/
 theorem native_background_tool_live_parent_interrupted_on_restart
     (row : RestartRow)
     (h_native : row.isNativeBackgroundTool)
@@ -307,9 +302,10 @@ theorem terminalize_lands_terminal
     isTerminal cause.terminalState :=
   cause.terminalState_terminal
 
-/-- The notification + coalesced wake obligation is owed exactly on the
-    restart-interrupt arm — subagent bridges left running owe nothing at
-    restart (their notification comes from completion projection later). -/
+/-- The transcript-notification obligation is owed exactly on the
+    restart-interrupt arm. It carries no request-producing wake side effect;
+    subagent bridges left running receive their notification from completion
+    projection later. -/
 theorem notification_iff_restart_interrupt (row : RestartRow) :
     (restartDisposition row).notification =
         some restartNotificationObligation ↔
