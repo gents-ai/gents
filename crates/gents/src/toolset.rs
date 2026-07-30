@@ -464,11 +464,11 @@ pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
-    if config.steering_tools_enabled() {
+    if config.background_inspection_tools_enabled() {
         names.insert(3, READ_SUBAGENT_TOOL_NAME.to_string());
     }
     if config.steer_subagent_enabled() {
-        let insert_at = if config.steering_tools_enabled() {
+        let insert_at = if config.background_inspection_tools_enabled() {
             4
         } else {
             3
@@ -488,7 +488,7 @@ pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn To
         Box::new(WaitSubagentTool),
         Box::new(ListSubagentsTool),
     ];
-    if config.steering_tools_enabled() {
+    if config.background_inspection_tools_enabled() {
         tools.push(Box::new(ReadSubagentTool));
     }
     if config.steer_subagent_enabled() {

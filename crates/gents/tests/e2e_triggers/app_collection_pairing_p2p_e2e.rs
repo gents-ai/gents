@@ -443,7 +443,10 @@ async fn wait_for_app_collections_pairing_applied(
             );
             let has_addr = addresses.iter().any(|a| !a.trim().is_empty());
             let has_col = subscribed.iter().any(|c| c == expected_collection);
-            if has_addr && has_col {
+            let has_control = NETWORK_CONTROL_COLLECTIONS
+                .iter()
+                .all(|expected| subscribed.iter().any(|actual| actual == expected));
+            if has_addr && has_col && has_control {
                 return;
             }
         }

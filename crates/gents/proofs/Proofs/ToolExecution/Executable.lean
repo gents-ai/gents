@@ -9,6 +9,9 @@ inductive Action where
   | complete
   | fail (failure : FailureClass)
   | timeout
+  | background
+  | foreground
+  | detach
   | cancelBeforeDispatch (cause : CancelCause)
   | cancelDuringRun (cause : CancelCause)
   | holdForApproval
@@ -43,6 +46,22 @@ def step? (pre : ToolCallContext) : Action → Option ToolCallContext
   | .timeout =>
       if pre.state = .running ∧ pre.deadlineExceeded then
         some { pre with state := .timedOut }
+      else
+        none
+  | .background =>
+      if pre.state = .running ∧ pre.awaitMode = .foreground then
+        some { pre with awaitMode := .background }
+      else
+        none
+  | .foreground =>
+      if pre.state = .running ∧ pre.awaitMode = .background then
+        some { pre with awaitMode := .foreground }
+      else
+        none
+  | .detach =>
+      if (pre.state = .pending ∨ pre.state = .running) ∧
+          pre.cancelPolicy = .cascade then
+        some { pre with cancelPolicy := .detach }
       else
         none
   | .cancelBeforeDispatch _ =>
@@ -111,6 +130,21 @@ theorem step_refines_transition
       simp [step?] at h_step
       rcases h_step with ⟨⟨h_state, h_deadline⟩, h_post⟩
       exact Transition.timeout (h_state := h_state) (h_deadline := h_deadline) (h_post := h_post.symm)
+  | background =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_mode⟩, h_post⟩
+      exact Transition.background (h_state := h_state) (h_mode := h_mode)
+        (h_post := h_post.symm)
+  | foreground =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_mode⟩, h_post⟩
+      exact Transition.foreground (h_state := h_state) (h_mode := h_mode)
+        (h_post := h_post.symm)
+  | detach =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_live, h_policy⟩, h_post⟩
+      exact Transition.detach (h_live := h_live) (h_pol := h_policy)
+        (h_post := h_post.symm)
   | cancelBeforeDispatch cause =>
       simp [step?] at h_step
       rcases h_step with ⟨h_state, h_post⟩

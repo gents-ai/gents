@@ -1530,3 +1530,344 @@ async fn drive_duplicate_conversation_outcome_case() {
         "an already-recovered store must report no recoveries"
     );
 }
+
+/// Drives the Lean restart-disposition witnesses (#937) through the real
+/// startup sweep. The leave-running rows are the previously unfenced half of
+/// the contract: `recover_all` must preserve a running background subagent
+/// bridge under a live parent (R5) while interrupting a native background
+/// tool under the same parent (R6), and the interrupt owes a durable
+/// `interrupted_on_restart` notification plus one coalesced wake.
+pub(super) async fn generated_restart_disposition_cases_drive_recover_all() {
+    let cases = lean_restart_disposition_cases();
+    assert_eq!(
+        cases.len(),
+        10,
+        "Lean restart-disposition case family drifted"
+    );
+    assert!(
+        cases.iter().any(|case| case.disposition == "leave_running"),
+        "family must include leave-running rows"
+    );
+    assert!(
+        cases.iter().any(|case| case.disposition == "terminalize"),
+        "family must include terminalize rows"
+    );
+
+    for case in cases {
+        assert_eq!(
+            case.rust_function, "ToolCallLifecycle::recover_all",
+            "restart disposition case {} names the wrong Rust owner",
+            case.name
+        );
+        drive_restart_disposition_case(case).await;
+    }
+}
+
+async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispositionCase) {
+    let db = test_db(&format!("restart-disposition-{}", case.name)).await;
+    let parent_request_id = format!("{}-parent", case.name);
+    let parent_session_id = format!("{}-parent-session", case.name);
+    let tool_call_id = format!("{}-tool", case.name);
+
+    // Parent per the Lean observation vocabulary. `missing` seeds no parent
+    // row at all: the bridge's request_id resolves to nothing.
+    if case.parent_observation != "missing" {
+        let parent_doc_id = create_request(
+            &db.node,
+            &parent_request_id,
+            &parent_session_id,
+            "processing",
+            RECOVERY_CREATED_AT,
+        )
+        .await;
+        match case.parent_observation.as_str() {
+            "live" => {}
+            "interrupted" => {
+                set_request_status_and_lifecycle(
+                    &db.node,
+                    &parent_doc_id,
+                    "interrupted",
+                    "interrupted",
+                )
+                .await;
+            }
+            "cleanlyCompleted" => {
+                set_request_status_and_lifecycle(
+                    &db.node,
+                    &parent_doc_id,
+                    "completed",
+                    "completed",
+                )
+                .await;
+            }
+            "otherTerminal" => {
+                set_request_status_and_lifecycle(&db.node, &parent_doc_id, "error", "failed").await;
+            }
+            other => panic!("unhandled parent observation {other}"),
+        }
+    }
+
+    let deadline = if case.deadline_expired {
+        chrono::Utc::now() - chrono::Duration::seconds(5)
+    } else {
+        chrono::Utc::now() + chrono::Duration::minutes(5)
+    };
+    let await_mode = match case.await_mode.as_str() {
+        "background" => AwaitMode::Background,
+        "foreground" => AwaitMode::Foreground,
+        other => panic!("unhandled await mode {other}"),
+    };
+    let cancel_policy = match case.cancel_policy.as_str() {
+        "cascade" => CancelPolicy::Cascade,
+        "detach" => CancelPolicy::Detach,
+        other => panic!("unhandled cancel policy {other}"),
+    };
+
+    let mut lifecycle = if case.child_linked {
+        // Non-terminal child: rows reaching the classifier have no durable
+        // child terminal (child precedence is covered by the sweep cases).
+        let child_request_id = format!("{tool_call_id}-child");
+        seed_child_request(&db.node, &child_request_id, "processing").await;
+        ToolCallLifecycle::new_subagent(
+            db.node.clone(),
+            parent_request_id.clone(),
+            parent_session_id.clone(),
+            "did:test:test".to_string(),
+            tool_call_id.clone(),
+            1,
+            "spawn_subagent".to_string(),
+            "{}".to_string(),
+            deadline,
+            await_mode,
+            cancel_policy,
+            child_request_id,
+            "did:test:target".to_string(),
+        )
+    } else if await_mode == AwaitMode::Background {
+        assert_eq!(
+            case.cancel_policy, "cascade",
+            "native background rows always persist cascade cancel policy"
+        );
+        ToolCallLifecycle::new_background_tool(
+            db.node.clone(),
+            parent_request_id.clone(),
+            parent_session_id.clone(),
+            "did:test:test".to_string(),
+            tool_call_id.clone(),
+            1,
+            "spawn_process".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    } else {
+        ToolCallLifecycle::new(
+            db.node.clone(),
+            parent_request_id.clone(),
+            parent_session_id.clone(),
+            "did:test:test".to_string(),
+            tool_call_id.clone(),
+            1,
+            "slow_tool".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    };
+    lifecycle.start_running().await.unwrap();
+    if case.unclaimed_expired {
+        set_tool_unclaimed_deadline(&db.node, &tool_call_id, "2020-01-01T00:00:00Z").await;
+    }
+
+    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    let row = fetch_tool_recovery_row(&db.node, &tool_call_id).await;
+
+    match case.disposition.as_str() {
+        "leave_running" => {
+            assert_eq!(
+                report.tool_calls_recovered, 0,
+                "leave-running case {} must not count a recovery",
+                case.name
+            );
+            assert_eq!(
+                row.lifecycle_state.as_deref(),
+                Some("running"),
+                "leave-running case {} must preserve the running row",
+                case.name
+            );
+            assert_eq!(case.cause, None, "{}", case.name);
+            assert_eq!(case.terminal_state, None, "{}", case.name);
+            if case.child_linked {
+                // Preserving the bridge must not secretly cascade an
+                // interrupt to the child request either.
+                let child_interrupt =
+                    fetch_interrupt_requested_at(&db.node, &format!("{tool_call_id}-child"))
+                        .await
+                        .expect("fetch child interrupt_requested_at");
+                assert!(
+                    child_interrupt.is_none(),
+                    "leave-running case {} must not interrupt the child request",
+                    case.name
+                );
+            }
+        }
+        "terminalize" => {
+            assert_eq!(
+                report.tool_calls_recovered, 1,
+                "terminalize case {} must recover exactly one row",
+                case.name
+            );
+            assert_eq!(
+                row.lifecycle_state.as_deref(),
+                case.terminal_state.as_deref(),
+                "terminalize case {} landed on the wrong terminal state",
+                case.name
+            );
+        }
+        other => panic!("unhandled disposition {other}"),
+    }
+
+    let notifications = load_restart_notification_messages(&db.node, &parent_session_id).await;
+    let wakes = load_restart_wake_rows(&db.node, &parent_session_id).await;
+    if let Some(reason) = case.notification_reason.as_deref() {
+        assert_eq!(
+            notifications.len(),
+            1,
+            "restart interrupt case {} must append exactly one notification",
+            case.name
+        );
+        assert!(
+            notifications[0].contains("<tool-completion"),
+            "{}: notification must be a tool completion: {}",
+            case.name,
+            notifications[0]
+        );
+        assert!(
+            notifications[0].contains(r#"status="cancelled""#),
+            "{}: notification must carry the cancelled status",
+            case.name
+        );
+        assert!(
+            notifications[0].contains(&format!("<reason>{reason}</reason>")),
+            "{}: notification must carry the Lean-pinned reason {reason}",
+            case.name
+        );
+
+        let queue_source = case
+            .queue_source
+            .as_deref()
+            .expect("restart interrupt case must pin the queue source");
+        let queue_key = format!(
+            "{}{}",
+            case.queue_key_prefix
+                .as_deref()
+                .expect("restart interrupt case must pin the queue key prefix"),
+            parent_session_id
+        );
+        assert_eq!(
+            wakes.len(),
+            1,
+            "restart interrupt case {} must enqueue exactly one coalesced wake",
+            case.name
+        );
+        let metadata: serde_json::Value = serde_json::from_str(
+            wakes[0]
+                .as_deref()
+                .expect("wake request must carry queue metadata"),
+        )
+        .expect("wake metadata must be JSON");
+        assert_eq!(metadata["queue"]["source"], queue_source, "{}", case.name);
+        assert_eq!(metadata["queue"]["key"], queue_key, "{}", case.name);
+
+        // Idempotence: a second startup pass finds no running row, appends no
+        // duplicate notification, and enqueues no second wake.
+        let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+            .await
+            .unwrap();
+        assert_eq!(second.tool_calls_recovered, 0, "{}", case.name);
+        assert_eq!(
+            load_restart_notification_messages(&db.node, &parent_session_id)
+                .await
+                .len(),
+            1,
+            "{}: second recovery pass must not duplicate the notification",
+            case.name
+        );
+        assert_eq!(
+            load_restart_wake_rows(&db.node, &parent_session_id)
+                .await
+                .len(),
+            1,
+            "{}: second recovery pass must not duplicate the wake",
+            case.name
+        );
+    } else {
+        assert!(
+            notifications.is_empty(),
+            "case {} owes no restart notification, found {:?}",
+            case.name,
+            notifications
+        );
+        assert!(wakes.is_empty(), "case {} owes no restart wake", case.name);
+    }
+}
+
+async fn load_restart_notification_messages(node: &EmbeddedNode, session_id: &str) -> Vec<String> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{ content }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "load restart notification messages failed: {:?}",
+        response.errors
+    );
+    #[derive(Deserialize)]
+    struct MessageRow {
+        content: String,
+    }
+    let rows: Vec<MessageRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    rows.into_iter().map(|row| row.content).collect()
+}
+
+async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Option<String>> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    execution_origin: {{ _eq: "scheduled" }}
+                }}
+            ) {{ metadata }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "load restart wake rows failed: {:?}",
+        response.errors
+    );
+    #[derive(Deserialize)]
+    struct WakeRow {
+        metadata: Option<String>,
+    }
+    let rows: Vec<WakeRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    rows.into_iter().map(|row| row.metadata).collect()
+}

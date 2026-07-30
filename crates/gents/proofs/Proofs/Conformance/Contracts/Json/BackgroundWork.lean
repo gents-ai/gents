@@ -1,6 +1,13 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 
+/-!
+# Background Work JSON
+
+Serializers and fixed witness rows for R4C/R6 backgrounding and transcript
+contracts.
+-/
+
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
@@ -51,11 +58,17 @@ def r4cReadToolOutputDispatchesByStateJson
       ++ jsonString "r4c.read_tool_output.dispatch_by_state" ++ ","
     ++ "\"tool_call_id\":" ++ jsonString witness.toolCallId ++ ","
     ++ "\"running_source\":" ++ jsonString witness.runningSource ++ ","
+    ++ "\"running_no_buffer_source\":"
+      ++ jsonString witness.runningNoBufferSource ++ ","
     ++ "\"terminal_source\":" ++ jsonString witness.terminalSource ++ ","
     ++ "\"running_payload\":" ++ jsonString witness.runningPayload ++ ","
-    ++ "\"stale_running_payload\":"
-      ++ jsonString witness.staleRunningPayload ++ ","
-    ++ "\"terminal_payload\":" ++ jsonString witness.terminalPayload
+    ++ "\"running_no_buffer_payload\":"
+      ++ jsonString witness.runningNoBufferPayload ++ ","
+    ++ "\"terminal_payload\":" ++ jsonString witness.terminalPayload ++ ","
+    ++ "\"running_next_offset\":" ++ toString witness.runningNextOffset ++ ","
+    ++ "\"running_total_bytes\":" ++ toString witness.runningTotalBytes ++ ","
+    ++ "\"running_has_more\":" ++ boolString witness.runningHasMore ++ ","
+    ++ "\"terminal_total_bytes\":" ++ toString witness.terminalTotalBytes
     ++ "}"
 
 def r4cSteerAppendPreservesLineageJson
@@ -137,16 +150,46 @@ def r4cReadTranscriptHidesBridgeRows :
   , renderedTranscript := "[assistant seq=2]\nplain assistant message\n"
   }
 
+-- #937 realignment: the live ring buffer (`LiveToolOutputRegistry`) exists in
+-- production and `handle_read_tool_output` serves its snapshots for running
+-- rows — the earlier "never built / running reads are empty" witness had
+-- drifted from shipped behavior and was invisible because it was only
+-- string-pinned. Sources and paging numbers are computed from the
+-- `Subagent.ToolOutput` model: a running row with a snapshot serves the live
+-- tail; a running row with NO snapshot (the post-restart shape — the
+-- registry is volatile) serves empty output; a terminal row serves the
+-- persisted completion. Payload fixture: the running snapshot has produced
+-- "live" (4 bytes, nothing evicted) and the terminal completion is
+-- "livedone" (8 bytes).
 def r4cReadToolOutputDispatchesByState :
     R4cWitnesses.ReadToolOutputDispatchesByState :=
+  let runningWindow : Subagent.ToolOutput.RetainedWindow :=
+    { firstOffset := 0, retainedLen := 4, totalBytes := 4 }
+  let runningSlice := Subagent.ToolOutput.readSlice runningWindow 0 65536
+  let terminalWindow : Subagent.ToolOutput.RetainedWindow :=
+    { firstOffset := 0, retainedLen := 8, totalBytes := 8 }
+  let terminalSlice := Subagent.ToolOutput.readSlice terminalWindow 0 65536
   { toolCallId := "r4c-w4-tool-call"
-  , runningSource := "none"
-  , terminalSource := "persisted_tool_completion"
-  , runningPayload := ""
-  , staleRunningPayload := ""
-  , terminalPayload := "persisted-completion-stdout"
+  , runningSource :=
+      (Subagent.ToolOutput.readDispatch false true).toContract
+  , runningNoBufferSource :=
+      (Subagent.ToolOutput.readDispatch false false).toContract
+  , terminalSource :=
+      (Subagent.ToolOutput.readDispatch true true).toContract
+  , runningPayload := "live"
+  , runningNoBufferPayload := ""
+  , terminalPayload := "livedone"
+  , runningNextOffset := runningSlice.nextOffset
+  , runningTotalBytes := runningSlice.totalBytes
+  , runningHasMore := runningSlice.hasMore
+  , terminalTotalBytes := terminalSlice.totalBytes
   }
 
+-- #593 fixed witness: the bridge exists and is `running`, the child row is
+-- absent, and every parent-facing surface stays observable — the list entry
+-- projects `awaiting_child_materialization` (visible under both the `all`
+-- and default `running` filters), the read explains the same projection
+-- without faking a terminal outcome, and the wait payload is retryable.
 def r4cUnmaterializedChildVisible :
     R4cWitnesses.UnmaterializedChildVisible :=
   { callerRequestId := "r4c-w7-caller"
@@ -192,6 +235,39 @@ def r4cBackgroundWorkCasesJson : List String :=
   , r4cSteerInterruptComposesJson r4cSteerInterruptComposes
   , r4cUnmaterializedChildVisibleJson r4cUnmaterializedChildVisible
   ]
+
+def bridgeStepCaseJson (witness : BridgeStepCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"event\":" ++ jsonString witness.event ++ ","
+    ++ "\"child_state\":" ++ jsonString witness.childState ++ ","
+    ++ "\"parent_state\":" ++ jsonString witness.parentState ++ ","
+    ++ "\"cancel_policy\":" ++ jsonString witness.cancelPolicy ++ ","
+    ++ "\"bridge_committed\":" ++ boolString witness.bridgeCommitted ++ ","
+    ++ "\"legal\":" ++ boolString witness.legal ++ ","
+    ++ "\"post_tool_state\":" ++ jsonOptionalString witness.postToolState ++ ","
+    ++ "\"post_child_interrupt_set\":"
+      ++ boolString witness.postChildInterruptSet ++ ","
+    ++ "\"theorem\":" ++ jsonString witness.theoremName
+    ++ "}"
+
+def toolOutputPagingCaseJson (witness : ToolOutputPagingCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"first_offset\":" ++ toString witness.firstOffset ++ ","
+    ++ "\"retained_len\":" ++ toString witness.retainedLen ++ ","
+    ++ "\"total_bytes\":" ++ toString witness.totalBytes ++ ","
+    ++ "\"offset\":" ++ toString witness.offset ++ ","
+    ++ "\"max_bytes\":" ++ toString witness.maxBytes ++ ","
+    ++ "\"start\":" ++ toString witness.start ++ ","
+    ++ "\"slice_len\":" ++ toString witness.sliceLen ++ ","
+    ++ "\"next_offset\":" ++ toString witness.nextOffset ++ ","
+    ++ "\"first_available_offset\":"
+      ++ toString witness.firstAvailableOffset ++ ","
+    ++ "\"total_bytes_out\":" ++ toString witness.totalBytesOut ++ ","
+    ++ "\"has_more\":" ++ boolString witness.hasMore ++ ","
+    ++ "\"theorem\":" ++ jsonString witness.theoremName
+    ++ "}"
 
 def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
   "{"

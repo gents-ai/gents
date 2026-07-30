@@ -1,8 +1,91 @@
 use super::*;
 
 impl DefraSessionHook {
+    /// Persist the assistant tool-call envelope before inline execution can
+    /// block. Background completion is appended by an independent task that
+    /// allocates from durable transcript state; without this row it can reuse
+    /// the hook's in-memory assistant sequence and the later upsert overwrites
+    /// the notification (#945).
+    ///
+    /// Repeated snapshots in one assistant turn update the same row so
+    /// providers that emit several tool calls still materialize one assistant
+    /// message containing the accumulated calls.
+    pub(crate) async fn persist_inflight_assistant_turn(
+        &self,
+        message: &Message,
+    ) -> anyhow::Result<u32> {
+        if !matches!(message, Message::Assistant { .. }) {
+            anyhow::bail!("in-flight assistant persistence requires an assistant message");
+        }
+
+        let content = serde_json::to_string(message)?;
+        let reasoning = gents_protocol::transcript::extract_message_reasoning(message);
+        let (session_id, building_sequence, current_request_id, current_requester_did) = {
+            let state = self.state.lock().await;
+            let session_id = state
+                .session_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            let building_sequence = match state.transcript_turn {
+                TranscriptTurnState::AssistantBuilding { sequence } => Some(sequence),
+                TranscriptTurnState::Idle | TranscriptTurnState::AssistantPersisted { .. } => None,
+            };
+            (
+                session_id,
+                building_sequence,
+                state.current_request_id.clone(),
+                state.current_requester_did.clone(),
+            )
+        };
+
+        let sequence = match building_sequence {
+            Some(sequence) => {
+                session::save_message_with_requester_did(
+                    &self.node,
+                    &session_id,
+                    &self.agent_did,
+                    current_requester_did.as_deref(),
+                    sequence,
+                    "assistant",
+                    &content,
+                    reasoning.as_deref(),
+                )
+                .await?;
+                sequence
+            }
+            None => {
+                session::append_message_with_requester_did(
+                    &self.node,
+                    &session_id,
+                    &self.agent_did,
+                    current_requester_did.as_deref(),
+                    "assistant",
+                    &content,
+                    reasoning.as_deref(),
+                    current_request_id.as_deref(),
+                )
+                .await?
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        if state.session_id.as_deref() == Some(session_id.as_str()) {
+            state.sequence = state.sequence.max(sequence);
+            state.transcript_turn = TranscriptTurnState::AssistantBuilding { sequence };
+        }
+        Ok(sequence)
+    }
+
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
         let content = serde_json::to_string(message)?;
+        let tool_result_aliases = persisted_tool_result_message_aliases(message);
+        // #492: durably persist the assistant turn's chain-of-thought reasoning
+        // into `AgentMessage.reasoning` at materialize time. The reasoning is
+        // already embedded in the serialized `content` blob, but we extract a
+        // readable copy into the dedicated field so a post-finalize reader (our
+        // offline harvest) can recover it even though the live
+        // `AgentResponse.reasoning` tail is cleared on finalize (#64). Only
+        // assistant messages carry reasoning; users/tool-results yield `None`.
         let reasoning = gents_protocol::transcript::extract_message_reasoning(message);
         let reasoning = reasoning.as_deref();
         let (
@@ -12,6 +95,7 @@ impl DefraSessionHook {
             existing_sequence,
             current_request_id,
             current_requester_did,
+            preferred_sequence,
         ) = {
             let state = self.state.lock().await;
             let session_id = state
@@ -22,6 +106,11 @@ impl DefraSessionHook {
             let existing_sequence = message_key
                 .as_ref()
                 .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
+                .or_else(|| {
+                    tool_result_aliases
+                        .iter()
+                        .find_map(|alias| state.persisted_tool_result_message_sequences.get(alias))
+                })
                 .copied();
             (
                 session_id,
@@ -30,6 +119,7 @@ impl DefraSessionHook {
                 existing_sequence,
                 state.current_request_id.clone(),
                 state.current_requester_did.clone(),
+                state.sequence.checked_add(1),
             )
         };
 
@@ -37,6 +127,12 @@ impl DefraSessionHook {
             return Ok(sequence);
         }
 
+        // #497: durable request-scoped dedup for the turn-1 user prompt and the
+        // per-request `<context>` message. Tool-result user messages already
+        // dedup by `message_key` above; these don't. The daemon retry loop builds
+        // a fresh hook per attempt, so a transient failure before the first
+        // assistant token would otherwise re-persist them. If this request
+        // already persisted an identical message, reuse its sequence.
         if message_key.is_none() && matches!(message, Message::User { .. }) {
             if let Some(request_id) = current_request_id.as_deref() {
                 if let Some(sequence) = session::message_sequence_for_request_content(
@@ -52,7 +148,46 @@ impl DefraSessionHook {
             }
         }
 
-        if matches!(turn_state, TranscriptTurnState::Idle) {
+        // Tool-result rows have a stable logical key, but their sequence must
+        // still be allocated from the durable transcript. An in-memory
+        // `state.sequence += 1` can race an independently appended background
+        // notification and create duplicate sequence numbers.
+        if let Some(message_key) = message_key.as_ref() {
+            if !matches!(message, Message::User { .. }) {
+                anyhow::bail!("only user tool-result messages may carry a message key");
+            }
+            let sequence = session::append_message_with_key_and_requester_did(
+                &self.node,
+                &session_id,
+                &self.agent_did,
+                current_requester_did.as_deref(),
+                "user",
+                &content,
+                reasoning,
+                current_request_id.as_deref(),
+                message_key,
+                preferred_sequence,
+            )
+            .await?;
+            let mut state = self.state.lock().await;
+            if state.session_id.as_deref() == Some(session_id.as_str()) {
+                state.sequence = state.sequence.max(sequence);
+                state
+                    .persisted_tool_result_message_sequences
+                    .insert(message_key.clone(), sequence);
+                for alias in &tool_result_aliases {
+                    state
+                        .persisted_tool_result_message_sequences
+                        .insert(alias.clone(), sequence);
+                }
+            }
+            return Ok(sequence);
+        }
+
+        let append_unreserved = matches!(turn_state, TranscriptTurnState::Idle)
+            || (matches!(message, Message::Assistant { .. })
+                && matches!(turn_state, TranscriptTurnState::AssistantPersisted { .. }));
+        if append_unreserved {
             let role = match message {
                 Message::User { .. } => "user",
                 Message::Assistant { .. } => "assistant",
@@ -74,17 +209,8 @@ impl DefraSessionHook {
             let mut state = self.state.lock().await;
             if state.session_id.as_deref() == Some(session_id.as_str()) {
                 state.sequence = state.sequence.max(sequence);
-                let is_tool_result_message = message_key.is_some();
-                if let Some(key) = message_key {
-                    state
-                        .persisted_tool_result_message_sequences
-                        .insert(key, sequence);
-                }
                 match message {
-                    Message::User { .. } if !is_tool_result_message => {
-                        state.reset_after_user_message()
-                    }
-                    Message::User { .. } => {}
+                    Message::User { .. } => state.reset_after_user_message(),
                     Message::Assistant { .. } => {
                         state.transcript_turn =
                             TranscriptTurnState::AssistantPersisted { sequence };
@@ -95,36 +221,23 @@ impl DefraSessionHook {
             return Ok(sequence);
         }
 
-        let (session_id, sequence, role, message_key) = {
+        let (session_id, sequence, role) = {
             let mut state = self.state.lock().await;
             let session_id = state
                 .session_id
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-            if let Some(existing_sequence) = message_key
-                .as_ref()
-                .and_then(|key| state.persisted_tool_result_message_sequences.get(key))
-            {
-                return Ok(*existing_sequence);
-            }
 
             match message {
                 Message::User { .. } => {
                     state.sequence += 1;
                     let sequence = state.sequence;
-                    if message_key.is_none() {
-                        state.reset_after_user_message();
-                    }
-                    if let Some(key) = message_key.as_ref() {
-                        state
-                            .persisted_tool_result_message_sequences
-                            .insert(key.clone(), sequence);
-                    }
-                    (session_id, sequence, "user", message_key)
+                    state.reset_after_user_message();
+                    (session_id, sequence, "user")
                 }
                 Message::Assistant { .. } => {
                     let sequence = state.persist_assistant_turn();
-                    (session_id, sequence, "assistant", None)
+                    (session_id, sequence, "assistant")
                 }
                 Message::System { .. } => {
                     anyhow::bail!("system messages are not persisted in session history");
@@ -132,35 +245,17 @@ impl DefraSessionHook {
             }
         };
 
-        match message_key {
-            Some(message_key) => {
-                session::save_message_with_key_and_requester_did(
-                    &self.node,
-                    &session_id,
-                    &self.agent_did,
-                    current_requester_did.as_deref(),
-                    sequence,
-                    role,
-                    &content,
-                    reasoning,
-                    &message_key,
-                )
-                .await?;
-            }
-            None => {
-                session::save_message_with_requester_did(
-                    &self.node,
-                    &session_id,
-                    &self.agent_did,
-                    current_requester_did.as_deref(),
-                    sequence,
-                    role,
-                    &content,
-                    reasoning,
-                )
-                .await?;
-            }
-        }
+        session::save_message_with_requester_did(
+            &self.node,
+            &session_id,
+            &self.agent_did,
+            current_requester_did.as_deref(),
+            sequence,
+            role,
+            &content,
+            reasoning,
+        )
+        .await?;
         Ok(sequence)
     }
 
@@ -273,6 +368,8 @@ impl DefraSessionHook {
                 _ => return Ok(0),
             }
         };
+        // `session_id` is required by the streamed-result path below; bind it to
+        // keep the query and that call reading from the same active session.
         let _ = &session_id;
 
         let escaped_request_id = crate::graphql::escape_graphql_string(&request_id);
@@ -318,11 +415,15 @@ impl DefraSessionHook {
                 continue;
             }
 
+            // Resolve the result-message identity the stream path would have used.
             let (result_id, call_id) = {
                 let state = self.state.lock().await;
                 state.tool_result_message_identity(internal_call_id, None)
             };
 
+            // Replay the streamed result-message persistence: it loads the
+            // recorded result from the row (so the empty content here is
+            // replaced) and dedupes, so an already-paired call is a no-op.
             let tool_result = ToolResult {
                 id: result_id,
                 call_id,
@@ -485,6 +586,11 @@ impl DefraSessionHook {
             .map(|mode| mode.as_await_mode())
             .unwrap_or(parent_context.subagent_default_await_mode);
         let target_host = self.subagent_target_host(&target);
+        // Cross-deployment (remote-DID) subagent delegation is deferred behind a
+        // default-OFF flag (#377). When the parent behavior has not opted in,
+        // reject ANY remote spawn (both await modes). Remote targets should not
+        // even be surfaced to the model in this case (see tool_surface), so a
+        // remote spawn here means a stale/forged target name.
         if target_host == SubagentTargetHost::Remote
             && !parent_context.subagent_allow_cross_deployment
         {
@@ -546,6 +652,11 @@ impl DefraSessionHook {
                 .await;
         }
 
+        // Fail-safe for local targets whose behavior was deleted mid-session
+        // (#377). If the resolved target is LOCAL (same agent DID) but its
+        // behavior no longer exists in the DB, writing a child AgentRequest
+        // would produce an orphan that can never be claimed. Reject cleanly
+        // with a service_unavailable payload instead of writing the orphan.
         if target_host == SubagentTargetHost::Local {
             match load_agent_behavior(&self.node, behavior_id).await {
                 Ok(None) => {
@@ -638,6 +749,14 @@ impl DefraSessionHook {
                 .await;
         }
 
+        // Persist a normalized bridge args payload that carries the RESOLVED
+        // target `(agent_did, behavior_id)` alongside the model-facing `name`.
+        // `SubagentSource` reads these resolved fields directly. For a remote
+        // target, the targeted bridge reaches that host and the host writes the
+        // child `AgentRequest` with its local DID + behavior id. The claiming
+        // deployment never needs to re-resolve the friendly name (it has no
+        // access to the parent's target table), which is what removes the
+        // resolution seam.
         let target_agent_did = target.agent_did.clone();
         let bridge_args = serde_json::json!({
             "name": name,
@@ -675,6 +794,16 @@ impl DefraSessionHook {
         }
         lifecycle.start_running().await?;
 
+        // Spawn convergence (#377): both same-deployment (local) and
+        // cross-deployment (remote) spawns now follow ONE path — write the
+        // `AgentToolCall` bridge (done by `start_running()` above) and let
+        // `SubagentSource` create the child `AgentRequest`. `SubagentSource`
+        // dedups via `child_request_exists`, so there is exactly one creator
+        // regardless of locality. The hook no longer synchronously creates the
+        // child, so the background receipt does not yet carry the child session
+        // id (the claiming deployment assigns it when it materializes the
+        // child); foreground waits adopt the session id from the edge once
+        // `SubagentSource` has materialized the child.
         self.in_flight_lifecycles
             .lock()
             .await
@@ -685,6 +814,9 @@ impl DefraSessionHook {
             return Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, receipt));
         }
 
+        // Foreground spawns are local-only (the remote-foreground case is
+        // rejected above). Block until `SubagentSource` materializes the child
+        // and the bridge reaches a terminal state.
         let result = self
             .await_foreground_subagent(
                 internal_call_id,
@@ -699,6 +831,10 @@ impl DefraSessionHook {
         Ok(self.skip_tool_result(SPAWN_SUBAGENT_TOOL_NAME, result))
     }
 
+    /// Classify a resolved target as local or remote by comparing the target's
+    /// `agent_did` to this deployment's own DID. No behavior DB lookup is
+    /// needed: the target carries the owning agent's DID directly, which is
+    /// also what removes the cross-node resolution seam.
     pub(super) fn subagent_target_host(&self, target: &SubagentTarget) -> SubagentTargetHost {
         if target.agent_did == self.agent_did {
             SubagentTargetHost::Local
@@ -706,6 +842,30 @@ impl DefraSessionHook {
             SubagentTargetHost::Remote
         }
     }
+}
+
+fn persisted_tool_result_message_aliases(message: &Message) -> Vec<String> {
+    let Message::User { content } = message else {
+        return Vec::new();
+    };
+    if content.len() != 1 {
+        return Vec::new();
+    }
+    let Some(UserContent::ToolResult(tool_result)) = content.first() else {
+        return Vec::new();
+    };
+
+    let mut aliases = Vec::new();
+    if !tool_result.id.is_empty() {
+        aliases.push(format!("result:{}", tool_result.id));
+    }
+    if let Some(call_id) = tool_result.call_id.as_deref().filter(|id| !id.is_empty()) {
+        let alias = format!("call:{call_id}");
+        if !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    aliases
 }
 
 fn is_missing_tool_call_result(error: &anyhow::Error) -> bool {

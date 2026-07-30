@@ -231,6 +231,40 @@ async fn load_response_doc(
         .expect("AgentResponse row")
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct PersistedMessageShape {
+    sequence: u32,
+    role: String,
+    content: String,
+}
+
+async fn load_message_shapes(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+) -> Vec<PersistedMessageShape> {
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{ sequence role content }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentMessage shape query failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .and_then(|rows| serde_json::from_value(rows.clone()).ok())
+        .unwrap_or_default()
+}
+
 fn text_item(text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
     Ok(LoopStreamItem::Item(
         MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(
@@ -482,7 +516,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 }
 
 #[tokio::test]
-async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_completion() {
+async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
@@ -575,6 +609,30 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
         .await,
         crate::llm::ToolCallHookAction::Continue
     ));
+
+    // Reproduce the live wait race: an independent background task appends a
+    // user-role completion while inline tool execution is still active. The
+    // streamed tool-call envelope must already own its durable assistant row,
+    // so this append allocates the following sequence instead of colliding.
+    let notification = serde_json::to_string(&Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "<tool-notification status=\"completed\" />".to_string(),
+        })],
+    })
+    .unwrap();
+    crate::session::append_message_with_requester_did(
+        &node,
+        &session_id,
+        "did:test:test",
+        None,
+        "user",
+        &notification,
+        None,
+        Some(&request_id),
+    )
+    .await
+    .unwrap();
+
     assert!(matches!(
         hook.on_tool_result(
             "read_file",
@@ -600,13 +658,40 @@ async fn streamed_tool_result_persists_accumulated_assistant_turn_after_inline_c
     let history = crate::session::load_history(&node, &session_id)
         .await
         .unwrap();
-    assert_eq!(history.len(), 3);
+    assert_eq!(history.len(), 4);
     assert!(matches!(&history[1], Message::Assistant { content, .. }
         if matches!(content.first(), Some(AssistantContent::ToolCall(tool_call))
             if tool_call.call_id.as_deref() == Some("call-1"))));
     assert!(matches!(&history[2], Message::User { content }
+        if matches!(content.first(), Some(UserContent::Text(Text { text }))
+            if text.contains("<tool-notification"))));
+    assert!(matches!(&history[3], Message::User { content }
         if matches!(content.first(), Some(UserContent::ToolResult(tool_result))
             if tool_result.call_id.as_deref() == Some("call-1"))));
+
+    let shapes = load_message_shapes(&node, &session_id).await;
+    assert_eq!(
+        shapes
+            .iter()
+            .map(|row| row.role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["user", "assistant", "user", "user"]
+    );
+    assert!(
+        shapes
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence),
+        "assistant wait, background notification, and result need distinct ordered rows: {shapes:#?}"
+    );
+    assert_eq!(
+        shapes.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "the inline wait race must not overwrite a row or leave a phantom reservation"
+    );
+    assert!(
+        shapes[1].content.contains("\"role\":\"assistant\""),
+        "assistant database role must agree with its serialized envelope"
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

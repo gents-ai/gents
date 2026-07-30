@@ -675,9 +675,14 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_recovery_outcome_cases_fence_duplicate_tolerant_counting")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "conformance::generated_restart_disposition_cases_drive_recover_all")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "conformance::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract")
+      "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r5_cross_deployment_cases"
@@ -729,6 +734,21 @@ def caseCoverage : List CoverageEntry :=
       "R4cBackgroundWorkCases"
       "gents_desktop_bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "r4c_background_work_cases"
+      "R4cBackgroundWorkCases"
+      "conformance::generated_read_tool_output_witness_drives_hook_dispatch")
+      "background-tools" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "tool_output_paging_cases"
+      "ToolOutputPagingCases"
+      "background_tools::tests::generated_tool_output_paging_cases_match_slice_function")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "bridge_step_cases"
+      "BridgeStepCases"
+      "conformance::generated_bridge_step_cases_drive_bridge_lifecycle")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "codex_shim_projection_cases"
       "CodexShimProjectionCases"

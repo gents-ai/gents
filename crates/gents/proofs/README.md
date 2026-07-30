@@ -166,6 +166,9 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
+| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, and per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937) |
+| `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -645,6 +648,102 @@ scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
 `serial_gate_ignores_expired_claims`,
 `supersede_only_touches_own_agent_requests`); see the docstrings on
 `Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
+
+### Backgrounding: subagent bridges and native background tools
+
+Background work comes in two kinds that share the `AgentToolCall` bridge row
+vocabulary (`await_mode`, `cancel_policy`) but have deliberately different
+durable state and restart outcomes. The models keep them distinct; do not
+generalize one lane's fixtures to the other.
+
+| | Background **subagent** (R5) | Native background **tool** (R6) |
+|---|---|---|
+| Row shape | `await_mode="background"`, `child_request_id` set | `await_mode="background"`, `child_request_id` empty |
+| Durable state | Bridge row + child `AgentRequest` (lineage, depth, interrupt flag) + notification message + coalesced wake row | Tool row (result, cancel_cause) + notification message + coalesced wake row |
+| Volatile state | Foreground waiter state in the owned loop | Execution registries and the live output ring buffer |
+| Restart, live parent | **Leave bridge running**; project when the child terminal is durable | **Interrupt**: terminalize `cancelled`, notification reason `interrupted_on_restart`, one coalesced wake |
+| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / `recover_all` interrupt path |
+
+Model → conformance → Rust bindings:
+
+- **Bridge lifecycle and properties** — `Proofs/Background/*` (B1–B7,
+  INV-LINK/UNIQUE/DEPTH, delegation graph) → `r6_backgrounding_cases`,
+  `r6_background_theorem_witnesses`, `subagent_delegation_graph_cases`, and
+  `r4c_background_work_cases` in the contract JSON → driven by
+  `tests/conformance/background.rs` against the real hook and
+  `ToolCallLifecycle`.
+- **Startup restart disposition (#937)** —
+  `Proofs/Recovery/Sweeps/BackgroundRestart.lean` models the classifier in
+  `recover_stuck_running_tool_calls` as a total function
+  (`restartDisposition`) with exhaustive characterizations
+  (`restart_interrupt_iff_native_background_live_parent`,
+  `leave_running_iff_preserved_shapes`,
+  `notification_iff_restart_interrupt`,
+  `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
+  rows are **computed from the model** and driven through the real
+  `ToolCallLifecycle::recover_all` by
+  `conformance::generated_restart_disposition_cases_drive_recover_all`,
+  including the leave-running rows (background subagent bridge under a live
+  parent, detached bridge under an interrupted parent, child-linked bridge
+  under a cleanly completed parent) and the notification + coalesced-wake
+  side effects with idempotence under a second pass.
+- **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
+  bridges, subagent liveness #465, terminal-parent owned tools #837) →
+  `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
+- **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
+  three-way `read_tool_output` dispatch (terminal → persisted completion;
+  running + live snapshot → ring-buffer tail; running + no snapshot — the
+  post-restart shape — → empty), the retained-window paging contract
+  (contiguity, eviction detectability, progress, `has_more`), and ring tail
+  retention. The `r4c.read_tool_output.dispatch_by_state` witness values and
+  the `tool_output_paging_cases` rows are computed from `readDispatch` /
+  `readSlice`; the dispatch is driven against the real hook by
+  `conformance::generated_read_tool_output_witness_drives_hook_dispatch` and
+  the paging rows against `read_retained_output_slice` by
+  `background_tools::tests::generated_tool_output_paging_cases_match_slice_function`.
+  UTF-8 boundary snapping is a Rust representation detail below the byte
+  model.
+- **Executable bridge step (#937)** — `Proofs/Background/Executable.lean`
+  now executes the bridge-local events on the subagent leg
+  (`bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`) with a
+  non-vacuous `step_refines_transition`. The `bridge_step_cases` rows are
+  computed by running `step` on concrete fixtures (pinned at Lean build time
+  by `bridgeStepCases_pinned`) and driven by
+  `conformance::generated_bridge_step_cases_drive_bridge_lifecycle` through
+  `project_background_subagent_completion` (which owns the complete/failure
+  guards — Rust `bridge_complete` itself is a caller-trust boundary) and
+  `ToolCallLifecycle::bridge_cancel_cascade`.
+- **Native tool leg (boundary)** — the childless R6 row's lifecycle is the
+  single-row `ToolExecution` machine (executable via
+  `ToolExecution.Executable.step?`, including `background`, `foreground`, and
+  `detach` mode/policy actions): Rust `bridge_complete` on a
+  `new_background_tool` row refines `ToolExecution.Transition.complete`,
+  `bridge_failure(Interrupted)` refines `cancelDuringRun`, and
+  `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
+  (`is_bridge()` admits both kinds). `SecondLeg.tool` in
+  `Proofs/Background/Bridge.lean` carries only the terminal-projection
+  vocabulary for that leg; the paired `BridgedState` transitions are
+  subagent-only by design.
+- **Terminal completion → next agent turn (#937)** —
+  `Proofs/Background/CompletionContinuation.lean` composes the terminal
+  parent-visible tool state, ordinary user-role transcript append, canonical
+  `background_completion:<session>` coalesced wake, and FIFO claim. Its
+  `claimed_continuation_sees_terminal_notification` theorem makes the
+  provider-facing acceptance property explicit: a continuation can only be
+  built after notification persistence, and claiming it retains that message
+  in the parent transcript. The executable canonical path emits
+  `terminal_completion_message_precedes_claimed_continuation` in
+  `r6_backgrounding_cases`; the Rust consumer projects a real background
+  subagent completion, verifies the message and wake, releases the active
+  parent, claims the wake through `DefraWatcher`, and verifies the message is
+  still present.
+- **Wake coalescing** — `Proofs/Session/*` queue model
+  (`background_completion` source, coalesce keys, automated drain) →
+  queue-source rows in `r6_backgrounding_cases` and the R4c steering
+  witnesses.
+- **Cross-node subagent completion/cancel** — `tla/SubagentCompletion.tla`
+  and `tla/SubagentCancelPropagation.tla` (subagent lane only; native tool
+  backgrounding is single-node and carried by Lean).
 
 ### Client Turn Projection
 

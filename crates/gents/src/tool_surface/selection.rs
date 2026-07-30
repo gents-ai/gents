@@ -79,12 +79,15 @@ impl SubagentToolConfig {
         self.spawn_enabled && !self.targets.is_empty()
     }
 
-    pub(crate) fn steering_tools_enabled(&self) -> bool {
-        self.tools_enabled() && self.steering_enabled
+    /// Inspection is part of the background-subagent capability. A behavior
+    /// that can launch a child asynchronously must also be able to read that
+    /// child's transcript without requiring the stronger steering permission.
+    pub(crate) fn background_inspection_tools_enabled(&self) -> bool {
+        self.tools_enabled() && self.background_enabled
     }
 
     pub(crate) fn steer_subagent_enabled(&self) -> bool {
-        self.steering_tools_enabled() && self.background_enabled
+        self.background_inspection_tools_enabled() && self.steering_enabled
     }
 }
 

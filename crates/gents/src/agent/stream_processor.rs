@@ -115,6 +115,15 @@ impl<'a> StreamProcessor<'a> {
                     .await;
                 self.assistant_turn
                     .push_tool_call(crate::llm::rig_compat::from_rig_tool_call(&tool_call));
+                if let Some(message) = self.assistant_turn.message_snapshot() {
+                    self.persistence_hook.apply_persistence_policy(
+                        self.persistence_hook
+                            .persist_inflight_assistant_turn(&message)
+                            .await
+                            .map(|_| ()),
+                        "persist in-flight assistant tool-call turn",
+                    )?;
+                }
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
@@ -215,7 +224,7 @@ impl<'a> StreamProcessor<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct AssistantTurnAccumulator {
     text: String,
     reasoning: Vec<AssistantReasoning>,
@@ -246,6 +255,10 @@ impl AssistantTurnAccumulator {
 
     pub(crate) fn take_message(&mut self) -> Option<CompletionMessage> {
         self.build_message()
+    }
+
+    fn message_snapshot(&self) -> Option<CompletionMessage> {
+        self.clone().build_message()
     }
 
     pub(crate) fn reconcile_text(&mut self, final_text: &str) {

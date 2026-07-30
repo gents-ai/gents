@@ -131,8 +131,17 @@ def snapshotJson : String :=
     ++ "\"recovery_equivalence_cases\":"
       ++ jsonArray
         (Recovery.recoveryEquivalenceCases.map recoveryEquivalenceCaseJson) ++ ","
+    ++ "\"restart_disposition_cases\":"
+      ++ jsonArray
+        (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
     ++ "\"r4c_background_work_cases\":"
       ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
+    ++ "\"tool_output_paging_cases\":"
+      ++ jsonArray
+        (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","
+    ++ "\"bridge_step_cases\":"
+      ++ jsonArray
+        (bridgeStepCases.map bridgeStepCaseJson) ++ ","
     ++ "\"codex_shim_projection_cases\":"
       ++ codexShimProjectionCasesJson ++ ","
     ++ "\"codex_shim_subagent_tool_cases\":"

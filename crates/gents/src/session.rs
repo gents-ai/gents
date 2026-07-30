@@ -37,8 +37,8 @@ pub use fork::{
 pub use history::load_history;
 #[allow(unused_imports)]
 pub(crate) use history::{
-    append_message_with_requester_did, mark_response_materialized,
-    message_sequence_for_request_content, save_message, save_message_with_key_and_requester_did,
+    append_message_with_key_and_requester_did, append_message_with_requester_did,
+    mark_response_materialized, message_sequence_for_request_content, save_message,
     save_message_with_requester_did,
 };
 pub(crate) use query::load_session_behavior_id;

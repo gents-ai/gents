@@ -2683,4 +2683,59 @@ mod tests {
         assert_eq!(slice.total_bytes, 1000);
         assert!(!slice.has_more);
     }
+
+    /// Drives the Lean `tool_output_paging_cases` (#937) through the real
+    /// `read_retained_output_slice`. The rows are computed from the Lean
+    /// `Subagent.ToolOutput.readSlice` model, so paging drift in either
+    /// direction (model or implementation) fails here. ASCII payloads keep
+    /// byte and UTF-8 character boundaries identical, so the Rust boundary
+    /// snapping is inert for these rows.
+    #[test]
+    fn generated_tool_output_paging_cases_match_slice_function() {
+        let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();
+        assert_eq!(cases.len(), 5, "Lean tool-output paging family drifted");
+
+        for case in cases {
+            let retained = "x".repeat(case.retained_len as usize);
+            let slice = read_retained_output_slice(
+                &retained,
+                case.first_offset,
+                case.total_bytes,
+                case.offset,
+                case.max_bytes as usize,
+            );
+            assert_eq!(
+                slice.output.len() as u64,
+                case.slice_len,
+                "paging case {} returned the wrong slice length",
+                case.name
+            );
+            assert_eq!(
+                slice.next_offset, case.next_offset,
+                "paging case {} continuation cursor drifted",
+                case.name
+            );
+            assert_eq!(
+                slice.first_available_offset, case.first_available_offset,
+                "paging case {} eviction floor drifted",
+                case.name
+            );
+            assert_eq!(
+                slice.total_bytes, case.total_bytes_out,
+                "paging case {} total drifted",
+                case.name
+            );
+            assert_eq!(
+                slice.has_more, case.has_more,
+                "paging case {} has_more drifted",
+                case.name
+            );
+            assert_eq!(
+                slice.next_offset,
+                case.start + case.slice_len,
+                "paging case {} pages must be contiguous from the clamped start",
+                case.name
+            );
+        }
+    }
 }

@@ -31,10 +31,15 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
     ReadToolOutputDispatchesByState {
         tool_call_id: String,
         running_source: String,
+        running_no_buffer_source: String,
         terminal_source: String,
         running_payload: String,
-        stale_running_payload: String,
+        running_no_buffer_payload: String,
         terminal_payload: String,
+        running_next_offset: u64,
+        running_total_bytes: u64,
+        running_has_more: bool,
+        terminal_total_bytes: u64,
     },
     #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
     SteerAppendPreservesLineage {
@@ -93,6 +98,45 @@ impl LeanR4cBackgroundWorkCase {
             }
         }
     }
+}
+
+/// Executable bridge-step witness (#937): one concrete subagent-bridge
+/// fixture, one bridge event, and the outcome computed by running the Lean
+/// `Subagent.BridgedState.step` on it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanBridgeStepCase {
+    pub(crate) name: String,
+    pub(crate) event: String,
+    pub(crate) child_state: String,
+    pub(crate) parent_state: String,
+    pub(crate) cancel_policy: String,
+    pub(crate) bridge_committed: bool,
+    pub(crate) legal: bool,
+    pub(crate) post_tool_state: Option<String>,
+    pub(crate) post_child_interrupt_set: bool,
+    #[allow(dead_code)]
+    pub(crate) theorem: String,
+}
+
+/// Paging witness over the retained output window (#937): inputs plus the
+/// slice outputs computed from the Lean `Subagent.ToolOutput.readSlice`
+/// model, consumed against `read_retained_output_slice`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanToolOutputPagingCase {
+    pub(crate) name: String,
+    pub(crate) first_offset: u64,
+    pub(crate) retained_len: u64,
+    pub(crate) total_bytes: u64,
+    pub(crate) offset: u64,
+    pub(crate) max_bytes: u64,
+    pub(crate) start: u64,
+    pub(crate) slice_len: u64,
+    pub(crate) next_offset: u64,
+    pub(crate) first_available_offset: u64,
+    pub(crate) total_bytes_out: u64,
+    pub(crate) has_more: bool,
+    #[allow(dead_code)]
+    pub(crate) theorem: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
