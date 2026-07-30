@@ -12,13 +12,8 @@ use super::TemplateError;
 /// Collect the complete set of full variable refs a system template reads,
 /// rejecting constructs that introduce bindings or control flow.
 pub fn collect_system_reads(template: &str) -> Result<BTreeSet<String>, TemplateError> {
-    let ast = parse(
-        template,
-        "system_prompt",
-        SyntaxConfig::default(),
-        Default::default(),
-    )
-    .map_err(|e| TemplateError::Parse(e.to_string()))?;
+    let ast = parse(template, "system_prompt", SyntaxConfig, Default::default())
+        .map_err(|e| TemplateError::Parse(e.to_string()))?;
     let mut reads = BTreeSet::new();
     walk_stmt_system(&ast, &mut reads)?;
     Ok(reads)
@@ -75,7 +70,7 @@ pub fn collect_request_reads(template: &str) -> Result<BTreeSet<String>, Templat
     let ast = parse(
         template,
         "request_context",
-        SyntaxConfig::default(),
+        SyntaxConfig,
         Default::default(),
     )
     .map_err(|e| TemplateError::Parse(e.to_string()))?;
