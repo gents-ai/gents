@@ -345,7 +345,6 @@ declare -a ALLOWLIST=(
 # - defradb / defradb.rs
 # - defra-core, defra-node, defra-p2p-adapter (upstream DefraDB crates)
 # - agent_did, AgentRequest, AgentResponse, AgentToolCall (domain nouns)
-# - agent-tool-call-lifecycle-v1-to-v2-lens (lens name = domain vocabulary)
 
 # ---------------------------------------------------------------------------
 # Helpers
