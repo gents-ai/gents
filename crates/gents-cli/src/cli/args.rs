@@ -1074,7 +1074,7 @@ pub(crate) struct TraceProjectArgs {
         long,
         value_enum,
         default_value_t = TraceProjectionFormatArg::Json,
-        help = "Adapter projection output format"
+        help = "Adapter projection output format; native-json omits the Gents envelope"
     )]
     pub(crate) format: TraceProjectionFormatArg,
     #[arg(
@@ -1092,7 +1092,7 @@ pub(crate) struct TraceProjectSchemaArgs {
         long,
         value_enum,
         default_value_t = TraceProjectionFormatArg::Json,
-        help = "Output schema for a JSON projection envelope or JSONL record"
+        help = "Output schema for a projection envelope, native projection, or JSONL record"
     )]
     pub(crate) format: TraceProjectionFormatArg,
     #[arg(
@@ -1104,6 +1104,7 @@ pub(crate) struct TraceProjectSchemaArgs {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum TraceProjectionArg {
+    Atif,
     OpenaiCodex,
     Langgraph,
     MultiAgent,
@@ -1119,6 +1120,7 @@ pub(crate) enum TraceProjectionRedactionArg {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum TraceProjectionFormatArg {
     Json,
+    NativeJson,
     Jsonl,
     EvalJsonl,
 }

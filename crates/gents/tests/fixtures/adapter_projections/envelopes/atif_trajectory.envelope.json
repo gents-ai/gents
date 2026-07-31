@@ -1,0 +1,98 @@
+{
+  "output": {
+    "adapter": "atif_trajectory",
+    "projection": {
+      "agent": {
+        "extra": {
+          "agent_did": "did:test:planner",
+          "behavior_id": "terminal-bench",
+          "runtime": "gents"
+        },
+        "model_name": "deepseek-ai/DeepSeek-V4-Flash-0731",
+        "name": "terminal-bench",
+        "version": "0.10.1"
+      },
+      "extra": {
+        "source_projection_id": "run_timeline",
+        "source_request_id": "req-atif-1"
+      },
+      "final_metrics": {
+        "extra": {
+          "inference_call_count": 1,
+          "lifecycle_state": "completed",
+          "request_id": "req-atif-1",
+          "status": "completed",
+          "tool_call_count": 1
+        },
+        "total_steps": 2
+      },
+      "notes": "Projected from Gents' persisted run timeline; token metrics are omitted when the durable trace does not distinguish prompt and completion usage.",
+      "schema_version": "ATIF-v1.7",
+      "session_id": "session-atif-1",
+      "steps": [
+        {
+          "extra": {
+            "request_id": "req-atif-1",
+            "session_id": "session-atif-1"
+          },
+          "message": "[training_safe_redacted]",
+          "source": "user",
+          "step_id": 1,
+          "timestamp": "2026-07-31T20:00:00Z"
+        },
+        {
+          "extra": {
+            "gents_role": "assistant",
+            "message_sequence": 1,
+            "request_id": "req-atif-1",
+            "session_id": "session-atif-1"
+          },
+          "message": "I will inspect the workspace.",
+          "observation": {
+            "results": [
+              {
+                "content": "Cargo.toml",
+                "extra": {
+                  "latency_ms": 75,
+                  "status": "completed"
+                },
+                "source_call_id": "call-shell-1"
+              }
+            ]
+          },
+          "source": "agent",
+          "step_id": 2,
+          "timestamp": "2026-07-31T20:00:01Z",
+          "tool_calls": [
+            {
+              "arguments": {
+                "cmd": "[training_safe_redacted]"
+              },
+              "extra": {
+                "completed_at": "2026-07-31T20:00:03Z",
+                "started_at": "2026-07-31T20:00:02Z",
+                "status": "completed"
+              },
+              "function_name": "bash",
+              "tool_call_id": "call-shell-1"
+            }
+          ]
+        }
+      ],
+      "trajectory_id": "req-atif-1"
+    }
+  },
+  "projection_id": "atif_trajectory",
+  "projection_version": "v1",
+  "provenance": {
+    "actor_did": "did:test:fixture-reader",
+    "runtime": "gents",
+    "source_projection_id": "run_timeline",
+    "source_projection_version": "v1"
+  },
+  "redaction_mode": "training_safe",
+  "source_agent_did": "did:test:planner",
+  "source_behavior_id": "terminal-bench",
+  "source_request_id": "req-atif-1",
+  "source_session_id": "session-atif-1"
+}

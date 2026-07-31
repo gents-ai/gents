@@ -261,6 +261,7 @@ Examples:
   gents trace export --graphql http://127.0.0.1:9191/api/v0/graphql
   gents trace export --graphql http://100.69.4.79:9191/api/v0/graphql --run-id amy-readonly-001 --limit 200 > amy-tool-calls.jsonl
   gents trace timeline --request-id REQUEST_ID --home /path/to/home
+  gents trace project --projection atif --request-id REQUEST_ID --format native-json --output-file /logs/agent/trajectory.json --home /path/to/home
   gents trace project --projection openai-codex --request-id REQUEST_ID --redaction public --home /path/to/home
   gents trace project --projection langgraph --request-id REQUEST_ID --format jsonl --home /path/to/home
   gents trace project --projection multi-agent --request-id REQUEST_ID --scope-agent-did DID --home /path/to/home

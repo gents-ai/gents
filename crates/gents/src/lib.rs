@@ -103,10 +103,13 @@ pub use collection::Collection;
 pub use adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, build_adapter_projection,
+    adapter_projection_jsonl_records, adapter_projection_native_json,
+    adapter_projection_native_json_schema, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
-    AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
+    AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
+    AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
+    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};

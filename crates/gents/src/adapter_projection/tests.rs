@@ -214,6 +214,24 @@ fn projection_participants(
     envelope: &AdapterProjectionEnvelope,
 ) -> BTreeSet<ProjectionParticipant> {
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => participant(
+            projection
+                .agent
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.get("agent_did"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            projection
+                .agent
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.get("behavior_id"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        )
+        .into_iter()
+        .collect(),
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection
             .items
             .iter()
@@ -260,6 +278,30 @@ fn participant(
 
 fn projection_delegations(envelope: &AdapterProjectionEnvelope) -> BTreeSet<ProjectionDelegation> {
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => projection
+            .steps
+            .iter()
+            .flat_map(|step| {
+                step.tool_calls
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(move |tool| (step, tool))
+            })
+            .filter_map(|(step, tool)| {
+                let extra = tool.extra.as_ref()?;
+                Some(ProjectionDelegation {
+                    parent_request_id: step
+                        .extra
+                        .as_ref()
+                        .and_then(|extra| extra.get("request_id"))
+                        .and_then(Value::as_str)?
+                        .to_string(),
+                    child_request_id: extra.get("child_request_id")?.as_str()?.to_string(),
+                    parent_tool_call_id: Some(tool.tool_call_id.clone()),
+                })
+            })
+            .collect(),
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection
             .items
             .iter()
@@ -302,6 +344,22 @@ fn projection_delegations(envelope: &AdapterProjectionEnvelope) -> BTreeSet<Proj
 
 fn projection_tool_calls(envelope: &AdapterProjectionEnvelope) -> BTreeSet<ProjectionToolCall> {
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => projection
+            .steps
+            .iter()
+            .flat_map(|step| step.tool_calls.as_deref().unwrap_or_default())
+            .map(|tool| ProjectionToolCall {
+                tool_call_id: tool.tool_call_id.clone(),
+                tool_name: tool.function_name.clone(),
+                status: tool
+                    .extra
+                    .as_ref()
+                    .and_then(|extra| extra.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+            .collect(),
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection
             .items
             .iter()
@@ -339,6 +397,13 @@ fn projection_tool_calls(envelope: &AdapterProjectionEnvelope) -> BTreeSet<Proje
 
 fn projection_terminal_status(envelope: &AdapterProjectionEnvelope) -> Option<String> {
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => projection
+            .final_metrics
+            .as_ref()
+            .and_then(|metrics| metrics.extra.as_ref())
+            .and_then(|extra| extra.get("lifecycle_state").or_else(|| extra.get("status")))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection.status.clone(),
         AdapterProjection::LangGraphStateHistory(projection) => projection
             .values
@@ -485,6 +550,31 @@ fn adapter_projections_are_coherent_for_delegated_timeline() {
 }
 
 #[test]
+fn atif_projection_emits_a_schema_valid_native_harbor_document() {
+    let timeline = delegated_coherence_timeline();
+    let envelope = build_adapter_projection(
+        AdapterProjectionKind::AtifTrajectory,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+
+    validate_adapter_projection_contract(&envelope).unwrap();
+    assert_adapter_projection_matches_json_schema(&envelope);
+
+    let native = adapter_projection_native_json(&envelope);
+    assert_eq!(
+        native.get("schema_version").and_then(Value::as_str),
+        Some(ATIF_SCHEMA_VERSION)
+    );
+    assert!(native.get("projection_id").is_none());
+    assert_json_schema_valid(
+        &adapter_projection_native_json_schema(AdapterProjectionKind::AtifTrajectory),
+        &native,
+        "ATIF native JSON",
+    );
+}
+
+#[test]
 fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
@@ -595,7 +685,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             .get("schemas")
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(3)
+        Some(4)
     );
 
     assert_eq!(codex.projection_id, "openai_codex_run_trace");
@@ -640,6 +730,11 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
 #[test]
 fn external_contract_fixtures_validate_without_runtime_dependencies() {
     let cases: &[(AdapterProjectionKind, &str, &[&str])] = &[
+        (
+            AdapterProjectionKind::AtifTrajectory,
+            "atif_trajectory",
+            &["atif_agent", "atif_step", "atif_final_metrics"],
+        ),
         (
             AdapterProjectionKind::OpenAiCodexRunTrace,
             "openai_codex_run_trace",

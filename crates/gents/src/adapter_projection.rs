@@ -8,12 +8,20 @@ use crate::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineRequestEvent, TimelineResponseEvent,
 };
 
+mod atif;
+
+pub use atif::{
+    AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult, AtifStep, AtifStepSource,
+    AtifToolCall, AtifTrajectory, ATIF_SCHEMA_VERSION,
+};
+
 pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
 pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterProjectionKind {
+    AtifTrajectory,
     #[serde(rename = "openai_codex_run_trace")]
     OpenAiCodexRunTrace,
     #[serde(rename = "langgraph_state_history")]
@@ -24,6 +32,7 @@ pub enum AdapterProjectionKind {
 impl AdapterProjectionKind {
     pub fn id(self) -> &'static str {
         match self {
+            Self::AtifTrajectory => "atif_trajectory",
             Self::OpenAiCodexRunTrace => "openai_codex_run_trace",
             Self::LangGraphStateHistory => "langgraph_state_history",
             Self::MultiAgentTask => "multi_agent_task",
@@ -32,6 +41,7 @@ impl AdapterProjectionKind {
 
     pub fn title(self) -> &'static str {
         match self {
+            Self::AtifTrajectory => "Agent Trajectory Interchange Format (ATIF) v1.7",
             Self::OpenAiCodexRunTrace => "OpenAI/Codex Run Trace Projection",
             Self::LangGraphStateHistory => "LangGraph State History Projection",
             Self::MultiAgentTask => "Multi-Agent Task Projection",
@@ -90,6 +100,7 @@ pub struct ProjectionProvenance {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "adapter", content = "projection", rename_all = "snake_case")]
 pub enum AdapterProjection {
+    AtifTrajectory(AtifTrajectory),
     #[serde(rename = "openai_codex_run_trace")]
     OpenAiCodexRunTrace(OpenAiCodexRunTraceProjection),
     #[serde(rename = "langgraph_state_history")]
@@ -100,6 +111,7 @@ pub enum AdapterProjection {
 impl AdapterProjection {
     pub fn kind(&self) -> AdapterProjectionKind {
         match self {
+            Self::AtifTrajectory(_) => AdapterProjectionKind::AtifTrajectory,
             Self::OpenAiCodexRunTrace(_) => AdapterProjectionKind::OpenAiCodexRunTrace,
             Self::LangGraphStateHistory(_) => AdapterProjectionKind::LangGraphStateHistory,
             Self::MultiAgentTask(_) => AdapterProjectionKind::MultiAgentTask,
@@ -371,6 +383,9 @@ pub fn build_adapter_projection(
             actor_did: context.actor_did.clone(),
         },
         output: match kind {
+            AdapterProjectionKind::AtifTrajectory => {
+                AdapterProjection::AtifTrajectory(atif::build_atif_trajectory(timeline, context))
+            }
             AdapterProjectionKind::OpenAiCodexRunTrace => AdapterProjection::OpenAiCodexRunTrace(
                 build_openai_codex_run_trace(timeline, context),
             ),
@@ -430,6 +445,9 @@ pub fn validate_adapter_projection_contract(
     );
 
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => {
+            atif::validate_atif_trajectory(&mut violations, projection);
+        }
         AdapterProjection::OpenAiCodexRunTrace(projection) => {
             validate_openai_codex_projection(&mut violations, projection);
         }
@@ -452,6 +470,35 @@ pub fn adapter_projection_jsonl_records(
     envelope: &AdapterProjectionEnvelope,
 ) -> Vec<AdapterProjectionJsonlRecord> {
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => {
+            let mut records = Vec::new();
+            records.push(jsonl_record(
+                envelope,
+                "atif_agent",
+                records.len(),
+                projection.agent.name.clone(),
+                serde_json::to_value(&projection.agent).unwrap_or(Value::Null),
+            ));
+            for step in &projection.steps {
+                records.push(jsonl_record(
+                    envelope,
+                    "atif_step",
+                    records.len(),
+                    format!("step:{}", step.step_id),
+                    serde_json::to_value(step).unwrap_or(Value::Null),
+                ));
+            }
+            if let Some(final_metrics) = projection.final_metrics.as_ref() {
+                records.push(jsonl_record(
+                    envelope,
+                    "atif_final_metrics",
+                    records.len(),
+                    "final_metrics".to_string(),
+                    serde_json::to_value(final_metrics).unwrap_or(Value::Null),
+                ));
+            }
+            records
+        }
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection
             .items
             .iter()
@@ -559,6 +606,70 @@ pub fn adapter_projection_eval_jsonl_records(
 ) -> Vec<AdapterProjectionEvalJsonlRecord> {
     let mut records = Vec::new();
     match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => {
+            for step in &projection.steps {
+                if let Some(tools) = step.tool_calls.as_deref().filter(|tools| !tools.is_empty()) {
+                    for tool in tools {
+                        let observation = step.observation.as_ref().and_then(|observation| {
+                            observation.results.iter().find(|result| {
+                                result.source_call_id.as_deref() == Some(tool.tool_call_id.as_str())
+                            })
+                        });
+                        let status = tool
+                            .extra
+                            .as_ref()
+                            .and_then(|extra| extra.get("status"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned);
+                        let child_request_id = tool
+                            .extra
+                            .as_ref()
+                            .and_then(|extra| extra.get("child_request_id"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned);
+                        records.push(eval_record(
+                            envelope,
+                            records.len(),
+                            "tool_call",
+                            "atif_step",
+                            &format!("step:{}:tool:{}", step.step_id, tool.tool_call_id),
+                            EvalRecordFields {
+                                role: Some(step.source.as_str().to_string()),
+                                input: Some(
+                                    serde_json::to_string(&tool.arguments)
+                                        .unwrap_or_else(|_| "{}".to_string()),
+                                ),
+                                output: observation.and_then(|result| result.content.clone()),
+                                tool_name: Some(tool.function_name.clone()),
+                                status,
+                                child_request_id,
+                                metadata: step.extra.clone().unwrap_or_default(),
+                                ..EvalRecordFields::default()
+                            },
+                        ));
+                    }
+                    continue;
+                }
+                records.push(eval_record(
+                    envelope,
+                    records.len(),
+                    if step.source == AtifStepSource::User {
+                        "prompt"
+                    } else {
+                        "message"
+                    },
+                    "atif_step",
+                    &format!("step:{}", step.step_id),
+                    EvalRecordFields {
+                        role: Some(step.source.as_str().to_string()),
+                        input: (step.source == AtifStepSource::User).then(|| step.message.clone()),
+                        output: (step.source != AtifStepSource::User).then(|| step.message.clone()),
+                        metadata: step.extra.clone().unwrap_or_default(),
+                        ..EvalRecordFields::default()
+                    },
+                ));
+            }
+        }
         AdapterProjection::OpenAiCodexRunTrace(projection) => {
             for item in &projection.items {
                 match item {
@@ -836,6 +947,46 @@ pub fn adapter_projection_eval_jsonl_records(
     records
 }
 
+pub fn adapter_projection_native_json(envelope: &AdapterProjectionEnvelope) -> Value {
+    match &envelope.output {
+        AdapterProjection::AtifTrajectory(projection) => {
+            serde_json::to_value(projection).unwrap_or(Value::Null)
+        }
+        AdapterProjection::OpenAiCodexRunTrace(projection) => {
+            serde_json::to_value(projection).unwrap_or(Value::Null)
+        }
+        AdapterProjection::LangGraphStateHistory(projection) => {
+            serde_json::to_value(projection).unwrap_or(Value::Null)
+        }
+        AdapterProjection::MultiAgentTask(projection) => {
+            serde_json::to_value(projection).unwrap_or(Value::Null)
+        }
+    }
+}
+
+pub fn adapter_projection_native_json_schema(kind: AdapterProjectionKind) -> Value {
+    let mut schema = projection_json_schema(kind);
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "$schema".to_string(),
+            Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
+        );
+        object.insert(
+            "$id".to_string(),
+            Value::String(format!(
+                "https://schemas.defra.ai/gents/adapter-projection/{}/{}-native.schema.json",
+                kind.id(),
+                ADAPTER_PROJECTION_VERSION
+            )),
+        );
+        object.insert(
+            "title".to_string(),
+            Value::String(format!("{} Native Projection", kind.title())),
+        );
+    }
+    schema
+}
+
 pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -866,7 +1017,7 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
                 "required": ["adapter", "projection"],
                 "properties": {
                     "adapter": { "const": kind.id() },
-                    "projection": projection_json_schema(kind)
+                    "projection": envelope_projection_json_schema(kind)
                 }
             }
         }
@@ -947,6 +1098,7 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
 
 pub fn adapter_projection_schema_index() -> Value {
     let projections = [
+        AdapterProjectionKind::AtifTrajectory,
         AdapterProjectionKind::OpenAiCodexRunTrace,
         AdapterProjectionKind::LangGraphStateHistory,
         AdapterProjectionKind::MultiAgentTask,
@@ -960,6 +1112,7 @@ pub fn adapter_projection_schema_index() -> Value {
                 json!({
                     "projection_id": kind.id(),
                     "title": kind.title(),
+                    "native_json_schema_id": adapter_projection_native_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
                     "json_schema_id": adapter_projection_json_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
                     "jsonl_record_schema_id": adapter_projection_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null),
                     "eval_jsonl_record_schema_id": adapter_projection_eval_jsonl_record_schema(*kind).get("$id").cloned().unwrap_or(Value::Null)
@@ -971,9 +1124,48 @@ pub fn adapter_projection_schema_index() -> Value {
 
 fn projection_json_schema(kind: AdapterProjectionKind) -> Value {
     match kind {
+        AdapterProjectionKind::AtifTrajectory => atif::atif_projection_schema(),
         AdapterProjectionKind::OpenAiCodexRunTrace => openai_codex_projection_schema(),
         AdapterProjectionKind::LangGraphStateHistory => langgraph_projection_schema(),
         AdapterProjectionKind::MultiAgentTask => multi_agent_projection_schema(),
+    }
+}
+
+fn envelope_projection_json_schema(kind: AdapterProjectionKind) -> Value {
+    let mut schema = projection_json_schema(kind);
+    if kind == AdapterProjectionKind::AtifTrajectory {
+        rewrite_local_definition_refs(
+            &mut schema,
+            "#/properties/output/properties/projection/$defs/",
+        );
+    }
+    schema
+}
+
+fn rewrite_local_definition_refs(value: &mut Value, prefix: &str) {
+    match value {
+        Value::Object(object) => {
+            let definition = object
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|reference| reference.strip_prefix("#/$defs/"))
+                .map(ToOwned::to_owned);
+            if let Some(definition) = definition {
+                object.insert(
+                    "$ref".to_string(),
+                    Value::String(format!("{prefix}{definition}")),
+                );
+            }
+            for child in object.values_mut() {
+                rewrite_local_definition_refs(child, prefix);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                rewrite_local_definition_refs(child, prefix);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1212,6 +1404,9 @@ fn provenance_schema() -> Value {
 
 fn jsonl_record_kind_schema(kind: AdapterProjectionKind) -> Value {
     match kind {
+        AdapterProjectionKind::AtifTrajectory => {
+            json!({ "enum": ["atif_agent", "atif_step", "atif_final_metrics"] })
+        }
         AdapterProjectionKind::OpenAiCodexRunTrace => {
             json!({ "enum": ["openai_codex_trace_item"] })
         }
@@ -1226,6 +1421,9 @@ fn jsonl_record_kind_schema(kind: AdapterProjectionKind) -> Value {
 
 fn training_sample_kind_schema(kind: AdapterProjectionKind) -> Value {
     match kind {
+        AdapterProjectionKind::AtifTrajectory => {
+            json!({ "enum": ["prompt", "message", "tool_call"] })
+        }
         AdapterProjectionKind::OpenAiCodexRunTrace => {
             json!({ "enum": ["prompt", "message", "tool_call", "response"] })
         }

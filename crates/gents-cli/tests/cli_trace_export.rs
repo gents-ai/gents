@@ -340,6 +340,32 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
         );
     }
 
+    let atif_native_schema_output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "project-schema",
+            "--projection",
+            "atif",
+            "--format",
+            "native-json",
+        ],
+    )?;
+    let atif_native_schema = serde_json::from_str::<Value>(&atif_native_schema_output)
+        .context("parsing ATIF native JSON schema")?;
+    assert_eq!(
+        atif_native_schema
+            .pointer("/properties/schema_version/const")
+            .and_then(Value::as_str),
+        Some("ATIF-v1.7")
+    );
+    assert_eq!(
+        atif_native_schema.get("$id").and_then(Value::as_str),
+        Some(
+            "https://schemas.defra.ai/gents/adapter-projection/atif_trajectory/v1-native.schema.json"
+        )
+    );
+
     Ok(())
 }
 
@@ -449,6 +475,31 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     }
 
     let home = agent_home.to_str().context("agent home utf8")?;
+    let atif = trace_project_json_with_extra_args(
+        tempdir.path(),
+        home,
+        "atif",
+        "full",
+        &["--format", "native-json"],
+    )?;
+    assert_eq!(
+        atif.get("schema_version").and_then(Value::as_str),
+        Some("ATIF-v1.7")
+    );
+    assert!(atif.get("projection_id").is_none());
+    assert!(
+        atif.get("steps")
+            .and_then(Value::as_array)
+            .is_some_and(|steps| !steps.is_empty()),
+        "ATIF projection should contain trajectory steps: {atif:#}"
+    );
+    assert!(
+        atif.pointer("/agent/name")
+            .and_then(Value::as_str)
+            .is_some(),
+        "ATIF projection should identify the Gents behavior: {atif:#}"
+    );
+
     let openai = trace_project_json(tempdir.path(), home, "openai-codex", "public")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai)?;
     assert_eq!(
@@ -521,7 +572,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         !serialized_openai_eval_jsonl.contains("Inspect the repo and show README.md"),
         "public eval JSONL adapter projection leaked request content: {openai_eval_jsonl:#?}"
     );
-    for projection in ["openai-codex", "langgraph", "multi-agent"] {
+    for projection in ["atif", "openai-codex", "langgraph", "multi-agent"] {
         let training_safe = trace_project_json(tempdir.path(), home, projection, "training-safe")?;
         let serialized_training_safe = serde_json::to_string(&training_safe)?;
         assert_eq!(
