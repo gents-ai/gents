@@ -6,6 +6,25 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.10.1 - 2026-07-30
+
+### Dependencies
+
+- Advance DefraDB to v0.17.4 (`f9e21c68`), following the v0.17.3 pin from #972.
+
+### Runtime and reliability
+
+- Stabilize mobile chat and stop synthetic agent turns (#930).
+- Complete native backgrounding for subagents and tools with real GLM E2E (#937, #945).
+- Fix machine pairing replicator install: `source_did` must be `@immutable` (#939).
+- Hard-fail materialize + restore post-migration CI gates; complete and pin the
+  runtime migration baseline catalog (#947, #949).
+
+### Cleanup
+
+- Integration cleanup pass for runtime, desktop, CLI, and tests (#970, #971).
+- Clippy and harness hygiene for trigger tests (#961).
+
 ## 0.10.0 - 2026-07-29
 
 ### Bridge contract
@@ -72,6 +91,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.10.1    | 0.10.1       | 0.10.1       | 0.5              | DefraDB v0.17.4; mobile/subagent/migration fixes |
 | v0.10.0    | 0.10.0       | 0.10.0       | 0.5              | Reusable desktop packages implemented in #878 |
 
 ## 0.8.0

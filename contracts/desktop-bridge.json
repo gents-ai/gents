@@ -270,7 +270,7 @@
     "desktop://client-updated",
     "desktop://codex-login-url"
   ],
-  "packageVersion": "0.10.0",
+  "packageVersion": "0.10.1",
   "permissionSets": [
     {
       "kind": "bundle",

@@ -1,7 +1,7 @@
 {
   "name": "@source-inc/fixture-host-ui",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1421",
@@ -9,12 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@source-inc/gents-desktop-chat": "0.10.0",
-    "@source-inc/gents-desktop-client": "0.10.0",
-    "@source-inc/gents-desktop-fleet": "0.10.0",
-    "@source-inc/gents-desktop-operations": "0.10.0",
-    "@source-inc/gents-desktop-tokens": "0.10.0",
-    "@source-inc/gents-desktop-ui": "0.10.0",
+    "@source-inc/gents-desktop-chat": "0.10.1",
+    "@source-inc/gents-desktop-client": "0.10.1",
+    "@source-inc/gents-desktop-fleet": "0.10.1",
+    "@source-inc/gents-desktop-operations": "0.10.1",
+    "@source-inc/gents-desktop-tokens": "0.10.1",
+    "@source-inc/gents-desktop-ui": "0.10.1",
     "@tauri-apps/api": "^2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
