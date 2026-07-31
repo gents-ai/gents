@@ -210,7 +210,7 @@ test.describe("desktop UI harness", () => {
     await captureStableScreenshot(page, testInfo, "empty-fleet");
 
     await gotoHarness(page, "bridge-unavailable");
-    await expect(page.getByTestId("error-banner")).toContainText(
+    await expect(page.getByTestId("startup-screen")).toContainText(
       "Desktop native bridge is unavailable",
     );
 

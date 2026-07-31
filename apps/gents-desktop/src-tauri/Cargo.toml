@@ -33,10 +33,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
-# custom-protocol embeds frontendDist and serves tauri://localhost.
-# Without it Tauri sets cfg(dev) and the mobile shell tries to load devUrl
-# (http://localhost:1420), which fails on device with a Local Network error.
-default = ["custom-protocol"]
+# Production and mobile Tauri builds explicitly enable custom-protocol so the
+# bundled frontend is served from tauri://localhost. Keep it opt-in so ordinary
+# workspace checks do not require a prebuilt frontendDist directory.
+default = []
 custom-protocol = ["tauri/custom-protocol"]
 # Forwards to the bridge; E2E launchers pass --features native-e2e.
 native-e2e = ["gents-desktop-bridge/native-e2e"]
