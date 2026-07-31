@@ -503,9 +503,7 @@ impl ClientCore {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
 
-        let mut snapshot =
-            load_full_snapshot_from_graphql(graphql, &record.agent_did, self.principal.did())
-                .await?;
+        let mut snapshot = load_full_snapshot_from_graphql(graphql, &record.agent_did).await?;
         snapshot.stamp_source_agent_did(&record.agent_did);
         let rows = snapshot.row_count();
         let version = self

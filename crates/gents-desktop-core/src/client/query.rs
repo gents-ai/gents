@@ -96,10 +96,8 @@ pub async fn load_full_snapshot_with_peer_records(
 
         let peer = peer.clone();
         let graphql = graphql.to_string();
-        let requester_did = requester_did.to_string();
         remote_loads.push(tokio::spawn(async move {
-            let result =
-                load_full_snapshot_from_graphql(&graphql, &peer.agent_did, &requester_did).await;
+            let result = load_full_snapshot_from_graphql(&graphql, &peer.agent_did).await;
             (peer, graphql, result)
         }));
     }
@@ -477,16 +475,21 @@ pub async fn load_tool_service_registries(
     .await
 }
 
+/// Load the connected agent's host view.
+///
+/// Requester identity remains attached to rows for audit and future policy
+/// projection, but it does not partition conversation visibility here. This
+/// lets a user start a session through one client and continue observing it
+/// from another client connected to the same agent runtime.
 pub async fn load_full_snapshot_from_graphql(
     graphql: &str,
     agent_did: &str,
-    requester_did: &str,
 ) -> Result<ClientStore> {
     let client = reqwest::Client::builder()
         .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
         .build()
         .context("building remote GraphQL snapshot HTTP client")?;
-    let data = execute_remote_snapshot_query(&client, graphql, agent_did, requester_did).await?;
+    let data = execute_remote_snapshot_query(&client, graphql, agent_did).await?;
 
     Ok(ClientStore::from_rows(ClientStoreRows {
         agent_principals: parse_remote_rows(&data, "AgentPrincipal")?,
@@ -682,9 +685,8 @@ async fn execute_remote_snapshot_query(
     client: &reqwest::Client,
     graphql: &str,
     agent_did: &str,
-    requester_did: &str,
 ) -> Result<Value> {
-    let query = remote_snapshot_query(agent_did, requester_did);
+    let query = remote_snapshot_query(agent_did);
     execute_remote_graphql_query(client, graphql, &query, "snapshot").await
 }
 
@@ -871,24 +873,23 @@ query DesktopRemoteChatPatch {{
     )
 }
 
-fn remote_snapshot_query(agent_did: &str, requester_did: &str) -> String {
+fn remote_snapshot_query(agent_did: &str) -> String {
     let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
     format!(
         r#"
 query DesktopRemoteSnapshot {{
   AgentPrincipal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }}
   AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }}
   AgentRuntime(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_RUNTIME_FIELDS} }}
-  AgentConversation(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
-  AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
-  AgentResponse(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
-  AgentMessage(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
-  AgentSession(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
+  AgentConversation(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
+  AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
+  AgentResponse(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
+  AgentMessage(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+  AgentSession(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
   Goal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {GOAL_FIELDS} }}
-  AgentToolCall(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
-  AgentToolResult(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
-  CompactionEntry(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
+  AgentToolCall(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
+  AgentToolResult(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
+  CompactionEntry(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
   Task {{ task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }}
   Schedule {{ schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }}
   EventTrigger {{ trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }}
@@ -1448,13 +1449,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_snapshot_hydrates_from_requester_scoped_query() {
+    async fn remote_snapshot_hydrates_from_agent_scoped_query() {
         let server = MockServer::start().await;
         let data = json!({
             "AgentPrincipal": [],
             "AgentBehavior": [],
             "AgentRuntime": [],
-            "AgentConversation": [],
+            "AgentConversation": [
+                {
+                    "session_id": "host-session",
+                    "agent_did": "did:test:agent",
+                    "requester_did": null
+                },
+                {
+                    "session_id": "phone-session",
+                    "agent_did": "did:test:agent",
+                    "requester_did": "did:test:requester"
+                }
+            ],
             "AgentRequest": [],
             "AgentResponse": [],
             "AgentMessage": [],
@@ -1474,19 +1486,25 @@ mod tests {
         });
         Mock::given(method("POST"))
             .and(body_string_contains("did:test:agent"))
-            .and(body_string_contains("did:test:requester"))
             .and(body_string_contains("requester_did"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": data })))
             .expect(1)
             .mount(&server)
             .await;
 
-        let snapshot =
-            load_full_snapshot_from_graphql(&server.uri(), "did:test:agent", "did:test:requester")
-                .await
-                .expect("requester-scoped remote snapshot");
+        let snapshot = load_full_snapshot_from_graphql(&server.uri(), "did:test:agent")
+            .await
+            .expect("agent-scoped remote snapshot");
 
-        assert_eq!(snapshot.row_count(), 0);
+        assert_eq!(snapshot.conversations.len(), 2);
+        assert!(snapshot
+            .conversations
+            .iter()
+            .any(|row| row.session_id == "host-session" && row.requester_did.is_none()));
+        assert!(snapshot.conversations.iter().any(|row| {
+            row.session_id == "phone-session"
+                && row.requester_did.as_deref() == Some("did:test:requester")
+        }));
     }
 
     #[tokio::test]
@@ -1675,7 +1693,7 @@ mod tests {
     #[test]
     fn remote_tool_call_queries_include_local_field_set() {
         let chat_patch = remote_chat_patch_query("sess-1");
-        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
+        let remote_snapshot = remote_snapshot_query("did:test:agent");
         for field in AGENT_TOOL_CALL_FIELDS.split_whitespace() {
             assert!(
                 chat_patch.contains(field),
@@ -1691,7 +1709,7 @@ mod tests {
     #[test]
     fn remote_goal_queries_include_local_field_set() {
         let chat_patch = remote_chat_patch_query("sess-1");
-        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
+        let remote_snapshot = remote_snapshot_query("did:test:agent");
         for field in GOAL_FIELDS.split_whitespace() {
             assert!(
                 chat_patch.contains(field),
@@ -1706,7 +1724,7 @@ mod tests {
 
     #[test]
     fn remote_runtime_query_includes_local_field_set() {
-        let remote_snapshot = remote_snapshot_query("did:test:agent", "did:test:requester");
+        let remote_snapshot = remote_snapshot_query("did:test:agent");
         for field in AGENT_RUNTIME_FIELDS.split_whitespace() {
             assert!(
                 remote_snapshot.contains(field),
@@ -1716,18 +1734,16 @@ mod tests {
     }
 
     #[test]
-    fn remote_snapshot_scopes_conversation_rows_to_agent_and_requester() {
-        let query = remote_snapshot_query(
-            r#"did:test:agent"with-quote"#,
-            r#"did:test:requester"with-quote"#,
-        );
+    fn remote_snapshot_scopes_conversation_rows_to_agent() {
+        let query = remote_snapshot_query(r#"did:test:agent"with-quote"#);
 
         assert!(query.contains(
-            r#"agent_did: { _eq: "did:test:agent\"with-quote" }, requester_did: { _eq: "did:test:requester\"with-quote" }"#
+            r#"AgentConversation(filter: { agent_did: { _eq: "did:test:agent\"with-quote" } })"#
         ));
         assert!(query.contains(
-            r#"AgentMessage(filter: { agent_did: { _eq: "did:test:agent\"with-quote" }, requester_did: { _eq: "did:test:requester\"with-quote" } })"#
+            r#"AgentMessage(filter: { agent_did: { _eq: "did:test:agent\"with-quote" } })"#
         ));
+        assert!(!query.contains("requester_did: { _eq:"));
         assert!(!query.contains("AgentConversation {"));
         assert!(!query.contains("AgentRequest {"));
     }

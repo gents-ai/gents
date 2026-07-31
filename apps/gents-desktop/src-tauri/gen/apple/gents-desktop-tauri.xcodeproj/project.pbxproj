@@ -15,7 +15,6 @@
 		5DA6544B44A458E0C361C447 /* GentsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C9537E32F3F70D432C59D3 /* GentsUITests.swift */; };
 		71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */; };
 		8143829881E3F0C0DB8A6D6E /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 29FC53575AC1D708DC7E349B /* libapp.a */; };
-		88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */; };
 		A49DADAEA00825152FA18A1E /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 63D599966BF164B2E3721580 /* SystemConfiguration.framework */; };
 		AB4DEA7CDE0EF8AEEEB51066 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9550978DF0AC0816DF1CC6DF /* main.mm */; };
 		ABBC6FAC9160FA4A18515F68 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5DAD3CA911F8C2F902D01BC /* WebKit.framework */; };
@@ -64,7 +63,6 @@
 		4A8E3985F8D178430B2655C8 /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
 		4A9A0C77855ED19483490C28 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		4FB100F63CC4233DE1144D72 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		5AB282B8BF935EF647AE9F20 /* util.rs */ = {isa = PBXFileReference; path = util.rs; sourceTree = "<group>"; };
 		5B5A7408B9252B2996C02FEB /* support.rs */ = {isa = PBXFileReference; path = support.rs; sourceTree = "<group>"; };
@@ -147,7 +145,6 @@
 			children = (
 				DF999997666534D30CBC7799 /* assets */,
 				4AA87E72BB6F6E6A9013ED37 /* Assets.xcassets */,
-				4B930D4D1CC1491CC8188CAD /* LaunchScreen.storyboard */,
 				E578A9CE50CAD151F94E888C /* gents-desktop-tauri_iOS */,
 				0F8C42C2795F7E73E8279429 /* ios */,
 				E1F731CFA4D72A5157CF32D7 /* Sources */,
@@ -504,7 +501,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				71C6080565821E5F55BC7BC4 /* Assets.xcassets in Resources */,
-				88EFB05DB5D303BB4A995A0B /* LaunchScreen.storyboard in Resources */,
 				3DB3C858BF3C14FFFE4EC35D /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
