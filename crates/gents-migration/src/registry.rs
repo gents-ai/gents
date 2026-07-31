@@ -253,7 +253,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY,
-        "bafyreidvqhhvvodkcn5eus7qams2fzsivj4t56x2ztihxybyxxtvth3k5a"
+        "bafyreib3nckkjgeabgwk7uy2h4xc7ztmivf7qkrfzghrjpln6ze4i6e52m"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MEMORY_NAME,
