@@ -119,7 +119,11 @@ pub fn chatgpt_codex_client_version() -> String {
         .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
 }
 
-const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.138.0";
+// The codex backend-api gates its /models list by the advertised client
+// version, so an old default silently hides newer model families (#982).
+// Keep this at a current codex CLI release when bumping the vendored codex
+// crate rev; GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides it at runtime.
+const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.144.4";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
