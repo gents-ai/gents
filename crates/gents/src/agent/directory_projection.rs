@@ -29,6 +29,10 @@ pub struct DirectoryEntry {
     pub source_did: String,
     pub display_name: String,
     pub behaviors: Vec<String>,
+    /// Index-aligned with `behaviors` (`behavior_ids[i]` names `behaviors[i]`)
+    /// so clients can stamp `AgentRequest.behavior_id` from a picked display
+    /// name.
+    pub behavior_ids: Vec<String>,
     pub runtime_state: String,
     pub last_seen: String,
 }
@@ -43,7 +47,9 @@ pub struct DirectoryTickOutcome {
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
     async fn load_principals(&self) -> Result<Vec<(String, String)>>;
-    async fn load_behavior_names(&self) -> Result<BTreeMap<String, Vec<String>>>;
+    /// Per principal, the enabled behaviors as `(behavior_id, display_name)`
+    /// pairs (display name falls back to the id when blank).
+    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>>;
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
     async fn list_directory_entries(
         &self,
@@ -108,16 +114,21 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
 pub fn derive_directory_entries(
     source_did: &str,
     principals: &[(String, String)],
-    behaviors: &BTreeMap<String, Vec<String>>,
+    behaviors: &BTreeMap<String, Vec<(String, String)>>,
     runtimes: &BTreeMap<String, (String, String)>,
 ) -> BTreeMap<String, DirectoryEntry> {
     principals
         .iter()
         .filter(|(did, _)| !did.trim().is_empty())
         .map(|(did, display_name)| {
-            let mut names = behaviors.get(did).cloned().unwrap_or_default();
-            names.sort();
-            names.dedup();
+            // Sort by (name, id) for a stable picker order, then dedup by id
+            // (a behavior's id determines its identity; same id implies same
+            // name, so duplicates land adjacent after the sort).
+            let mut pairs = behaviors.get(did).cloned().unwrap_or_default();
+            pairs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            pairs.dedup_by(|a, b| a.0 == b.0);
+            let names = pairs.iter().map(|(_, name)| name.clone()).collect();
+            let ids = pairs.into_iter().map(|(id, _)| id).collect();
             let (runtime_state, updated_at) = runtimes.get(did).cloned().unwrap_or_default();
             (
                 did.clone(),
@@ -127,6 +138,7 @@ pub fn derive_directory_entries(
                     source_did: source_did.to_string(),
                     display_name: display_name.clone(),
                     behaviors: names,
+                    behavior_ids: ids,
                     runtime_state,
                     last_seen: canonicalize_last_seen(&updated_at),
                 },
@@ -149,10 +161,7 @@ pub async fn reconcile_directory_tick(
         .load_principals()
         .await
         .context("load agent principals")?;
-    let behaviors = store
-        .load_behavior_names()
-        .await
-        .context("load behavior names")?;
+    let behaviors = store.load_behaviors().await.context("load behaviors")?;
     let runtimes = store
         .load_runtime_states()
         .await
@@ -317,7 +326,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
             .collect())
     }
 
-    async fn load_behavior_names(&self) -> Result<BTreeMap<String, Vec<String>>> {
+    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>> {
         let query = r#"{
             AgentBehavior {
                 agent_did
@@ -328,7 +337,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
         }"#;
         let response = self.node.execute(query).await;
         ensure_no_errors(&response, "query AgentBehavior")?;
-        let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut grouped: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         for row in rows::<BehaviorRow>(&response, "AgentBehavior")? {
             if !row.enabled.unwrap_or(true) {
                 continue;
@@ -339,22 +348,23 @@ impl DirectoryStore for GraphqlDirectoryStore {
             if did.is_empty() {
                 continue;
             }
+            let Some(behavior_id) = row
+                .behavior_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
             let name = row
                 .display_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
-                .or_else(|| {
-                    row.behavior_id
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(ToOwned::to_owned)
-                });
-            if let Some(name) = name {
-                grouped.entry(did).or_default().push(name);
-            }
+                .unwrap_or_else(|| behavior_id.clone());
+            grouped.entry(did).or_default().push((behavior_id, name));
         }
         Ok(grouped)
     }
@@ -406,6 +416,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 source_did
                 display_name
                 behaviors
+                behavior_ids
                 runtime_state
                 last_seen
             }}
@@ -430,6 +441,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                     source_did: row.source_did.unwrap_or_default(),
                     display_name: row.display_name.unwrap_or_default(),
                     behaviors: row.behaviors.unwrap_or_default(),
+                    behavior_ids: row.behavior_ids.unwrap_or_default(),
                     runtime_state: row.runtime_state.unwrap_or_default(),
                     last_seen: row.last_seen.unwrap_or_default(),
                 };
@@ -459,6 +471,10 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     let source_did = escape_graphql_string(&entry.source_did);
     let display_name = escape_graphql_string(&entry.display_name);
     let behaviors = graphql_string_list_literal(entry.behaviors.iter().map(String::as_str));
+    // Index-aligned with `behaviors`; rendered as null (never []) when empty
+    // — an empty list literal types as JsonArray and corrupts nillable array
+    // columns.
+    let behavior_ids = graphql_string_list_literal(entry.behavior_ids.iter().map(String::as_str));
     let runtime_state = escape_graphql_string(&entry.runtime_state);
     let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
@@ -472,6 +488,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     source_did: "{source_did}",
                     display_name: "{display_name}",
                     behaviors: {behaviors},
+                    behavior_ids: {behavior_ids},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -479,6 +496,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                 update: {{
                     display_name: "{display_name}",
                     behaviors: {behaviors},
+                    behavior_ids: {behavior_ids},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -581,6 +599,8 @@ struct DirectoryRow {
     #[serde(default)]
     behaviors: Option<Vec<String>>,
     #[serde(default)]
+    behavior_ids: Option<Vec<String>>,
+    #[serde(default)]
     runtime_state: Option<String>,
     #[serde(default)]
     last_seen: Option<String>,
@@ -597,6 +617,7 @@ mod tests {
             source_did: "did:key:home".to_string(),
             display_name: "Display".to_string(),
             behaviors: Vec::new(),
+            behavior_ids: Vec::new(),
             runtime_state: "running".to_string(),
             last_seen: last_seen.to_string(),
         }
@@ -653,6 +674,30 @@ mod tests {
             "2026-07-23T00:00:00Z",
         );
         assert!(mutation.contains(r#"last_seen: "2026-07-20T00:00:00Z""#));
+    }
+
+    /// `behavior_ids` follows the same null-never-[] discipline as
+    /// `behaviors`, and stays index-aligned when both are populated.
+    #[test]
+    fn upsert_mutation_renders_null_behavior_ids_when_empty_and_aligned_list_when_present() {
+        let empty = upsert_directory_entry_mutation(
+            &entry("did:key:no-behaviors", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        assert!(
+            empty.contains("behavior_ids: null"),
+            "empty behavior_ids must render as null, never []: {empty}"
+        );
+
+        let mut with_behaviors = entry("did:key:with-behaviors", "2026-07-20T00:00:00Z");
+        with_behaviors.behaviors = vec!["Artist".to_string(), "Coder".to_string()];
+        with_behaviors.behavior_ids = vec![
+            "did:key:a:artist".to_string(),
+            "did:key:a:coder".to_string(),
+        ];
+        let mutation = upsert_directory_entry_mutation(&with_behaviors, "2026-07-23T00:00:00Z");
+        assert!(mutation.contains(r#"behaviors: ["Artist", "Coder"]"#));
+        assert!(mutation.contains(r#"behavior_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
     }
 
     /// Round-trip consistency: a stored `null` `last_seen` must decode back
@@ -810,6 +855,12 @@ mod tests {
                 enabled: true
             }) { _docID }
             create_AgentBehavior(input: {
+                behavior_id: "artist-behavior",
+                agent_did: "did:key:with-runtime",
+                display_name: "Artist Behavior",
+                enabled: true
+            }) { _docID }
+            create_AgentBehavior(input: {
                 behavior_id: "disabled-behavior",
                 agent_did: "did:key:with-runtime",
                 display_name: "Disabled Behavior",
@@ -840,7 +891,21 @@ mod tests {
             .get("did:key:with-runtime")
             .expect("with-runtime directory row");
         assert_eq!(with_runtime.runtime_state, "running");
-        assert_eq!(with_runtime.behaviors, vec!["Enabled Behavior".to_string()]);
+        assert_eq!(
+            with_runtime.behaviors,
+            vec![
+                "Artist Behavior".to_string(),
+                "Enabled Behavior".to_string()
+            ]
+        );
+        assert_eq!(
+            with_runtime.behavior_ids,
+            vec![
+                "artist-behavior".to_string(),
+                "enabled-behavior".to_string()
+            ],
+            "behavior_ids must round-trip index-aligned with behaviors through a real node"
+        );
         assert!(
             !entries.contains_key("did:key:disabled"),
             "disabled principals must not be advertised"

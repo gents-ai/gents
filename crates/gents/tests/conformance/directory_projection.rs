@@ -11,7 +11,7 @@ use gents::agent::directory_projection::{
 #[derive(Default)]
 struct DirectoryFixtureStore {
     principals: Vec<(String, String)>,
-    behaviors: BTreeMap<String, Vec<String>>,
+    behaviors: BTreeMap<String, Vec<(String, String)>>,
     runtimes: BTreeMap<String, (String, String)>,
     entries: Mutex<BTreeMap<(String, String), DirectoryEntry>>,
     upserts: Mutex<Vec<String>>,
@@ -23,7 +23,7 @@ impl DirectoryStore for DirectoryFixtureStore {
     async fn load_principals(&self) -> Result<Vec<(String, String)>> {
         Ok(self.principals.clone())
     }
-    async fn load_behavior_names(&self) -> Result<BTreeMap<String, Vec<String>>> {
+    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>> {
         Ok(self.behaviors.clone())
     }
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
@@ -69,7 +69,13 @@ fn derivation_projects_exactly_the_principals() {
     let derived = derive_directory_entries(
         "did:key:home",
         &[principal("did:key:a", "Amy"), principal("did:key:b", "Bob")],
-        &BTreeMap::from([("did:key:a".to_string(), vec!["coder".to_string()])]),
+        &BTreeMap::from([(
+            "did:key:a".to_string(),
+            vec![
+                ("did:key:a:coder".to_string(), "Coder".to_string()),
+                ("did:key:a:artist".to_string(), "Artist".to_string()),
+            ],
+        )]),
         &BTreeMap::from([(
             "did:key:a".to_string(),
             ("running".to_string(), "2026-07-23T00:00:00Z".to_string()),
@@ -82,10 +88,18 @@ fn derivation_projects_exactly_the_principals() {
     let a = &derived["did:key:a"];
     assert_eq!(a.source_did, "did:key:home");
     assert_eq!(a.display_name, "Amy");
-    assert_eq!(a.behaviors, vec!["coder".to_string()]);
+    assert_eq!(a.behaviors, vec!["Artist".to_string(), "Coder".to_string()]);
+    assert_eq!(
+        a.behavior_ids,
+        vec![
+            "did:key:a:artist".to_string(),
+            "did:key:a:coder".to_string()
+        ],
+        "ids must stay index-aligned with display names"
+    );
     assert_eq!(a.runtime_state, "running");
     let b = &derived["did:key:b"];
-    assert!(b.behaviors.is_empty());
+    assert!(b.behaviors.is_empty() && b.behavior_ids.is_empty());
     assert_eq!(b.runtime_state, "");
 }
 
@@ -105,6 +119,7 @@ async fn tick_converges_then_quiesces() {
                 source_did: "did:key:home".to_string(),
                 display_name: "Amy".to_string(),
                 behaviors: Vec::new(),
+                behavior_ids: Vec::new(),
                 runtime_state: "starting".to_string(),
                 last_seen: String::new(),
             },
@@ -145,6 +160,7 @@ async fn tick_retracts_only_removed_principals() {
                     source_did: "did:key:home".to_string(),
                     display_name: "Amy".to_string(),
                     behaviors: Vec::new(),
+                    behavior_ids: Vec::new(),
                     runtime_state: String::new(),
                     last_seen: String::new(),
                 },
@@ -157,6 +173,7 @@ async fn tick_retracts_only_removed_principals() {
                     source_did: "did:key:home".to_string(),
                     display_name: "Bob".to_string(),
                     behaviors: Vec::new(),
+                    behavior_ids: Vec::new(),
                     runtime_state: String::new(),
                     last_seen: String::new(),
                 },
@@ -184,6 +201,7 @@ async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
         source_did: "did:key:foreign-home".to_string(),
         display_name: "Foreign".to_string(),
         behaviors: Vec::new(),
+        behavior_ids: Vec::new(),
         runtime_state: String::new(),
         last_seen: String::new(),
     };

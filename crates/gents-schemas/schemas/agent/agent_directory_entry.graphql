@@ -28,6 +28,11 @@ type AgentDirectoryEntry @branchable {
     # the principal has no behaviors - empty list literals corrupt nillable
     # array columns.
     behaviors: [String]
+    # Behavior ids, index-aligned with `behaviors` (ids[i] names[i]) so
+    # clients can stamp AgentRequest.behavior_id from a picked display name.
+    # Emitted as null (never []) when empty - empty list literals corrupt
+    # nillable array columns.
+    behavior_ids: [String]
     runtime_state: String @index
     last_seen: DateTime
     updated_at: DateTime @index(direction: DESC)
