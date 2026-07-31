@@ -12,6 +12,7 @@ import { applyShellPlatform } from "./lib/shellPlatform";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { Sidebar } from "./components/Sidebar";
+import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
@@ -109,12 +110,18 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   return (
     <main className={`app-shell app-view-${workspaceView}`}>
       <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
-      {shell.error ? (
+      {shell.error && shell.startupPhase === "ready" ? (
         <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
       ) : null}
       <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
-      {workspaceView === "fleet" ? (
+      {shell.startupPhase !== "ready" ? (
+        <StartupScreen
+          error={shell.error}
+          onRetry={shell.onRetryStartup}
+          phase={shell.startupPhase}
+        />
+      ) : workspaceView === "fleet" ? (
         <FleetHostDashboard
           api={bridge.api}
           addingPeer={shell.addingPeer}

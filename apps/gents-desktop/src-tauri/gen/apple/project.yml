@@ -37,13 +37,12 @@ targets:
       - path: assets
         buildPhase: resources
         type: folder
-      - path: LaunchScreen.storyboard
     info:
       path: gents-desktop-tauri_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
         NSCameraUsageDescription: Gents uses the camera to scan signed agent pairing invites.
-        UILaunchStoryboardName: LaunchScreen
+        UILaunchScreen: {}
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -11,6 +11,8 @@ import type {
 type PeerActionParams = {
   api: DesktopApiAdapter;
   snapshot: DesktopClientSnapshot | null;
+  /** Shared single-flight start used by autostart and peer actions. */
+  ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot | null>;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setRepairingP2P: Dispatch<SetStateAction<boolean>>;
@@ -22,6 +24,7 @@ type PeerActionParams = {
 export function createDesktopShellPeerActions({
   api,
   snapshot,
+  ensureDesktopClientStarted,
   setAddingPeer,
   setError,
   setRepairingP2P,
@@ -45,9 +48,14 @@ export function createDesktopShellPeerActions({
         addr: summary.p2pListenAddress,
         graphql: summary.graphql,
       };
+      // Init writes the peer directory entry; a fresh start bootstraps it.
+      // A live client needs an explicit addPeer for the new record.
       const next = snapshot?.client
         ? await api.addPeer(peerRequest)
-        : await api.startDesktopClient();
+        : await ensureDesktopClientStarted();
+      if (!next) {
+        throw new Error("desktop client failed to start after local runtime init");
+      }
       setSnapshot(next);
       setSelectedAgentDid(summary.agentDid);
       return summary;
@@ -66,9 +74,10 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       if (!snapshot?.client) {
-        setStarting(true);
-        const started = await api.startDesktopClient();
-        setSnapshot(started);
+        const started = await ensureDesktopClientStarted();
+        if (!started) {
+          throw new Error("desktop client failed to start before adding peer");
+        }
       }
       const next = await api.addPeer(request);
       setSnapshot(next);
@@ -89,9 +98,10 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       if (!snapshot?.client) {
-        setStarting(true);
-        const started = await api.startDesktopClient();
-        setSnapshot(started);
+        const started = await ensureDesktopClientStarted();
+        if (!started) {
+          throw new Error("desktop client failed to start before pairing");
+        }
       }
       const response = await api.pairBearer(request);
       setSnapshot({

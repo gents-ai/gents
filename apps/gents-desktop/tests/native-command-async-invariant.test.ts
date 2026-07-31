@@ -25,8 +25,13 @@ describe("native command async invariants", () => {
     const occurrences = source.match(/tauri::async_runtime::block_on/g) ?? [];
 
     expect(occurrences).toHaveLength(1);
+    // Large-stack OS thread still runs block_on; the async command awaits a
+    // oneshot instead of thread::join so Tokio workers stay unblocked.
     expect(source).toContain(
-      ".spawn(move || tauri::async_runtime::block_on(ClientCore::start_with_paths(paths)))",
+      "tauri::async_runtime::block_on(ClientCore::start_with_paths(paths))",
     );
+    expect(source).toContain("start_client_core_async");
+    expect(source).toContain("single-flight");
+    expect(source).not.toContain(".join()");
   });
 });
