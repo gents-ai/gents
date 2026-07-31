@@ -10,7 +10,7 @@ use gents::agent::directory_projection::{
 
 #[derive(Default)]
 struct DirectoryFixtureStore {
-    principals: Vec<(String, String)>,
+    principals: Vec<(String, String, String)>,
     behaviors: BTreeMap<String, Vec<(String, String)>>,
     runtimes: BTreeMap<String, (String, String)>,
     entries: Mutex<BTreeMap<(String, String), DirectoryEntry>>,
@@ -20,7 +20,7 @@ struct DirectoryFixtureStore {
 
 #[async_trait]
 impl DirectoryStore for DirectoryFixtureStore {
-    async fn load_principals(&self) -> Result<Vec<(String, String)>> {
+    async fn load_principals(&self) -> Result<Vec<(String, String, String)>> {
         Ok(self.principals.clone())
     }
     async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>> {
@@ -60,15 +60,30 @@ impl DirectoryStore for DirectoryFixtureStore {
     }
 }
 
-fn principal(did: &str, name: &str) -> (String, String) {
-    (did.to_string(), name.to_string())
+fn principal(did: &str, name: &str) -> (String, String, String) {
+    (did.to_string(), name.to_string(), String::new())
+}
+
+fn principal_with_default(
+    did: &str,
+    name: &str,
+    default_behavior_id: &str,
+) -> (String, String, String) {
+    (
+        did.to_string(),
+        name.to_string(),
+        default_behavior_id.to_string(),
+    )
 }
 
 #[test]
 fn derivation_projects_exactly_the_principals() {
     let derived = derive_directory_entries(
         "did:key:home",
-        &[principal("did:key:a", "Amy"), principal("did:key:b", "Bob")],
+        &[
+            principal_with_default("did:key:a", "Amy", "did:key:a:coder"),
+            principal("did:key:b", "Bob"),
+        ],
         &BTreeMap::from([(
             "did:key:a".to_string(),
             vec![
@@ -97,9 +112,17 @@ fn derivation_projects_exactly_the_principals() {
         ],
         "ids must stay index-aligned with display names"
     );
+    assert_eq!(
+        a.default_behavior_id, "did:key:a:coder",
+        "default_behavior_id must copy through from the principal"
+    );
     assert_eq!(a.runtime_state, "running");
     let b = &derived["did:key:b"];
     assert!(b.behaviors.is_empty() && b.behavior_ids.is_empty());
+    assert_eq!(
+        b.default_behavior_id, "",
+        "a principal with no default behavior must derive an empty default_behavior_id"
+    );
     assert_eq!(b.runtime_state, "");
 }
 
@@ -120,6 +143,7 @@ async fn tick_converges_then_quiesces() {
                 display_name: "Amy".to_string(),
                 behaviors: Vec::new(),
                 behavior_ids: Vec::new(),
+                default_behavior_id: String::new(),
                 runtime_state: "starting".to_string(),
                 last_seen: String::new(),
             },
@@ -161,6 +185,7 @@ async fn tick_retracts_only_removed_principals() {
                     display_name: "Amy".to_string(),
                     behaviors: Vec::new(),
                     behavior_ids: Vec::new(),
+                    default_behavior_id: String::new(),
                     runtime_state: String::new(),
                     last_seen: String::new(),
                 },
@@ -174,6 +199,7 @@ async fn tick_retracts_only_removed_principals() {
                     display_name: "Bob".to_string(),
                     behaviors: Vec::new(),
                     behavior_ids: Vec::new(),
+                    default_behavior_id: String::new(),
                     runtime_state: String::new(),
                     last_seen: String::new(),
                 },
@@ -202,6 +228,7 @@ async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
         display_name: "Foreign".to_string(),
         behaviors: Vec::new(),
         behavior_ids: Vec::new(),
+        default_behavior_id: String::new(),
         runtime_state: String::new(),
         last_seen: String::new(),
     };

@@ -33,6 +33,10 @@ pub struct DirectoryEntry {
     /// so clients can stamp `AgentRequest.behavior_id` from a picked display
     /// name.
     pub behavior_ids: Vec<String>,
+    /// The agent's resolved default (from `AgentPrincipal.default_behavior_id`),
+    /// so clients can badge threads bound to a NON-default behavior; empty
+    /// when the principal has none.
+    pub default_behavior_id: String,
     pub runtime_state: String,
     pub last_seen: String,
 }
@@ -46,7 +50,10 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    async fn load_principals(&self) -> Result<Vec<(String, String)>>;
+    /// One row per enabled principal: `(agent_did, display_name,
+    /// default_behavior_id)`. `default_behavior_id` is empty when the
+    /// principal has none.
+    async fn load_principals(&self) -> Result<Vec<(String, String, String)>>;
     /// Per principal, the enabled behaviors as `(behavior_id, display_name)`
     /// pairs (display name falls back to the id when blank).
     async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>>;
@@ -113,14 +120,14 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
 /// Mirrors Lean `project`.
 pub fn derive_directory_entries(
     source_did: &str,
-    principals: &[(String, String)],
+    principals: &[(String, String, String)],
     behaviors: &BTreeMap<String, Vec<(String, String)>>,
     runtimes: &BTreeMap<String, (String, String)>,
 ) -> BTreeMap<String, DirectoryEntry> {
     principals
         .iter()
-        .filter(|(did, _)| !did.trim().is_empty())
-        .map(|(did, display_name)| {
+        .filter(|(did, _, _)| !did.trim().is_empty())
+        .map(|(did, display_name, default_behavior_id)| {
             // Sort by (name, id) for a stable picker order, then dedup by id
             // (a behavior's id determines its identity; same id implies same
             // name, so duplicates land adjacent after the sort).
@@ -139,6 +146,7 @@ pub fn derive_directory_entries(
                     display_name: display_name.clone(),
                     behaviors: names,
                     behavior_ids: ids,
+                    default_behavior_id: default_behavior_id.clone(),
                     runtime_state,
                     last_seen: canonicalize_last_seen(&updated_at),
                 },
@@ -295,11 +303,12 @@ impl GraphqlDirectoryStore {
 
 #[async_trait]
 impl DirectoryStore for GraphqlDirectoryStore {
-    async fn load_principals(&self) -> Result<Vec<(String, String)>> {
+    async fn load_principals(&self) -> Result<Vec<(String, String, String)>> {
         let query = r#"{
             AgentPrincipal {
                 agent_did
                 display_name
+                default_behavior_id
                 enabled
             }
         }"#;
@@ -321,7 +330,13 @@ impl DirectoryStore for GraphqlDirectoryStore {
                     .map(str::trim)
                     .unwrap_or_default()
                     .to_string();
-                Some((did, display_name))
+                let default_behavior_id = row
+                    .default_behavior_id
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                Some((did, display_name, default_behavior_id))
             })
             .collect())
     }
@@ -417,6 +432,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 display_name
                 behaviors
                 behavior_ids
+                default_behavior_id
                 runtime_state
                 last_seen
             }}
@@ -442,6 +458,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                     display_name: row.display_name.unwrap_or_default(),
                     behaviors: row.behaviors.unwrap_or_default(),
                     behavior_ids: row.behavior_ids.unwrap_or_default(),
+                    default_behavior_id: row.default_behavior_id.unwrap_or_default(),
                     runtime_state: row.runtime_state.unwrap_or_default(),
                     last_seen: row.last_seen.unwrap_or_default(),
                 };
@@ -475,6 +492,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     // — an empty list literal types as JsonArray and corrupts nillable array
     // columns.
     let behavior_ids = graphql_string_list_literal(entry.behavior_ids.iter().map(String::as_str));
+    let default_behavior_id = escape_graphql_string(&entry.default_behavior_id);
     let runtime_state = escape_graphql_string(&entry.runtime_state);
     let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
@@ -489,6 +507,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     behavior_ids: {behavior_ids},
+                    default_behavior_id: "{default_behavior_id}",
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -497,6 +516,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     display_name: "{display_name}",
                     behaviors: {behaviors},
                     behavior_ids: {behavior_ids},
+                    default_behavior_id: "{default_behavior_id}",
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -564,6 +584,8 @@ struct PrincipalRow {
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
+    default_behavior_id: Option<String>,
+    #[serde(default)]
     enabled: Option<bool>,
 }
 
@@ -601,6 +623,8 @@ struct DirectoryRow {
     #[serde(default)]
     behavior_ids: Option<Vec<String>>,
     #[serde(default)]
+    default_behavior_id: Option<String>,
+    #[serde(default)]
     runtime_state: Option<String>,
     #[serde(default)]
     last_seen: Option<String>,
@@ -618,6 +642,7 @@ mod tests {
             display_name: "Display".to_string(),
             behaviors: Vec::new(),
             behavior_ids: Vec::new(),
+            default_behavior_id: String::new(),
             runtime_state: "running".to_string(),
             last_seen: last_seen.to_string(),
         }
@@ -698,6 +723,26 @@ mod tests {
         let mutation = upsert_directory_entry_mutation(&with_behaviors, "2026-07-23T00:00:00Z");
         assert!(mutation.contains(r#"behaviors: ["Artist", "Coder"]"#));
         assert!(mutation.contains(r#"behavior_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
+    }
+
+    /// `default_behavior_id` is a plain string field (unlike the nullable
+    /// list/DateTime fields above): empty stays `""`, never `null`, so the
+    /// client can compare it against a picked `behavior_id` unconditionally.
+    #[test]
+    fn upsert_mutation_renders_default_behavior_id_as_plain_string() {
+        let empty = upsert_directory_entry_mutation(
+            &entry("did:key:no-default", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        assert!(
+            empty.contains(r#"default_behavior_id: """#),
+            "empty default_behavior_id must render as an empty string, never null: {empty}"
+        );
+
+        let mut with_default = entry("did:key:with-default", "2026-07-20T00:00:00Z");
+        with_default.default_behavior_id = "did:key:a:coder".to_string();
+        let mutation = upsert_directory_entry_mutation(&with_default, "2026-07-23T00:00:00Z");
+        assert!(mutation.contains(r#"default_behavior_id: "did:key:a:coder""#));
     }
 
     /// Round-trip consistency: a stored `null` `last_seen` must decode back
@@ -833,6 +878,7 @@ mod tests {
             create_AgentPrincipal(input: {
                 agent_did: "did:key:with-runtime",
                 display_name: "With Runtime",
+                default_behavior_id: "enabled-behavior",
                 enabled: true,
                 created_at: "2026-07-23T00:00:00Z"
             }) { _docID }
@@ -906,6 +952,10 @@ mod tests {
             ],
             "behavior_ids must round-trip index-aligned with behaviors through a real node"
         );
+        assert_eq!(
+            with_runtime.default_behavior_id, "enabled-behavior",
+            "default_behavior_id must round-trip from AgentPrincipal through a real node"
+        );
         assert!(
             !entries.contains_key("did:key:disabled"),
             "disabled principals must not be advertised"
@@ -921,6 +971,10 @@ mod tests {
         assert_eq!(
             no_runtime.last_seen, "",
             "runtime-less principal's stored null last_seen must round-trip to \"\""
+        );
+        assert_eq!(
+            no_runtime.default_behavior_id, "",
+            "a principal with no default_behavior_id must stay empty, not null-coerced garbage"
         );
 
         // Settled state is a write-free fixpoint: the runtime-less principal

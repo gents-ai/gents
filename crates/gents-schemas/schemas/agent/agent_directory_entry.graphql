@@ -33,6 +33,10 @@ type AgentDirectoryEntry @branchable {
     # Emitted as null (never []) when empty - empty list literals corrupt
     # nillable array columns.
     behavior_ids: [String]
+    # The agent's resolved default (from AgentPrincipal.default_behavior_id),
+    # so clients can badge threads bound to a NON-default behavior; empty
+    # when the principal has none.
+    default_behavior_id: String
     runtime_state: String @index
     last_seen: DateTime
     updated_at: DateTime @index(direction: DESC)
