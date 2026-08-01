@@ -889,6 +889,7 @@ impl DefraSessionHook {
         parent_request_id: &str,
         tool_call_id: &str,
         parent_deadline_at: chrono::DateTime<chrono::Utc>,
+        wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
         loop {
             let now = chrono::Utc::now();
@@ -924,7 +925,16 @@ impl DefraSessionHook {
                     .await;
             }
 
-            let remaining = (parent_deadline_at - now)
+            // Bounded wait (#985): report the process as still running — do
+            // NOT cancel it; the run continues and completion is delivered
+            // via the background completion notification.
+            if now >= wait_deadline_at {
+                return self
+                    .background_tool_envelope(lifecycle, "wait_timeout")
+                    .await;
+            }
+
+            let remaining = (parent_deadline_at.min(wait_deadline_at) - now)
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
             tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;

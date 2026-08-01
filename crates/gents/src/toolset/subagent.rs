@@ -8,7 +8,7 @@ use crate::background_tools::r4c_args::{
 };
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
-    WaitToolArgs,
+    WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
 use crate::tool_call_lifecycle::AwaitMode;
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -442,7 +442,7 @@ impl Tool for SpawnProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately."
+            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately. You are notified automatically when it completes — end your turn instead of polling or sleep-waiting; use wait_process only for short bounded waits."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -478,13 +478,22 @@ impl Tool for WaitProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for a background process to reach a terminal state.".to_string(),
+            description: format!(
+                "Wait up to timeout_secs for a background process to reach a terminal state. On timeout it returns status \"running\" with reason \"wait_timeout\" — the process keeps running and you are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s, maximum {MAX_WAIT_PROCESS_TIMEOUT_SECS}s."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
                         "description": "Process handle returned by spawn_process."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
+                        "minimum": 1,
+                        "maximum": MAX_WAIT_PROCESS_TIMEOUT_SECS,
+                        "description": "How long to wait before returning a still-running snapshot; the process is never cancelled by a wait timeout."
                     }
                 },
                 "required": ["tool_call_id"]

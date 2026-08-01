@@ -548,8 +548,8 @@ pub(crate) struct ServeArgs {
     pub(crate) tool_ceiling: Option<ToolCeilingArg>,
     #[arg(
         long,
-        default_value_t = 10,
-        help = "Maximum foreground Bash command duration in seconds"
+        default_value_t = 120,
+        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs and also the foreground cap (backgrounded runs use the built-in background lifetime budget)"
     )]
     pub(crate) command_timeout_secs: u64,
     #[arg(long = "cli-tool")]

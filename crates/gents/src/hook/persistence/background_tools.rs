@@ -103,6 +103,12 @@ impl DefraSessionHook {
         let background_tool_call_id = uuid::Uuid::new_v4().to_string();
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
+        // Backgrounded executions are decoupled from the parent request
+        // deadline (like background subagent bridges): they get the
+        // background lifetime budget, with cancel_process and the completion
+        // notification as the lifecycle controls (#985).
+        let background_deadline_at = chrono::Utc::now()
+            + chrono::Duration::seconds(crate::toolset::BACKGROUND_COMMAND_TIMEOUT_SECS as i64);
         let mut lifecycle = ToolCallLifecycle::new_background_tool(
             self.node.clone(),
             request_id.clone(),
@@ -112,7 +118,7 @@ impl DefraSessionHook {
             seq,
             target_tool_name.clone(),
             target_args.clone(),
-            deadline_at,
+            background_deadline_at,
         );
         lifecycle.start_running().await?;
 
@@ -133,18 +139,17 @@ impl DefraSessionHook {
         let workspace_cwd = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .and_then(|runtime| runtime.workspace_cwd);
         tokio::spawn(async move {
-            let result =
-                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_and_live_output(
-                    Some(deadline_at),
-                    cancellation_token.clone(),
-                    workspace_cwd,
-                    Some(live_output_writer),
-                    async {
-                        let tool = target_tool.lock().await;
-                        tool.call(target_args).await
-                    },
-                )
-                .await;
+            let result = crate::tool_call_lifecycle::runtime::scope_background_tool_execution(
+                Some(background_deadline_at),
+                cancellation_token.clone(),
+                workspace_cwd,
+                Some(live_output_writer),
+                async {
+                    let tool = target_tool.lock().await;
+                    tool.call(target_args).await
+                },
+            )
+            .await;
 
             match result {
                 Ok(output) => match classify_managed_tool_result(&output) {
@@ -313,8 +318,16 @@ impl DefraSessionHook {
             ));
         }
 
+        let wait_deadline_at = chrono::Utc::now()
+            + chrono::Duration::from_std(parsed.validated_wait_timeout())
+                .unwrap_or_else(|_| chrono::Duration::seconds(30));
         let result = match self
-            .await_background_tool(&request_id, background_tool_call_id, parent_deadline_at)
+            .await_background_tool(
+                &request_id,
+                background_tool_call_id,
+                parent_deadline_at,
+                wait_deadline_at,
+            )
             .await
         {
             Ok(result) => result,

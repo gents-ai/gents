@@ -215,10 +215,10 @@ fn server_p2p_admission_flags_parse() {
 
 #[test]
 fn server_command_timeout_defaults_and_parses() {
-    assert_eq!(parse_server(&[]).command_timeout_secs, 10);
+    assert_eq!(parse_server(&[]).command_timeout_secs, 120);
     assert_eq!(
-        parse_server(&["--command-timeout-secs", "120"]).command_timeout_secs,
-        120
+        parse_server(&["--command-timeout-secs", "300"]).command_timeout_secs,
+        300
     );
 }
 

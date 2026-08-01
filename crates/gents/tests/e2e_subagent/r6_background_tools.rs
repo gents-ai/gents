@@ -355,6 +355,118 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     );
 }
 
+// #985: a backgrounded bash run's lifetime budget is decoupled from both the
+// parent request deadline and the foreground command ceiling — the execution
+// must complete (and notify) even though the parent deadline expires while it
+// is still running.
+#[tokio::test]
+async fn background_tool_execution_survives_parent_request_deadline() {
+    let bash_tools = gents::ToolSet::builder()
+        .bash_read_only_with_policy_and_timeout(
+            gents::CommandExecutionPolicy::read_only(vec!["sleep".to_string()]),
+            std::time::Duration::from_secs(120),
+        )
+        .build()
+        .build_native_tools()
+        .unwrap();
+    let (db, hook, session_id, _request_id) = setup_hook(
+        "r6-background-outlives-deadline",
+        registry(bash_tools, &["bash"]),
+    )
+    .await;
+    hook.set_request_deadline_at(Some(
+        chrono::Utc::now() + chrono::Duration::milliseconds(200),
+    ))
+    .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-outlive",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["0.7"]}}"#,
+        )
+        .await,
+    );
+    assert_eq!(receipt["status"], "running");
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    // The tool outlives both the parent deadline (200ms) and the shared
+    // 500ms wait helper; poll long enough for the 700ms sleep to finish.
+    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
+    let mut message = None;
+    for _ in 0..60 {
+        if let Some(found) = fetch_messages(db.node.as_ref(), &session_id)
+            .await
+            .into_iter()
+            .find(|message| message.content.contains(&marker))
+        {
+            message = Some(found);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let message = message.expect("background tool completion message was not appended");
+    assert!(
+        message.content.contains(r#"status="completed""#),
+        "background tool must outlive the parent request deadline; got: {}",
+        message.content
+    );
+
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
+}
+
+// #985: wait_process is a bounded wait — on timeout it reports the process
+// as still running without cancelling it, so a model that waits cannot pin
+// the session (or kill the job) until the parent request deadline.
+#[tokio::test]
+async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
+    let (db, hook, session_id, _request_id) = setup_hook(
+        "r6-background-wait-bounded",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-bounded",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    assert_eq!(receipt["status"], "running");
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    let started = std::time::Instant::now();
+    let waited = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "meta-wait-bounded",
+            &serde_json::json!({ "tool_call_id": tool_call_id, "timeout_secs": 1 }).to_string(),
+        )
+        .await,
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "bounded wait must return promptly, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(waited["status"], "running");
+    assert_eq!(waited["error"]["reason"], "wait_timeout");
+
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(
+        row.lifecycle_state.as_deref(),
+        Some("running"),
+        "wait timeout must not cancel the background process"
+    );
+    assert_eq!(row.cancel_cause.as_deref(), None);
+}
+
 #[tokio::test]
 async fn wait_envelope_bounds_oversized_background_tool_result() {
     let big_line = "x".repeat(200);
