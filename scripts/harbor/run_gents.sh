@@ -12,6 +12,7 @@ set -eu
 : "${GENTS_TOP_P:=1.0}"
 : "${GENTS_TOP_K:=}"
 : "${GENTS_MAX_TOKENS:=32768}"
+: "${GENTS_CONTEXT_WINDOW:=65536}"
 : "${GENTS_MAX_TURNS:=250}"
 : "${GENTS_RETRY_MAX_TRANSPORT:=3}"
 : "${GENTS_REQUEST_TIMEOUT_SECS:=1800}"
@@ -125,6 +126,7 @@ fi
 "${GENTS_BINARY}" config profile set \
   --graphql http://127.0.0.1:9191/api/v0/graphql \
   --profile-id "${profile_id}" \
+  --context-window "${GENTS_CONTEXT_WINDOW}" \
   --max-turns "${GENTS_MAX_TURNS}" \
   --stream-liveness-timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
   --deadline-duration-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \

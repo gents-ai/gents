@@ -52,6 +52,7 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH="$PWD" harbor run \
   --ae GENTS_GLIBC_BUNDLE_PATH=/absolute/path/to/gents-glibc-bullseye-x86_64.tar.gz \
   --ae GENTS_INFERENCE_URL=http://100.73.235.38:8000/v1 \
   --ae GENTS_DOCKER_PLATFORM=linux/amd64 \
+  --ae GENTS_CONTEXT_WINDOW=65536 \
   --ae GENTS_MAX_TURNS=250 \
   --ae GENTS_REQUEST_TIMEOUT_SECS=86400 \
   --ae GENTS_COMMAND_TIMEOUT_SECS=86400
@@ -84,6 +85,7 @@ Useful overrides:
 | `GENTS_DOCKER_PLATFORM` | unset | Force task images/builds, e.g. `linux/amd64` |
 | `GENTS_GLIBC_BUNDLE_PATH` | unset | glibc loader/library bundle for musl task images |
 | `GENTS_MAX_TOKENS` | `32768` | Per-turn output cap |
+| `GENTS_CONTEXT_WINDOW` | `65536` | Conservative compaction budget within the model's actual context window |
 | `GENTS_MAX_TURNS` | `250` | Agent completion-loop turn ceiling |
 | `GENTS_RETRY_MAX_TRANSPORT` | `3` | Transient inference retry ceiling |
 | `GENTS_REQUEST_TIMEOUT_SECS` | `1800` | Durable request and Harbor exec timeout |

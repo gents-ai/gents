@@ -32,7 +32,9 @@ class GentsAgent(BaseAgent):
     SUPPORTS_ATIF = True
     _REMOTE_BINARY = "/usr/local/bin/gents"
     _REMOTE_REAL_BINARY = "/usr/local/libexec/gents-harbor"
+    _REMOTE_BINARY_UPLOAD = "/tmp/gents-harbor-upload"
     _REMOTE_RUNNER = "/usr/local/bin/run-gents-harbor"
+    _REMOTE_RUNNER_UPLOAD = "/tmp/run-gents-harbor-upload"
     _REMOTE_CA_BUNDLE = "/tmp/gents-harbor-ca-bundle.pem"
     _REMOTE_GLIBC_BUNDLE = "/tmp/gents-harbor-glibc.tar.gz"
     _REMOTE_GLIBC_DIR = "/usr/local/lib/gents-harbor-glibc"
@@ -96,7 +98,7 @@ class GentsAgent(BaseAgent):
     ) -> None:
         if not binary_path.is_file():
             raise ValueError(f"GENTS_BINARY_PATH is not a file: {binary_path}")
-        upload_path = "/tmp/gents-harbor-upload"
+        upload_path = self._REMOTE_BINARY_UPLOAD
         await environment.upload_file(binary_path, upload_path)
         loader_check = await environment.exec(
             command=(
@@ -107,7 +109,8 @@ class GentsAgent(BaseAgent):
         if loader_check.return_code == 0:
             command = (
                 f"install -m 0755 {shlex.quote(upload_path)} "
-                f"{shlex.quote(self._REMOTE_BINARY)}"
+                f"{shlex.quote(self._REMOTE_BINARY)} && "
+                f"rm -f {shlex.quote(upload_path)}"
             )
             result = await environment.exec(command=command, user="root")
             self._require_success(command, result)
@@ -132,6 +135,7 @@ tar -xzf {shlex.quote(self._REMOTE_GLIBC_BUNDLE)} -C {shlex.quote(self._REMOTE_G
 install -m 0755 {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_REAL_BINARY)}
 printf '%s\\n' '#!/bin/sh' 'exec {self._REMOTE_GLIBC_DIR}/ld-linux-x86-64.so.2 --library-path {self._REMOTE_GLIBC_DIR} {self._REMOTE_REAL_BINARY} "$@"' > {shlex.quote(self._REMOTE_BINARY)}
 chmod 0755 {shlex.quote(self._REMOTE_BINARY)}
+rm -f {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_GLIBC_BUNDLE)}
 """.strip()
         result = await environment.exec(command=command, user="root")
         self._require_success("install Gents with glibc compatibility bundle", result)
@@ -180,11 +184,12 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
 
         if not self._RUNNER_SOURCE.is_file():
             raise FileNotFoundError(f"Harbor runner is missing: {self._RUNNER_SOURCE}")
-        runner_upload = "/tmp/run-gents-harbor-upload"
+        runner_upload = self._REMOTE_RUNNER_UPLOAD
         await environment.upload_file(self._RUNNER_SOURCE, runner_upload)
         install_runner = (
             f"install -m 0755 {shlex.quote(runner_upload)} "
-            f"{shlex.quote(self._REMOTE_RUNNER)}"
+            f"{shlex.quote(self._REMOTE_RUNNER)} && "
+            f"rm -f {shlex.quote(runner_upload)}"
         )
         result = await environment.exec(command=install_runner, user="root")
         self._require_success(install_runner, result)
@@ -238,6 +243,14 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         self._require_success("prepare Gents instruction", chmod_result)
 
         request_timeout = int(self._env("GENTS_REQUEST_TIMEOUT_SECS", "1800") or 1800)
+        tool_root = self._env("GENTS_TOOL_ROOT", "/app") or "/app"
+        prepare_tool_root = f"install -d -m 0755 {shlex.quote(tool_root)}"
+        prepare_result = await environment.exec(
+            command=prepare_tool_root,
+            cwd="/",
+            user="root",
+        )
+        self._require_success("prepare Gents tool root", prepare_result)
         run_env = {
             "GENTS_BINARY": self._REMOTE_BINARY,
             "GENTS_HOME": f"/tmp/gents-harbor-{session_slug}",
@@ -248,6 +261,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             "GENTS_TOP_P": self._env("GENTS_TOP_P", "1.0") or "1.0",
             "GENTS_TOP_K": self._env("GENTS_TOP_K", "") or "",
             "GENTS_MAX_TOKENS": self._env("GENTS_MAX_TOKENS", "32768") or "32768",
+            "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "65536")
+            or "65536",
             "GENTS_MAX_TURNS": self._env("GENTS_MAX_TURNS", "250") or "250",
             "GENTS_RETRY_MAX_TRANSPORT": self._env(
                 "GENTS_RETRY_MAX_TRANSPORT", "3"
@@ -262,7 +277,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "GENTS_SERVER_STARTUP_TIMEOUT_SECS", "120"
             )
             or "120",
-            "GENTS_TOOL_ROOT": self._env("GENTS_TOOL_ROOT", "/app") or "/app",
+            "GENTS_TOOL_ROOT": tool_root,
             "GENTS_API_KEY": self._env("GENTS_API_KEY", "no-key") or "no-key",
             "SSL_CERT_FILE": self._REMOTE_CA_BUNDLE,
         }
@@ -272,6 +287,33 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             env=run_env,
             timeout_sec=request_timeout + 180,
         )
+        cleanup_files = [
+            self._REMOTE_BINARY,
+            self._REMOTE_REAL_BINARY,
+            self._REMOTE_BINARY_UPLOAD,
+            self._REMOTE_RUNNER,
+            self._REMOTE_RUNNER_UPLOAD,
+            self._REMOTE_CA_BUNDLE,
+            self._REMOTE_GLIBC_BUNDLE,
+            instruction_path,
+        ]
+        cleanup_dirs = [self._REMOTE_GLIBC_DIR, run_env["GENTS_HOME"]]
+        cleanup_command = (
+            "rm -f "
+            + " ".join(shlex.quote(path) for path in cleanup_files)
+            + "\nrm -rf "
+            + " ".join(shlex.quote(path) for path in cleanup_dirs)
+        )
+        cleanup_result = await environment.exec(
+            command=cleanup_command,
+            cwd="/",
+            user="root",
+        )
+        if cleanup_result.return_code != 0:
+            self.logger.warning(
+                "Failed to remove temporary Gents runtime artifacts: %s",
+                (cleanup_result.stderr or cleanup_result.stdout or "").strip(),
+            )
         self._require_success(self._REMOTE_RUNNER, result)
 
         context.metadata = {
