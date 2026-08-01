@@ -12,7 +12,7 @@ use crate::tool_surface::BehaviorToolConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
-pub const DEFAULT_MAX_TURNS: usize = 50;
+pub const DEFAULT_MAX_TURNS: usize = 250;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
@@ -277,6 +277,11 @@ mod tests {
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         }
+    }
+
+    #[test]
+    fn default_max_turns_supports_long_running_agents() {
+        assert_eq!(DEFAULT_MAX_TURNS, 250);
     }
 
     /// TA-1 (#566 review): `openai_wire_api` must appear in the manual `Debug`

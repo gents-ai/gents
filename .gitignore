@@ -20,3 +20,7 @@
 packages/*/dist/
 node_modules/
 target/npm-pack/
+
+# Python tooling and Harbor adapter bytecode
+__pycache__/
+*.py[cod]
