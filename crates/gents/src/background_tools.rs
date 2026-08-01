@@ -52,8 +52,9 @@ pub const AWAITING_CHILD_MATERIALIZATION: &str = "awaiting_child_materialization
 /// Immutable identity boundary used by `list_processes`, `read_process`,
 /// `wait_process`, and `cancel_process`. A handle is usable on a later request
 /// in the same session when the agent and requester principals still match.
-/// Exact originating-request ownership remains sufficient for legacy rows
-/// that predate persisted requester lineage.
+/// Two absent requester identities are the same anonymous principal scope.
+/// Exact originating-request ownership remains sufficient when only a legacy
+/// owner row predates persisted requester lineage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessControlScope {
     pub(crate) request_id: String,
@@ -73,8 +74,7 @@ impl ProcessControlScope {
         self.session_id == owner_session_id
             && self.agent_did == owner_agent_did
             && (self.request_id == owner_request_id
-                || normalize_optional_str(self.requester_did.as_deref())
-                    == normalize_optional_str(owner_requester_did))
+                || self.requester_did.as_deref() == owner_requester_did)
     }
 }
 
@@ -666,7 +666,8 @@ pub(crate) async fn handle_list_background_tools(
     if response.has_errors() {
         anyhow::bail!("list_background_tools query failed: {:?}", response.errors);
     }
-    let rows: Vec<ListBackgroundToolRow> = rows(response.data.as_ref(), "AgentToolCall")?;
+    let rows: Vec<ListBackgroundToolRow> =
+        rows_skipping_malformed(response.data.as_ref(), "AgentToolCall")?;
 
     let mut entries = Vec::new();
     for row in rows {
@@ -695,8 +696,14 @@ pub(crate) async fn handle_list_background_tools(
         if !list_status_matches(args.status, status) {
             continue;
         }
-        let created_at = parse_rfc3339(row.started_at.as_deref())
-            .ok_or_else(|| anyhow!("background tool call {tool_call_id} has invalid started_at"))?;
+        let Some(created_at) = parse_rfc3339(row.started_at.as_deref()) else {
+            tracing::warn!(
+                tool_call_id,
+                started_at = ?row.started_at,
+                "skipping malformed background tool call with invalid started_at"
+            );
+            continue;
+        };
         let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
         let (stdout_bytes, stderr_bytes) = if status == "running" {
             live_outputs
@@ -1488,13 +1495,6 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
-fn normalize_optional_str(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let value = value.trim();
-        (!value.is_empty()).then_some(value)
     })
 }
 
@@ -2622,6 +2622,34 @@ where
     serde_json::from_value(value.clone()).map_err(|error| anyhow!("parse {collection}: {error}"))
 }
 
+fn rows_skipping_malformed<T>(data: Option<&serde_json::Value>, collection: &str) -> Result<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let Some(value) = data.and_then(|data| data.get(collection)) else {
+        anyhow::bail!("{collection} field missing from query response");
+    };
+    let Some(values) = value.as_array() else {
+        anyhow::bail!("parse {collection}: expected an array");
+    };
+
+    let mut parsed = Vec::with_capacity(values.len());
+    for (row_index, value) in values.iter().enumerate() {
+        match serde_json::from_value(value.clone()) {
+            Ok(row) => parsed.push(row),
+            Err(error) => {
+                tracing::warn!(
+                    collection,
+                    row_index,
+                    error = %error,
+                    "skipping malformed control-plane row"
+                );
+            }
+        }
+    }
+    Ok(parsed)
+}
+
 fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {
     let mut deduped = Vec::with_capacity(values.len());
     for value in values {
@@ -2644,6 +2672,37 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::llm::message::{AssistantContent, Text};
+
+    #[test]
+    fn process_control_requester_absence_is_exact_not_empty_string() {
+        let owner = ProcessControlScope {
+            request_id: "request-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_did: "did:agent".to_string(),
+            requester_did: None,
+        };
+        let absent_next_turn = ProcessControlScope {
+            request_id: "request-2".to_string(),
+            ..owner.clone()
+        };
+        assert!(absent_next_turn.authorizes(
+            &owner.request_id,
+            &owner.session_id,
+            &owner.agent_did,
+            owner.requester_did.as_deref(),
+        ));
+
+        let empty_next_turn = ProcessControlScope {
+            requester_did: Some(String::new()),
+            ..absent_next_turn
+        };
+        assert!(!empty_next_turn.authorizes(
+            &owner.request_id,
+            &owner.session_id,
+            &owner.agent_did,
+            owner.requester_did.as_deref(),
+        ));
+    }
 
     #[test]
     fn wait_process_timeout_defaults_and_clamps() {

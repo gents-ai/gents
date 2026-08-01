@@ -194,7 +194,7 @@ impl DefraSessionHook {
                                 &execution_tool_name,
                                 "cancelled",
                                 "",
-                                Some("parent_cancelled"),
+                                Some("explicit_cancel"),
                             )
                             .await
                         {
@@ -386,7 +386,7 @@ impl DefraSessionHook {
             &self.node,
             &caller,
             &self.agent_did,
-            &self.background_live_outputs,
+            &self.background_live_outputs.registry,
             parsed,
         )
         .await?;
@@ -441,8 +441,13 @@ impl DefraSessionHook {
             agent_did: self.agent_did.clone(),
             requester_did: self.active_requester_did().await,
         };
-        match handle_read_tool_output(&self.node, &caller, &self.background_live_outputs, parsed)
-            .await?
+        match handle_read_tool_output(
+            &self.node,
+            &caller,
+            &self.background_live_outputs.registry,
+            parsed,
+        )
+        .await?
         {
             ReadToolOutputOutcome::Found(response) => {
                 let result = serde_json::to_value(response).map_err(|error| {

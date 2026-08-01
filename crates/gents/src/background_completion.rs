@@ -702,7 +702,7 @@ pub(crate) async fn append_background_tool_completion(
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
                 let notification_request_id =
                     background_completion_notification_request_id(tool_call_id);
-                let sequence = session::append_message_with_requester_did(
+                let sequence = session::append_message_with_key_and_requester_did(
                     node,
                     parent_session_id,
                     &parent_request.agent_did,
@@ -711,6 +711,8 @@ pub(crate) async fn append_background_tool_completion(
                     &notification,
                     None,
                     Some(&notification_request_id),
+                    &notification_request_id,
+                    None,
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;

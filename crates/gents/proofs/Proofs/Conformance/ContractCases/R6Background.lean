@@ -216,12 +216,12 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       .complete
       (some "done")
   , r6NativeStepCase
-      "tool_kind_bridge_failure_cancelled_projects_parent_cancelled"
+      "tool_kind_explicit_cancel_projects_explicit_cancel"
       "bridge_failure"
       r6NativeToolFixture
       (.cancelDuringRun .interrupted)
       none
-      (some "parent_cancelled")
+      (some "explicit_cancel")
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
@@ -250,6 +250,16 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       "originating_request_authorizes_legacy_row_without_requester"
       "read_process" "originating_request_legacy_row"
       (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" none)
+  , r6ProcessControlCase
+      "absent_requester_next_turn_authorized"
+      "read_process" "absent_requester_next_turn"
+      (processScope "request-2" "session-1" "did:agent" none)
+      (processScope "request-1" "session-1" "did:agent" none)
+  , r6ProcessControlCase
+      "empty_requester_does_not_alias_absent"
+      "read_process" "empty_requester_vs_absent"
+      (processScope "request-2" "session-1" "did:agent" (some ""))
       (processScope "request-1" "session-1" "did:agent" none)
   , r6ProcessControlCase
       "process_control_cross_session_denied"
@@ -294,7 +304,7 @@ theorem r6BackgroundingCases_pinned :
           none, "running", none, none)
       , ("tool_kind_bridge_complete_persists_result", true, "background",
           none, "completed", none, none)
-      , ("tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
+      , ("tool_kind_explicit_cancel_projects_explicit_cancel",
           true, "background", none, "cancelled", none, none)
       , ("background_recovery_running_live_parent_to_cancelled", true,
           "background", none, "cancelled", some "background_completion",
@@ -317,6 +327,10 @@ theorem r6BackgroundingCases_pinned :
       , ("cancel_process_same_requester_next_turn_authorized", true,
           "background", none, "running", none, none)
       , ("originating_request_authorizes_legacy_row_without_requester", true,
+          "background", none, "running", none, none)
+      , ("absent_requester_next_turn_authorized", true,
+          "background", none, "running", none, none)
+      , ("empty_requester_does_not_alias_absent", false,
           "background", none, "running", none, none)
       , ("process_control_cross_session_denied", false,
           "background", none, "running", none, none)

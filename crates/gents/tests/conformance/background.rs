@@ -516,7 +516,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 20);
+    assert_eq!(cases.len(), 22);
 
     let names = cases
         .iter()
@@ -529,7 +529,7 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "background_tool_budget_count_8_rejects_spawn",
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
-            "tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
+            "tool_kind_explicit_cancel_projects_explicit_cancel",
             "background_recovery_running_live_parent_to_cancelled",
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
@@ -539,6 +539,8 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "wait_process_same_requester_next_turn_authorized",
             "cancel_process_same_requester_next_turn_authorized",
             "originating_request_authorizes_legacy_row_without_requester",
+            "absent_requester_next_turn_authorized",
+            "empty_requester_does_not_alias_absent",
             "process_control_cross_session_denied",
             "process_control_cross_agent_denied",
             "process_control_cross_requester_denied",
@@ -576,9 +578,9 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     assert_eq!(completed.result.as_deref(), Some("done"));
 
     let cancelled =
-        lean_r6_backgrounding_case("tool_kind_bridge_failure_cancelled_projects_parent_cancelled");
+        lean_r6_backgrounding_case("tool_kind_explicit_cancel_projects_explicit_cancel");
     assert_eq!(cancelled.terminal_state.as_str(), "cancelled");
-    assert_eq!(cancelled.reason.as_deref(), Some("parent_cancelled"));
+    assert_eq!(cancelled.reason.as_deref(), Some("explicit_cancel"));
 
     let backgrounded = lean_r6_backgrounding_case("tool_kind_background_mode_executes");
     assert!(backgrounded.legal);
@@ -652,6 +654,9 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             .unwrap_or_else(|| panic!("missing denied process control case for {scenario}"));
         assert!(!case.legal, "{} must be denied", case.name);
     }
+
+    assert!(lean_r6_backgrounding_case("absent_requester_next_turn_authorized").legal);
+    assert!(!lean_r6_backgrounding_case("empty_requester_does_not_alias_absent").legal);
 
     for reason in [
         "wait_timeout",
@@ -1508,11 +1513,11 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
 
 /// Drives the Lean `r4c.read_tool_output.dispatch_by_state` witness (#937)
 /// through the real hook: a running native background tool serves its live
-/// ring-buffer tail; a second hook on the same session — the restart shape,
-/// since `LiveToolOutputRegistry` is volatile per-process state — serves
-/// empty output for the same running row; after completion both hooks serve
-/// the persisted result. Payloads and paging numbers are the Lean-computed
-/// witness values.
+/// ring-buffer tail; a later-request hook sharing the process registry serves
+/// the same live output; an explicitly unshared hook models daemon restart and
+/// serves empty output for the still-running row. After completion every hook
+/// serves the persisted result. Payloads and paging numbers are the
+/// Lean-computed witness values.
 pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     let LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
         running_payload,
@@ -1539,6 +1544,8 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         background_tool_registry(tools, &["bash_unrestricted"]),
     )
     .await;
+    let shared_processes = gents::BackgroundExecutionRegistry::default();
+    let hook = hook.with_background_execution_registry(shared_processes.clone());
 
     let spawn = skip_reason_json(
         hook.on_tool_call(
@@ -1589,6 +1596,68 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     assert_eq!(running["total_bytes"].as_u64(), Some(*running_total_bytes));
     assert_eq!(running["has_more"].as_bool(), Some(*running_has_more));
     assert_eq!(running["exited"].as_bool(), Some(false));
+
+    // A new request gets a new hook, but the daemon-owned process registry
+    // carries the live ring buffer across that request boundary.
+    let next_request_id = format!("{request_id}-next");
+    support::create_request(
+        db.node.as_ref(),
+        &next_request_id,
+        &session_id,
+        "processing",
+        "2026-05-19T00:00:01Z",
+    )
+    .await;
+    let next_turn_hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        "r6-background-theorem",
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume next-turn hook")
+    .with_background_execution_registry(shared_processes);
+    next_turn_hook
+        .set_active_request_id(Some(next_request_id))
+        .await;
+    next_turn_hook
+        .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    let next_turn_read = skip_reason_json(
+        next_turn_hook
+            .on_tool_call(
+                "read_process",
+                None,
+                "read-dispatch-next-turn",
+                &json!({ "tool_call_id": tool_call_id }).to_string(),
+            )
+            .await,
+    );
+    assert_eq!(next_turn_read["status"].as_str(), Some("running"));
+    assert_eq!(
+        next_turn_read["output"].as_str(),
+        Some(running_payload.as_str()),
+        "a later request must observe the originating request's live output"
+    );
+    assert_eq!(
+        next_turn_read["total_bytes"].as_u64(),
+        Some(*running_total_bytes)
+    );
+
+    let next_turn_list = skip_reason_json(
+        next_turn_hook
+            .on_tool_call("list_processes", None, "list-dispatch-next-turn", "{}")
+            .await,
+    );
+    let listed = next_turn_list["entries"]
+        .as_array()
+        .expect("list_processes entries")
+        .iter()
+        .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id.as_str()))
+        .expect("running process listed on later request");
+    assert_eq!(listed["stdout_bytes"].as_u64(), Some(*running_total_bytes));
 
     // Running + NO snapshot: a second hook on the same session has a fresh
     // (empty) live-output registry — exactly what a restarted daemon would
@@ -1642,7 +1711,11 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         .await,
     );
     assert_eq!(waited["status"].as_str(), Some("completed"));
-    for (label, reader) in [("live", &hook), ("restarted", &restarted_hook)] {
+    for (label, reader) in [
+        ("live", &hook),
+        ("next-turn", &next_turn_hook),
+        ("restarted", &restarted_hook),
+    ] {
         let terminal = skip_reason_json(
             reader
                 .on_tool_call(

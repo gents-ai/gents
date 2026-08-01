@@ -875,6 +875,78 @@ async fn process_controls_deny_different_requester_in_same_session() {
 }
 
 #[tokio::test]
+async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() {
+    let (db, hook, session_id, request_id) = setup_hook(
+        "r6-background-list-malformed-rows",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-valid-row",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let valid_tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    let escaped_session_id = escape_graphql_string(&session_id);
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let escaped_agent_did = escape_graphql_string(crate::support::AGENT_DID);
+    let malformed_rows = format!(
+        r#"mutation {{
+            null_identity: create_AgentToolCall(input: {{
+                tool_call_key: "malformed-null-identity-{escaped_session_id}",
+                session_id: "{escaped_session_id}",
+                await_mode: "background",
+                lifecycle_state: "running",
+                started_at: "2026-05-14T00:00:02Z"
+            }}) {{ _docID }}
+            no_start: create_AgentToolCall(input: {{
+                tool_call_key: "malformed-no-start-{escaped_session_id}",
+                tool_call_id: "malformed-no-start",
+                tool_name: "slow_tool",
+                request_id: "{escaped_request_id}",
+                session_id: "{escaped_session_id}",
+                agent_did: "{escaped_agent_did}",
+                await_mode: "background",
+                lifecycle_state: "running"
+            }}) {{ _docID }}
+        }}"#,
+    );
+    let response = db.node.execute(&malformed_rows).await;
+    assert!(
+        !response.has_errors(),
+        "seed malformed AgentToolCall rows failed: {:?}",
+        response.errors
+    );
+
+    let listed = skip_reason_json(
+        hook.on_tool_call("list_processes", None, "meta-list-malformed", r#"{}"#)
+            .await,
+    );
+    let entries = listed["entries"]
+        .as_array()
+        .expect("list_processes must return entries despite malformed rows");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0]["tool_call_id"].as_str(),
+        Some(valid_tool_call_id.as_str())
+    );
+
+    let _ = hook
+        .on_tool_call(
+            "cancel_process",
+            None,
+            "meta-cleanup-malformed",
+            &serde_json::json!({ "tool_call_id": valid_tool_call_id }).to_string(),
+        )
+        .await;
+}
+
+#[tokio::test]
 async fn same_tool_background_calls_execute_concurrently_without_registry_mutex() {
     let entered = Arc::new(AtomicUsize::new(0));
     let release = Arc::new(Notify::new());
