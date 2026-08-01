@@ -55,15 +55,45 @@ esac
   --tool-root "${GENTS_TOOL_ROOT}" \
   >"${init_log}"
 
-"${GENTS_BINARY}" server \
-  --home "${GENTS_HOME}" \
-  --http-addr 127.0.0.1 \
-  --http-port 9191 \
-  --tool-ceiling readwrite \
-  --tool-root "${GENTS_TOOL_ROOT}" \
-  --command-timeout-secs "${GENTS_COMMAND_TIMEOUT_SECS}" \
-  >"${server_log}" 2>&1 &
-server_pid=$!
+start_server() {
+  "${GENTS_BINARY}" server \
+    --home "${GENTS_HOME}" \
+    --http-addr 127.0.0.1 \
+    --http-port 9191 \
+    --tool-ceiling readwrite \
+    --tool-root "${GENTS_TOOL_ROOT}" \
+    --command-timeout-secs "${GENTS_COMMAND_TIMEOUT_SECS}" \
+    >>"${server_log}" 2>&1 &
+  server_pid=$!
+}
+
+wait_for_server_ready() {
+  server_ready=0
+  attempt=0
+  while [ "${attempt}" -lt "${GENTS_SERVER_STARTUP_TIMEOUT_SECS}" ]; do
+    if "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
+      grep -q '"process_state": "ready"' "${status_log}" &&
+      grep -q '"behavior_readiness": "ready"' "${status_log}"; then
+      server_ready=1
+      break
+    fi
+    if ! kill -0 "${server_pid}" >/dev/null 2>&1; then
+      echo "Gents server exited during startup" >&2
+      tail -200 "${server_log}" >&2 || true
+      exit 1
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  if [ "${server_ready}" != "1" ]; then
+    echo "Gents server did not become ready in ${GENTS_SERVER_STARTUP_TIMEOUT_SECS}s" >&2
+    tail -200 "${server_log}" >&2 || true
+    exit 1
+  fi
+}
+
+: >"${server_log}"
+start_server
 
 cleanup() {
   exit_code=$?
@@ -85,26 +115,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-server_ready=0
-attempt=0
-while [ "${attempt}" -lt "${GENTS_SERVER_STARTUP_TIMEOUT_SECS}" ]; do
-  if "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null; then
-    server_ready=1
-    break
-  fi
-  if ! kill -0 "${server_pid}" >/dev/null 2>&1; then
-    echo "Gents server exited during startup" >&2
-    tail -200 "${server_log}" >&2 || true
-    exit 1
-  fi
-  sleep 1
-  attempt=$((attempt + 1))
-done
-if [ "${server_ready}" != "1" ]; then
-  echo "Gents server did not become ready in ${GENTS_SERVER_STARTUP_TIMEOUT_SECS}s" >&2
-  tail -200 "${server_log}" >&2 || true
-  exit 1
-fi
+wait_for_server_ready
 
 profile_id=$(sed -n 's/^[[:space:]]*"inference_profile_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
 if [ -z "${profile_id}" ]; then
@@ -119,9 +130,13 @@ fi
   --deadline-duration-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
   --retry-max-transport "${GENTS_RETRY_MAX_TRANSPORT}" \
   >"${profile_log}"
-# The server reconciles document-backed configuration asynchronously. Give the
-# updated profile a moment to enter the runtime snapshot before submitting.
-sleep 1
+
+# Profile mutations reconcile asynchronously. Restarting makes the persisted
+# profile part of the startup snapshot before any benchmark request can exist.
+kill "${server_pid}"
+wait "${server_pid}" || true
+start_server
+wait_for_server_ready
 
 metadata=$(printf '{"harness":"harbor","model_name":"%s"}' "${GENTS_MODEL}")
 set -- \
