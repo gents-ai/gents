@@ -54,7 +54,9 @@ pub enum OAuthRefreshKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OAuthAuthProblem {
     Missing,
-    WrongMode { found_mode: String },
+    WrongMode {
+        found_mode: String,
+    },
     Expired,
     /// Valid grant, but the account is not entitled to this OAuth surface (tier gate).
     NotEntitled,
@@ -653,7 +655,10 @@ impl DbCredentialBearer {
         ))
     }
 
-    async fn refresh_tokens(&self, refresh_token: &str) -> Result<RefreshedTokens, OAuthAuthProblem> {
+    async fn refresh_tokens(
+        &self,
+        refresh_token: &str,
+    ) -> Result<RefreshedTokens, OAuthAuthProblem> {
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
                 crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await

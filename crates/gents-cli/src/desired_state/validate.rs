@@ -2436,7 +2436,10 @@ mod live_tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         ids.sort();
-        assert_eq!(ids, vec!["openai-sol".to_string(), "openai-terra".to_string()]);
+        assert_eq!(
+            ids,
+            vec!["openai-sol".to_string(), "openai-terra".to_string()]
+        );
         Ok(())
     }
 
@@ -2554,10 +2557,7 @@ mod live_tests {
         ids.sort();
         assert_eq!(
             ids,
-            vec![
-                "openai-sol".to_string(),
-                "other-agent-backend".to_string()
-            ]
+            vec!["openai-sol".to_string(), "other-agent-backend".to_string()]
         );
         Ok(())
     }

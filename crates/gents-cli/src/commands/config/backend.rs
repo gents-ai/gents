@@ -124,9 +124,10 @@ async fn load_oauth_credential_for_discovery(
             gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             "gents codex-login",
         ),
-        BackendProviderKind::XaiGrokOAuth => {
-            (gents::xai_grok_oauth::XAI_OAUTH_PROVIDER, "gents grok-login")
-        }
+        BackendProviderKind::XaiGrokOAuth => (
+            gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            "gents grok-login",
+        ),
         _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
     };
     let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
@@ -137,12 +138,9 @@ async fn load_oauth_credential_for_discovery(
     };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let access = ConfigAccess::Graphql(graphql);
-    let credential = crate::commands::codex_auth_probe::load_oauth_credential(
-        &access,
-        &agent_did,
-        provider,
-    )
-    .await?;
+    let credential =
+        crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
+            .await?;
     Ok((credential, agent_did))
 }
 

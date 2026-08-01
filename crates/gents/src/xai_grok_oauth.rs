@@ -378,8 +378,12 @@ pub async fn build_chat_completions_client(
     let endpoint = normalize_endpoint(endpoint);
     // Identity headers ride along via `prepare` on every request.
     let http = build_authenticated_http(node, agent_did).await?;
-    crate::inference_http::build_openai_chat_completions_client("xai-oauth-managed", &endpoint, http)
-        .context("building Grok OAuth Chat Completions client")
+    crate::inference_http::build_openai_chat_completions_client(
+        "xai-oauth-managed",
+        &endpoint,
+        http,
+    )
+    .context("building Grok OAuth Chat Completions client")
 }
 
 #[cfg(test)]
@@ -467,8 +471,7 @@ mod tests {
         // a force-refresh loop would burn a rotation per request.
         let unauthorized =
             http_client::Error::InvalidStatusCode("401".parse().expect("valid status"));
-        let forbidden =
-            http_client::Error::InvalidStatusCode("403".parse().expect("valid status"));
+        let forbidden = http_client::Error::InvalidStatusCode("403".parse().expect("valid status"));
         assert!(is_bearer_rejection(&unauthorized));
         assert!(!is_bearer_rejection(&forbidden));
     }

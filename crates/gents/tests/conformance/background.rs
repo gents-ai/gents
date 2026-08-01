@@ -516,7 +516,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 20);
 
     let names = cases
         .iter()
@@ -534,6 +534,17 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "background_completion_source_writes_canonical_key",
             "terminal_completion_message_precedes_claimed_continuation",
             "legacy_subagent_completion_source_aliases_canonical_key",
+            "list_processes_same_requester_next_turn_authorized",
+            "read_process_same_requester_next_turn_authorized",
+            "wait_process_same_requester_next_turn_authorized",
+            "cancel_process_same_requester_next_turn_authorized",
+            "originating_request_authorizes_legacy_row_without_requester",
+            "process_control_cross_session_denied",
+            "process_control_cross_agent_denied",
+            "process_control_cross_requester_denied",
+            "wait_timeout_preserves_running_process",
+            "caller_interrupt_preserves_running_process",
+            "caller_deadline_preserves_running_process",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>()
@@ -613,6 +624,47 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     let continuation =
         lean_r6_backgrounding_case("terminal_completion_message_precedes_claimed_continuation");
     drive_r6_completion_continuation_case(continuation).await;
+
+    for action in [
+        "list_processes",
+        "read_process",
+        "wait_process",
+        "cancel_process",
+    ] {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.group == "process_control_authorization"
+                    && case.action == action
+                    && case.reason.as_deref() == Some("same_requester_next_turn")
+            })
+            .unwrap_or_else(|| panic!("missing same-principal process control case for {action}"));
+        assert!(case.legal, "{} must remain authorized", case.name);
+    }
+
+    for scenario in ["cross_session", "cross_agent", "cross_requester"] {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.group == "process_control_authorization"
+                    && case.reason.as_deref() == Some(scenario)
+            })
+            .unwrap_or_else(|| panic!("missing denied process control case for {scenario}"));
+        assert!(!case.legal, "{} must be denied", case.name);
+    }
+
+    for reason in [
+        "wait_timeout",
+        "caller_interrupted",
+        "caller_deadline_exceeded",
+    ] {
+        let case = cases
+            .iter()
+            .find(|case| case.group == "wait_boundary" && case.reason.as_deref() == Some(reason))
+            .unwrap_or_else(|| panic!("missing wait boundary case for {reason}"));
+        assert!(case.legal, "{} must not request cancellation", case.name);
+        assert_eq!(case.terminal_state, "running", "{}", case.name);
+    }
 }
 
 #[derive(Debug, Deserialize)]

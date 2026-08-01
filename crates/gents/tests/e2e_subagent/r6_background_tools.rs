@@ -4,9 +4,12 @@ use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
-use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::{interrupt_request, BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::sync::Notify;
 
 use crate::support::{first_row, test_db};
 
@@ -80,6 +83,37 @@ impl ToolDyn for PendingTool {
 
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
+    }
+}
+
+struct ConcurrentGateTool {
+    entered: Arc<AtomicUsize>,
+    release: Arc<Notify>,
+}
+
+impl ToolDyn for ConcurrentGateTool {
+    fn name(&self) -> String {
+        "concurrent_tool".to_string()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "concurrent_tool".to_string(),
+                description: "test tool".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        let entered = self.entered.clone();
+        let release = self.release.clone();
+        Box::pin(async move {
+            entered.fetch_add(1, Ordering::SeqCst);
+            release.notified().await;
+            Ok("done".to_string())
+        })
     }
 }
 
@@ -597,7 +631,7 @@ async fn background_tool_rejects_when_parent_budget_is_exhausted() {
 }
 
 #[tokio::test]
-async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_call() {
+async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     let (db, hook, session_id, _request_id) = setup_hook(
         "r6-background-wait-deadline",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
@@ -627,15 +661,275 @@ async fn wait_tool_deadline_out_cancels_background_row_without_persisting_wait_c
         )
         .await,
     );
-    assert_eq!(waited["status"], "cancelled");
-    assert_eq!(waited["error"]["reason"], "parent_deadline_exceeded");
+    assert_eq!(waited["status"], "running");
+    assert_eq!(waited["error"]["reason"], "caller_deadline_exceeded");
 
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(row.cancel_cause.as_deref(), None);
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
         0
     );
+}
+
+#[tokio::test]
+async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() {
+    let (db, hook, session_id, request_id) = setup_hook(
+        "r6-background-wait-interrupt",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-interrupt",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+    interrupt_request(db.node.as_ref(), &request_id)
+        .await
+        .expect("interrupt caller request");
+
+    let waited = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "meta-wait-interrupt",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(waited["status"], "running");
+    assert_eq!(waited["error"]["reason"], "caller_interrupted");
+
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(row.cancel_cause.as_deref(), None);
+}
+
+#[tokio::test]
+async fn process_controls_manage_same_principal_job_across_request_turns() {
+    let (db, hook, session_id, origin_request_id) = setup_hook(
+        "r6-background-cross-turn-controls",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let requester_did = "did:key:same-requester";
+    hook.set_active_request_lineage(Some(origin_request_id), Some(requester_did.to_string()))
+        .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-cross-turn",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    let next_request_id = "r6-background-cross-turn-controls-request-2".to_string();
+    crate::support::create_request(
+        db.node.as_ref(),
+        &next_request_id,
+        &session_id,
+        "processing",
+        "2026-05-14T00:00:01Z",
+    )
+    .await;
+    hook.set_active_request_lineage(Some(next_request_id), Some(requester_did.to_string()))
+        .await;
+
+    let listed = skip_reason_json(
+        hook.on_tool_call("list_processes", None, "meta-list-cross-turn", r#"{}"#)
+            .await,
+    );
+    assert!(listed["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["tool_call_id"] == tool_call_id));
+
+    let read = skip_reason_json(
+        hook.on_tool_call(
+            "read_process",
+            None,
+            "meta-read-cross-turn",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(read["status"], "running");
+
+    hook.set_request_deadline_at(Some(chrono::Utc::now() - chrono::Duration::milliseconds(1)))
+        .await;
+    let waited = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "meta-wait-cross-turn",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(waited["status"], "running");
+    assert_eq!(waited["error"]["reason"], "caller_deadline_exceeded");
+
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
+        .await;
+    let cancelled = skip_reason_json(
+        hook.on_tool_call(
+            "cancel_process",
+            None,
+            "meta-cancel-cross-turn",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn process_controls_deny_different_requester_in_same_session() {
+    let (db, hook, session_id, request_id) = setup_hook(
+        "r6-background-cross-requester-denied",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    hook.set_active_request_lineage(Some(request_id.clone()), Some("did:key:owner".to_string()))
+        .await;
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-cross-requester",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    hook.set_active_request_lineage(
+        Some(format!("{request_id}-other")),
+        Some("did:key:other".to_string()),
+    )
+    .await;
+    let listed = skip_reason_json(
+        hook.on_tool_call("list_processes", None, "meta-list-cross-requester", r#"{}"#)
+            .await,
+    );
+    assert!(listed["entries"].as_array().unwrap().is_empty());
+    let denied = skip_reason_json(
+        hook.on_tool_call(
+            "read_process",
+            None,
+            "meta-read-cross-requester",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(denied["ok"], false);
+
+    let wait_denied = skip_reason_json(
+        hook.on_tool_call(
+            "wait_process",
+            None,
+            "meta-wait-cross-requester",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(wait_denied["ok"], false);
+    let cancel_denied = skip_reason_json(
+        hook.on_tool_call(
+            "cancel_process",
+            None,
+            "meta-cancel-cross-requester",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await,
+    );
+    assert_eq!(cancel_denied["ok"], false);
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(row.cancel_cause.as_deref(), None);
+
+    hook.set_active_request_lineage(Some(request_id), Some("did:key:owner".to_string()))
+        .await;
+    let _ = hook
+        .on_tool_call(
+            "cancel_process",
+            None,
+            "meta-cleanup-cross-requester",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await;
+    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+}
+
+#[tokio::test]
+async fn same_tool_background_calls_execute_concurrently_without_registry_mutex() {
+    let entered = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Notify::new());
+    let (_db, hook, _session_id, _request_id) = setup_hook(
+        "r6-background-concurrent-tool",
+        registry(
+            vec![Box::new(ConcurrentGateTool {
+                entered: entered.clone(),
+                release: release.clone(),
+            })],
+            &["concurrent_tool"],
+        ),
+    )
+    .await;
+
+    let first = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-concurrent-1",
+            r#"{"tool_name":"concurrent_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let second = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-concurrent-2",
+            r#"{"tool_name":"concurrent_tool","args":{}}"#,
+        )
+        .await,
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while entered.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both calls to the same tool must enter concurrently");
+    release.notify_waiters();
+
+    for (index, receipt) in [first, second].into_iter().enumerate() {
+        let waited = skip_reason_json(
+            hook.on_tool_call(
+                "wait_process",
+                None,
+                &format!("meta-wait-concurrent-{index}"),
+                &serde_json::json!({ "tool_call_id": receipt["tool_call_id"] }).to_string(),
+            )
+            .await,
+        );
+        assert_eq!(waited["status"], "completed");
+    }
 }
 
 #[tokio::test]

@@ -479,7 +479,7 @@ impl Tool for WaitProcessTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Wait up to timeout_secs for a background process to reach a terminal state. On timeout it returns status \"running\" with reason \"wait_timeout\" — the process keeps running and you are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s, maximum {MAX_WAIT_PROCESS_TIMEOUT_SECS}s."
+                "Wait up to timeout_secs for a background process in this session to reach a terminal state, including a handle returned on an earlier turn. A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s, maximum {MAX_WAIT_PROCESS_TIMEOUT_SECS}s."
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -517,7 +517,7 @@ impl Tool for ListProcessesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this request's background processes.".to_string(),
+            description: "List background processes manageable by this session principal, including processes started on earlier turns.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -555,7 +555,7 @@ impl Tool for ReadProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read an incremental, byte-addressed slice of a background process's \
+            description: "Read an incremental, byte-addressed slice of a manageable background process in this session, including one started on an earlier turn. \
 captured output. stdout and stderr are merged in capture order behind a single byte cursor \
 (stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
 gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
@@ -607,7 +607,7 @@ impl Tool for CancelProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Cancel a running background process.".to_string(),
+            description: "Cancel a manageable running background process in this session, including one started on an earlier turn.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

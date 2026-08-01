@@ -251,8 +251,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             == Some(gents::backend_provider::BackendProviderKind::XaiGrokOAuth.as_str())
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
-    let xai_auth_ok = !xai_backend_configured
-        || xai_auth_check.get("ok").and_then(Value::as_bool) == Some(true);
+    let xai_auth_ok =
+        !xai_backend_configured || xai_auth_check.get("ok").and_then(Value::as_bool) == Some(true);
 
     let status = if schemas_ok
         && principal_present

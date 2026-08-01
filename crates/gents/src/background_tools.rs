@@ -49,6 +49,35 @@ use self::transcript_render::{
 /// the Lean witness `r4c.list_subagents.unmaterialized_child_visible`.
 pub const AWAITING_CHILD_MATERIALIZATION: &str = "awaiting_child_materialization";
 
+/// Immutable identity boundary used by `list_processes`, `read_process`,
+/// `wait_process`, and `cancel_process`. A handle is usable on a later request
+/// in the same session when the agent and requester principals still match.
+/// Exact originating-request ownership remains sufficient for legacy rows
+/// that predate persisted requester lineage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessControlScope {
+    pub(crate) request_id: String,
+    pub(crate) session_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) requester_did: Option<String>,
+}
+
+impl ProcessControlScope {
+    pub(crate) fn authorizes(
+        &self,
+        owner_request_id: &str,
+        owner_session_id: &str,
+        owner_agent_did: &str,
+        owner_requester_did: Option<&str>,
+    ) -> bool {
+        self.session_id == owner_session_id
+            && self.agent_did == owner_agent_did
+            && (self.request_id == owner_request_id
+                || normalize_optional_str(self.requester_did.as_deref())
+                    == normalize_optional_str(owner_requester_did))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
     /// Friendly, model-facing name of an allowed subagent target. The runtime
@@ -324,6 +353,10 @@ struct ListSubagentChildRow {
 struct ListBackgroundToolRow {
     tool_call_id: String,
     tool_name: String,
+    request_id: String,
+    session_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
@@ -353,6 +386,9 @@ struct ReadToolOutputRow {
     tool_call_id: String,
     tool_name: String,
     request_id: Option<String>,
+    session_id: Option<String>,
+    agent_did: Option<String>,
+    requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
@@ -595,24 +631,28 @@ pub async fn handle_list_subagents(
 
 pub(crate) async fn handle_list_background_tools(
     node: &EmbeddedNode,
-    caller_request_id: &str,
+    caller: &ProcessControlScope,
     local_deployment_id: &str,
     live_outputs: &LiveToolOutputRegistry,
     args: ListBackgroundToolsArgs,
 ) -> Result<ListBackgroundToolsResponse> {
     let limit = args.validated_limit() as usize;
-    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_session = escape_graphql_string(&caller.session_id);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
+                    session_id: {{ _eq: "{escaped_session}" }},
                     await_mode: {{ _eq: "background" }}
                 }},
                 order: {{ started_at: ASC }}
             ) {{
                 tool_call_id
                 tool_name
+                request_id
+                session_id
+                agent_did
+                requester_did
                 await_mode
                 lifecycle_state
                 child_request_id
@@ -630,6 +670,14 @@ pub(crate) async fn handle_list_background_tools(
 
     let mut entries = Vec::new();
     for row in rows {
+        if !caller.authorizes(
+            &row.request_id,
+            &row.session_id,
+            &row.agent_did,
+            row.requester_did.as_deref(),
+        ) {
+            continue;
+        }
         if non_empty_string(row.child_request_id.as_deref()).is_some() {
             continue;
         }
@@ -969,7 +1017,7 @@ fn tool_result_identities(message: &Message) -> Vec<String> {
 
 pub(crate) async fn handle_read_tool_output(
     node: &EmbeddedNode,
-    caller_request_id: &str,
+    caller: &ProcessControlScope,
     live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
 ) -> Result<ReadToolOutputOutcome> {
@@ -979,12 +1027,12 @@ pub(crate) async fn handle_read_tool_output(
     }
 
     let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_session = escape_graphql_string(&caller.session_id);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
+                    session_id: {{ _eq: "{escaped_session}" }},
                     tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
                 }},
                 limit: 1
@@ -992,6 +1040,9 @@ pub(crate) async fn handle_read_tool_output(
                 tool_call_id
                 tool_name
                 request_id
+                session_id
+                agent_did
+                requester_did
                 await_mode
                 lifecycle_state
                 child_request_id
@@ -1006,7 +1057,12 @@ pub(crate) async fn handle_read_tool_output(
     let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
-    if row.request_id.as_deref() != Some(caller_request_id) {
+    if !caller.authorizes(
+        row.request_id.as_deref().unwrap_or_default(),
+        row.session_id.as_deref().unwrap_or_default(),
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.requester_did.as_deref(),
+    ) {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     }
     if row.await_mode.as_deref() != Some("background")
@@ -1432,6 +1488,13 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn normalize_optional_str(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then_some(value)
     })
 }
 

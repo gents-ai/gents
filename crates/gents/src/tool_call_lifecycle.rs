@@ -476,6 +476,18 @@ impl ToolCallLifecycle {
         &self.request_id
     }
 
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
+    pub(crate) fn requester_did(&self) -> Option<&str> {
+        self.requester_did.as_deref()
+    }
+
     pub(crate) fn tool_name(&self) -> &str {
         &self.tool_name
     }

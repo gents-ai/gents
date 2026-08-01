@@ -19,8 +19,8 @@ use crate::background_tools::{
     load_parent_subagent_context, load_spawn_bridge_row, load_steer_subagent_target,
     pending_automated_wakeup_request_ids, project_child_terminal, resolve_context_target,
     try_load_authorized_child_edge, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
-    ParentSubagentContext, ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget,
-    WaitSubagentArgs, WaitToolArgs,
+    ParentSubagentContext, ProcessControlScope, ReadToolOutputOutcome, SpawnSubagentArgs,
+    SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::{load_agent_behavior, SubagentTarget};

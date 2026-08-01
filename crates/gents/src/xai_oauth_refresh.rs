@@ -54,8 +54,7 @@ pub async fn refresh_xai_token(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::BAD_REQUEST
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::BAD_REQUEST
         {
             // 400 invalid_grant is the usual consumed/revoked refresh token path.
             return Err(OAuthAuthProblem::Expired);
@@ -111,9 +110,11 @@ fn parse_error_message(body: &str) -> String {
         .get("error_description")
         .and_then(Value::as_str)
         .or_else(|| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str().or_else(|| error.get("message").and_then(Value::as_str)))
+            value.get("error").and_then(|error| {
+                error
+                    .as_str()
+                    .or_else(|| error.get("message").and_then(Value::as_str))
+            })
         })
         .or_else(|| value.get("message").and_then(Value::as_str))
         .unwrap_or(body)

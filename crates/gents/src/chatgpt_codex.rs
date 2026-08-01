@@ -18,9 +18,9 @@ use serde_json::{json, Value};
 // Re-export the shared OAuth credential shell so existing `chatgpt_codex::` call sites stay stable.
 pub use crate::oauth_credential::{
     classify_chatgpt_auth_error, list_oauth_credentials, lookup_oauth_credential,
-    lookup_oauth_credential_by_doc_id, lookup_oauth_credential_by_id, oauth_credential_by_doc_id_query,
-    oauth_credential_by_id_query, oauth_credential_id, oauth_credential_query,
-    oauth_credential_upsert_mutation, oauth_credentials_for_agent_query,
+    lookup_oauth_credential_by_doc_id, lookup_oauth_credential_by_id,
+    oauth_credential_by_doc_id_query, oauth_credential_by_id_query, oauth_credential_id,
+    oauth_credential_query, oauth_credential_upsert_mutation, oauth_credentials_for_agent_query,
     oauth_credentials_from_response, shared_bearer, token_is_fresh, upsert_oauth_credential,
     BearerSource, ChatGptAuthProblem, DbCredentialBearer, OAuthAuthProblem, OAuthCredential,
     OAuthProduct, OAuthRefreshKind, CHATGPT_OAUTH_PRODUCT,

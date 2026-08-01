@@ -119,11 +119,7 @@ mod tests {
         // The Grok proxy serves both wires; the official client picks per
         // model. Default to Responses, but let operators pin chat_completions.
         assert_eq!(
-            OpenAiWireApi::effective_for_provider(
-                BackendProviderKind::XaiGrokOAuth,
-                None,
-                "grok",
-            ),
+            OpenAiWireApi::effective_for_provider(BackendProviderKind::XaiGrokOAuth, None, "grok",),
             OpenAiWireApi::Responses
         );
         assert_eq!(

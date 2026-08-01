@@ -15,10 +15,6 @@ pub(crate) mod background_tools;
 pub mod chatgpt_codex;
 pub mod chatgpt_oauth_refresh;
 pub mod codex_shim_binding;
-pub mod oauth_credential;
-pub mod xai_grok_oauth;
-pub mod xai_oauth_login;
-pub mod xai_oauth_refresh;
 pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
@@ -40,9 +36,13 @@ pub mod inference_http;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+pub mod oauth_credential;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub mod startup_readiness;
+pub mod xai_grok_oauth;
+pub mod xai_oauth_login;
+pub mod xai_oauth_refresh;
 
 /// Shared in-crate test utilities.
 #[cfg(test)]

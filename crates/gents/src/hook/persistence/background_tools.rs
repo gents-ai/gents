@@ -119,7 +119,8 @@ impl DefraSessionHook {
             target_tool_name.clone(),
             target_args.clone(),
             background_deadline_at,
-        );
+        )
+        .with_requester_did(self.active_requester_did().await);
         lifecycle.start_running().await?;
 
         let cancellation_token = tokio_util::sync::CancellationToken::new();
@@ -144,10 +145,7 @@ impl DefraSessionHook {
                 cancellation_token.clone(),
                 workspace_cwd,
                 Some(live_output_writer),
-                async {
-                    let tool = target_tool.lock().await;
-                    tool.call(target_args).await
-                },
+                async { target_tool.call(target_args).await },
             )
             .await;
 
@@ -285,7 +283,7 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (_session_id, request_id, parent_deadline_at, _seq) =
+        let (session_id, request_id, parent_deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         self.state.lock().await.register_tool_result_identity(
             internal_call_id,
@@ -321,9 +319,15 @@ impl DefraSessionHook {
         let wait_deadline_at = chrono::Utc::now()
             + chrono::Duration::from_std(parsed.validated_wait_timeout())
                 .unwrap_or_else(|_| chrono::Duration::seconds(30));
+        let caller = ProcessControlScope {
+            request_id,
+            session_id,
+            agent_did: self.agent_did.clone(),
+            requester_did: self.active_requester_did().await,
+        };
         let result = match self
             .await_background_tool(
-                &request_id,
+                &caller,
                 background_tool_call_id,
                 parent_deadline_at,
                 wait_deadline_at,
@@ -351,7 +355,7 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (_session_id, request_id, _deadline_at, _seq) =
+        let (session_id, request_id, _deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         self.state.lock().await.register_tool_result_identity(
             internal_call_id,
@@ -372,9 +376,15 @@ impl DefraSessionHook {
                 ));
             }
         };
+        let caller = ProcessControlScope {
+            request_id,
+            session_id,
+            agent_did: self.agent_did.clone(),
+            requester_did: self.active_requester_did().await,
+        };
         let response = handle_list_background_tools(
             &self.node,
-            &request_id,
+            &caller,
             &self.agent_did,
             &self.background_live_outputs,
             parsed,
@@ -392,7 +402,7 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (_session_id, request_id, _deadline_at, _seq) =
+        let (session_id, request_id, _deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         self.state.lock().await.register_tool_result_identity(
             internal_call_id,
@@ -425,13 +435,14 @@ impl DefraSessionHook {
             ));
         }
 
-        match handle_read_tool_output(
-            &self.node,
-            &request_id,
-            &self.background_live_outputs,
-            parsed,
-        )
-        .await?
+        let caller = ProcessControlScope {
+            request_id,
+            session_id,
+            agent_did: self.agent_did.clone(),
+            requester_did: self.active_requester_did().await,
+        };
+        match handle_read_tool_output(&self.node, &caller, &self.background_live_outputs, parsed)
+            .await?
         {
             ReadToolOutputOutcome::Found(response) => {
                 let result = serde_json::to_value(response).map_err(|error| {
@@ -453,7 +464,7 @@ impl DefraSessionHook {
                     READ_PROCESS_TOOL_NAME,
                     "/tool_call_id",
                     &background_tool_call_id,
-                    "background tool call is not owned by this parent request",
+                    "background tool call is not manageable by this session principal",
                     Vec::new(),
                 ),
             )),
@@ -513,8 +524,14 @@ impl DefraSessionHook {
             ));
         }
 
+        let caller = ProcessControlScope {
+            request_id: request_id.clone(),
+            session_id: session_id.clone(),
+            agent_did: self.agent_did.clone(),
+            requester_did: self.active_requester_did().await,
+        };
         let lifecycle = match self
-            .load_authorized_background_tool(&request_id, background_tool_call_id)
+            .load_authorized_background_tool(&caller, background_tool_call_id)
             .await
         {
             Ok(lifecycle) => lifecycle,
@@ -537,6 +554,7 @@ impl DefraSessionHook {
         }
 
         let notification_tool_name = lifecycle.tool_name().to_string();
+        let notification_request_id = lifecycle.request_id().to_string();
         self.cancel_background_tool_lifecycle(lifecycle, CancelCause::UserCancelled)
             .await?;
         let notification_reason = parsed
@@ -547,7 +565,7 @@ impl DefraSessionHook {
         if let Err(error) = crate::background_completion::append_background_tool_completion(
             self.node.as_ref(),
             &session_id,
-            &request_id,
+            &notification_request_id,
             background_tool_call_id,
             &notification_tool_name,
             "cancelled",

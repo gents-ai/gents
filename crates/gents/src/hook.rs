@@ -45,7 +45,7 @@ pub struct BackgroundToolRegistry {
 
 #[derive(Default)]
 struct BackgroundToolRegistryInner {
-    tools: HashMap<String, Arc<Mutex<Box<dyn ToolDyn>>>>,
+    tools: HashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
 }
 
@@ -61,7 +61,7 @@ impl BackgroundToolRegistry {
         for tool in tools {
             let name = tool.name();
             if allowed.contains(&name) {
-                registry_tools.insert(name, Arc::new(Mutex::new(tool)));
+                registry_tools.insert(name, Arc::from(tool));
             }
         }
         let mut allowlist = allowed.into_iter().collect::<Vec<_>>();
@@ -74,7 +74,7 @@ impl BackgroundToolRegistry {
         }
     }
 
-    pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<Mutex<Box<dyn ToolDyn>>>> {
+    pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {
         self.inner.tools.get(tool_name).cloned()
     }
 

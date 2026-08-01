@@ -142,10 +142,7 @@ pub async fn poll_device_token(
             .header("Accept", "application/json")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&[
-                (
-                    "grant_type",
-                    "urn:ietf:params:oauth:grant-type:device_code",
-                ),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ("client_id", XAI_OAUTH_CLIENT_ID),
                 ("device_code", challenge.device_code.as_str()),
             ])
@@ -174,14 +171,12 @@ pub async fn poll_device_token(
             .ok()
             .and_then(|value| value.error)
             .or_else(|| {
-                serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("error")
-                            .and_then(Value::as_str)
-                            .map(ToOwned::to_owned)
-                    })
+                serde_json::from_str::<Value>(&body).ok().and_then(|value| {
+                    value
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned)
+                })
             })
             .unwrap_or_default();
 
@@ -258,14 +253,15 @@ pub fn credential_from_login_tokens(
 ) -> OAuthCredential {
     let agent_did = agent_did.into();
     let provider = provider.into();
-    let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&tokens.access_token)
-        .or_else(|| {
-            tokens
-                .expires_in
-                .filter(|seconds| *seconds > 0)
-                .map(|seconds| now + chrono::Duration::seconds(seconds))
-        })
-        .unwrap_or_else(|| now + chrono::Duration::minutes(15));
+    let access_token_expires_at =
+        crate::chatgpt_oauth_refresh::jwt_expiration(&tokens.access_token)
+            .or_else(|| {
+                tokens
+                    .expires_in
+                    .filter(|seconds| *seconds > 0)
+                    .map(|seconds| now + chrono::Duration::seconds(seconds))
+            })
+            .unwrap_or_else(|| now + chrono::Duration::minutes(15));
 
     OAuthCredential {
         doc_id: None,

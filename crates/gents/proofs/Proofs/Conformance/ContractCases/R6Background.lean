@@ -1,6 +1,7 @@
 import Proofs.Background.State
 import Proofs.Background.ToolOutput
 import Proofs.Background.CompletionContinuation
+import Proofs.Background.ProcessControl
 import Proofs.Conformance.ContractCases.Types
 import Proofs.Recovery.Sweeps.BackgroundRestart
 import Proofs.Session.State
@@ -166,6 +167,36 @@ def r6LegacyQueueAliasCase : R6BackgroundingCase :=
     (some legacy)
     (parsed.map fun source => source.toDefraDB ++ ":900")
 
+def processScope
+    (requestId sessionId agentDid : String)
+    (requesterDid : Option String) : Subagent.ProcessControl.Scope :=
+  { requestId, sessionId, agentDid, requesterDid }
+
+def r6ProcessControlCase
+    (name action scenario : String)
+    (caller owner : Subagent.ProcessControl.Scope) : R6BackgroundingCase :=
+  r6Case name "process_control_authorization" action
+    (Subagent.ProcessControl.authorized caller owner)
+    1 "running" none (some scenario)
+
+def childTerminalContract : Subagent.ChildTerminal -> String
+  | .running => "running"
+  | .completed => "completed"
+  | .failed => "failed"
+  | .dead => "dead"
+  | .interrupted => "interrupted"
+  | .superseded => "superseded"
+
+def r6WaitBoundaryCase
+    (name : String) (boundary : Subagent.ProcessControl.WaitBoundary) :
+    R6BackgroundingCase :=
+  let observation :=
+    Subagent.ProcessControl.observeBoundary Subagent.ChildTerminal.running boundary
+  r6Case name "wait_boundary" "wait_process"
+    (!observation.cancellationRequested)
+    1 (childTerminalContract observation.processState)
+    none (some observation.reason)
+
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -195,6 +226,55 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
   , r6LegacyQueueAliasCase
+  , r6ProcessControlCase
+      "list_processes_same_requester_next_turn_authorized"
+      "list_processes" "same_requester_next_turn"
+      (processScope "request-2" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "read_process_same_requester_next_turn_authorized"
+      "read_process" "same_requester_next_turn"
+      (processScope "request-2" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "wait_process_same_requester_next_turn_authorized"
+      "wait_process" "same_requester_next_turn"
+      (processScope "request-2" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "cancel_process_same_requester_next_turn_authorized"
+      "cancel_process" "same_requester_next_turn"
+      (processScope "request-2" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "originating_request_authorizes_legacy_row_without_requester"
+      "read_process" "originating_request_legacy_row"
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" none)
+  , r6ProcessControlCase
+      "process_control_cross_session_denied"
+      "cancel_process" "cross_session"
+      (processScope "request-2" "session-2" "did:agent" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "process_control_cross_agent_denied"
+      "wait_process" "cross_agent"
+      (processScope "request-2" "session-1" "did:other" (some "did:requester"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6ProcessControlCase
+      "process_control_cross_requester_denied"
+      "list_processes" "cross_requester"
+      (processScope "request-2" "session-1" "did:agent" (some "did:other"))
+      (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
+  , r6WaitBoundaryCase
+      "wait_timeout_preserves_running_process"
+      .waitTimeout
+  , r6WaitBoundaryCase
+      "caller_interrupt_preserves_running_process"
+      .callerInterrupted
+  , r6WaitBoundaryCase
+      "caller_deadline_preserves_running_process"
+      .callerDeadline
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -228,6 +308,28 @@ theorem r6BackgroundingCases_pinned :
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,
           "background", none, "completed", some "subagent_completion",
           some "background_completion:900")
+      , ("list_processes_same_requester_next_turn_authorized", true,
+          "background", none, "running", none, none)
+      , ("read_process_same_requester_next_turn_authorized", true,
+          "background", none, "running", none, none)
+      , ("wait_process_same_requester_next_turn_authorized", true,
+          "background", none, "running", none, none)
+      , ("cancel_process_same_requester_next_turn_authorized", true,
+          "background", none, "running", none, none)
+      , ("originating_request_authorizes_legacy_row_without_requester", true,
+          "background", none, "running", none, none)
+      , ("process_control_cross_session_denied", false,
+          "background", none, "running", none, none)
+      , ("process_control_cross_agent_denied", false,
+          "background", none, "running", none, none)
+      , ("process_control_cross_requester_denied", false,
+          "background", none, "running", none, none)
+      , ("wait_timeout_preserves_running_process", true,
+          "background", none, "running", none, none)
+      , ("caller_interrupt_preserves_running_process", true,
+          "background", none, "running", none, none)
+      , ("caller_deadline_preserves_running_process", true,
+          "background", none, "running", none, none)
       ] := by
   rfl
 

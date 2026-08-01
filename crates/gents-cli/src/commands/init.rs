@@ -296,8 +296,7 @@ async fn maybe_inline_grok_login(
             eprintln!("Could not check for an existing Grok credential: {error:#}");
         }
     }
-    if !crate::interactive_backend::confirm("Log in to Grok / xAI now to finish setup?", true)
-        .await
+    if !crate::interactive_backend::confirm("Log in to Grok / xAI now to finish setup?", true).await
     {
         return InlineGrokLoginState::Unauthenticated;
     }
