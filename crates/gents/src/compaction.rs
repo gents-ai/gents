@@ -97,15 +97,16 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
     ) -> Result<CompactionResult> {
         let original_token_estimate = estimate_message_tokens(&messages);
 
-        let (stripped_messages, stripped_activity) = match options.strategy {
-            CompactionStrategy::StripToolResults | CompactionStrategy::StripThenSummarize => {
-                strip_tool_results(messages)
-            }
-            CompactionStrategy::Summarize => {
-                let activity = extract_file_activity(&messages);
-                (messages, activity)
-            }
-        };
+        // Normalize to the canonical provider view so `messages_compacted`
+        // indexes the same list `drop_compacted_prefix` will later index,
+        // whoever the caller is. Idempotent, so this is a no-op when the caller
+        // already passed a provider view — which the daemon always does.
+        //
+        // This makes `CompactionStrategy::Summarize` and `StripThenSummarize`
+        // behave identically. They already did on the daemon path, which strips
+        // unconditionally before calling here; the variant is retained for
+        // config compatibility.
+        let (stripped_messages, stripped_activity) = provider_view(messages);
 
         let stripped_token_estimate = estimate_message_tokens(&stripped_messages);
         if matches!(options.strategy, CompactionStrategy::StripToolResults)
@@ -201,6 +202,107 @@ pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
     history::normalize_assistant_content_order(history::drop_unpaired_tool_calls(
         history::drop_orphaned_tool_results(messages),
     ))
+}
+
+/// The single canonical narrowing from the durable transcript to the provider
+/// view: stub tool-result payloads, then drop unpaired calls and orphaned
+/// results and normalize assistant content order.
+///
+/// Both sides of compaction's prefix accounting index *this* list. The
+/// compaction writer records `messages_compacted` against it and the request
+/// reader drops that many rows from it; measuring in one space and dropping in
+/// another was defect 3 of #993.
+///
+/// Modelled as `Compaction.providerView`, proven idempotent by
+/// `Compaction.providerView_idempotent` — which is what lets [`Compactor::compact`]
+/// re-normalize its own input for free.
+pub fn provider_view(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+    let (stripped, activity) = strip_tool_results(messages);
+    (sanitize_history_for_provider(stripped), activity)
+}
+
+/// Greatest `j <= limit` at which no tool call is awaiting its result — the
+/// index [`Compactor::compact`] retreats its token-budget split to.
+///
+/// Re-exported so the generated conformance cases can check the production
+/// boundary against `Compaction.pairSafeBoundary`.
+pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
+    history::pair_safe_boundary(messages, limit)
+}
+
+/// Mirror of Lean `StreamingResponse.Status`, with the same terminal partition,
+/// so generated conformance cases can be fed straight in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseStatus {
+    Streaming,
+    Complete,
+    Error,
+}
+
+impl ResponseStatus {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::Error)
+    }
+
+    pub fn from_defra(value: &str) -> Option<Self> {
+        match value {
+            "streaming" => Some(Self::Streaming),
+            "complete" => Some(Self::Complete),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+/// Resolves the streaming status of the response that produced a message.
+pub trait ResponseStatusIndex {
+    fn status_of(&self, message: &Message) -> Option<ResponseStatus>;
+}
+
+/// Every response in scope is terminal.
+pub struct AllTerminal;
+
+impl ResponseStatusIndex for AllTerminal {
+    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
+        Some(ResponseStatus::Complete)
+    }
+}
+
+/// No status is known — the conservative resolution when anything in scope is
+/// still streaming.
+pub struct NoneKnown;
+
+impl ResponseStatusIndex for NoneKnown {
+    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
+        None
+    }
+}
+
+/// Runtime counterpart of Lean `PromptView.safeToReduce`: a transcript may only
+/// be reduced when every tool result it retains belongs to a response whose
+/// status is known and terminal. Reducing under a live response can summarize
+/// away a turn that is still being written.
+///
+/// See `boundary.compaction.safe-to-reduce-session-scope` for how the daemon
+/// resolves statuses at session scope rather than per message.
+pub fn safe_to_reduce(messages: &[Message], statuses: &impl ResponseStatusIndex) -> bool {
+    messages.iter().all(|message| {
+        if !carries_tool_result(message) {
+            return true;
+        }
+        statuses
+            .status_of(message)
+            .is_some_and(ResponseStatus::is_terminal)
+    })
+}
+
+fn carries_tool_result(message: &Message) -> bool {
+    let Message::User { content } = message else {
+        return false;
+    };
+    content
+        .iter()
+        .any(|item| matches!(item, crate::llm::message::UserContent::ToolResult(_)))
 }
 
 pub fn bounded_summary(summary: String) -> String {

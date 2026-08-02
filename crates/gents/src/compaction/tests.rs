@@ -613,7 +613,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     let long_result = "x".repeat(5000);
     let messages = vec![
         text_msg("user", "read this file"),
-        tool_call_msg("read", r#"{"file_path": "/tmp/test.rs"}"#),
+        tool_call_msg("read_file", r#"{"path": "/tmp/test.rs"}"#),
         tool_result_msg("call-1", &long_result),
         text_msg("assistant", "I saw the file"),
     ];
@@ -622,23 +622,11 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert_eq!(stripped.len(), 4);
     assert_eq!(files.files_read, vec!["/tmp/test.rs"]);
     assert!(files.files_modified.is_empty());
-
-    if let Message::User { content } = &stripped[2] {
-        if let UserContent::ToolResult(tr) = first_content(content) {
-            if let ToolResultContent::Text(text) = first_content(&tr.content) {
-                assert_eq!(
-                    text.text,
-                    "[tool: read, call_id: call-1, 5000 bytes — see DefraDB AgentToolCall for full output]"
-                );
-            } else {
-                panic!("expected text content");
-            }
-        } else {
-            panic!("expected tool result");
-        }
-    } else {
-        panic!("expected user message");
-    }
+    assert_eq!(
+        sole_tool_result_text(&stripped[2]),
+        "[tool: read_file(/tmp/test.rs), call_id: call-1, 5000 bytes \
+         — see DefraDB AgentToolCall for full output]"
+    );
 }
 
 #[test]
@@ -653,6 +641,261 @@ fn strip_extracts_read_and_modified_files() {
     let (_, files) = strip_tool_results(messages);
     assert_eq!(files.files_read, vec!["/src/main.rs"]);
     assert_eq!(files.files_modified, vec!["/src/lib.rs"]);
+}
+
+fn sole_tool_result_text(message: &Message) -> String {
+    let Message::User { content } = message else {
+        panic!("expected user message");
+    };
+    let UserContent::ToolResult(tool_result) = first_content(content) else {
+        panic!("expected tool result");
+    };
+    let ToolResultContent::Text(text) = first_content(&tool_result.content) else {
+        panic!("expected text content");
+    };
+    text.text.clone()
+}
+
+#[test]
+fn strip_is_idempotent_and_preserves_the_original_byte_count() {
+    let long_result = "x".repeat(5000);
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/tmp/test.rs"}"#),
+        tool_result_msg("call-1", &long_result),
+    ];
+
+    let (once, _) = strip_tool_results(messages);
+    let (twice, _) = strip_tool_results(once.clone());
+
+    assert_eq!(once, twice, "strip must be idempotent");
+    let stub = sole_tool_result_text(&twice[1]);
+    assert!(
+        stub.contains("5000 bytes"),
+        "reapplying strip must not re-measure the stub: {stub}"
+    );
+}
+
+#[test]
+fn strip_marks_already_truncated_output_without_sniffing_the_word() {
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+        tool_result_msg("call-1", "the build log says truncated somewhere"),
+    ];
+    let (stripped, _) = strip_tool_results(messages);
+    assert!(
+        !sole_tool_result_text(&stripped[1]).contains(", truncated"),
+        "ordinary output mentioning the word must not be flagged as truncated"
+    );
+
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+        tool_result_msg("call-1", "output\n[Full output: DefraDB doc bafy123]"),
+    ];
+    let (stripped, _) = strip_tool_results(messages);
+    assert!(sole_tool_result_text(&stripped[1]).contains(", truncated"));
+}
+
+#[test]
+fn pretruncation_does_not_panic_on_a_multibyte_boundary() {
+    // "é" is two bytes, so byte 2000 lands inside a codepoint.
+    let payload = format!("{}é{}", "a".repeat(1999), "b".repeat(500));
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "cat notes"}"#),
+        tool_result_msg("call-1", &payload),
+    ];
+    let truncated = super::history::pretruncate_tool_results(messages, 2000);
+    assert!(sole_tool_result_text(&truncated[1]).contains("pre-truncated"));
+}
+
+#[test]
+fn file_activity_classifies_the_registered_file_tools() {
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        tool_call_msg("write_file", r#"{"path": "/src/lib.rs"}"#),
+        tool_result_msg("call-1", "ok"),
+        tool_call_msg("edit_file", r#"{"path": "/src/edit.rs"}"#),
+        tool_result_msg("call-1", "ok"),
+        tool_call_msg("grep", r#"{"path": "/src/grep.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+        tool_call_msg("glob", r#"{"path": "/src/glob.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+        tool_call_msg("list_files", r#"{"path": "/src/list.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+    ];
+
+    let (_, files) = strip_tool_results(messages);
+    assert_eq!(
+        files.files_read,
+        vec![
+            "/src/glob.rs",
+            "/src/grep.rs",
+            "/src/list.rs",
+            "/src/main.rs"
+        ]
+    );
+    assert_eq!(files.files_modified, vec!["/src/edit.rs", "/src/lib.rs"]);
+}
+
+#[test]
+fn every_registered_file_tool_is_classified() {
+    // Guards against a file tool being added to toolset::file_tools without a
+    // matching classification here, which would silently empty the compaction
+    // summary's file lists — the defect this test exists to keep from recurring.
+    for name in ["read_file", "list_files", "glob", "grep"] {
+        assert!(
+            super::history::is_read_tool(name),
+            "{name} is not classified as a read tool"
+        );
+    }
+    for name in ["write_file", "edit_file"] {
+        assert!(
+            super::history::is_write_tool(name),
+            "{name} is not classified as a write tool"
+        );
+    }
+}
+
+#[test]
+fn split_never_separates_a_tool_call_from_its_result() {
+    // A budget that retains roughly the last message would land the boundary
+    // between the assistant tool call and the user tool result.
+    let messages = vec![
+        text_msg("user", &"a".repeat(4000)),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    let (old, recent) = super::history::split_messages_for_summary(messages, 40);
+
+    assert_eq!(old.len(), 1, "only the bulky user turn should be summarized");
+    assert_eq!(
+        recent.len(),
+        2,
+        "the assistant turn and its result stay together"
+    );
+    assert!(
+        matches!(&recent[0], Message::Assistant { .. }),
+        "the retained tail must start at the assistant announcement"
+    );
+}
+
+#[test]
+fn pair_safe_boundary_retreats_to_the_turn_start() {
+    let messages = vec![
+        text_msg("user", "go"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    assert_eq!(super::history::pair_safe_boundary(&messages, 2), 1);
+    assert_eq!(super::history::pair_safe_boundary(&messages, 3), 3);
+    assert_eq!(super::history::pair_safe_boundary(&messages, 1), 1);
+}
+
+#[test]
+fn provider_view_is_idempotent() {
+    let history = vec![
+        tool_result_msg("orphan-1", "result with no call"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+    let (once, _) = provider_view(history);
+    let (twice, _) = provider_view(once.clone());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
+    // An orphaned tool result at the head: sanitize removes it, so the
+    // unsanitized and sanitized indexings of the compacted prefix diverge.
+    // Under the old order (strip -> drop -> sanitize) a count measured in the
+    // sanitized space was applied to the unsanitized one, shifting the boundary.
+    let history = vec![
+        tool_result_msg("orphan-1", "result with no call"),
+        text_msg("user", "first real turn"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        text_msg("assistant", "done"),
+        text_msg("user", "second turn"),
+    ];
+
+    let (view, _) = provider_view(history.clone());
+    assert_eq!(
+        view.len(),
+        5,
+        "sanitize must remove the orphaned result from the view"
+    );
+
+    // Compaction summarized the first row *of the view* — a pair-safe boundary,
+    // which is the only kind the writer ever records.
+    let compacted = 1usize;
+    assert_eq!(
+        super::history::pair_safe_boundary(&view, compacted),
+        compacted,
+        "the modelled writer only ever records a pair-safe boundary"
+    );
+    let retained = view.iter().skip(compacted).cloned().collect::<Vec<_>>();
+
+    // The next request rebuilds the view from the same durable history and
+    // drops the same count. It must land on exactly the retained rows.
+    let (reread, _) = provider_view(history.clone());
+    assert_eq!(
+        reread.into_iter().skip(compacted).collect::<Vec<_>>(),
+        retained
+    );
+
+    // The old order is the defect: the count was measured against the sanitized
+    // list but applied to the unsanitized one, which still carries the orphan at
+    // index 0. Dropping one row there removes the orphan instead of the
+    // summarized turn, so "first real turn" survives verbatim alongside its own
+    // summary.
+    let (stripped, _) = strip_tool_results(history);
+    let old_order =
+        sanitize_history_for_provider(stripped.into_iter().skip(compacted).collect::<Vec<_>>());
+    assert_eq!(
+        old_order.len(),
+        retained.len() + 1,
+        "the old order retains one row too many"
+    );
+    assert_eq!(
+        old_order.first(),
+        Some(&text_msg("user", "first real turn")),
+        "and the row it retains is the one that was summarized"
+    );
+}
+
+#[test]
+fn safe_to_reduce_requires_every_retained_tool_result_to_be_terminal() {
+    let messages = vec![
+        text_msg("user", "go"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    assert!(safe_to_reduce(&messages, &AllTerminal));
+    assert!(!safe_to_reduce(&messages, &NoneKnown));
+
+    // No tool results at all: nothing to gate on.
+    let plain = vec![text_msg("user", "go"), text_msg("assistant", "ok")];
+    assert!(safe_to_reduce(&plain, &NoneKnown));
+}
+
+struct StreamingIndex;
+
+impl ResponseStatusIndex for StreamingIndex {
+    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
+        Some(ResponseStatus::Streaming)
+    }
+}
+
+#[test]
+fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+    assert!(!safe_to_reduce(&messages, &StreamingIndex));
 }
 
 #[test]
@@ -779,10 +1022,11 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     }
 
     let history = session::load_history(&node, "session-1").await.unwrap();
-    let (stripped_history, _) = strip_tool_results(history);
+    let durable_before = history.clone();
+    let (provider_history, _) = provider_view(history);
     let result = compactor
         .compact(
-            stripped_history,
+            provider_history,
             2000,
             &CompactionOptions {
                 threshold: 0.50,
@@ -816,7 +1060,19 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     assert!(entries[0].summary.contains("inspected the source files"));
 
     let resumed_history = session::load_history(&node, "session-1").await.unwrap();
-    let (resumed_history, _) = strip_tool_results(resumed_history);
+    // Compaction is a projection: it writes a summary entry and drops a prefix
+    // from the *provider view*. The durable AgentMessage rows that
+    // `run_timeline` reconstructs a request's event stream from must be
+    // untouched.
+    assert_eq!(
+        durable_before, resumed_history,
+        "compaction must not mutate the durable transcript the timeline is built from"
+    );
+
+    // Read side: rebuild the same provider view and drop the same count. This
+    // is the write/read correspondence — the count was measured against
+    // `provider_view` above, so it must be applied to `provider_view` here.
+    let (resumed_history, _) = provider_view(resumed_history);
     let compacted_count = entries
         .iter()
         .map(|entry| entry.messages_compacted as usize)
