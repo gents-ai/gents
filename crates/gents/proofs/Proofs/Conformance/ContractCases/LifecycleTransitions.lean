@@ -9,6 +9,7 @@ inductive LifecycleTransitionClassification where
   | legal
   | illegal
   | productUnreachable
+  | recoveryReachable
   deriving DecidableEq, Repr
 
 namespace LifecycleTransitionClassification
@@ -17,6 +18,7 @@ def toContract : LifecycleTransitionClassification → String
   | .legal => "legal"
   | .illegal => "illegal"
   | .productUnreachable => "productUnreachable"
+  | .recoveryReachable => "recoveryReachable"
 
 end LifecycleTransitionClassification
 
@@ -109,6 +111,21 @@ def requestTransitionAction? (source target : String) : Option String :=
     source
     target
 
+/-- Request edges that no single `RequestContext.Action` takes, but that
+registered recovery sweeps legitimately perform on persisted rows.
+
+`claimed -> completed` is terminal repair finishing a claimed request whose
+response document already landed; `claimed -> dead` and `processing -> dead` are
+the subagent-liveness sweep terminalizing an expired child. The licensing models
+live in `Proofs/Recovery/` — the request machine alone does not model them, so
+publishing these as `illegal` made the emitted contract assert that Rust has no
+writer for edges the product actually performs. -/
+def requestRecoverySweepReachable : RequestState → RequestState → Bool
+  | .claimed, .completed => true
+  | .claimed, .dead => true
+  | .processing, .dead => true
+  | _, _ => false
+
 def requestTransitionClassification
     (source target : RequestState)
     (action : Option String) : LifecycleTransitionClassification :=
@@ -117,6 +134,8 @@ def requestTransitionClassification
   | none =>
       if source = .inputRequired ∨ target = .inputRequired then
         .productUnreachable
+      else if requestRecoverySweepReachable source target then
+        .recoveryReachable
       else
         .illegal
 
@@ -135,6 +154,8 @@ def requestTransitionCase (source target : RequestState) : LifecycleTransitionCa
       match classification with
       | .productUnreachable =>
           some Conformance.Contracts.boundaryRequestInputRequiredReservedId
+      | .recoveryReachable =>
+          some Conformance.Contracts.boundaryRequestRecoverySweepReachableId
       | _ => none
   }
 

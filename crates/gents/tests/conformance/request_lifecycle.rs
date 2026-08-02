@@ -17,14 +17,77 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
     }
 }
 
+/// Production writers for edges no single `RequestContext.Action` takes, but
+/// that registered recovery sweeps perform on persisted rows (Lean:
+/// `requestRecoverySweepReachable`, cited as
+/// `boundary.request.recovery-sweep-reachable`).
+///
+/// These were previously published as `illegal`, which made the emitted
+/// contract assert that Rust has no writer for edges the product performs.
+fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
+    match (from, to) {
+        ("claimed", "completed") => Some("RequestLifecycle::complete"),
+        ("claimed", "dead") | ("processing", "dead") => {
+            Some("ToolCallLifecycle::reconcile_subagent_liveness")
+        }
+        _ => None,
+    }
+}
+
 fn rust_request_transition_classification(from: &str, to: &str) -> &'static str {
     if rust_request_transition_action(from, to).is_some() {
         "legal"
     } else if from == "inputRequired" || to == "inputRequired" {
         "productUnreachable"
+    } else if rust_request_recovery_sweep_writer(from, to).is_some() {
+        "recoveryReachable"
     } else {
         "illegal"
     }
+}
+
+/// Drive the real production writer for a recovery-reachable edge and assert it
+/// persists the modelled post-state.
+///
+/// Only `claimed -> completed` is driven here: it is reachable through the
+/// ordinary `RequestLifecycle` surface. The two `-> dead` edges run inside
+/// `reconcile_subagent_liveness`, which needs a running-bridge plus expired-child
+/// fixture; driving them is tracked in #994.
+async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
+    if !(case.from == "claimed" && case.to == "completed") {
+        return;
+    }
+
+    let db = test_db("generated-request-recovery-reachable").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let mut lifecycle = request_lifecycle_for_case(
+        &db,
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at.clone(),
+    );
+
+    // Claim, then complete WITHOUT begin_execution: this is terminal repair
+    // finishing a claimed request whose response already landed, and it
+    // exercises `complete()`'s persisted from-set including `claimed`.
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.complete().await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap.lifecycle_state, case.to,
+        "recovery-reachable Request transition {} expected {} -> {} via {:?}, got persisted lifecycle_state={}",
+        case.name,
+        case.from,
+        case.to,
+        rust_request_recovery_sweep_writer(&case.from, &case.to),
+        snap.lifecycle_state
+    );
 }
 
 fn request_lifecycle_for_case(
@@ -174,6 +237,7 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     let mut legal_count = 0;
     let mut illegal_count = 0;
     let mut product_unreachable_count = 0;
+    let mut recovery_reachable_count = 0;
 
     for case in lean_request_transition_cases() {
         let rust_classification = rust_request_transition_classification(&case.from, &case.to);
@@ -198,13 +262,42 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
             }
             "illegal" => {
                 illegal_count += 1;
+                // NOTE: this consults the writer inventory above, not production
+                // behaviour — an unlisted writer is invisible here. Inverting the
+                // fence (drive every production writer from every state and assert
+                // the observed edge set is a subset of legal + recoveryReachable)
+                // is tracked in #994.
                 assert!(
-                    rust_request_transition_action(&case.from, &case.to).is_none(),
+                    rust_request_transition_action(&case.from, &case.to).is_none()
+                        && rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
                     "Request transition {} is ordinary illegal but Rust has a writer path for {} -> {}",
                     case.name,
                     case.from,
                     case.to
                 );
+            }
+            "recoveryReachable" => {
+                recovery_reachable_count += 1;
+                assert!(
+                    case.action.is_none(),
+                    "Request transition {} is recovery-reachable and must be taken by no single action, got {:?}",
+                    case.name,
+                    case.action
+                );
+                assert!(
+                    rust_request_recovery_sweep_writer(&case.from, &case.to).is_some(),
+                    "Request transition {} is recovery-reachable but no Rust sweep writer is registered for {} -> {}",
+                    case.name,
+                    case.from,
+                    case.to
+                );
+                assert_eq!(
+                    case.boundary.as_deref(),
+                    Some("boundary.request.recovery-sweep-reachable"),
+                    "Request transition {} must cite the recovery-sweep boundary",
+                    case.name
+                );
+                drive_generated_request_recovery_reachable_case(case).await;
             }
             "productUnreachable" => {
                 product_unreachable_count += 1;
@@ -237,8 +330,9 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     }
 
     assert_eq!(legal_count, 11);
-    assert_eq!(illegal_count, 53);
+    assert_eq!(illegal_count, 50);
     assert_eq!(product_unreachable_count, 17);
+    assert_eq!(recovery_reachable_count, 3);
 }
 
 #[tokio::test]
