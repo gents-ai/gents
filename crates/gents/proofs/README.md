@@ -339,9 +339,12 @@ Operational meaning:
 - `inputRequired` is reserved for a blocked external-input cycle; current Rust
   runtime code does not emit it because autonomous tool calls run inline, and
   active runtime filters exclude it until that loop is modeled
-- `dead` is persisted only for stale pre-claim TTL expiry; post-claim provider
-  failure, retry exhaustion, tool failure, and deadline expiry are terminal
-  `failed`
+- `dead` is persisted by the request machine only for stale pre-claim TTL
+  expiry; post-claim provider failure, retry exhaustion, tool failure, and
+  deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
+  is the one exception: it terminalizes an expired `claimed`/`processing` child
+  as `dead` (`Proofs/Recovery/`), published in the contract as
+  `recoveryReachable` under `boundary.request.recovery-sweep-reachable`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 

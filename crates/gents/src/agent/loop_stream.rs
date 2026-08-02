@@ -51,9 +51,9 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, deadline_remaining,
+    cancelled_result, current_tool_runtime_context, deadline_remaining, model_facing_tool_result,
     scope_request_tool_execution_with_workspace_and_live_output, timeout_result,
-    unparseable_args_notice, unparseable_args_result,
+    tool_dispatch_failure_result, unparseable_args_result, ToolDispatchFailure,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
@@ -586,11 +586,8 @@ where
                                         )))?;
                                     }
                                 }
-                                // The internal marker must never reach the model.
-                                match unparseable_args_notice(&bounded) {
-                                    Some(notice) => notice.to_string(),
-                                    None => bounded,
-                                }
+                                // Internal lifecycle markers must never reach the model.
+                                model_facing_tool_result(&bounded).to_string()
                             }
                         };
 
@@ -894,14 +891,24 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-async fn dispatch_tool(
+pub(crate) async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
     live_output: Option<crate::background_tools::LiveToolOutputWriter>,
 ) -> String {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        return format!("error: unknown tool '{name}'");
+        // Marked, not a bare string: an unresolved tool name is a dispatch
+        // FAILURE, and an unmarked result classifies as `None` and terminalizes
+        // the call `completed`. Models hallucinate tool names and stale surfaces
+        // outlive their tools, so this is a routine path, not an exotic one — it
+        // would otherwise reproduce exactly the durability bug this marker exists
+        // to close. The detail text is unchanged so the model sees what it always
+        // saw.
+        return tool_dispatch_failure_result(
+            ToolDispatchFailure::ToolCallError,
+            &format!("error: unknown tool '{name}'"),
+        );
     };
 
     let Some(scope) = current_tool_runtime_context() else {
@@ -935,7 +942,7 @@ async fn dispatch_tool(
     }
 }
 
-fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
+pub(crate) fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
     match outcome {
         Ok(result) => result,
         Err(ToolError::UnparseableArgs { kind, reason }) => {
@@ -959,7 +966,25 @@ fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> Str
                 "tool '{name}' arguments could not be parsed: {guidance}."
             ))
         }
-        Err(error) => error.to_string(),
+        // Stamp the collision-free marker `classify_runtime_failure` matches on.
+        // Without it the persistence path cannot tell a failed call from a
+        // successful one and terminalizes it `completed` (#400/D6 regression).
+        // A human-readable prefix will not do: tool output is untrusted text, so
+        // a tool that merely printed the token could forge a failure — and a
+        // structured policy denial with it.
+        //
+        // The INNER error is carried, not the `ToolError` wrapper: a command
+        // policy denial arrives as a `ToolCallError` whose payload is the denial
+        // JSON, and `parse_command_policy_denial` parses the detail after the
+        // marker. The wrapper's own "tool call error: " text in front of the
+        // payload would silently downgrade every denial to an unstructured
+        // failure.
+        Err(ToolError::JsonError(error)) => {
+            tool_dispatch_failure_result(ToolDispatchFailure::JsonError, &error.to_string())
+        }
+        Err(ToolError::ToolCallError(error)) => {
+            tool_dispatch_failure_result(ToolDispatchFailure::ToolCallError, &error.to_string())
+        }
     }
 }
 

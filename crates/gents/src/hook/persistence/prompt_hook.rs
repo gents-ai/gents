@@ -416,6 +416,14 @@ impl DefraSessionHook {
                 None => (result, false),
             };
 
+            // A dispatch-failure marker carries the failure class out-of-band,
+            // exactly like the unparseable-args notice above: classify while the
+            // marker is still attached, then strip it. Persisting the marked text
+            // would put internal bookkeeping into the durable transcript, and it
+            // would be replayed to the provider on the next request.
+            let runtime_failure = classify_runtime_failure(result);
+            let result = model_facing_tool_result(result);
+
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
@@ -466,7 +474,7 @@ impl DefraSessionHook {
             if force_argument_invalid {
                 lc.fail(&truncated.text, FailureClass::ArgumentInvalid)
                     .await?;
-            } else if let Some(failure) = classify_runtime_failure(result_for_persistence) {
+            } else if let Some(failure) = runtime_failure {
                 if let Some(denial) = failure.command_denial.as_ref() {
                     lc.fail_with_command_denial(&truncated.text, denial).await?;
                 } else {

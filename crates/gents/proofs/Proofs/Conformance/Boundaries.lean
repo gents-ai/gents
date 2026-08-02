@@ -17,6 +17,9 @@ def boundaryRequestInputRequiredReservedId : String :=
 def boundaryRequestDeadPreclaimOnlyId : String :=
   "boundary.request.dead-preclaim-only"
 
+def boundaryRequestRecoverySweepReachableId : String :=
+  "boundary.request.recovery-sweep-reachable"
+
 def boundaryToolCallPermanentWithoutRetryEvidenceId : String :=
   "boundary.tool-call.permanent-without-retry-evidence"
 
@@ -87,7 +90,15 @@ def boundaries : List Boundary :=
     , domain := "RequestLifecycle"
     , subject := "dead terminal state"
     , statement :=
-        "dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed."
+        "In the request machine dead is terminal only for stale pre-claim work; post-claim provider, retry, tool, and deadline failures remain failed. The subagent-liveness recovery sweep is the one exception: it terminalizes an expired claimed or processing child as dead, published as recoveryReachable under boundary.request.recovery-sweep-reachable."
+    }
+  , { id := boundaryRequestRecoverySweepReachableId
+    , domain := "RequestLifecycle"
+    , subject := "recovery-sweep reachable request edges"
+    , statement :=
+        "claimed->completed, claimed->dead, and processing->dead are taken by no single RequestContext.Action, but registered recovery sweeps perform them on persisted rows: terminal repair completes a claimed request whose response already landed, and the subagent-liveness sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs."
+    , acceptedFollowUp :=
+        some "Compose the Request machine with Proofs/Recovery so these edges are proven in one model instead of cited across two."
     }
   , { id := boundaryToolCallPermanentWithoutRetryEvidenceId
     , domain := "ToolExecution"

@@ -266,6 +266,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
     let expected_boundary_ids = [
         "boundary.request.input-required-reserved",
         "boundary.request.dead-preclaim-only",
+        "boundary.request.recovery-sweep-reachable",
         "boundary.tool-call.permanent-without-retry-evidence",
         "boundary.mcp.call-tool-dispatch-retry-evidence",
         "boundary.inference-slots.running-row-derived",

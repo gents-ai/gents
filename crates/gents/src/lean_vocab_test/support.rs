@@ -1098,7 +1098,7 @@ pub(crate) fn assert_lifecycle_transition_cases_partition(
         }
         if !matches!(
             case.classification.as_str(),
-            "legal" | "illegal" | "productUnreachable"
+            "legal" | "illegal" | "productUnreachable" | "recoveryReachable"
         ) {
             invalid_cases.push(format!(
                 "{} has invalid classification {:?}",
@@ -1111,13 +1111,21 @@ pub(crate) fn assert_lifecycle_transition_cases_partition(
         if case.classification != "legal" && case.action.is_some() {
             invalid_cases.push(format!("{} non-legal case has action", case.name));
         }
-        if case.classification == "productUnreachable" && case.boundary.is_none() {
+        // `productUnreachable` and `recoveryReachable` are the two classifications
+        // that stand outside the machine's own transition relation, so each must
+        // name the boundary that licenses it. `legal` and `illegal` are decided by
+        // the relation itself and must not carry one.
+        let requires_boundary = matches!(
+            case.classification.as_str(),
+            "productUnreachable" | "recoveryReachable"
+        );
+        if requires_boundary && case.boundary.is_none() {
             invalid_cases.push(format!(
-                "{} product-unreachable case missing boundary",
-                case.name
+                "{} {} case missing boundary",
+                case.name, case.classification
             ));
         }
-        if case.classification != "productUnreachable" && case.boundary.is_some() {
+        if !requires_boundary && case.boundary.is_some() {
             invalid_cases.push(format!("{} reachable case has boundary", case.name));
         }
         if !expected_pairs.contains(&(case.from.clone(), case.to.clone())) {

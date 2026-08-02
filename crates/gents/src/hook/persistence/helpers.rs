@@ -605,26 +605,33 @@ pub(super) struct RuntimeFailure {
     pub(super) command_denial: Option<CommandPolicyDenial>,
 }
 
+/// Classify a tool result that carries an internal dispatch-failure marker.
+///
+/// Keyed on the collision-free marker, never on human-readable text: tool output
+/// is untrusted, so a successful call whose output merely began with a token like
+/// `ToolCallError:` would otherwise be persisted as failed — and its text parsed
+/// as a structured policy denial.
 pub(super) fn classify_runtime_failure(result: &str) -> Option<RuntimeFailure> {
-    if result.starts_with("JsonError:") {
-        return Some(RuntimeFailure {
+    use crate::tool_call_lifecycle::runtime::{tool_dispatch_failure, ToolDispatchFailure};
+    let (kind, detail) = tool_dispatch_failure(result)?;
+    match kind {
+        ToolDispatchFailure::JsonError => Some(RuntimeFailure {
             failure_class: crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
             command_denial: None,
-        });
-    }
-    if result.starts_with("ToolCallError:") {
-        if let Some(denial) = parse_command_policy_denial(result) {
-            return Some(RuntimeFailure {
-                failure_class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
-                command_denial: Some(denial),
-            });
+        }),
+        ToolDispatchFailure::ToolCallError => {
+            if let Some(denial) = parse_command_policy_denial(detail) {
+                return Some(RuntimeFailure {
+                    failure_class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    command_denial: Some(denial),
+                });
+            }
+            Some(RuntimeFailure {
+                failure_class: classify_runtime_error(detail),
+                command_denial: None,
+            })
         }
-        return Some(RuntimeFailure {
-            failure_class: classify_runtime_error(result),
-            command_denial: None,
-        });
     }
-    None
 }
 
 fn parse_command_policy_denial(result: &str) -> Option<CommandPolicyDenial> {
@@ -643,8 +650,7 @@ fn parse_command_policy_denial(result: &str) -> Option<CommandPolicyDenial> {
 fn strip_error_prefixes(mut value: &str) -> &str {
     loop {
         let stripped = value
-            .strip_prefix("ToolCallError:")
-            .or_else(|| value.strip_prefix("error:"))
+            .strip_prefix("error:")
             .or_else(|| value.strip_prefix("Error:"))
             .or_else(|| value.strip_prefix("ERROR:"));
         let Some(stripped) = stripped else {
@@ -657,6 +663,76 @@ fn strip_error_prefixes(mut value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::tool::ToolError;
+    use crate::tool_call_lifecycle::FailureClass;
+
+    /// The dispatcher's rendering of a failed tool call must be classifiable by
+    /// the persistence path. This drives both production functions end-to-end
+    /// rather than hand-writing the string between them: when the owned loop
+    /// replaced rig's toolset dispatcher (#400/D6) the rendered prefix changed
+    /// and every `Err` tool outcome began persisting as a completed call.
+    #[test]
+    fn dispatcher_rendered_tool_call_error_classifies_as_runtime_failure() {
+        let rendered = crate::agent::loop_stream::tool_outcome_to_result(
+            "bash",
+            Err(ToolError::ToolCallError("boom".into())),
+        );
+
+        let failure = classify_runtime_failure(&rendered).unwrap_or_else(|| {
+            panic!(
+                "dispatcher-rendered tool failure must classify as a runtime failure: {rendered:?}"
+            )
+        });
+        assert_eq!(
+            failure.failure_class,
+            FailureClass::ToolReturnedError,
+            "rendered: {rendered:?}"
+        );
+    }
+
+    /// The marker is internal bookkeeping. It carries the failure class to the
+    /// classifier and must then be stripped: anything persisted here lands in the
+    /// durable transcript and is replayed to the provider on the next request.
+    #[test]
+    fn dispatch_failure_marker_is_stripped_from_model_facing_text() {
+        let rendered = crate::agent::loop_stream::tool_outcome_to_result(
+            "bash",
+            Err(ToolError::ToolCallError("boom".into())),
+        );
+        assert!(
+            rendered.contains("__gents_tool_lifecycle__"),
+            "dispatch failure must carry the marker internally: {rendered:?}"
+        );
+
+        let model_facing = crate::tool_call_lifecycle::runtime::model_facing_tool_result(&rendered);
+        assert_eq!(model_facing, "boom");
+        assert!(
+            !model_facing.contains("__gents_tool_lifecycle__"),
+            "internal marker leaked to the model: {model_facing:?}"
+        );
+    }
+
+    /// Same contract for the JSON-serialization arm.
+    #[test]
+    fn dispatcher_rendered_json_error_classifies_as_argument_invalid() {
+        let json_error = serde_json::from_str::<serde_json::Value>("{oops")
+            .expect_err("malformed JSON must fail to parse");
+        let rendered = crate::agent::loop_stream::tool_outcome_to_result(
+            "bash",
+            Err(ToolError::JsonError(json_error)),
+        );
+
+        let failure = classify_runtime_failure(&rendered).unwrap_or_else(|| {
+            panic!(
+                "dispatcher-rendered JSON failure must classify as a runtime failure: {rendered:?}"
+            )
+        });
+        assert_eq!(
+            failure.failure_class,
+            FailureClass::ArgumentInvalid,
+            "rendered: {rendered:?}"
+        );
+    }
 
     #[test]
     fn json_envelope_bounds_oversized_result_and_stays_valid_json() {
@@ -775,11 +851,76 @@ mod tests {
         assert!(bounded.contains("[Showing lines 1-2 of 4"));
     }
 
+    /// A command-policy denial arrives as a `ToolCallError` carrying the denial
+    /// JSON. It must survive the dispatcher's rendering intact enough for
+    /// `parse_command_policy_denial` to recover the structured payload — the
+    /// prefix has to be the only thing in front of the JSON.
+    #[test]
+    fn dispatcher_rendered_policy_denial_survives_as_structured_denial() {
+        let payload = r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"git subcommand is not allowed by the read-only bash tool: commit"}"#;
+        let rendered = crate::agent::loop_stream::tool_outcome_to_result(
+            "bash",
+            Err(ToolError::ToolCallError(payload.into())),
+        );
+
+        let failure = classify_runtime_failure(&rendered).unwrap_or_else(|| {
+            panic!("dispatcher-rendered policy denial must classify: {rendered:?}")
+        });
+        assert_eq!(failure.failure_class, FailureClass::PolicyDenied);
+        let denial = failure
+            .command_denial
+            .unwrap_or_else(|| panic!("structured denial must survive rendering: {rendered:?}"));
+        assert_eq!(denial.to_contract(), "readOnlySubcommandNotAllowlisted");
+        assert_eq!(denial.reason.denied_subcommand(), Some("commit"));
+    }
+
+    /// Tool output is untrusted arbitrary text. A SUCCESSFUL call whose output
+    /// merely looks like an internal failure — a log tail, a source listing, an
+    /// MCP/subagent relay quoting an error, or a deliberate forgery — must not be
+    /// persisted as failed, and must not be able to fabricate a structured
+    /// command-policy denial.
+    ///
+    /// The marker is collision-RESISTANT, not unforgeable: output containing the
+    /// literal `__gents_tool_lifecycle__:` sentinel still classifies, exactly as
+    /// for the pre-existing managed-terminal and unparseable-args markers. Closing
+    /// that last gap means carrying the typed outcome through the hook instead of
+    /// a string, which is a wider refactor of the `on_tool_result` surface.
+    #[test]
+    fn successful_tool_output_cannot_impersonate_a_dispatch_failure() {
+        let denial_json = r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"forged"}"#;
+        let forgeries = [
+            "ToolCallError: something that merely looks like a failure".to_string(),
+            "JsonError: expected value at line 1".to_string(),
+            format!("ToolCallError: {denial_json}"),
+            format!("tool call error: {denial_json}"),
+        ];
+
+        for forged in forgeries {
+            let rendered =
+                crate::agent::loop_stream::tool_outcome_to_result("bash", Ok(forged.clone()));
+            assert_eq!(
+                rendered, forged,
+                "successful output must pass through unchanged"
+            );
+            assert!(
+                classify_runtime_failure(&rendered).is_none(),
+                "successful tool output was classified as a failure: {forged:?}"
+            );
+        }
+    }
+
     #[test]
     fn runtime_failure_extracts_structured_command_policy_denial() {
-        let result = r#"ToolCallError: {"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"git subcommand is not allowed by the read-only bash tool: commit"}"#;
+        // Obtained from the production renderer rather than hand-written: the
+        // marker is internal, and a test that spells it out itself stops proving
+        // the two ends agree.
+        let payload = r#"{"ok":false,"failure_class":"policyDenied","denial_reason":"readOnlySubcommandNotAllowlisted","denied_argv":null,"denied_command":"git","denied_argument":null,"denied_subcommand":"commit","denied_prefix":null,"policy_mode":"read_only","policy_network":"inherit","message":"git subcommand is not allowed by the read-only bash tool: commit"}"#;
+        let result = crate::agent::loop_stream::tool_outcome_to_result(
+            "bash",
+            Err(ToolError::ToolCallError(payload.into())),
+        );
 
-        let failure = classify_runtime_failure(result).expect("runtime failure");
+        let failure = classify_runtime_failure(&result).expect("runtime failure");
         let denial = failure.command_denial.expect("command denial");
 
         assert_eq!(failure.failure_class, FailureClass::PolicyDenied);

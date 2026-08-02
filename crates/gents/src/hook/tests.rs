@@ -866,6 +866,80 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
+/// An unresolved tool name must persist as a FAILED call, end to end.
+///
+/// The result string is produced by the real dispatcher against an empty tool
+/// surface — not hand-written here — and fed through the real hook, so this fails
+/// if `dispatch_tool` ever stops marking the unknown-tool branch. Before the
+/// marker, that branch returned a bare `error: unknown tool` string, which
+/// classified as `None` and terminalized the call `completed`: a hallucinated or
+/// stale tool name was durably recorded as a SUCCESSFUL call.
+#[tokio::test]
+async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-unknown-tool-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-unknown-tool".to_string()))
+        .await;
+
+    assert!(matches!(
+        hook.on_tool_call("ghost_tool", None, "internal-unknown", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    // The production dispatcher's own unknown-tool result, against an empty
+    // tool surface.
+    let dispatched =
+        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None).await;
+
+    let _ = hook
+        .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
+        .await;
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-unknown").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed"),
+        "unknown tool must terminalize as failed, got row {row:?}"
+    );
+    let persisted_result = row
+        .get("result")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        persisted_result.contains("unknown tool"),
+        "persisted result should explain the failure: {persisted_result:?}"
+    );
+    assert!(
+        !persisted_result.contains("__gents_tool_lifecycle__"),
+        "internal marker leaked into the persisted result: {persisted_result:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
 #[tokio::test]
 async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     let data_path =
