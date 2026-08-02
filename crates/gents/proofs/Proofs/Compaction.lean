@@ -1,4 +1,8 @@
 import Proofs.Compaction.State
+import Proofs.Compaction.Strip
+import Proofs.Compaction.ProviderView
+import Proofs.Compaction.Prefix
 import Proofs.Compaction.Transition
 import Proofs.Compaction.Properties
+import Proofs.Compaction.Summarize
 import Proofs.Compaction.Executable
