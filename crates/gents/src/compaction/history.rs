@@ -15,6 +15,18 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
     for message in messages {
         match message {
             Message::Assistant { id, content } => {
+                // Scope the lookup to the turn being opened. Call ids are
+                // provider-generated and can repeat across turns, so a stale
+                // entry could label a later stub with the wrong tool. Only an
+                // assistant message that actually announces calls opens a new
+                // turn — a text-only one must not orphan the pending lookups.
+                let opens_turn = content
+                    .iter()
+                    .any(|item| matches!(item, AssistantContent::ToolCall(_)));
+                if opens_turn {
+                    tool_calls.clear();
+                }
+
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
                         let key = tool_call_key(tool_call);
@@ -216,6 +228,23 @@ pub(super) fn split_messages_for_summary(
         break;
     }
 
+    // The token budget can land the boundary between an assistant message
+    // carrying a ToolCall and the user message carrying its ToolResult. Left
+    // alone, the call is summarized away while the result stays in the retained
+    // tail, and `sanitize_history_for_provider` then drops the orphaned result
+    // at loop entry — the tool's output is lost from the provider view entirely
+    // while the summary describes only the call.
+    //
+    // Retreat to the nearest turn boundary. Moving *earlier* over-retains by at
+    // most one turn and never loses context; moving later would summarize a turn
+    // the budget wanted kept. For provider-input assembly, over-retaining is the
+    // correct failure direction.
+    //
+    // Modelled as `Compaction.pairSafeBoundary`, with
+    // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index is
+    // unsound.
+    let split_index = pair_safe_boundary(&messages, split_index);
+
     if split_index == 0 {
         return (Vec::new(), messages);
     }
@@ -223,6 +252,54 @@ pub(super) fn split_messages_for_summary(
     let old_messages = messages[..split_index].to_vec();
     let recent_messages = messages[split_index..].to_vec();
     (old_messages, recent_messages)
+}
+
+/// Greatest `j <= limit` at which no tool call is awaiting its result.
+///
+/// Mirrors `Compaction.pairSafeBoundary` and the pending-set discipline in
+/// [`drop_orphaned_tool_results`]: an assistant message replaces the pending set
+/// with its own call ids, a tool result erases one, and anything else clears it.
+pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
+    let limit = limit.min(messages.len());
+    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut boundary = 0usize;
+
+    for (index, message) in messages.iter().take(limit).enumerate() {
+        if pending.is_empty() {
+            boundary = index;
+        }
+        match message {
+            Message::Assistant { content, .. } => {
+                pending = content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::ToolCall(tool_call) => Some(tool_call_key(tool_call)),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            Message::User { content } => {
+                let has_plain_content = content
+                    .iter()
+                    .any(|item| !matches!(item, UserContent::ToolResult(_)));
+                for item in content.iter() {
+                    if let UserContent::ToolResult(tool_result) = item {
+                        pending.remove(&tool_result_key(tool_result));
+                    }
+                }
+                if has_plain_content {
+                    pending.clear();
+                }
+            }
+            Message::System { .. } => pending.clear(),
+        }
+    }
+
+    if pending.is_empty() {
+        limit
+    } else {
+        boundary
+    }
 }
 
 pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
@@ -246,10 +323,14 @@ pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
 fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) -> ToolResultContent {
     match content {
         ToolResultContent::Text(text) if text.text.len() > max_chars => {
+            // `max_chars` is a byte budget but tool output is arbitrary UTF-8,
+            // so slicing at that index panics whenever it lands inside a
+            // codepoint. Floor to the nearest boundary.
+            let cut = floor_char_boundary(&text.text, max_chars);
             let truncated = format!(
                 "{}… [pre-truncated {}/{} chars for compaction]",
-                &text.text[..max_chars],
-                max_chars,
+                &text.text[..cut],
+                cut,
                 text.text.len()
             );
             ToolResultContent::Text(Text { text: truncated })
@@ -258,27 +339,67 @@ fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) ->
     }
 }
 
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Head and tail of every stub this module writes.
+///
+/// Recognizing an existing stub is what makes `strip_tool_results` idempotent.
+/// Without it a second pass re-measures the stub and reports *its* length
+/// instead of the tool's — and the request path really does strip twice, once
+/// in `agent/daemon/request.rs` and again inside `compact()`, so after a
+/// compaction the model was being told the wrong byte count.
+const STUB_HEAD: &str = "[tool: ";
+const STUB_TAIL: &str = "see DefraDB AgentToolCall for full output]";
+
+/// Markers the truncation layer itself writes (`truncation::logic`,
+/// `truncation::spill`). Matching these exactly replaces a `contains("truncated")`
+/// sniff that fired on any tool output happening to mention the word.
+const TRUNCATION_MARKERS: [&str; 2] = ["[Full output: DefraDB doc ", "[Showing lines "];
+
+fn tool_result_is_stub(tool_result: &ToolResult) -> bool {
+    matches!(
+        tool_result.content.as_slice(),
+        [ToolResultContent::Text(text)]
+            if text.text.starts_with(STUB_HEAD) && text.text.ends_with(STUB_TAIL)
+    )
+}
+
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
 ) -> ToolResult {
+    if tool_result_is_stub(&tool_result) {
+        return tool_result;
+    }
+
     let call_id = tool_result_key(&tool_result);
-    let tool_name = tool_calls
-        .get(&call_id)
-        .map(|info| info.name.as_str())
-        .unwrap_or("unknown");
+    let info = tool_calls.get(&call_id);
+    let tool_name = info.map_or("unknown", |info| info.name.as_str());
+    // The primary path argument is already extracted for `FileActivity`.
+    // Carrying it turns the stub from "a file was read" into "this file was
+    // read", which is most of what a pointer stub exists to do.
+    let argument = info
+        .and_then(|info| info.file_path.as_deref())
+        .map(|path| format!("({path})"))
+        .unwrap_or_default();
     let byte_count = tool_result_byte_count(&tool_result);
-    let truncated = tool_result_was_truncated(&tool_result);
-    let stub = if truncated {
-        format!(
-            "[tool: {tool_name}, call_id: {call_id}, {byte_count} bytes, truncated — see DefraDB AgentToolCall for full output]"
-        )
+    let truncated = if tool_result_was_truncated(&tool_result) {
+        ", truncated"
     } else {
-        format!(
-            "[tool: {tool_name}, call_id: {call_id}, {byte_count} bytes — see DefraDB AgentToolCall for full output]"
-        )
+        ""
     };
 
+    let stub = format!(
+        "[tool: {tool_name}{argument}, call_id: {call_id}, {byte_count} bytes{truncated} — {STUB_TAIL}"
+    );
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result
 }
@@ -296,11 +417,9 @@ fn tool_result_byte_count(tool_result: &ToolResult) -> usize {
 
 fn tool_result_was_truncated(tool_result: &ToolResult) -> bool {
     tool_result.content.iter().any(|content| match content {
-        ToolResultContent::Text(text) => {
-            text.text.contains("[Full output: DefraDB doc")
-                || text.text.contains("Showing lines")
-                || text.text.contains("truncated")
-        }
+        ToolResultContent::Text(text) => TRUNCATION_MARKERS
+            .iter()
+            .any(|marker| text.text.contains(marker)),
         _ => false,
     })
 }
@@ -337,6 +456,36 @@ struct ToolCallInfo {
     is_write: bool,
 }
 
+/// Tools whose calls mean "this path was read".
+///
+/// The first group is the registered native file tools (`toolset/file_tools.rs`);
+/// the second is the generic names MCP servers commonly use. Keep this in sync
+/// with the tool registry — `every_registered_file_tool_is_classified` fails if
+/// a file tool is added without a classification, which would silently empty the
+/// compaction summary's file lists.
+pub(super) fn is_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file"
+            | "list_files"
+            | "glob"
+            | "grep"
+            | "read"
+            | "cat"
+            | "search"
+            | "find"
+            | "query"
+    )
+}
+
+/// Tools whose calls mean "this path was modified".
+pub(super) fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file" | "edit_file" | "write" | "edit" | "replace" | "apply_patch"
+    )
+}
+
 impl From<&ToolCall> for ToolCallInfo {
     fn from(tool_call: &ToolCall) -> Self {
         let file_path = tool_call
@@ -349,11 +498,8 @@ impl From<&ToolCall> for ToolCallInfo {
         let name = tool_call.function.name.clone();
 
         Self {
-            is_read: matches!(
-                name.as_str(),
-                "read" | "cat" | "grep" | "search" | "find" | "query"
-            ),
-            is_write: matches!(name.as_str(), "write" | "edit" | "replace" | "apply_patch"),
+            is_read: is_read_tool(&name),
+            is_write: is_write_tool(&name),
             name,
             file_path,
         }
