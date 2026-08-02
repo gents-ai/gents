@@ -92,8 +92,8 @@ runner on that host is idle in the GitHub API.
 Exclude disposable worktrees and the durable compiler cache from Time Machine:
 
 ```bash
-ssh -t studio-1 'sudo tmutil addexclusion -p /Users/admin/.ghrunner/defra-agent/_work /Users/admin/.ghrunner/gents-2/_work /Users/admin/.cache/sccache'
-ssh -t studio-2 'sudo tmutil addexclusion -p /Users/admin/.ghrunner/defra-agent/_work /Users/admin/.ghrunner/gents-2/_work /Users/admin/.cache/sccache'
+ssh -t studio-1 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache'
+ssh -t studio-2 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache'
 ```
 
 Confirm the exclusions with `tmutil isexcluded <path>`. For Spotlight, first
