@@ -190,6 +190,57 @@ describe("Bombadil watchdog recovery", () => {
     ]);
   });
 
+  it("gives surviving group members the full SIGTERM grace after a clean exit", async () => {
+    const child = new FakeChild(865);
+    child.finish(0);
+    const signals: Array<[number, string]> = [];
+    let polls = 0;
+
+    await stopProcess(child, {
+      killProcessGroup: true,
+      graceMs: 100,
+      killByPid: (pid: number, signal: string | number) => {
+        if (signal === 0) {
+          polls += 1;
+          if (polls < 3) return true;
+          const error = new Error("process group drained") as NodeJS.ErrnoException;
+          error.code = "ESRCH";
+          throw error;
+        }
+        signals.push([pid, String(signal)]);
+        return true;
+      },
+    });
+
+    expect(signals).toEqual([[-865, "SIGTERM"]]);
+    expect(polls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps a finished run authoritative when its group never drains", async () => {
+    const child = new FakeChild(976);
+    child.finish(0);
+    const signals: Array<[number, string]> = [];
+
+    await expect(
+      stopProcess(child, {
+        killProcessGroup: true,
+        graceMs: 1,
+        killDrainMs: 2,
+        killByPid: (pid: number, signal: string | number) => {
+          if (signal === 0) return true;
+          signals.push([pid, String(signal)]);
+          return true;
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(signals).toEqual([
+      [-976, "SIGTERM"],
+      [-976, "SIGKILL"],
+    ]);
+    expect(child.exitCode).toBe(0);
+  });
+
   it("does not start over while a SIGKILLed process remains undrained", async () => {
     const child = new FakeChild(777);
 
