@@ -169,6 +169,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, and per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
+| `Proofs/Compaction/` | Transcript reduction (#993): the payload-stubbing `strip`, the canonical `providerView = sanitize ∘ strip` with `strip_sanitize_commute` and idempotence, prefix stability under append and the compacted-prefix index correspondence, and the `summarize` reducer parameterised over the production split policy with pair closure proven over it. Fences: `tests/conformance/streaming_compaction.rs`. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -744,6 +745,50 @@ Model → conformance → Rust bindings:
 - **Cross-node subagent completion/cancel** — `tla/SubagentCompletion.tla`
   and `tla/SubagentCancelPropagation.tla` (subagent lane only; native tool
   backgrounding is single-node and carried by Lean).
+
+### Compaction
+
+`Proofs/Compaction` models transcript reduction — the one place where the
+durable transcript and the provider view diverge on purpose, and therefore the
+place where "everything persisted can be projected back out" is most at risk.
+
+Before #993 the model was vacuous: `stubMessageKind` was literally
+`| .toolResult callId key => .toolResult callId key`, so every preservation
+property quantified over `id` and proved that doing nothing preserves meaning.
+The current model quantifies over the production policy:
+
+- **`strip`** rewrites a tool result's payload into a pointer stub and touches
+  nothing else — never a constructor, never a call id. `strip_idempotent` is
+  earned by production recognizing an existing stub rather than re-stubbing it.
+- **`providerView = sanitize ∘ strip`** is the single narrowing both the
+  compaction writer and the request reader index.
+  `strip_sanitize_commute` settles the question #993 raised as unproven —
+  stripping first does *not* change which pairs `sanitize` considers orphaned —
+  and settling it affirmatively is what licenses reordering the compacted-prefix
+  drop past sanitization.
+- **`providerView_append`** proves the provider view of a longer history begins
+  with the provider view of the shorter one, given the suffix contributes no
+  result for a call announced in the prefix. Two checkable sufficient conditions
+  are provided; production satisfies the second, since a new request appends its
+  user prompt before anything else. `compacted_prefix_correspondence` is the
+  theorem the runtime fix rests on: the count the writer records names exactly
+  the rows the reader drops.
+- **`summarize`** is parameterised over the token-budget split index rather than
+  pinning a token function — what must hold is that *whatever* index the budget
+  picks, the reducer stays sound. `pairSafeBoundary` retreats that index to the
+  nearest turn boundary, and `raw_split_can_orphan` witnesses that the retreat is
+  load-bearing: an unadjusted split leaves a tool result whose call was dropped.
+
+`IsValidReducer` carries whole-view coherence (`preservesCoherent`) rather than
+pair closure alone, and `ViewCoherent` includes provider-validity and the
+assistant-role structure of announcements. Pair closure of a compacted
+transcript is not preserved by an arbitrary drop; the previous, narrower fields
+sufficed only because the modelled reducer was `id`.
+
+The runtime counterpart of `safeToReduce` is `compaction::safe_to_reduce`,
+resolved at session scope — see
+`boundary.compaction.safe-to-reduce-session-scope` for the refinement and its
+accepted failure mode.
 
 ### Client Turn Projection
 

@@ -230,6 +230,19 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     history::pair_safe_boundary(messages, limit)
 }
 
+/// The real split [`Compactor::compact`] performs: everything before the
+/// boundary is summarized, everything from it is retained.
+///
+/// Exported so the generated conformance cases can sweep budgets against the
+/// live splitter rather than only against [`pair_safe_boundary`] — otherwise a
+/// change that stopped *calling* the boundary would slip through.
+pub fn split_for_summary(
+    messages: Vec<Message>,
+    keep_recent_tokens: usize,
+) -> (Vec<Message>, Vec<Message>) {
+    history::split_messages_for_summary(messages, keep_recent_tokens)
+}
+
 /// Mirror of Lean `StreamingResponse.Status`, with the same terminal partition,
 /// so generated conformance cases can be fed straight in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

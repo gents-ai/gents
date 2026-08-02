@@ -1286,6 +1286,23 @@ fn drive_summarize(
         case.name
     );
 
+    // Checking `pair_safe_boundary` alone would not notice production dropping
+    // the call to it from `split_messages_for_summary`. Sweep every budget
+    // through the live splitter and require the retained tail to stay
+    // pair-closed — the property `summarize_preserves_pairs` states, fenced
+    // against the real code path rather than a helper.
+    if pair_closed(&input) {
+        let total_tokens = gents::compaction::estimate_message_tokens(&input);
+        for budget in 0..=total_tokens + 1 {
+            let (_, recent) = gents::compaction::split_for_summary(input.clone(), budget);
+            assert!(
+                pair_closed(&recent),
+                "{}: split_for_summary orphaned a tool result at budget {budget}",
+                case.name
+            );
+        }
+    }
+
     if !gate_open || boundary == 0 {
         return input;
     }
