@@ -82,7 +82,8 @@ theorem stripRow_idempotent (row : MessageRow) : stripRow (stripRow row) = strip
 
 /-- The honest replacement for the old `strip_tool_results_is_strictly_idempotent`,
 which was true only because the modelled strip was `id`. Production earns this
-by recognizing an existing stub instead of re-stubbing it. -/
+by recovering a stub's recorded facts instead of re-measuring it — it always
+rewrites, so text that merely looks like a stub cannot bypass the reduction. -/
 theorem strip_idempotent (msgs : List MessageRow) : strip (strip msgs) = strip msgs := by
   induction msgs with
   | nil => rfl

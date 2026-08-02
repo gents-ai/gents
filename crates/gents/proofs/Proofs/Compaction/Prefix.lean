@@ -269,8 +269,9 @@ theorem activeBlockValidFrom_append (a : List MessageRow) :
 
 /-- Dropping at a pending-empty index of a provider view leaves a provider view.
 
-This is what makes it safe for `agent/daemon/request.rs` to drop the compacted
-prefix *after* sanitization without re-sanitizing: the writer's boundary is
+This is what makes dropping the compacted prefix *after* sanitization sound in
+`agent/daemon/request.rs`, and (via `sanitize_drop_noop`) what makes the
+re-narrowing that follows it free rather than corrective: the writer's boundary is
 always `pairSafeBoundary`, so the drop lands where nothing is pending. -/
 theorem drop_preserves_providerValid (msgs : List MessageRow) (n : Nat)
     (hvalid : ProviderValid msgs) (hboundary : pendingAfter ∅ (msgs.take n) = ∅) :

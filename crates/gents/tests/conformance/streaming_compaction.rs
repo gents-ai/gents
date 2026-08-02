@@ -1205,7 +1205,7 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
     if case.name == "strip_is_strictly_idempotent" {
         let reapplied = gents::compaction::strip_tool_results(reduced.clone()).0;
         // Full payload equality, not just the structural projection: production
-        // recognizes an existing stub rather than re-measuring it, which is what
+        // recovers a stub's recorded facts rather than re-measuring it, which is what
         // `Compaction.strip_idempotent` states.
         assert_eq!(
             reduced, reapplied,
