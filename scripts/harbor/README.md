@@ -63,7 +63,7 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH="$PWD" \
   --ae GENTS_GLIBC_BUNDLE_PATH=/absolute/path/to/gents-glibc-bullseye-x86_64.tar.gz \
   --ae GENTS_INFERENCE_URL=http://100.73.235.38:8000/v1 \
   --ae GENTS_DOCKER_PLATFORM=linux/amd64 \
-  --ae GENTS_CONTEXT_WINDOW=510976 \
+  --ae GENTS_CONTEXT_WINDOW=458752 \
   --ae GENTS_MAX_OUTPUT=393216 \
   --ae GENTS_MAX_TURNS=250 \
   --ae GENTS_REQUEST_TIMEOUT_SECS=86400 \
@@ -116,7 +116,7 @@ Useful overrides:
 | `GENTS_DOCKER_PLATFORM` | unset | Force task images/builds, e.g. `linux/amd64` |
 | `GENTS_GLIBC_BUNDLE_PATH` | unset | glibc loader/library bundle for musl task images |
 | `GENTS_MAX_OUTPUT` | `393216` | Per-turn output cap and prompt-builder output reserve, matching DeepSeek's 384K (384 × 1024) `high`/`max` recommendation. The name deliberately avoids Harbor's secret-key `TOKEN` heuristic. |
-| `GENTS_CONTEXT_WINDOW` | `510976` | Gents prompt/compaction budget. This leaves a 1,024-token provider-accounting margin below the 512K server limit while preserving the 393,216-token output cap. |
+| `GENTS_CONTEXT_WINDOW` | `458752` | Gents prompt/compaction budget. With the 393,216-token output cap, this keeps a conservative 65,536-token estimated input budget and leaves 53,248 tokens of tokenizer-accounting headroom below the 512K server limit. |
 | `GENTS_MAX_TURNS` | `250` | Agent completion-loop turn ceiling |
 | `GENTS_RETRY_MAX_TRANSPORT` | `3` | Transient inference retry ceiling |
 | `GENTS_REQUEST_TIMEOUT_SECS` | `86400` | Durable request and Harbor exec timeout |

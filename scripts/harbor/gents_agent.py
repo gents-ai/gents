@@ -299,11 +299,12 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             # agent-env names as secrets and blindly replaces their values in
             # downloaded text artifacts, which can corrupt numeric JSON fields.
             "GENTS_MAX_OUTPUT": self._env("GENTS_MAX_OUTPUT", "393216") or "393216",
-            # Leave a small provider-tokenization margin below D4F's 512K
-            # server limit. Gents' estimate can otherwise admit a prompt one
-            # token beyond the provider's exact accounting after compaction.
-            "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "510976")
-            or "510976",
+            # Keep a 65,536-token estimated input budget and 53,248 tokens of
+            # provider-tokenization headroom below D4F's 512K server limit.
+            # Code-heavy prompts can exceed Gents' character-based estimate by
+            # more than the previous 1,024-token margin.
+            "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "458752")
+            or "458752",
             "GENTS_MAX_TURNS": self._env("GENTS_MAX_TURNS", "250") or "250",
             "GENTS_RETRY_MAX_TRANSPORT": self._env(
                 "GENTS_RETRY_MAX_TRANSPORT", "3"
