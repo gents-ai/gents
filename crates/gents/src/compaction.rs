@@ -106,10 +106,31 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         // behave identically. They already did on the daemon path, which strips
         // unconditionally before calling here; the variant is retained for
         // config compatibility.
+        let row_count = messages.len();
         let (stripped_messages, stripped_activity) = provider_view(messages);
 
+        // `messages_compacted` is an *index* into this list, so normalization
+        // removing rows means the caller did not hand us a provider view and any
+        // count taken here would be measured in a shifted space — silently
+        // dropping rows the reader never summarized. Refuse loudly instead.
+        //
+        // For a provider view this is unreachable
+        // (`Compaction.providerView_idempotent`). It is a real guard for legacy
+        // compaction entries whose boundary predates the pair-safe splitter, and
+        // for any future caller passing a raw transcript.
+        let normalization_removed_rows = stripped_messages.len() != row_count;
+        if normalization_removed_rows {
+            tracing::warn!(
+                row_count,
+                normalized_count = stripped_messages.len(),
+                "compaction skipped: input was not a provider view, so a compacted-prefix \
+                 count taken here would not name the rows the next request drops"
+            );
+        }
+
         let stripped_token_estimate = estimate_message_tokens(&stripped_messages);
-        if matches!(options.strategy, CompactionStrategy::StripToolResults)
+        if normalization_removed_rows
+            || matches!(options.strategy, CompactionStrategy::StripToolResults)
             || !needs_compaction(&stripped_messages, context_window, options.threshold)
         {
             return Ok(CompactionResult {
@@ -307,6 +328,51 @@ pub fn safe_to_reduce(messages: &[Message], statuses: &impl ResponseStatusIndex)
             .status_of(message)
             .is_some_and(ResponseStatus::is_terminal)
     })
+}
+
+/// Runtime counterpart of Lean `PromptAssembly.UniqueCallIds`: no tool-call id
+/// is announced by more than one assistant message.
+///
+/// This is a *hypothesis* of the prefix-stability theorem, not a structural
+/// guarantee — call ids come from the provider, and nothing in the ingestion
+/// path enforces uniqueness across a session. `sanitize_history_for_provider`
+/// credits an announcement from the globally resolved set, so a later turn that
+/// reuses an id resurrects an earlier announcement the shorter view had dropped
+/// as unpaired. The prefix then changes under append and a stored
+/// `messages_compacted` no longer names the rows it was measured against.
+/// `Compaction.reused_call_id_breaks_prefix_stability` exhibits exactly that.
+///
+/// Checking it here turns the theorem's hypothesis into a precondition the
+/// runtime verifies before recording a count. See
+/// `boundary.compaction.unique-call-ids-checked` for the residual gap and the
+/// follow-up that would remove the need for the check.
+pub fn has_unique_call_ids(messages: &[Message]) -> bool {
+    let mut announced: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for message in messages {
+        let Message::Assistant { content, .. } = message else {
+            continue;
+        };
+        // Per-message first: Lean models a turn's ids as a `Finset`, so a repeat
+        // *within* one announcement collapses rather than conflicting.
+        let this_turn: std::collections::HashSet<String> = content
+            .iter()
+            .filter_map(|item| match item {
+                crate::llm::message::AssistantContent::ToolCall(tool_call) => Some(
+                    tool_call
+                        .call_id
+                        .clone()
+                        .unwrap_or_else(|| tool_call.id.clone()),
+                ),
+                _ => None,
+            })
+            .collect();
+        for call_id in this_turn {
+            if !announced.insert(call_id) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn carries_tool_result(message: &Message) -> bool {

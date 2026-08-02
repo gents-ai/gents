@@ -72,14 +72,24 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         compacted_message_count = tracing::field::Empty,
                     ))
                     .await?;
-                // Drop in the space the count was measured in. The writer's
-                // boundary is always `pair_safe_boundary`, so the drop lands on
-                // a turn boundary and the tail is still provider-valid — no
-                // re-sanitizing needed (`Compaction.drop_preserves_providerValid`).
-                let mut history = drop_compacted_prefix(
+                // Drop in the space the count was measured in.
+                //
+                // Re-narrowing afterwards is provably free for counts this
+                // runtime wrote — their boundary is always `pair_safe_boundary`,
+                // so the drop lands on a turn boundary and the tail is already
+                // provider-valid (`Compaction.sanitize_drop_noop`). It is not
+                // free for counts written *before* the pair-safe splitter
+                // existed: those used an arbitrary budget index and carry no
+                // version marker, so an upgraded session can drop into the
+                // middle of a turn. Without this the orphan would reach
+                // `compact()`, which re-normalizes its input and would then
+                // record its count in a shifted space — reopening the very
+                // accounting defect this change closes, for exactly the sessions
+                // that predate it.
+                let mut history = compaction::sanitize_history_for_provider(drop_compacted_prefix(
                     provider_history,
                     total_compacted_messages(&compaction_entries),
-                );
+                ));
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| compaction::bounded_summary(entry.summary))
@@ -128,7 +138,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             "compaction skipped: a response in this session is still streaming"
                         );
                     }
-                    gate_open
+                    // `Compaction.providerView_append` — the theorem that lets a
+                    // recorded count still name the same rows once the
+                    // transcript grows — assumes `UniqueCallIds`. Call ids come
+                    // from the provider and nothing enforces that, so it is
+                    // checked rather than assumed: a reused id resurrects an
+                    // earlier unpaired announcement and shifts the prefix under
+                    // the stored count
+                    // (`Compaction.reused_call_id_breaks_prefix_stability`).
+                    let unique_call_ids = compaction::has_unique_call_ids(&history);
+                    if gate_open && !unique_call_ids {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            behavior_id = %behavior_name,
+                            "compaction skipped: a tool-call id is announced by more than one turn, \
+                             so a recorded compacted-prefix count would not stay valid"
+                        );
+                    }
+                    gate_open && unique_call_ids
                 } else {
                     false
                 };

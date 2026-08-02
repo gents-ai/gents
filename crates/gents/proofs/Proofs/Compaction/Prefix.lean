@@ -281,6 +281,68 @@ theorem drop_preserves_providerValid (msgs : List MessageRow) (n : Nat)
     (by rw [hsplit]; exact hvalid.activeBlockValid)
   rwa [hboundary] at h
 
+theorem nonemptyAnnouncements_drop (n : Nat) :
+    ∀ l : List MessageRow,
+      PromptAssembly.NonemptyAnnouncements l →
+        PromptAssembly.NonemptyAnnouncements (l.drop n) := by
+  induction n with
+  | zero => intro l h; simpa using h
+  | succ m ih =>
+      intro l h
+      cases l with
+      | nil => simpa using h
+      | cons row rest =>
+          rw [List.drop_succ_cons]
+          refine ih rest ?_
+          cases hk : row.kind with
+          | assistantToolCalls callIds =>
+              exact ((PromptAssembly.nonemptyAnnouncements_cons_assistant row rest callIds
+                hk).mp h).2
+          | toolResult callId key =>
+              exact (PromptAssembly.nonemptyAnnouncements_cons_other row rest
+                (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp h
+          | ordinary =>
+              exact (PromptAssembly.nonemptyAnnouncements_cons_other row rest
+                (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp h
+
+/-- Re-narrowing after the compacted-prefix drop is a no-op.
+
+`agent/daemon/request.rs` sanitizes again after dropping. For every count this
+runtime writes that call is provably free — the writer's boundary is always
+`pairSafeBoundary`, so the drop lands where nothing is pending. It is kept
+because counts written before that splitter existed carry no version marker and
+can land mid-turn, and because `UniqueCallIds` is a *checked* precondition
+rather than a structural guarantee (see `reused_call_id_breaks_prefix_stability`). -/
+theorem sanitize_drop_noop {msgs : List MessageRow} {n : Nat}
+    (huniq : UniqueCallIds msgs)
+    (hboundary : pendingAfter ∅ ((providerView msgs).take n) = ∅) :
+    sanitize ((providerView msgs).drop n) = (providerView msgs).drop n :=
+  PromptAssembly.sanitize_fixpoint
+    (drop_preserves_providerValid _ n (providerView_sound huniq) hboundary)
+    (nonemptyAnnouncements_drop n _ (providerView_nonempty_announcements msgs))
+
+/-- Reusing a tool-call id across turns breaks prefix stability, and therefore
+breaks the compacted-prefix correspondence.
+
+`dropUnpairedCalls` credits an announcement from the *global* resolved set, so a
+later turn that reuses an id resurrects an earlier announcement that the shorter
+view had dropped as unpaired. The prefix changes under append and a stored count
+no longer names the rows it was measured against.
+
+`UniqueCallIds` is what rules this out, and it is a real hypothesis rather than
+a structural fact: production call ids come from the provider. Rust checks it
+(`compaction::has_unique_call_ids`) and skips compaction when it fails, rather
+than assuming it. See `boundary.compaction.unique-call-ids-checked`. -/
+theorem reused_call_id_breaks_prefix_stability :
+    ∃ a b : List MessageRow,
+      pendingAfter ∅ a = ∅ ∧
+        (providerView (a ++ b)).take (providerView a).length ≠ providerView a := by
+  refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
+          [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
+           ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩
+  · decide
+  · decide
+
 /-- **The correspondence the production fix rests on.** The count the compaction
 writer records against `providerView H` names exactly the rows the next
 request's reader drops from `providerView (H ++ new)`. -/

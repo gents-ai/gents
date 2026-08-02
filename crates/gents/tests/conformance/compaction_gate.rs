@@ -112,13 +112,111 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
     .await;
     wait_for_terminal_request(db.node.as_ref(), &allowed_doc_id).await;
 
+    let after_allowed = backend.observed_requests(COMPACTION_MARKER);
     assert!(
-        backend.observed_requests(COMPACTION_MARKER) >= 1,
+        after_allowed >= 1,
         "with every response in the session terminal the gate opens and the daemon reduces; \
          a gate that never opens would starve compaction entirely"
     );
 
+    // A later turn reusing an earlier call id resurrects that earlier
+    // announcement in the provider view, so a count recorded now would stop
+    // naming the rows the next request drops
+    // (`Compaction.reused_call_id_breaks_prefix_stability`). The daemon must
+    // check `has_unique_call_ids` and decline rather than record a count it
+    // cannot honour.
+    seed_reused_call_id_turn(db.node.as_ref(), &agent.agent_did, &session_id).await;
+
+    let reused_request_id = format!("reused-{}", uuid::Uuid::new_v4());
+    let reused_doc_id = create_runtime_request(
+        db.node.as_ref(),
+        agent.agent_did.as_str(),
+        AGENT_NAME,
+        &reused_request_id,
+        &session_id,
+        GATE_MARKER,
+    )
+    .await;
+    wait_for_terminal_request(db.node.as_ref(), &reused_doc_id).await;
+
+    assert_eq!(
+        backend.observed_requests(COMPACTION_MARKER),
+        after_allowed,
+        "a reused tool-call id must stop the daemon reducing — removing the \
+         has_unique_call_ids check from BehaviorDaemon::handle_request fails here"
+    );
+
     agent.shutdown().await;
+}
+
+/// Appends two turns that announce the *same* call id.
+///
+/// Both live in the freshly-appended tail, so the duplicate survives wherever
+/// the compacted-prefix boundary happens to fall — reusing an id from an
+/// already-summarized turn would not, since that announcement is no longer in
+/// the view.
+async fn seed_reused_call_id_turn(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
+    // Past anything the daemon has appended for the requests already run, so
+    // these turns sort last in the loaded history.
+    let mut sequence = 10_000i64;
+    let call_id = "duplicated-call".to_string();
+
+    for round in 0..2 {
+        insert_message(
+            node,
+            agent_did,
+            session_id,
+            sequence,
+            "user",
+            &format!("reuse turn {round}: {}", "r".repeat(SEEDED_TURN_BYTES)),
+        )
+        .await;
+        sequence += 1;
+
+        let announcement = Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: call_id.clone(),
+                call_id: Some(call_id.clone()),
+                function: ToolFunction {
+                    name: "read_file".to_string(),
+                    arguments: json!({ "path": format!("/seed/reused-{round}.rs") }),
+                },
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        insert_message(
+            node,
+            agent_did,
+            session_id,
+            sequence,
+            "assistant",
+            &serde_json::to_string(&announcement).expect("serialize reused announcement"),
+        )
+        .await;
+        sequence += 1;
+
+        let result = Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: call_id.clone(),
+                call_id: Some(call_id.clone()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: format!("contents of reused-{round}.rs"),
+                })],
+            })],
+        };
+        insert_message(
+            node,
+            agent_did,
+            session_id,
+            sequence,
+            "user",
+            &serde_json::to_string(&result).expect("serialize reused result"),
+        )
+        .await;
+        sequence += 1;
+    }
 }
 
 async fn boot_compaction_gate_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
@@ -236,7 +334,10 @@ async fn insert_message(
     role: &str,
     content: &str,
 ) {
-    let escaped_key = escape_graphql_string(&format!("{session_id}:{sequence}"));
+    // The daemon persists its own turns into this session while the test runs,
+    // so the key must not be derived from the sequence alone.
+    let escaped_key =
+        escape_graphql_string(&format!("{session_id}:{sequence}:{}", uuid::Uuid::new_v4()));
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_role = escape_graphql_string(role);

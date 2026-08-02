@@ -947,6 +947,139 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
 }
 
 #[test]
+fn legacy_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
+    // Counts written before the pair-safe splitter used an arbitrary budget
+    // index and carry no version marker, so an upgraded session can drop
+    // between an assistant ToolCall and its ToolResult. Left alone the orphan
+    // reaches compact(), which re-normalizes its input and would record its
+    // next count in a shifted space — the accounting defect, reopened for
+    // exactly the sessions that predate the fix.
+    let history = vec![
+        text_msg("user", "first"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        text_msg("assistant", "done"),
+    ];
+    let (view, _) = provider_view(history);
+
+    // A legacy count of 2 lands between the call and its result.
+    let legacy = 2usize;
+    assert_ne!(
+        super::history::pair_safe_boundary(&view, legacy),
+        legacy,
+        "the fixture must actually straddle a turn, or this proves nothing"
+    );
+
+    let dropped = view.iter().skip(legacy).cloned().collect::<Vec<_>>();
+    assert!(
+        !pair_closed_messages(&dropped),
+        "dropping at a legacy boundary orphans the result"
+    );
+
+    let repaired = sanitize_history_for_provider(dropped);
+    assert!(
+        pair_closed_messages(&repaired),
+        "re-narrowing after the drop must remove the orphan"
+    );
+
+    // And it is a no-op at a boundary this runtime would have written.
+    let safe = super::history::pair_safe_boundary(&view, legacy);
+    let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
+    assert_eq!(
+        sanitize_history_for_provider(safe_tail.clone()),
+        safe_tail,
+        "Compaction.sanitize_drop_noop: free for counts this runtime writes"
+    );
+}
+
+fn pair_closed_messages(messages: &[Message]) -> bool {
+    let announced = messages
+        .iter()
+        .flat_map(|message| match message {
+            Message::Assistant { content, .. } => content
+                .iter()
+                .filter_map(|item| match item {
+                    AssistantContent::ToolCall(tool_call) => Some(
+                        tool_call
+                            .call_id
+                            .clone()
+                            .unwrap_or_else(|| tool_call.id.clone()),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect::<std::collections::HashSet<_>>();
+    messages.iter().all(|message| match message {
+        Message::User { content } => content.iter().all(|item| match item {
+            UserContent::ToolResult(tool_result) => announced.contains(
+                &tool_result
+                    .call_id
+                    .clone()
+                    .unwrap_or_else(|| tool_result.id.clone()),
+            ),
+            _ => true,
+        }),
+        _ => true,
+    })
+}
+
+#[test]
+fn reused_call_ids_are_detected() {
+    let unique = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        tool_result_msg("call-1", "a"),
+    ];
+    assert!(has_unique_call_ids(&unique));
+
+    // The same id announced by two different turns: a later result resurrects
+    // the earlier announcement in the provider view, shifting a stored prefix
+    // count. `Compaction.reused_call_id_breaks_prefix_stability` is the model's
+    // version of this.
+    let reused = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        text_msg("user", "next turn"),
+        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
+        tool_result_msg("call-1", "b"),
+    ];
+    assert!(!has_unique_call_ids(&reused));
+}
+
+#[test]
+fn reused_call_ids_really_do_shift_the_provider_view_prefix() {
+    // The concrete harm the check exists to prevent, in runtime terms.
+    let prefix = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        text_msg("user", "next turn"),
+    ];
+    let suffix = vec![
+        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
+        tool_result_msg("call-1", "b"),
+    ];
+
+    let (short_view, _) = provider_view(prefix.clone());
+    let mut whole = prefix;
+    whole.extend(suffix);
+    let (long_view, _) = provider_view(whole);
+
+    assert_eq!(
+        short_view.len(),
+        1,
+        "the unpaired announcement is dropped while nothing resolves it"
+    );
+    assert_ne!(
+        long_view
+            .iter()
+            .take(short_view.len())
+            .cloned()
+            .collect::<Vec<_>>(),
+        short_view,
+        "reuse resurrects the earlier announcement, so the prefix is not stable"
+    );
+}
+
+#[test]
 fn safe_to_reduce_requires_every_retained_tool_result_to_be_terminal() {
     let messages = vec![
         text_msg("user", "go"),
