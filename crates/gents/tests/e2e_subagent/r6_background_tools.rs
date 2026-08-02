@@ -4,7 +4,10 @@ use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
-use gents::{interrupt_request, BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::{
+    interrupt_request, BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook,
+    FailurePolicy,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -83,6 +86,28 @@ impl ToolDyn for PendingTool {
 
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
+    }
+}
+
+struct PanickingTool;
+
+impl ToolDyn for PanickingTool {
+    fn name(&self) -> String {
+        "panicking_tool".to_string()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "panicking_tool".to_string(),
+                description: "test tool that panics".to_string(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async { panic!("intentional background tool panic") })
     }
 }
 
@@ -499,6 +524,103 @@ async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
         "wait timeout must not cancel the background process"
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
+}
+
+#[tokio::test]
+async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
+    let (db, hook, session_id, _request_id) = setup_hook(
+        "r6-background-periodic-live-owner",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let executions = BackgroundExecutionRegistry::default();
+    let hook = hook.with_background_execution_registry(executions.clone());
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-periodic-live-owner",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    let report =
+        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+            db.node.as_ref(),
+            crate::support::AGENT_DID,
+            &executions,
+        )
+        .await
+        .unwrap();
+    assert!(report.is_noop());
+    assert_eq!(
+        load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
+            .await
+            .lifecycle_state
+            .as_deref(),
+        Some("running")
+    );
+
+    let _ = hook
+        .on_tool_call(
+            "cancel_process",
+            None,
+            "meta-bg-periodic-live-owner-cleanup",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn panicking_background_tool_terminalizes_and_notifies() {
+    let (db, hook, session_id, _request_id) = setup_hook(
+        "r6-background-panic",
+        registry(vec![Box::new(PanickingTool)], &["panicking_tool"]),
+    )
+    .await;
+
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-panic",
+            r#"{"tool_name":"panicking_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let row = loop {
+        let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+        if row.lifecycle_state.as_deref() != Some("running") {
+            break row;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "panicking background tool remained durably running"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    };
+    assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
+    assert!(row
+        .result
+        .as_deref()
+        .is_some_and(|result| { result.contains("intentional background tool panic") }));
+
+    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
+    let messages = fetch_messages(db.node.as_ref(), &session_id).await;
+    let notification = messages
+        .iter()
+        .find(|message| message.content.contains(&marker))
+        .expect("panic recovery must append a completion notification");
+    assert!(notification.content.contains(r#"status="failed""#));
+    assert!(notification
+        .content
+        .contains("<reason>tool_panicked</reason>"));
 }
 
 #[tokio::test]

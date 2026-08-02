@@ -544,9 +544,13 @@ where
                                 reason
                             }
                             _ => {
-                                let live_output = hook.as_ref().map(|hook| {
-                                    hook.foreground_live_output_writer(&internal_call_id)
-                                });
+                                let live_output = match hook.as_ref() {
+                                    Some(hook) => Some(
+                                        hook.foreground_live_output_writer(&internal_call_id)
+                                            .await,
+                                    ),
+                                    None => None,
+                                };
                                 let full_result = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,

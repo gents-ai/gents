@@ -98,6 +98,12 @@ def recoverySweepCases : List RecoverySweepCase :=
       "cancelled"
       "r6-TerminalizeBackgroundedAsInterrupted"
   , recoveryCase
+      orphanedBackgroundToolSweep
+      "orphaned_background_tool_without_execution_to_cancelled"
+      "running"
+      "cancelled"
+      "r6-cross-turn-background-process-durability"
+  , recoveryCase
       toolCallRecoverySweep
       "tool_running_unclaimed_cross_deployment_spawn_to_failed"
       "running"
@@ -275,6 +281,8 @@ def recoveryEquivalenceTheorem (sweepId : String) : String :=
     "Recovery.responseRecover_matches_uninterrupted"
   else if sweepId = toolCallRecoverySweep.sweepId then
     "Recovery.toolCallRecover_matches_uninterrupted"
+  else if sweepId = orphanedBackgroundToolSweep.sweepId then
+    "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
   else if sweepId = terminalParentOwnedToolSweep.sweepId then
     "Recovery.terminalParentToolRecover_matches_uninterrupted"
   else if sweepId = detachedBridgeRecoverySweep.sweepId then
@@ -353,11 +361,11 @@ def restartDispositionCase
   , cause := disposition.causeContract
   , terminalState := disposition.terminalStateContract
   , notificationReason :=
-      disposition.notification.map RestartNotificationObligation.notificationReason
+      row.notification.map RestartNotificationObligation.notificationReason
   , queueSource :=
-      disposition.notification.map RestartNotificationObligation.queueSource
+      row.notification.map RestartNotificationObligation.queueSource
   , queueKeyPrefix :=
-      disposition.notification.map RestartNotificationObligation.queueKeyPrefix
+      row.notification.map RestartNotificationObligation.queueKeyPrefix
   , theoremName := theoremName
   }
 
@@ -386,11 +394,11 @@ def restartDispositionCases : List RestartDispositionCase :=
   , restartDispositionCase
       "restart_native_background_interrupted_parent_cancelled"
       .background .cascade false .interrupted
-      "Recovery.restart_interrupt_iff_native_background_live_parent"
+      "Recovery.notification_iff_terminalized_native_background"
   , restartDispositionCase
       "restart_native_background_terminal_parent_failed"
       .background .cascade false .otherTerminal
-      "Recovery.restart_interrupt_iff_native_background_live_parent"
+      "Recovery.notification_iff_terminalized_native_background"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
       .foreground .cascade false .live
@@ -419,10 +427,9 @@ theorem restartDispositionCases_cover_both_dispositions :
         (fun witness => witness.disposition = "terminalize")).length = 5 := by
   native_decide
 
-/-- Exactly one row owes the restart notification, and it is the native
-    background live-parent interrupt with the pinned reason and queue
-    vocabulary. -/
-theorem restartDispositionCases_notification_unique :
+/-- Every terminal native background witness with a resolvable parent owes a
+    completion notification and coalesced wake. -/
+theorem restartDispositionCases_notifications_pinned :
     (restartDispositionCases.filter
         (fun witness => witness.notificationReason.isSome)).map
         (fun witness =>
@@ -430,6 +437,21 @@ theorem restartDispositionCases_notification_unique :
             witness.queueKeyPrefix)) =
       [ ("restart_native_background_live_parent_interrupted"
         , some "interrupted_on_restart"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_deadline_expired_times_out"
+        , some "deadline_exceeded"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_interrupted_parent_cancelled"
+        , some "parent_interrupted"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_terminal_parent_failed"
+        , some "parent_terminal"
         , some "background_completion"
         , some "background_completion:"
         ) ] := by

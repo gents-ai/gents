@@ -11,7 +11,8 @@ use defra_node::EmbeddedNode;
 use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
 use crate::llm::tool::BoxFuture;
 use crate::tool_call_lifecycle::{
-    SubagentLivenessReport, TerminalParentToolReport, ToolCallLifecycle,
+    OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
+    ToolCallLifecycle,
 };
 
 const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &[
@@ -21,6 +22,8 @@ const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &[
 const REQUEST_TERMINAL_REPAIR_SWEEP_IDS: &[&str] = &["request_lifecycle_recover_all_requests"];
 const TERMINAL_PARENT_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_terminal_parent_owned_tools"];
+const ORPHANED_BACKGROUND_TOOL_SWEEP_IDS: &[&str] =
+    &["tool_call_lifecycle_reconcile_orphaned_background_tools"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
@@ -34,6 +37,7 @@ pub enum PeriodicRecoverySweepOutcome {
     RequestTerminalRepair(TerminalRepairReport),
     SubagentLiveness(SubagentLivenessReport),
     TerminalParentTools(TerminalParentToolReport),
+    OrphanedBackgroundTools(OrphanedBackgroundToolReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
@@ -42,6 +46,7 @@ impl PeriodicRecoverySweepOutcome {
             Self::RequestTerminalRepair(report) => report.is_noop(),
             Self::SubagentLiveness(report) => report.is_noop(),
             Self::TerminalParentTools(report) => report.is_noop(),
+            Self::OrphanedBackgroundTools(report) => report.is_noop(),
         }
     }
 }
@@ -58,8 +63,11 @@ impl PeriodicRecoverySweepRun {
     }
 }
 
-type PeriodicRecoverySweepFn =
-    for<'a> fn(&'a EmbeddedNode, &'a str) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
+type PeriodicRecoverySweepFn = for<'a> fn(
+    &'a EmbeddedNode,
+    &'a str,
+    &'a crate::hook::BackgroundExecutionRegistry,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
 
 struct PeriodicRecoverySweepExecutor {
     metadata_index: usize,
@@ -79,6 +87,10 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
         sweep_ids: TERMINAL_PARENT_TOOL_SWEEP_IDS,
         rust_function: "ToolCallLifecycle::reconcile_terminal_parent_owned_tools",
     },
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: ORPHANED_BACKGROUND_TOOL_SWEEP_IDS,
+        rust_function: "ToolCallLifecycle::reconcile_orphaned_background_tools",
+    },
 ];
 
 const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
@@ -94,6 +106,10 @@ const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
         metadata_index: 2,
         run: reconcile_terminal_parent_owned_tools,
     },
+    PeriodicRecoverySweepExecutor {
+        metadata_index: 3,
+        run: reconcile_orphaned_background_tools,
+    },
 ];
 
 pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMetadata] {
@@ -103,12 +119,22 @@ pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMeta
 pub async fn run_periodic_recovery_sweeps(
     node: &EmbeddedNode,
     agent_did: &str,
+    background_executions: &crate::hook::BackgroundExecutionRegistry,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
     let mut runs = Vec::with_capacity(PERIODIC_RECOVERY_SWEEP_EXECUTORS.len());
     for executor in PERIODIC_RECOVERY_SWEEP_EXECUTORS {
         let metadata = PERIODIC_RECOVERY_SWEEP_METADATA[executor.metadata_index];
-        let outcome = (executor.run)(node, agent_did).await?;
-        runs.push(PeriodicRecoverySweepRun { metadata, outcome });
+        match (executor.run)(node, agent_did, background_executions).await {
+            Ok(outcome) => runs.push(PeriodicRecoverySweepRun { metadata, outcome }),
+            Err(error) => {
+                tracing::warn!(
+                    sweep_ids = ?metadata.sweep_ids,
+                    rust_function = metadata.rust_function,
+                    error = %error,
+                    "periodic recovery sweep failed; continuing remaining sweeps and retrying next tick"
+                );
+            }
+        }
     }
     Ok(runs)
 }
@@ -116,6 +142,7 @@ pub async fn run_periodic_recovery_sweeps(
 fn reconcile_subagent_liveness<'a>(
     node: &'a EmbeddedNode,
     agent_did: &'a str,
+    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_subagent_liveness(node, agent_did)
@@ -127,6 +154,7 @@ fn reconcile_subagent_liveness<'a>(
 fn reconcile_terminal_parent_owned_tools<'a>(
     node: &'a EmbeddedNode,
     agent_did: &'a str,
+    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_terminal_parent_owned_tools(node, agent_did)
@@ -135,9 +163,26 @@ fn reconcile_terminal_parent_owned_tools<'a>(
     })
 }
 
+fn reconcile_orphaned_background_tools<'a>(
+    node: &'a EmbeddedNode,
+    agent_did: &'a str,
+    background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
+    Box::pin(async move {
+        ToolCallLifecycle::reconcile_orphaned_background_tools(
+            node,
+            agent_did,
+            background_executions,
+        )
+        .await
+        .map(PeriodicRecoverySweepOutcome::OrphanedBackgroundTools)
+    })
+}
+
 fn repair_terminal_requests<'a>(
     node: &'a EmbeddedNode,
     agent_did: &'a str,
+    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests(node, agent_did)

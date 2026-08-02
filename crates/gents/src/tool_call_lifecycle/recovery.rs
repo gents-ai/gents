@@ -54,6 +54,17 @@ impl TerminalParentToolReport {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct OrphanedBackgroundToolReport {
+    pub tool_calls_terminalized: usize,
+}
+
+impl OrphanedBackgroundToolReport {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RunningToolCallRow {
     #[serde(rename = "_docID")]
@@ -375,6 +386,10 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
+            if is_background_tool_row(&row) {
+                append_recovered_background_tool_completion(node, &row, outcome).await;
+            }
+
             report.tool_calls_terminalized += 1;
             tracing::info!(
                 doc_id = %row.doc_id,
@@ -389,6 +404,74 @@ impl super::ToolCallLifecycle {
             tracing::info!(
                 tool_calls_terminalized = report.tool_calls_terminalized,
                 "reconciled terminal-parent owned tools"
+            );
+        }
+        Ok(report)
+    }
+
+    /// Periodic repair for a durable native-background row whose volatile
+    /// process owner is absent. Live workers are skipped by registry identity;
+    /// an empty registry after restart (or panic cleanup) re-applies the same
+    /// classifier used by startup recovery.
+    pub async fn reconcile_orphaned_background_tools(
+        node: &EmbeddedNode,
+        agent_did: &str,
+        executions: &crate::hook::BackgroundExecutionRegistry,
+    ) -> Result<OrphanedBackgroundToolReport> {
+        let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
+        let mut report = OrphanedBackgroundToolReport::default();
+
+        for row in rows {
+            if row.agent_did.as_deref() != Some(agent_did)
+                || !is_background_tool_row(&row)
+                || executions.contains(&row.tool_call_id).await
+            {
+                continue;
+            }
+            let Some(request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            let Some(parent) = lookup_parent_request(node, agent_did, request_id).await? else {
+                continue;
+            };
+            let deadline_at = parse_datetime(row.deadline_at.as_deref());
+            let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
+                RecoveryOutcome::TimedOut
+            } else if request_is_interrupted(&parent) {
+                RecoveryOutcome::Cancelled
+            } else if request_is_terminal(&parent) {
+                RecoveryOutcome::Failed
+            } else {
+                RecoveryOutcome::BackgroundInterrupted
+            };
+
+            let updated = match recover_tool_call_row(node, &row, deadline_at, outcome, None).await
+            {
+                Ok(updated) => updated,
+                Err(error) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id,
+                        session_id = %row.session_id,
+                        tool_call_id = %row.tool_call_id,
+                        error = %error,
+                        "failed to reconcile orphaned background tool"
+                    );
+                    continue;
+                }
+            };
+            if !updated {
+                continue;
+            }
+
+            append_recovered_background_tool_completion(node, &row, outcome).await;
+            report.tool_calls_terminalized += 1;
+        }
+
+        if !report.is_noop() {
+            tracing::info!(
+                tool_calls_terminalized = report.tool_calls_terminalized,
+                "reconciled orphaned background tools"
             );
         }
         Ok(report)
@@ -789,30 +872,8 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
-        if outcome == RecoveryOutcome::BackgroundInterrupted {
-            if let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) {
-                if let Err(error) = crate::background_completion::append_background_tool_completion(
-                    node,
-                    &row.session_id,
-                    parent_request_id,
-                    &row.tool_call_id,
-                    &row.tool_name,
-                    "cancelled",
-                    "",
-                    Some("interrupted_on_restart"),
-                )
-                .await
-                {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = parent_request_id,
-                        session_id = %row.session_id,
-                        tool_call_id = %row.tool_call_id,
-                        error = %error,
-                        "failed to append recovered background tool notification"
-                    );
-                }
-            }
+        if is_background_tool_row(&row) {
+            append_recovered_background_tool_completion(node, &row, outcome).await;
         }
 
         recovered += 1;
@@ -827,6 +888,50 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
     }
 
     Ok(recovered)
+}
+
+async fn append_recovered_background_tool_completion(
+    node: &EmbeddedNode,
+    row: &RunningToolCallRow,
+    outcome: RecoveryOutcome,
+) {
+    let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let status = match outcome {
+        RecoveryOutcome::Cancelled | RecoveryOutcome::BackgroundInterrupted => "cancelled",
+        RecoveryOutcome::TimedOut
+        | RecoveryOutcome::Failed
+        | RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "failed",
+    };
+    let reason = match outcome {
+        RecoveryOutcome::TimedOut => "deadline_exceeded",
+        RecoveryOutcome::Cancelled => "parent_interrupted",
+        RecoveryOutcome::Failed => "parent_terminal",
+        RecoveryOutcome::BackgroundInterrupted => "interrupted_on_restart",
+        RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout",
+    };
+    if let Err(error) = crate::background_completion::append_background_tool_completion(
+        node,
+        &row.session_id,
+        parent_request_id,
+        &row.tool_call_id,
+        &row.tool_name,
+        status,
+        "",
+        Some(reason),
+    )
+    .await
+    {
+        tracing::warn!(
+            doc_id = %row.doc_id,
+            request_id = parent_request_id,
+            session_id = %row.session_id,
+            tool_call_id = %row.tool_call_id,
+            error = %error,
+            "failed to append recovered background tool notification"
+        );
+    }
 }
 
 /// Running tool rows owned by `agent_did` (immutable scope key on create).

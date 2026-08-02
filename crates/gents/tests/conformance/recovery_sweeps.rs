@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        31,
+        32,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -16,6 +16,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "request_lifecycle_recover_all_requests",
         "request_lifecycle_recover_all_streaming_responses",
         "tool_call_lifecycle_recover_all_running_calls",
+        "tool_call_lifecycle_reconcile_orphaned_background_tools",
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
         "tool_call_lifecycle_recover_detached_bridge_rows",
         "inference_call_recover_all_stale_calls",
@@ -51,7 +52,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        31,
+        32,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -130,6 +131,9 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         }
         "tool_call_lifecycle_recover_all_running_calls" => {
             "Recovery.toolCallRecover_matches_uninterrupted"
+        }
+        "tool_call_lifecycle_reconcile_orphaned_background_tools" => {
+            "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
         }
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" => {
             "Recovery.terminalParentToolRecover_matches_uninterrupted"
@@ -844,6 +848,17 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "live terminal-parent tool case {} must be idempotent",
             case.name
         );
+    } else if case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools" {
+        let registry = gents::BackgroundExecutionRegistry::default();
+        let report =
+            ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, AGENT_DID, &registry)
+                .await
+                .unwrap();
+        assert_eq!(
+            report.tool_calls_terminalized, 1,
+            "orphaned background case {} should terminalize one tool call",
+            case.name
+        );
     } else {
         let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
             .await
@@ -963,7 +978,8 @@ async fn seed_tool_parent_and_row(
     let future_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let past_deadline = chrono::Utc::now() - chrono::Duration::seconds(5);
     let mut lifecycle = match case.name.as_str() {
-        "tool_backgrounded_running_live_parent_to_cancelled" => {
+        "tool_backgrounded_running_live_parent_to_cancelled"
+        | "orphaned_background_tool_without_execution_to_cancelled" => {
             ToolCallLifecycle::new_background_tool(
                 node.clone(),
                 parent_request_id.to_string(),
@@ -1733,7 +1749,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         assert_eq!(
             notifications.len(),
             1,
-            "restart interrupt case {} must append exactly one notification",
+            "restart recovery case {} must append exactly one notification",
             case.name
         );
         assert!(
@@ -1742,9 +1758,14 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             case.name,
             notifications[0]
         );
+        let notification_status = if case.terminal_state.as_deref() == Some("cancelled") {
+            "cancelled"
+        } else {
+            "failed"
+        };
         assert!(
-            notifications[0].contains(r#"status="cancelled""#),
-            "{}: notification must carry the cancelled status",
+            notifications[0].contains(&format!(r#"status="{notification_status}""#)),
+            "{}: notification must carry status {notification_status}",
             case.name
         );
         assert!(
@@ -1756,18 +1777,18 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         let queue_source = case
             .queue_source
             .as_deref()
-            .expect("restart interrupt case must pin the queue source");
+            .expect("restart recovery case must pin the queue source");
         let queue_key = format!(
             "{}{}",
             case.queue_key_prefix
                 .as_deref()
-                .expect("restart interrupt case must pin the queue key prefix"),
+                .expect("restart recovery case must pin the queue key prefix"),
             parent_session_id
         );
         assert_eq!(
             wakes.len(),
             1,
-            "restart interrupt case {} must enqueue exactly one coalesced wake",
+            "restart recovery case {} must enqueue exactly one coalesced wake",
             case.name
         );
         let metadata: serde_json::Value = serde_json::from_str(

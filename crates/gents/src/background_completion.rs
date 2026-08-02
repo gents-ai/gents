@@ -1040,15 +1040,18 @@ fn parse_utc_timestamp(value: &str, field: &str) -> Result<DateTime<Utc>> {
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
+    background_executions: crate::hook::BackgroundExecutionRegistry,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut observer = BackgroundCompletionObserver::new(node, local_did, cancel);
+    let mut observer =
+        BackgroundCompletionObserver::new(node, local_did, background_executions, cancel);
     observer.run().await
 }
 
 struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
     local_did: String,
+    background_executions: crate::hook::BackgroundExecutionRegistry,
     cancel: CancellationToken,
     subscription: events::Subscription,
     collection_id_to_name: HashMap<String, String>,
@@ -1056,11 +1059,17 @@ struct BackgroundCompletionObserver {
 }
 
 impl BackgroundCompletionObserver {
-    fn new(node: Arc<EmbeddedNode>, local_did: String, cancel: CancellationToken) -> Self {
+    fn new(
+        node: Arc<EmbeddedNode>,
+        local_did: String,
+        background_executions: crate::hook::BackgroundExecutionRegistry,
+        cancel: CancellationToken,
+    ) -> Self {
         let subscription = node.subscribe(&[EventName::Update]);
         Self {
             node,
             local_did,
+            background_executions,
             cancel,
             subscription,
             collection_id_to_name: HashMap::new(),
@@ -1130,6 +1139,7 @@ impl BackgroundCompletionObserver {
         for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
             self.node.as_ref(),
             &self.local_did,
+            &self.background_executions,
         )
         .await?
         {

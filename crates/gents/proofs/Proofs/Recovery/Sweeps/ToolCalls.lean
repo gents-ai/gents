@@ -142,6 +142,98 @@ def toolCallRecoveryEquivalence : RecoveryEquivalence toolCallRecoverySweep :=
   , h_recover_eq_uninterrupted := toolCallRecover_matches_uninterrupted
   }
 
+/-! ## Periodic native-background ownership repair
+
+A native background row is backed by volatile process state while its worker
+is alive. If the durable row is still running but the process registry no
+longer owns its id, the row is orphaned and the startup classifier must be
+re-applied on the periodic recovery tick. This makes startup recovery retryable
+and closes the panic path without touching live registered workers. -/
+
+structure OrphanedBackgroundToolRow where
+  call : ToolCallContext
+  cause : ToolRecoveryCause
+  executionRegistered : Bool
+  parentResolvable : Bool
+  deriving Repr
+
+def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
+  row.call.state = .running ∧
+  row.call.awaitMode = .background ∧
+  row.call.childRequestId = none ∧
+  row.executionRegistered = false ∧
+  row.parentResolvable = true
+
+instance (row : OrphanedBackgroundToolRow) :
+    Decidable (orphanedBackgroundToolStale row) := by
+  unfold orphanedBackgroundToolStale
+  infer_instance
+
+def orphanedBackgroundToolRecover
+    (row : OrphanedBackgroundToolRow) : OrphanedBackgroundToolRow :=
+  { row with call := { row.call with state := row.cause.terminalState } }
+
+def orphanedBackgroundToolMeasure (row : OrphanedBackgroundToolRow) : Nat :=
+  if orphanedBackgroundToolStale row then 1 else 0
+
+theorem orphanedBackgroundTool_stale_positive :
+    ∀ row, orphanedBackgroundToolStale row →
+      orphanedBackgroundToolMeasure row > 0 := by
+  intro row h_stale
+  simp [orphanedBackgroundToolMeasure, h_stale]
+
+theorem orphanedBackgroundToolRecover_terminal :
+    ∀ row, orphanedBackgroundToolStale row →
+      isTerminal (orphanedBackgroundToolRecover row).call.state := by
+  intro row _h_stale
+  simpa [orphanedBackgroundToolRecover] using row.cause.terminalState_terminal
+
+theorem orphanedBackgroundToolRecover_zero :
+    ∀ row, orphanedBackgroundToolStale row →
+      orphanedBackgroundToolMeasure (orphanedBackgroundToolRecover row) = 0 := by
+  intro row _h_stale
+  have h_terminal_not_running : row.cause.terminalState ≠ .running := by
+    cases row.cause <;> simp [ToolRecoveryCause.terminalState]
+  have h_not :
+      ¬ orphanedBackgroundToolStale (orphanedBackgroundToolRecover row) := by
+    intro h_stale
+    exact h_terminal_not_running h_stale.1
+  simp [orphanedBackgroundToolMeasure, h_not]
+
+def orphanedBackgroundToolSweep : RecoverySweep :=
+  { Row := OrphanedBackgroundToolRow
+  , collection := .agentToolCall
+  , sweepId := "tool_call_lifecycle_reconcile_orphaned_background_tools"
+  , rustFunction := "ToolCallLifecycle::reconcile_orphaned_background_tools"
+  , cadence := .periodic
+  , implementationStatus := .implemented
+  , stale := orphanedBackgroundToolStale
+  , recover := orphanedBackgroundToolRecover
+  , terminal := fun row => isTerminal row.call.state
+  , measure := orphanedBackgroundToolMeasure
+  , h_stale_positive := orphanedBackgroundTool_stale_positive
+  , h_recover_terminal := orphanedBackgroundToolRecover_terminal
+  , h_recover_zero := orphanedBackgroundToolRecover_zero
+  }
+
+def orphanedBackgroundToolUninterruptedTerminalize
+    (row : OrphanedBackgroundToolRow) : OrphanedBackgroundToolRow :=
+  orphanedBackgroundToolRecover row
+
+theorem orphanedBackgroundToolRecover_matches_uninterrupted :
+    ∀ row, orphanedBackgroundToolStale row →
+      orphanedBackgroundToolRecover row =
+        orphanedBackgroundToolUninterruptedTerminalize row := by
+  intro _row _h_stale
+  rfl
+
+def orphanedBackgroundToolEquivalence :
+    RecoveryEquivalence orphanedBackgroundToolSweep :=
+  { uninterrupted := orphanedBackgroundToolUninterruptedTerminalize
+  , h_recover_eq_uninterrupted :=
+      orphanedBackgroundToolRecover_matches_uninterrupted
+  }
+
 structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool

@@ -98,7 +98,7 @@ def r6RestartCase : R6BackgroundingCase :=
     , unclaimedExpired := false
     }
   let disposition := Recovery.restartDisposition row
-  let notification := disposition.notification
+  let notification := row.notification
   { name := "background_recovery_running_live_parent_to_cancelled"
   , group := "recovery"
   , action := disposition.causeContract.getD ""

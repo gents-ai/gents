@@ -662,7 +662,8 @@ generalize one lane's fixtures to the other.
 | Durable state | Bridge row + child `AgentRequest` (lineage, depth, interrupt flag) + notification message + coalesced wake row | Tool row (result, cancel_cause) + notification message + coalesced wake row |
 | Volatile state | Foreground waiter state in the owned loop | Execution registries and the live output ring buffer |
 | Restart, live parent | **Leave bridge running**; project when the child terminal is durable | **Interrupt**: terminalize `cancelled`, notification reason `interrupted_on_restart`, one coalesced wake |
-| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / `recover_all` interrupt path |
+| Restart, terminal parent | Preserve the durable bridge for child-terminal projection | **Fail**: terminalize `failed`, notification reason `parent_terminal`, one coalesced wake |
+| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / startup and periodic ownership recovery |
 
 Model → conformance → Rust bindings:
 
@@ -678,7 +679,7 @@ Model → conformance → Rust bindings:
   (`restartDisposition`) with exhaustive characterizations
   (`restart_interrupt_iff_native_background_live_parent`,
   `leave_running_iff_preserved_shapes`,
-  `notification_iff_restart_interrupt`,
+  `notification_iff_terminalized_native_background`,
   `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
   rows are **computed from the model** and driven through the real
   `ToolCallLifecycle::recover_all` by
@@ -688,8 +689,9 @@ Model → conformance → Rust bindings:
   under a cleanly completed parent) and the notification + coalesced-wake
   side effects with idempotence under a second pass.
 - **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
-  bridges, subagent liveness #465, terminal-parent owned tools #837) →
-  `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
+  bridges, subagent liveness #465, terminal-parent owned tools #837, and
+  orphaned native-background ownership repair) → `recovery_sweep_cases` →
+  `tests/conformance/recovery_sweeps.rs`.
 - **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
   three-way `read_tool_output` dispatch (terminal → persisted completion;
   running + live snapshot → ring-buffer tail; running + no snapshot — the

@@ -96,11 +96,11 @@ struct BackgroundLiveOutputState {
 }
 
 impl BackgroundLiveOutputState {
-    fn writer_for(
+    async fn writer_for(
         &self,
         tool_call_id: impl Into<String>,
     ) -> crate::background_tools::LiveToolOutputWriter {
-        self.registry.writer_for(tool_call_id)
+        self.registry.writer_for(tool_call_id).await
     }
 
     async fn remove(&self, tool_call_id: &str) {
@@ -137,6 +137,10 @@ impl BackgroundExecutionRegistry {
 
     pub(crate) async fn remove(&self, tool_call_id: &str) {
         self.inner.lock().await.remove(tool_call_id);
+    }
+
+    pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
+        self.inner.lock().await.contains_key(tool_call_id)
     }
 }
 
@@ -545,12 +549,16 @@ impl DefraSessionHook {
             .any(|name| name == tool_name)
     }
 
-    pub(crate) fn foreground_live_output_writer(
+    pub(crate) async fn foreground_live_output_writer(
         &self,
         internal_call_id: &str,
     ) -> crate::background_tools::LiveToolOutputWriter {
+        let writer = self
+            .background_live_outputs
+            .writer_for(internal_call_id)
+            .await;
         self.ensure_live_output_flusher();
-        self.background_live_outputs.writer_for(internal_call_id)
+        writer
     }
 
     pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
