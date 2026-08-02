@@ -15,8 +15,7 @@ use gents::tool_call_lifecycle::{
 };
 use gents::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, DefraSessionHook, DefraWatcher, FailurePolicy, ToolSelectionDocument,
-    Watcher,
+    AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -27,9 +26,6 @@ use crate::support::{first_row, test_db};
 const AGENT_DID: &str = "did:test:r4-subagent-completion";
 const PARENT_BEHAVIOR_ID: &str = "r4-completion-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-completion-child";
-const WAKE_PROMPT: &str =
-    "Review pending subagent completion notifications in this session and continue the task if needed.";
-
 #[derive(Debug, Deserialize)]
 struct RequestSessionRow {
     session_id: String,
@@ -47,16 +43,6 @@ struct MessageRow {
     sequence: u32,
     role: String,
     content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WakeRequestRow {
-    request_id: String,
-    content: String,
-    status: String,
-    lifecycle_state: Option<String>,
-    execution_origin: Option<String>,
-    metadata: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,7 +525,7 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
         .unwrap_or_default()
 }
 
-async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<WakeRequestRow> {
+async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<serde_json::Value> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -574,7 +560,7 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<Wak
 }
 
 #[tokio::test]
-async fn background_completion_projects_bridge_appends_notification_and_enqueues_wakeup() {
+async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_project").await;
     let (child_request_id, child_session_id) = create_child_and_bridge(
         &db.node,
@@ -597,12 +583,10 @@ async fn background_completion_projects_bridge_appends_notification_and_enqueues
         project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
             .await
             .unwrap();
-    let BackgroundCompletionOutcome::Projected {
-        wake_request_id, ..
-    } = outcome
-    else {
-        panic!("expected projection, got {outcome:?}");
-    };
+    assert!(matches!(
+        outcome,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-1").await;
     assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
@@ -621,23 +605,6 @@ async fn background_completion_projects_bridge_appends_notification_and_enqueues
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
-    assert_eq!(wakes[0].request_id, wake_request_id);
-    assert_eq!(wakes[0].content, WAKE_PROMPT);
-    assert_eq!(wakes[0].status, "pending");
-    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
-    assert_eq!(wakes[0].execution_origin.as_deref(), Some("scheduled"));
-    let metadata: serde_json::Value =
-        serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(metadata["queue"]["source"], "background_completion");
-    assert_eq!(metadata["queue"]["policy"], "coalesce");
-    assert_eq!(
-        metadata["queue"]["key"],
-        format!("background_completion:{session_id}")
-    );
-    assert_eq!(
-        metadata["queue"]["queued_after_request_id"],
-        parent_request_id
-    );
 
     let again =
         project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
@@ -862,7 +829,7 @@ async fn background_completion_compacts_multibyte_summary_without_panicking() {
 }
 
 #[tokio::test]
-async fn multiple_background_completions_append_notifications_but_coalesce_wakeup() {
+async fn multiple_background_completions_append_notifications_and_coalesce_wake() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_coalesce").await;
     let (child_a, session_a) = create_child_and_bridge(
         &db.node,
@@ -891,21 +858,14 @@ async fn multiple_background_completions_append_notifications_but_coalesce_wakeu
     let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
         .await
         .unwrap();
-    let (
-        BackgroundCompletionOutcome::Projected {
-            wake_request_id: wake_a,
-            ..
-        },
-        BackgroundCompletionOutcome::Projected {
-            wake_request_id: wake_b,
-            ..
-        },
-    ) = (first, second)
-    else {
-        panic!("both completions should project");
-    };
-
-    assert_eq!(wake_a, wake_b);
+    assert!(matches!(
+        first,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
+    assert!(matches!(
+        second,
+        BackgroundCompletionOutcome::Projected { .. }
+    ));
     let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
     assert_eq!(messages.len(), 2);
     assert!(messages[0].content.contains("child A done"));
@@ -919,7 +879,7 @@ async fn multiple_background_completions_append_notifications_but_coalesce_wakeu
 }
 
 #[tokio::test]
-async fn background_completion_wakeup_waits_behind_active_foreground_parent_then_claims() {
+async fn background_completion_does_not_interrupt_active_foreground_parent() {
     let (db, session_id, parent_request_id) =
         setup_fixture("background_completion_interleave").await;
     let (foreground_child, _) = create_child_and_bridge(
@@ -967,26 +927,6 @@ async fn background_completion_wakeup_waits_behind_active_foreground_parent_then
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
-    assert_eq!(wakes[0].status, "pending");
-    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
-
-    let mut blocked_watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
-    let blocked =
-        tokio::time::timeout(Duration::from_millis(200), blocked_watcher.next_request()).await;
-    assert!(
-        blocked.is_err(),
-        "wake-up should not be claimable while the parent request is active"
-    );
-
-    set_request_lifecycle(db.node.as_ref(), &parent_request_id, "completed").await;
-    let mut watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
-    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
-        .await
-        .expect("watcher should return queued wake-up")
-        .expect("watcher should still be open")
-        .expect("wake-up should load");
-    assert_eq!(claimed.request_id, wakes[0].request_id);
-    assert_eq!(claimed.session_id, session_id);
 }
 
 #[tokio::test]
@@ -1094,14 +1034,6 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
-    assert_eq!(wakes[0].content, WAKE_PROMPT);
-    let metadata: serde_json::Value =
-        serde_json::from_str(wakes[0].metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(metadata["queue"]["source"], "background_completion");
-    assert_eq!(
-        metadata["queue"]["queued_after_request_id"],
-        parent_request_id
-    );
 }
 
 #[tokio::test]

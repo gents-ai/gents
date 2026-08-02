@@ -80,6 +80,143 @@ function toolArgsPreview(args?: ToolDetailValueView | null): string | null {
   return flat.length > 64 ? `${flat.slice(0, 64)}…` : flat;
 }
 
+function normalizedFieldKey(key: string) {
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function toolDetailField(
+  value: ToolDetailValueView | null | undefined,
+  keys: string[],
+): string | null {
+  const normalizedKeys = new Set(keys.map(normalizedFieldKey));
+  const field = value?.fields.find((candidate) =>
+    normalizedKeys.has(normalizedFieldKey(candidate.key)),
+  );
+  return field?.value.trim() || null;
+}
+
+function safeSubagentPreview(value: string | null, maxLength: number) {
+  const flat = value?.replace(/\s+/g, " ").trim();
+  if (!flat || SENSITIVE_TOOL_ARG_PREVIEW.test(flat)) {
+    return null;
+  }
+  return flat.length > maxLength ? `${flat.slice(0, maxLength)}…` : flat;
+}
+
+function isSubagentSpawnTool(toolName: string) {
+  const normalized = toolName.trim().toLowerCase();
+  return (
+    normalized === "spawn_subagent" || normalized.endsWith(".spawn_subagent")
+  );
+}
+
+function subagentStatusLabel(
+  statusKind?: string | null,
+  status?: string | null,
+) {
+  switch ((statusKind ?? "").toLowerCase()) {
+    case "success":
+      return "completed";
+    case "error":
+      return status?.trim() || "failed";
+    case "awaitingapproval":
+      return "awaiting approval";
+    default:
+      return "working";
+  }
+}
+
+function SubagentToolItem({ tool }: { tool: RenderedToolCallView }) {
+  const statusKind = (tool.statusKind ?? "running").toLowerCase();
+  const name =
+    toolDetailField(tool.args, ["name", "behavior_id", "behaviorId"]) ??
+    "subagent";
+  const prompt = toolDetailField(tool.args, ["prompt", "task"]);
+  const promptPreview = safeSubagentPreview(prompt, 96);
+  const awaitMode =
+    tool.awaitMode ??
+    toolDetailField(tool.args, ["await_mode", "awaitMode"]) ??
+    null;
+  const childRequestId =
+    tool.childRequestId ??
+    toolDetailField(tool.result, ["child_request_id", "childRequestId"]) ??
+    null;
+  const liveTail =
+    statusKind === "running" ? (tool.partialOutputTail ?? null) : null;
+  const statusLabel = subagentStatusLabel(tool.statusKind, tool.status);
+
+  return (
+    <details
+      className="tool-item subagent-tool-item"
+      data-child-request-id={childRequestId ?? undefined}
+      data-testid={`subagent-tool-${tool.itemKey}`}
+      open={liveTail != null || statusKind === "running"}
+    >
+      <summary className="tool-item-summary subagent-tool-summary">
+        <span className="tool-item-summary-left subagent-tool-summary-left">
+          <span
+            aria-hidden="true"
+            className={toolStatusClass(tool.statusKind)}
+          />
+          <span className="subagent-tool-kind">subagent</span>
+          <span className="tool-item-name">{name}</span>
+          {awaitMode ? (
+            <span className="subagent-tool-mode">{awaitMode}</span>
+          ) : null}
+          <span
+            className={`subagent-tool-status subagent-tool-status-${statusKind}`}
+          >
+            {statusLabel}
+          </span>
+          {promptPreview ? (
+            <span className="tool-item-preview subagent-tool-preview">
+              {promptPreview}
+            </span>
+          ) : null}
+        </span>
+        <span aria-hidden="true" className="tool-item-action">
+          ▸
+        </span>
+      </summary>
+      <div className="tool-item-body subagent-tool-body">
+        {tool.cancelCause ? (
+          <CancelCauseDetails cause={tool.cancelCause} />
+        ) : null}
+        {prompt ? (
+          <div className="subagent-tool-assignment">
+            <div className="tool-detail-label">assignment</div>
+            <div>{prompt}</div>
+          </div>
+        ) : (
+          <ToolDetailSection label="args" value={tool.args} />
+        )}
+        {childRequestId ? (
+          <div className="subagent-tool-child">
+            <span className="tool-detail-label">child request</span>
+            <code>{childRequestId}</code>
+          </div>
+        ) : null}
+        {liveTail != null ? (
+          <div
+            className="tool-live-tail"
+            data-testid={`subagent-live-${tool.itemKey}`}
+          >
+            <span className="tool-live-tail-label">
+              child activity
+              <span aria-hidden="true" className="tool-live-dot" />
+            </span>
+            <pre>{liveTail}</pre>
+          </div>
+        ) : null}
+        <ToolDetailSection label="result" value={tool.result} />
+      </div>
+    </details>
+  );
+}
+
 export function ToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
   return (
     <section className="tool-group">
@@ -96,6 +233,10 @@ export function ToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               tool={tool}
             />
           );
+        }
+
+        if (isSubagentSpawnTool(tool.toolName)) {
+          return <SubagentToolItem key={tool.itemKey} tool={tool} />;
         }
 
         const codeView =

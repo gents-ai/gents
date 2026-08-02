@@ -79,6 +79,7 @@ export function createDesktopShellChatActions({
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({
         kind: "awaitingObservation",
+        agentDid: selectedDeployment.agentDid,
         sessionId: result.sessionId,
         requestId: result.requestId,
       });
@@ -99,14 +100,50 @@ export function createDesktopShellChatActions({
     }
   }
 
-  function onRetryMessage(content: string) {
-    void submitContent(content);
+  /** Retry the persisted interactive predecessor through the fenced retry API. */
+  async function retryRequest(requestId: string) {
+    if (!selectedDeployment) {
+      return;
+    }
+    setLocalWorkflow({
+      kind: "submittingRequest",
+      agentDid: selectedDeployment.agentDid,
+      sessionId: selectedSessionId,
+    });
+    setSending(true);
+    setError(null);
+    try {
+      const result = await api.retryRequest(requestId);
+      setSelectedSessionId(result.sessionId);
+      setLocalWorkflow({
+        kind: "awaitingObservation",
+        agentDid: selectedDeployment.agentDid,
+        sessionId: result.sessionId,
+        requestId: result.requestId,
+      });
+    } catch (err) {
+      setLocalWorkflow({ kind: "ready" });
+      setError(String(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function onRetryMessage(requestId: string) {
+    return retryRequest(requestId);
   }
 
   async function onRenameConversationTitle(sessionId: string, title: string) {
+    if (!selectedDeployment) {
+      return;
+    }
     setError(null);
     try {
-      await api.renameConversation({ sessionId, title });
+      await api.renameConversation({
+        agentDid: selectedDeployment.agentDid,
+        sessionId,
+        title,
+      });
       await refreshSnapshot();
       await refreshSession(sessionId);
     } catch (err) {

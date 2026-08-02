@@ -179,7 +179,7 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
       1
       2
   , recoveryCaseFromStep
-      "legal_open_budget_latest"
+      "illegal_automated_origin"
       (recoveryPre scheduledOpenFailed scheduledOpenFailed 1)
       1
       2

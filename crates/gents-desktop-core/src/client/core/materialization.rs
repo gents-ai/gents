@@ -7,11 +7,15 @@ use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_RESPONSE_NAME};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::super::observe::ObservedStore;
-use super::super::query::{load_agent_scoped_snapshot, load_full_snapshot};
+use super::super::peer_directory::PeerDirectory;
+use super::super::query::{
+    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
+};
 use super::super::store::ClientStore;
 use super::p2p_ops::p2p_sync_branchable_collection;
 
@@ -72,6 +76,8 @@ pub(super) fn spawn_materialization_supervisor_task(
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     store: Arc<ObservedStore>,
+    peer_directory: Arc<RwLock<PeerDirectory>>,
+    requester_did: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut tracker = MaterializationTracker::default();
@@ -119,14 +125,35 @@ pub(super) fn spawn_materialization_supervisor_task(
                             "desktop repaired stalled materialization"
                         );
                         tokio::time::sleep(MATERIALIZATION_REFRESH_DELAY).await;
+                        let peers = peer_directory.read().await.records().to_vec();
                         let snapshot_result = match repair.agent_did.as_deref() {
-                            Some(did) => load_agent_scoped_snapshot(node.as_ref(), did).await,
-                            None => load_full_snapshot(node.as_ref()).await,
+                            Some(did) => {
+                                load_agent_scoped_snapshot_with_peer_records(
+                                    node.as_ref(),
+                                    did,
+                                    &peers,
+                                    &requester_did,
+                                )
+                                .await
+                            }
+                            None => {
+                                load_full_snapshot_with_peer_records(
+                                    node.as_ref(),
+                                    &peers,
+                                    &requester_did,
+                                )
+                                .await
+                            }
                         };
                         match snapshot_result {
-                            Ok(snapshot) => {
-                                store.merge_snapshot(snapshot);
-                            }
+                            Ok(snapshot) => match repair.agent_did.as_deref() {
+                                Some(did) => {
+                                    store.replace_agent_snapshot(did, snapshot);
+                                }
+                                None => {
+                                    store.replace_snapshot(snapshot);
+                                }
+                            },
                             Err(error) => {
                                 tracing::warn!(
                                     target: "gents_desktop_core::materialization",

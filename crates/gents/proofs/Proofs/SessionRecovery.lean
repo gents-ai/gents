@@ -57,6 +57,7 @@ def CanReissue (pre : SessionState) (failedId newId : RequestId) : Prop :=
     newId ∉ pre.requestIds ∧
     (pre.ctx failedId).state = .failed ∧
     (pre.ctx failedId).admission = .released ∧
+    (pre.ctx failedId).origin = .interactive ∧
     (pre.ctx failedId).retryCount < (pre.ctx failedId).maxRetries ∧
     ¬ (pre.ctx failedId).deadlineExceeded ∧
     (pre.ctx failedId).isLatest = true
@@ -269,9 +270,25 @@ theorem reissue_latest_origin_preserved
     (post.ctx post.latest).origin = (pre.ctx pre.latest).origin := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
+
+theorem reissue_source_interactive
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    (pre.ctx pre.latest).origin = .interactive := by
+  cases h_trans with
+  | reissue_failed _ _ h_can _ _ _ _ _ =>
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_interactive, _, _, _⟩
+      simpa [h_failed_latest] using h_interactive
+
+theorem reissue_latest_interactive
+    {pre post : SessionState}
+    (h_trans : Transition pre post) :
+    (post.ctx post.latest).origin = .interactive := by
+  rw [reissue_latest_origin_preserved h_trans]
+  exact reissue_source_interactive h_trans
 
 theorem reissue_latest_backend_preserved
     {pre post : SessionState}
@@ -279,7 +296,7 @@ theorem reissue_latest_backend_preserved
     (post.ctx post.latest).backend = (pre.ctx pre.latest).backend := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -289,7 +306,7 @@ theorem reissue_latest_retryCount_succ
     (post.ctx post.latest).retryCount = (pre.ctx pre.latest).retryCount + 1 := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, _, _⟩
       rw [h_latest, h_ctx, h_failed_latest]
       simp [reissuedContext]
 
@@ -299,7 +316,7 @@ theorem reissue_latest_retryBound
     (post.ctx post.latest).retryCount ≤ (post.ctx post.latest).maxRetries := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ h_latest h_ctx =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, h_budget, _, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_budget, _, _⟩
       have h_budget_latest : (pre.ctx pre.latest).retryCount < (pre.ctx pre.latest).maxRetries := by
         simpa [← h_failed_latest] using h_budget
       rw [h_latest, h_ctx, h_failed_latest]
@@ -311,7 +328,7 @@ theorem reissue_source_deadline_open
     ¬ (pre.ctx pre.latest).deadlineExceeded := by
   cases h_trans with
   | reissue_failed _ _ h_can _ _ _ _ _ =>
-      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, h_deadline, _⟩
+      rcases h_can with ⟨h_failed_latest, _, _, _, _, _, _, h_deadline, _⟩
       rw [h_failed_latest] at h_deadline
       exact h_deadline
 
@@ -330,7 +347,7 @@ theorem reissue_demotes_previous_latest
     (post.ctx pre.latest).isLatest = false := by
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ _ _ h_ctx =>
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
       have h_distinct : newId ≠ pre.latest := by
         intro h_eq
         have h_latest_mem : pre.latest ∈ pre.requestIds := by
@@ -350,7 +367,7 @@ theorem reissue_preserves_latestFlagInvariant
   cases h_trans with
   | reissue_failed failedId newId h_can _ _ h_requestIds h_latest h_ctx =>
       rcases h_pre with ⟨h_pre_latest_mem, h_pre_latest_flag, h_pre_others⟩
-      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _⟩
+      rcases h_can with ⟨h_failed_latest, h_failed_mem, h_new, _, _, _, _, _, _⟩
       constructor
       · rw [h_latest, h_requestIds]
         exact Finset.mem_insert_self _ _
@@ -382,5 +399,48 @@ theorem reissue_preserves_latestFlagInvariant
               h_pre_others rid h_rid_mem_pre h_rid_ne_pre_latest
             have h_rid_ne_failed : rid ≠ failedId := h_rid_failed
             simp [Function.update_of_ne h_rid_new, Function.update_of_ne h_rid_ne_failed, h_old_flag]
+
+/-!
+## Durable retry intent
+
+`Transition.reissue_failed` is one atomic state transition. A distributed
+client implementation additionally needs an idempotency fence so two callers
+cannot choose different successors for the same failed predecessor before
+either observes the other's transition. `RetryIntentState` models the unique
+per-parent key persisted beside the successor request.
+-/
+
+structure RetryIntentState where
+  successor : RequestId → Option RequestId
+
+/-- Claim the one durable successor slot for `parent`. The first candidate
+    wins; later callers observe and return that same winner. -/
+def claimRetry
+    (state : RetryIntentState)
+    (parent candidate : RequestId) : RetryIntentState × RequestId :=
+  match state.successor parent with
+  | some winner => (state, winner)
+  | none =>
+      ({ successor := Function.update state.successor parent (some candidate) }, candidate)
+
+theorem claimRetry_records_winner
+    (state : RetryIntentState)
+    (parent candidate : RequestId) :
+    (claimRetry state parent candidate).1.successor parent =
+      some (claimRetry state parent candidate).2 := by
+  simp [claimRetry]
+  split <;> simp_all
+
+/-- Retrying a claimed intent with any other candidate is idempotent: it
+    returns the original successor and leaves the ledger unchanged. -/
+theorem claimRetry_idempotent
+    (state : RetryIntentState)
+    (parent firstCandidate laterCandidate : RequestId) :
+    claimRetry (claimRetry state parent firstCandidate).1 parent laterCandidate =
+      ((claimRetry state parent firstCandidate).1,
+        (claimRetry state parent firstCandidate).2) := by
+  cases h_existing : state.successor parent with
+  | none => simp [claimRetry, h_existing]
+  | some winner => simp [claimRetry, h_existing]
 
 end SessionState

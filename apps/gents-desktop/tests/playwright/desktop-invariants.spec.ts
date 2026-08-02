@@ -39,7 +39,7 @@ test.describe("desktop UI invariants", () => {
   }) => {
     await gotoHarness(page, "bridge-unavailable");
     await expect(page.locator(".app-shell")).toBeVisible();
-    await expect(page.getByTestId("error-banner")).toContainText(
+    await expect(page.getByTestId("startup-screen")).toContainText(
       "Desktop native bridge is unavailable",
     );
 

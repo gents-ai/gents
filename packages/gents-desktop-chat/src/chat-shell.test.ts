@@ -10,6 +10,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import {
   projectChatShell,
+  reconcileProjectedWorkflow,
   type ChatBlockedReason,
   type ChatWorkflowState,
   type TurnState,
@@ -101,6 +102,7 @@ function session(
     status: "active",
     turnState: "completed",
     latestRequestId: "req-1",
+    retryEligibility: { eligible: false, denialReason: "notFailed" },
     latestResponse: null,
     activeResponseOverlay: null,
     pendingTurn: null,
@@ -265,6 +267,9 @@ function localWorkflowFromContract(
     case "awaitingObservation":
       return {
         kind: "awaitingObservation",
+        agentDid:
+          agentDid(contractCase.frontend_selected_agent_did) ??
+          "did:test:agent-missing",
         sessionId:
           sessionId(contractCase.frontend_local_workflow_session) ??
           "session-missing",
@@ -417,6 +422,7 @@ describe("projectChatShell", () => {
       }),
       localWorkflow: {
         kind: "awaitingObservation",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-new",
       },
@@ -425,6 +431,65 @@ describe("projectChatShell", () => {
     expect(projection.activeRequestId).toBe("req-new");
     expect(projection.workflow.kind).toBe("turnInProgress");
     expect(projection.sendStatus.kind).toBe("disabled");
+  });
+
+  test("commits terminal projection before observing an automated follow-up", () => {
+    const trackedWorkflow: ChatWorkflowState = {
+      kind: "turnInProgress",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-user",
+      turnState: "streaming",
+    };
+    const terminalProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      session: session({
+        latestRequestId: "req-user",
+        turnState: "completed",
+      }),
+      localWorkflow: trackedWorkflow,
+    });
+
+    expect(terminalProjection.workflow).toEqual({ kind: "ready" });
+    const reconciled = reconcileProjectedWorkflow(
+      trackedWorkflow,
+      terminalProjection.workflow,
+    );
+    expect(reconciled).toEqual({ kind: "ready" });
+
+    const wakeProjection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      session: session({
+        latestRequestId: "req-wake",
+        turnState: "streaming",
+      }),
+      localWorkflow: reconciled,
+    });
+
+    expect(wakeProjection.activeRequestId).toBe("req-wake");
+    expect(wakeProjection.workflow).toEqual({
+      kind: "turnInProgress",
+      agentDid: "did:test:amy",
+      sessionId: "session-1",
+      requestId: "req-wake",
+      turnState: "streaming",
+    });
   });
 
   test("keeps awaiting observation until the matching request is observed", () => {
@@ -441,6 +506,7 @@ describe("projectChatShell", () => {
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
       localWorkflow: {
         kind: "awaitingObservation",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-new",
       },
@@ -448,6 +514,7 @@ describe("projectChatShell", () => {
 
     expect(projection.workflow).toEqual({
       kind: "awaitingObservation",
+      agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-new",
     });
@@ -477,6 +544,7 @@ describe("projectChatShell", () => {
       }),
       localWorkflow: {
         kind: "turnInProgress",
+        agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-1",
         turnState: "streaming",

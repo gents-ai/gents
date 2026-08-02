@@ -1116,6 +1116,32 @@ Denies the desktop_request_resend command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-request-retry`
+
+</td>
+<td>
+
+Enables the desktop_request_retry command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-request-retry`
+
+</td>
+<td>
+
+Denies the desktop_request_retry command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-request-timeline`
 
 </td>

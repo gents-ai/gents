@@ -1,8 +1,12 @@
-import { waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
-import { exerciseOperationsDrawerTabs } from "./tauri-driver-live/operations-assertions";
+import {
+  expectOperationsPanel,
+  exerciseOperationsDrawerTabs,
+  openOperationsDrawer,
+} from "./tauri-driver-live/operations-assertions";
 import {
   describeLive,
   expectCompletedSession,
@@ -11,6 +15,8 @@ import {
 
 const OPERATIONS_PROMPT =
   "Reply with exactly this sentence and no tools: operations drawer smoke ready.";
+const NATIVE_BACKGROUND_PROMPT =
+  'Launch a native background process now. You MUST call spawn_process exactly once with tool_name "bash_unrestricted". Its args must set command to "sleep 20; printf live-native-background-smoke", args to an empty array, and timeout_secs to 25. Do not call wait_process, read_process, list_processes, cancel_process, or any other tool. Reply immediately with one short sentence after spawn_process returns.';
 
 describeLive("Tauri app live operations drawer", () => {
   it("opens every operations tab after a real chat turn", async () => {
@@ -29,6 +35,74 @@ describeLive("Tauri app live operations drawer", () => {
       expectCompletedSession("operations drawer seed turn", session);
 
       await exerciseOperationsDrawerTabs(driver);
+    });
+  }, 600_000);
+
+  it("renders a live native background process in the Background panel", async () => {
+    await withLiveDesktop(async ({ runner, driver, deployment }) => {
+      const defaultBehavior = deployment.behaviors.find(
+        (behavior) => behavior.isDefault,
+      );
+      const defaultTools = deployment.toolSelections.find(
+        (selection) => selection.selectionId === defaultBehavior?.toolSelectionId,
+      );
+      expect(defaultTools?.enableBash).toBe(true);
+      expect(defaultTools?.bashMode).toBe("Unrestricted");
+      expect(defaultTools?.backgroundableToolNames).toContain("bash_unrestricted");
+
+      await driver.ready();
+      await driver.openChat();
+      await driver.typeComposer(NATIVE_BACKGROUND_PROMPT);
+      await driver.pressEnter();
+      await waitFor(() => {
+        expect(runner.sendResults).toHaveLength(1);
+      });
+      const submitted = expectLatestSendResult(runner, "native background turn");
+
+      const session = await runner.waitForRequestCompletion(submitted);
+      expectCompletedSession("native background parent turn", session);
+
+      const nativeTool = await waitFor(
+        async () => {
+          const snapshot = await runner.adapter.fetchOperationsSnapshot({
+            agentDid: runner.agentDid,
+            rootRequestId: submitted.requestId,
+          });
+          const row = snapshot.backgroundedTools.find(
+            (candidate) =>
+              candidate.requestId === submitted.requestId &&
+              candidate.toolName === "bash_unrestricted",
+          );
+          expect(
+            row,
+            `expected running native background tool: ${JSON.stringify(snapshot.backgroundedTools)}`,
+          ).toBeDefined();
+          expect(row?.awaitMode).toBe("background");
+          expect(row?.childRequestId).toBeNull();
+          expect(row?.lifecycleState).toMatch(/pending|running/i);
+          expect(row?.nativeExecutor).not.toBeNull();
+          return row!;
+        },
+        { timeout: 60_000, interval: 250 },
+      );
+      logTurn(
+        `native background process projected toolCallId=${nativeTool.toolCallId} requestId=${submitted.requestId}`,
+      );
+
+      await openOperationsDrawer(driver);
+      const backgroundPanel = await expectOperationsPanel("background-tools");
+      const row = await waitFor(
+        () => within(backgroundPanel).getByText("bash_unrestricted").closest("tr"),
+        { timeout: 15_000 },
+      );
+      expect(row).not.toBeNull();
+      expect(row).toHaveTextContent("background");
+      expect(row).toHaveTextContent("pid");
+      expect(row).toHaveTextContent("bash_unrestricted");
+      expect(screen.getByRole("tab", { name: "Background" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
     });
   }, 600_000);
 });

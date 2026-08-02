@@ -3,4 +3,4 @@ import type { CommandDenialView } from "./CommandDenialView.js";
 import type { DerivedCancelCauseView } from "./DerivedCancelCauseView.js";
 import type { ToolDetailValueView } from "./ToolDetailValueView.js";
 
-export type RenderedToolCallView = { itemKey: string, toolName: string, status: string | null, statusKind: string, args: ToolDetailValueView | null, result: ToolDetailValueView | null, partialOutputTail?: string | null, partialOutputSeq?: number | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };
+export type RenderedToolCallView = { itemKey: string, toolName: string, status: string | null, statusKind: string, childRequestId?: string | null, awaitMode?: string | null, args: ToolDetailValueView | null, result: ToolDetailValueView | null, partialOutputTail?: string | null, partialOutputSeq?: number | null, denial?: CommandDenialView | null, cancelCause?: DerivedCancelCauseView | null, };

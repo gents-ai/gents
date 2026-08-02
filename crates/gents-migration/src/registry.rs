@@ -253,7 +253,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY,
-        "bafyreidvqhhvvodkcn5eus7qams2fzsivj4t56x2ztihxybyxxtvth3k5a"
+        "bafyreib3nckkjgeabgwk7uy2h4xc7ztmivf7qkrfzghrjpln6ze4i6e52m"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MEMORY_NAME,
@@ -293,7 +293,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreiee2kapqft4xy73z2eyavwcgr2cwvz5now65dhq7inpuwaet6vteq"
+        "bafyreidm25txacrwuypexjpvvxqyekewsw352ftqjohsf267cvlsklxu4y"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -323,7 +323,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreifgbfkl6ticsz3bhgpt2blojeexb7hmu7vybtmanglcnbem2kubsq"
+        "bafyreihjkmrocfh7zk5wl5hloawnerbalu6d5e7ovx5kod4kcb7yopbsui"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,

@@ -87,6 +87,26 @@ async fn fetch_backend_probe_row(
     (probe_status, last_probe)
 }
 
+async fn wait_for_backend_probe_status(
+    node: &defra_node::EmbeddedNode,
+    backend_id: &str,
+    expected_status: &str,
+) -> (String, Option<String>) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = fetch_backend_probe_row(node, backend_id).await;
+        if row.0 == expected_status {
+            return row;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for InferenceBackend {backend_id} to reach \
+             probe_status={expected_status}, last row={row:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     let node = test_node().await;
@@ -125,7 +145,7 @@ async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
     assert_eq!(status.last_reconcile_result, "startup");
     assert!(status.last_reconcile_error.is_empty());
     let (probe_status, last_probe) =
-        fetch_backend_probe_row(node.as_ref(), "backend-startup-probe").await;
+        wait_for_backend_probe_status(node.as_ref(), "backend-startup-probe", "healthy").await;
     assert_eq!(probe_status, "healthy");
     assert!(
         last_probe.is_some(),

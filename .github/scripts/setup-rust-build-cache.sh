@@ -27,7 +27,19 @@ echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 
 sccache --version
-if ! sccache --start-server; then
-  echo "::notice::sccache server was already starting or running; verifying connectivity."
-  sccache --show-stats >/dev/null
+# Studio runners share a long-lived sccache daemon across jobs. A prior job that
+# cleaned its workdir can leave the daemon with a dead cwd, which surfaces as
+# "Couldn't determine current working directory" / missing dep-info files mid
+# compile. Always recycle the server so each job starts from a live process.
+if sccache --stop-server >/dev/null 2>&1; then
+  echo "Stopped existing sccache server."
+else
+  echo "No sccache server was running (or stop failed); starting fresh."
 fi
+# Brief settle so the old process releases the port / lock before we restart.
+sleep 1
+if ! sccache --start-server; then
+  echo "::error::Failed to start sccache server after recycle."
+  exit 1
+fi
+sccache --show-stats >/dev/null

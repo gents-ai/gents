@@ -702,7 +702,8 @@ pub(crate) async fn append_background_tool_completion(
                     render_tool_completion(tool_call_id, tool_name, status, result, reason);
                 let notification_request_id =
                     background_completion_notification_request_id(tool_call_id);
-                let sequence = session::append_message_with_key_and_requester_did(
+                let notification_message_key = format!("{notification_request_id}:tool");
+                let (sequence, created) = session::append_message_once_with_key_and_requester_did(
                     node,
                     parent_session_id,
                     &parent_request.agent_did,
@@ -711,12 +712,12 @@ pub(crate) async fn append_background_tool_completion(
                     &notification,
                     None,
                     Some(&notification_request_id),
-                    &notification_request_id,
+                    &notification_message_key,
                     None,
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
-                (timestamp, true)
+                (timestamp, created)
             }
         };
 
@@ -725,6 +726,13 @@ pub(crate) async fn append_background_tool_completion(
         .await?
         .is_some()
     {
+        mark_background_tool_notification_delivered(
+            node,
+            &parent_request.agent_did,
+            parent_request_id,
+            tool_call_id,
+        )
+        .await?;
         mark_background_tool_completion_side_effects_done(node, parent_session_id, tool_call_id)
             .await?;
         return Ok(());
@@ -744,6 +752,13 @@ pub(crate) async fn append_background_tool_completion(
         },
     )
     .await?;
+    mark_background_tool_notification_delivered(
+        node,
+        &parent_request.agent_did,
+        parent_request_id,
+        tool_call_id,
+    )
+    .await?;
     mark_background_tool_completion_side_effects_done(node, parent_session_id, tool_call_id)
         .await?;
 
@@ -755,6 +770,40 @@ pub(crate) async fn append_background_tool_completion(
             "appended background tool completion notification"
         );
     }
+    Ok(())
+}
+
+async fn mark_background_tool_notification_delivered(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    parent_request_id: &str,
+    tool_call_id: &str,
+) -> Result<()> {
+    let agent_did = escape_graphql_string(agent_did);
+    let parent_request_id = escape_graphql_string(parent_request_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let delivered_at = escape_graphql_string(&Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    request_id: {{ _eq: "{parent_request_id}" }},
+                    tool_call_id: {{ _eq: "{tool_call_id}" }},
+                    completion_notification_delivered_at: {{ _eq: null }}
+                }},
+                input: {{
+                    completion_notification_delivered_at: "{delivered_at}"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    crate::session::execute_mutation_with_retry(
+        node,
+        &mutation,
+        "mark_background_tool_notification_delivered",
+    )
+    .await?;
     Ok(())
 }
 
@@ -856,7 +905,8 @@ async fn ensure_projection_side_effects(
                 let notification = render_notification(edge, status, summary);
                 let notification_request_id =
                     background_completion_notification_request_id(&edge.child_request_id);
-                let sequence = session::append_message_with_requester_did(
+                let notification_message_key = format!("{notification_request_id}:subagent");
+                let (sequence, created) = session::append_message_once_with_key_and_requester_did(
                     node,
                     parent_session_id,
                     &parent_request.agent_did,
@@ -865,10 +915,12 @@ async fn ensure_projection_side_effects(
                     &notification,
                     None,
                     Some(&notification_request_id),
+                    &notification_message_key,
+                    None,
                 )
                 .await?;
                 let timestamp = load_message_timestamp(node, parent_session_id, sequence).await?;
-                (sequence, timestamp, true)
+                (sequence, timestamp, created)
             }
         };
 

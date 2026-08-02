@@ -3,5 +3,6 @@ import type { GoalView } from "./GoalView.js";
 import type { PendingTurnView } from "./PendingTurnView.js";
 import type { RenderedTimelineItem } from "./RenderedTimelineItem.js";
 import type { ResponseView } from "./ResponseView.js";
+import type { RetryEligibilityView } from "./RetryEligibilityView.js";
 
-export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, latestResponse: ResponseView | null, activeResponseOverlay: ResponseView | null, pendingTurn: PendingTurnView | null, timelineItems: Array<RenderedTimelineItem>, };
+export type DesktopSessionSnapshot = { sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestResponse: ResponseView | null, activeResponseOverlay: ResponseView | null, pendingTurn: PendingTurnView | null, timelineItems: Array<RenderedTimelineItem>, };

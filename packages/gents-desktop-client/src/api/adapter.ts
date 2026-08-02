@@ -149,6 +149,10 @@ export function createDesktopApiAdapter(
       invokeDesktop<RequestResendResult>("desktop_request_resend", {
         requestId,
       }),
+    retryRequest: (requestId) =>
+      invokeDesktop<ChatSendResult>("desktop_request_retry", {
+        requestId,
+      }),
     saveAgentConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
         request,

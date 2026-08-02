@@ -37,7 +37,7 @@ pub use fork::{
 pub use history::load_history;
 #[allow(unused_imports)]
 pub(crate) use history::{
-    append_message_with_key_and_requester_did, append_message_with_requester_did,
+    append_message_once_with_key_and_requester_did, append_message_with_requester_did,
     mark_response_materialized, message_sequence_for_request_content, save_message,
     save_message_with_requester_did,
 };
@@ -52,6 +52,9 @@ pub(crate) use sessions::{
     max_sequence,
 };
 
+/// Render an immutable requester route key for a document create branch.
+/// Ordinary local lineage leaves the field null by omitting it; remote child
+/// lineage stamps the normalized coordinator DID exactly once.
 pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String {
     requester_did
         .map(str::trim)

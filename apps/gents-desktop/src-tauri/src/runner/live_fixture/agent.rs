@@ -70,11 +70,9 @@ pub(super) async fn spawn_live_agent(
         node_owner.node_arc(),
         identity,
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readwrite(tool_root.clone()).with_cli_tool(cli_tool(
-                "rg",
-                "rg",
-                "Search files with ripgrep",
-            )),
+            tool_ceiling: ToolCeiling::readwrite(tool_root.clone())
+                .with_command_timeout_secs(30)
+                .with_cli_tool(cli_tool("rg", "rg", "Search files with ripgrep")),
             ..Default::default()
         },
     )
@@ -137,8 +135,11 @@ async fn seed_live_behavior_documents(
         enable_file_tools: Some(true),
         file_tools_mode: Some("ReadOnly".to_string()),
         file_tool_root: None,
-        enable_bash: Some(false),
-        bash_mode: Some("ReadOnly".to_string()),
+        // Keep a real native-background lane in the live desktop fixture.  The
+        // Operations rail E2E uses it to observe a `spawn_process` call while
+        // its underlying command is still running.
+        enable_bash: Some(true),
+        bash_mode: Some("Unrestricted".to_string()),
         command_execution_policy: None,
         read_only_command_allowlist: Vec::new(),
         command_allowed_argv_prefixes: Vec::new(),
@@ -148,7 +149,7 @@ async fn seed_live_behavior_documents(
         enable_meta_tools: Some(false),
         allowed_mcp_service_ids: Vec::new(),
         delegate_to: vec![],
-        backgroundable_tool_names: Vec::new(),
+        backgroundable_tool_names: vec!["bash_unrestricted".to_string()],
         enable_memory: Some(false),
         enable_session_history_tool: Some(false),
         enable_context_budget: Some(true),
@@ -236,7 +237,7 @@ async fn seed_live_behavior_documents(
         agent_did: Some(agent_did.to_string()),
         display_name: Some("Live Repo Audit Default".to_string()),
         system_prompt: Some(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user."
+            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks."
                 .to_string(),
         ),
         backend_id: Some(backend_id.clone()),

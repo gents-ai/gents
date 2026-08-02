@@ -4,7 +4,8 @@ mod manage;
 mod setup;
 
 pub use chat::{
-    create_conversation, interrupt_request, rename_conversation, resend_request, retry_request,
+    create_conversation, interrupt_request, rename_conversation, rename_conversation_to_graphql,
+    resend_request, resend_request_to_graphql, retry_request, retry_request_to_graphql,
     submit_request, submit_request_to_graphql, CreatedConversation, SubmitRequestOptions,
     SubmittedRequest,
 };

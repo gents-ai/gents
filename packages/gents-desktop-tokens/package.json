@@ -1,6 +1,6 @@
 {
   "name": "@source-inc/gents-desktop-tokens",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "license": "Apache-2.0",
   "description": "Semantic design tokens for Gents desktop packages",
   "type": "module",

@@ -62,6 +62,7 @@ export async function gotoHarness(page: Page, scenario: HarnessScenario = "defau
           '[data-testid="transcript-panel"]',
           ".config-workspace",
           '[data-testid="error-banner"]',
+          '[data-testid="startup-screen"]',
         ].join(", "),
       )
       .first(),
@@ -125,6 +126,7 @@ export async function primarySurfaceCount(page: Page) {
       '[data-testid="fleet-empty"]',
       '[data-testid="transcript-panel"]',
       ".config-workspace",
+      '[data-testid="startup-screen"]',
     ];
     return selectors.filter((selector) => document.querySelector(selector)).length;
   });

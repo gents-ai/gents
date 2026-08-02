@@ -1,6 +1,17 @@
 ---- MODULE SubagentCompletion ----
 EXTENDS Naturals, FiniteSets, TLC
 
+(***************************************************************************)
+(* Cross-deployment background subagent completion projection.              *)
+(*                                                                         *)
+(* Spec design:                                                            *)
+(*   docs/superpowers/specs/2026-05-12-subagent-completion-cross-          *)
+(*   deployment-tla-design.md (removed from the tree; see git history)     *)
+(*                                                                         *)
+(* Parent bridge rows live on deployment A; child request terminal state   *)
+(* is durable on deployment B; A learns through document-gossip delivery.  *)
+(***************************************************************************)
+
 CONSTANTS
   Deployment,
   ParentDeployment,
@@ -119,6 +130,10 @@ Init ==
   /\ crashCount                = [deployment \in Deployment |-> 0]
   /\ cancelRequested           = [child \in Child |-> FALSE]
 
+(***************************************************************************)
+(* B-side durable child terminal writes.                                   *)
+(***************************************************************************)
+
 PersistChildTerminal(child, terminal) ==
   /\ child \in Child
   /\ terminal \in TerminalKind
@@ -142,6 +157,10 @@ PersistChildTerminal(child, terminal) ==
        crashCount,
        cancelRequested
      >>
+
+(***************************************************************************)
+(* Document-gossip delivery from B to A.                                   *)
+(***************************************************************************)
 
 FreshEventIds(k) ==
   Cardinality(EventId \ eventIdsUsed) >= k
@@ -239,6 +258,10 @@ PersistObservationOnA(obs) ==
        cancelRequested
      >>
 
+(***************************************************************************)
+(* A-side parent bridge projection.                                        *)
+(***************************************************************************)
+
 ProjectedBridgeState(terminal) ==
   IF terminal = "Completed" THEN "Completed" ELSE "Failed"
 
@@ -268,6 +291,10 @@ ProjectTerminal(child) ==
        cancelRequested
      >>
 
+(***************************************************************************)
+(* Durable transcript notification append on A.                            *)
+(***************************************************************************)
+
 AppendNotification(child) ==
   /\ child \in Child
   /\ terminalSource[child] = "ChildProjection"
@@ -290,6 +317,10 @@ AppendNotification(child) ==
        crashCount,
        cancelRequested
      >>
+
+(***************************************************************************)
+(* Parent-session request queue. Background completion never writes here.  *)
+(***************************************************************************)
 
 FreshQueueIds(k) ==
   Cardinality(QueueId \ queueIdsUsed) >= k
@@ -322,46 +353,6 @@ IsUserRequest(row) ==
 HasUserRequest ==
   \E row \in queueRows : IsUserRequest(row)
 
-EnqueueWakeup(child) ==
-  /\ child \in Child
-  /\ notificationDurable[child]
-  /\ ~HasPendingCompletionWakeup
-  /\ \/ /\ \E existing \in queueRows :
-           /\ IsCompletionWakeup(existing)
-           /\ queueRows' =
-                { IF row = existing
-                  THEN [row EXCEPT !.state = "pending"]
-                  ELSE row : row \in queueRows }
-           /\ queueIdsUsed' = queueIdsUsed
-        \/ /\ ~HasCompletionWakeup
-           /\ FreshQueueIds(1)
-           /\ LET id == CHOOSE queueId \in QueueId \ queueIdsUsed : TRUE
-                  row == [
-                    id      |-> id,
-                    session |-> ParentSession,
-                    source  |-> "subagent_completion",
-                    policy  |-> "coalesce",
-                    key     |-> CompletionQueueKey,
-                    state   |-> "pending"
-                  ]
-              IN /\ queueRows' = queueRows \cup {row}
-                 /\ queueIdsUsed' = queueIdsUsed \cup {id}
-  /\ UNCHANGED <<
-       childDurable,
-       childFinalResponseDurable,
-       messages,
-       pendingInboundA,
-       observedDurableA,
-       bridgeState,
-       terminalSource,
-       terminalWriteCount,
-       notificationDurable,
-       eventIdsUsed,
-       dropCount,
-       crashCount,
-       cancelRequested
-     >>
-
 EnqueueUserRequest ==
   /\ ~HasUserRequest
   /\ FreshQueueIds(1)
@@ -392,28 +383,9 @@ EnqueueUserRequest ==
        cancelRequested
      >>
 
-CancelDrain ==
-  /\ HasPendingCompletionWakeup
-  /\ queueRows' =
-       { IF IsPendingCompletionWakeup(row)
-         THEN [row EXCEPT !.state = "drained"]
-         ELSE row : row \in queueRows }
-  /\ UNCHANGED <<
-       childDurable,
-       childFinalResponseDurable,
-       messages,
-       pendingInboundA,
-       observedDurableA,
-       bridgeState,
-       terminalSource,
-       terminalWriteCount,
-       notificationDurable,
-       queueIdsUsed,
-       eventIdsUsed,
-       dropCount,
-       crashCount,
-       cancelRequested
-     >>
+(***************************************************************************)
+(* Parent cancellation winning a completion race.                          *)
+(***************************************************************************)
 
 CancelParent(child) ==
   /\ child \in Child
@@ -436,6 +408,10 @@ CancelParent(child) ==
        dropCount,
        crashCount
      >>
+
+(***************************************************************************)
+(* Crash/recovery abstraction.                                             *)
+(***************************************************************************)
 
 CrashA ==
   /\ crashCount[ParentDeployment] < MaxCrashes
@@ -478,6 +454,10 @@ CrashB ==
        dropCount,
        cancelRequested
      >>
+
+(***************************************************************************)
+(* Safety invariants.                                                      *)
+(***************************************************************************)
 
 DurableChildTerminalOK ==
   \A child \in Child :
@@ -527,24 +507,8 @@ NotificationCausal ==
 QueueIdsTracked ==
   \A row \in queueRows : row.id \in queueIdsUsed
 
-WakeupCoalesced ==
-  \A r1, r2 \in queueRows :
-    /\ r1 # r2
-    /\ IsPendingCompletionWakeup(r1)
-    /\ IsPendingCompletionWakeup(r2)
-    => FALSE
-
-CompletionWakeupUnique ==
-  \A r1, r2 \in queueRows :
-    /\ r1 # r2
-    /\ IsCompletionWakeup(r1)
-    /\ IsCompletionWakeup(r2)
-    => FALSE
-
-WakeupCausal ==
-  \A row \in queueRows :
-    IsPendingCompletionWakeup(row) =>
-      \E child \in Child : notificationDurable[child]
+NoSyntheticCompletionWakeups ==
+  ~HasCompletionWakeup
 
 UserPendingPreserved ==
   \A row \in queueRows :
@@ -574,12 +538,14 @@ Next ==
   \/ \E obs \in pendingInboundA : PersistObservationOnA(obs)
   \/ \E child \in Child : ProjectTerminal(child)
   \/ \E child \in Child : AppendNotification(child)
-  \/ \E child \in Child : EnqueueWakeup(child)
   \/ EnqueueUserRequest
-  \/ CancelDrain
   \/ \E child \in Child : CancelParent(child)
   \/ CrashA
   \/ CrashB
+
+(***************************************************************************)
+(* Fairness and liveness.                                                  *)
+(***************************************************************************)
 
 Fairness ==
   /\ \A child \in Child : WF_vars(EmitTerminalObservation(child))
@@ -587,7 +553,6 @@ Fairness ==
   /\ WF_vars(\E obs \in pendingInboundA : PersistObservationOnA(obs))
   /\ \A child \in Child : WF_vars(ProjectTerminal(child))
   /\ \A child \in Child : WF_vars(AppendNotification(child))
-  /\ \A child \in Child : WF_vars(EnqueueWakeup(child))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -611,14 +576,9 @@ ProjectionNotifies ==
     terminalSource[child] = "ChildProjection"
       ~> notificationDurable[child]
 
-ProjectionWakeupRepresented ==
-  \A child \in Child :
-    notificationDurable[child] ~> HasPendingCompletionWakeup
-
 CompletionProgress ==
   /\ DurableTerminalSettles
   /\ LiveBridgeTerminalProjects
   /\ ProjectionNotifies
-  /\ ProjectionWakeupRepresented
 
 ====

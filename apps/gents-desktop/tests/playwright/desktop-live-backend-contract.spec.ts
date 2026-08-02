@@ -6,7 +6,7 @@ import { expect, gotoLiveHarness, openChat, PEER_ID, test } from "./desktopTest"
 test.describe("desktop live backend harness contract", () => {
   test("reports missing bridge URL as a handled shell error", async ({ page }) => {
     await gotoLiveHarness(page);
-    await expect(page.getByTestId("error-banner")).toContainText(
+    await expect(page.getByTestId("startup-screen")).toContainText(
       "Live desktop harness backend requires bridgeUrl",
     );
   });

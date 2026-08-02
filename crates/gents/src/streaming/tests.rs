@@ -880,3 +880,68 @@ async fn finalize_complete_clears_tail() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+#[tokio::test]
+async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
+    const WRITER_COUNT: usize = 4;
+    const STREAM_COUNT: usize = 24;
+    const WRITES_PER_STREAM: usize = 4;
+
+    let (node, data_path) = build_test_node("parallel-stream-flushes").await;
+    let writers = (0..WRITER_COUNT)
+        .map(|_| {
+            Arc::new(DefraStreamWriter::new(
+                Arc::clone(&node),
+                "did:test:test",
+                Duration::ZERO,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut streams = Vec::with_capacity(STREAM_COUNT);
+    for index in 0..STREAM_COUNT {
+        let writer = Arc::clone(&writers[index % WRITER_COUNT]);
+        let doc_id = writer
+            .begin(
+                &format!("parallel-session-{index}"),
+                &format!("parallel-request-{index}"),
+                "general",
+            )
+            .await
+            .expect("begin parallel stream");
+        streams.push((writer, doc_id));
+    }
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(STREAM_COUNT));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (index, (writer, doc_id)) in streams.iter().cloned().enumerate() {
+        let barrier = Arc::clone(&barrier);
+        tasks.spawn(async move {
+            barrier.wait().await;
+            for write_index in 0..WRITES_PER_STREAM {
+                writer
+                    .write_reasoning(&doc_id, &format!("r{index}-{write_index} "))
+                    .await?;
+                writer
+                    .write_tokens(&doc_id, &format!("t{index}-{write_index} "))
+                    .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        });
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        result
+            .expect("parallel stream task panicked")
+            .expect("parallel stream write must not exhaust conflict retries");
+    }
+
+    for (_, doc_id) in streams {
+        let response = load_response(&node, &doc_id).await;
+        assert_eq!(
+            response["reasoning_progress_seq"].as_u64(),
+            Some(WRITES_PER_STREAM as u64)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&data_path);
+}

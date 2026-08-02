@@ -2,33 +2,7 @@ use super::retry::execute_query_timed;
 use super::rows::AgentMessageRow;
 use super::*;
 use gents_protocol::transcript::decode_persisted_message;
-use std::sync::Arc;
-
-type TranscriptAppendLock = Arc<tokio::sync::Mutex<()>>;
-
-fn transcript_append_lock(session_id: &str) -> TranscriptAppendLock {
-    static LOCKS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
-        >,
-    > = std::sync::OnceLock::new();
-
-    let mut locks = LOCKS
-        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(lock) = locks.get(session_id).and_then(std::sync::Weak::upgrade) {
-        return lock;
-    }
-
-    // Session ownership confines transcript writers to one deployment. The
-    // per-session lock serializes that deployment's owned loop and independent
-    // background-completion tasks without serializing unrelated agents.
-    locks.retain(|_, lock| lock.strong_count() > 0);
-    let lock = Arc::new(tokio::sync::Mutex::new(()));
-    locks.insert(session_id.to_string(), Arc::downgrade(&lock));
-    lock
-}
+use serde_json::Value;
 
 pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<Message>> {
     let escaped_session_id = escape_graphql_string(session_id);
@@ -180,8 +154,6 @@ pub(crate) async fn append_message_with_requester_did(
     reasoning: Option<&str>,
     request_id: Option<&str>,
 ) -> Result<u32> {
-    let append_lock = transcript_append_lock(session_id);
-    let _append_guard = append_lock.lock().await;
     let mut attempts = 0;
     loop {
         attempts += 1;
@@ -215,8 +187,13 @@ pub(crate) async fn append_message_with_requester_did(
     }
 }
 
+/// Append a message exactly once under a caller-owned stable key.
+///
+/// Concurrent writers can reserve the same next sequence or race on the same
+/// key. A successful key winner is authoritative; losers re-read that durable
+/// row and return its sequence without updating its content.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn append_message_with_key_and_requester_did(
+pub(crate) async fn append_message_once_with_key_and_requester_did(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
@@ -227,11 +204,9 @@ pub(crate) async fn append_message_with_key_and_requester_did(
     request_id: Option<&str>,
     message_key: &str,
     preferred_sequence: Option<u32>,
-) -> Result<u32> {
-    let append_lock = transcript_append_lock(session_id);
-    let _append_guard = append_lock.lock().await;
-    if let Some(sequence) = message_sequence_for_key(node, message_key).await? {
-        return Ok(sequence);
+) -> Result<(u32, bool)> {
+    if let Some(sequence) = message_sequence_for_key(node, session_id, message_key).await? {
+        return Ok((sequence, false));
     }
 
     let mut attempts = 0;
@@ -257,20 +232,25 @@ pub(crate) async fn append_message_with_key_and_requester_did(
         )
         .await
         {
-            Ok(()) => return Ok(sequence),
-            Err(error) if attempts < 5 => {
-                if let Some(existing) = message_sequence_for_key(node, message_key).await? {
-                    return Ok(existing);
+            Ok(()) => return Ok((sequence, true)),
+            Err(error) => {
+                if let Some(existing) =
+                    message_sequence_for_key(node, session_id, message_key).await?
+                {
+                    return Ok((existing, false));
+                }
+                if attempts >= 5 {
+                    return Err(error);
                 }
                 tracing::debug!(
-                    session_id = %session_id,
+                    session_id,
+                    message_key,
                     sequence,
                     error = %error,
-                    "keyed AgentMessage append failed; retrying with refreshed sequence"
+                    "keyed append lost a sequence race; retrying"
                 );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            Err(error) => return Err(error),
         }
     }
 }
@@ -285,7 +265,7 @@ async fn message_sequence_exists(
         r#"{{
             AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }}
+                    session_id: {{ _eq: "{escaped_session_id}" }},
                     sequence: {{ _eq: {sequence} }}
                 }},
                 limit: 1
@@ -305,16 +285,24 @@ async fn message_sequence_exists(
         .data
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
-        .and_then(serde_json::Value::as_array)
+        .and_then(Value::as_array)
         .is_some_and(|rows| !rows.is_empty()))
 }
 
-async fn message_sequence_for_key(node: &EmbeddedNode, message_key: &str) -> Result<Option<u32>> {
+async fn message_sequence_for_key(
+    node: &EmbeddedNode,
+    session_id: &str,
+    message_key: &str,
+) -> Result<Option<u32>> {
+    let escaped_session_id = escape_graphql_string(session_id);
     let escaped_message_key = escape_graphql_string(message_key);
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ message_key: {{ _eq: "{escaped_message_key}" }} }},
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    message_key: {{ _eq: "{escaped_message_key}" }}
+                }},
                 limit: 1
             ) {{ sequence }}
         }}"#
@@ -322,18 +310,21 @@ async fn message_sequence_for_key(node: &EmbeddedNode, message_key: &str) -> Res
     let response = execute_query_timed(node, &query, "message_sequence_for_key").await;
     if response.has_errors() {
         anyhow::bail!(
-            "loading AgentMessage sequence for message_key={}: {:?}",
+            "keyed AgentMessage lookup failed for session_id={} message_key={}: {:?}",
+            session_id,
             message_key,
             response.errors
         );
     }
-    let rows: Vec<ToolCallSequenceRow2> = response
+    Ok(response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows.first().map(|row| row.sequence))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("sequence"))
+        .and_then(Value::as_u64)
+        .and_then(|sequence| u32::try_from(sequence).ok()))
 }
 
 /// #497: durable request-scoped dedup. Return the sequence of an already-persisted
@@ -430,12 +421,10 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
-    // A background spawn can terminalize before the owned loop persists its
-    // immediate handle/receipt. Reserve one result position for each such call
-    // so its completion notification cannot overtake the receipt. Foreground
-    // calls are deliberately excluded: their results are allocated as they
-    // complete, including the result of a blocking wait after an independently
-    // appended background-completion notification.
+    // Background spawns reserve one result position after their assistant
+    // turn so an independently appended completion cannot overtake the
+    // immediate receipt. Foreground results do not reserve a position: they
+    // append when the owned loop observes completion.
     let mut counts = std::collections::BTreeMap::<u32, u32>::new();
     for row in rows {
         *counts.entry(row.message_sequence).or_default() += 1;
@@ -474,9 +463,8 @@ async fn create_message(
     // write is not request-scoped (background/fork paths).
     let escaped_request_id = escape_graphql_string(request_id.unwrap_or(""));
     let message_key = message_key
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("{session_id}:{sequence}"));
-    let message_key = escape_graphql_string(&message_key);
+        .map(escape_graphql_string)
+        .unwrap_or_else(|| format!("{escaped_session_id}:{sequence}"));
 
     let mutation = format!(
         r#"mutation {{

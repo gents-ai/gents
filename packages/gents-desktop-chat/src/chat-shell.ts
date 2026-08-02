@@ -24,9 +24,15 @@ export type ChatBlockedReason =
 export type ChatWorkflowState =
   | { kind: "ready" }
   | { kind: "submittingRequest"; agentDid: string; sessionId?: string | null }
-  | { kind: "awaitingObservation"; sessionId: string; requestId: string }
+  | {
+      kind: "awaitingObservation";
+      agentDid: string;
+      sessionId: string;
+      requestId: string;
+    }
   | {
       kind: "turnInProgress";
+      agentDid: string;
       sessionId: string;
       requestId?: string | null;
       turnState: TurnState;
@@ -59,6 +65,51 @@ export type ChatShellProjection = {
   turnState: TurnState | null;
   activeRequestId: string | null;
 };
+
+/**
+ * Commit authoritative projection transitions back into the hook's local
+ * workflow state.
+ *
+ * `projectChatShell` is intentionally pure, but the request id it tracks is
+ * also used to select the next session snapshot. If a terminal projection is
+ * rendered without retiring that local id, the following snapshot refresh can
+ * pin the completed request again and resurrect the interrupt control.
+ */
+export function reconcileProjectedWorkflow(
+  localWorkflow: ChatWorkflowState,
+  projectedWorkflow: ChatWorkflowState,
+): ChatWorkflowState {
+  if (
+    (localWorkflow.kind === "awaitingObservation" ||
+      localWorkflow.kind === "turnInProgress") &&
+    projectedWorkflow.kind === "ready"
+  ) {
+    return projectedWorkflow;
+  }
+
+  if (
+    localWorkflow.kind === "awaitingObservation" &&
+    projectedWorkflow.kind === "turnInProgress" &&
+    localWorkflow.agentDid === projectedWorkflow.agentDid &&
+    localWorkflow.sessionId === projectedWorkflow.sessionId &&
+    localWorkflow.requestId === projectedWorkflow.requestId
+  ) {
+    return projectedWorkflow;
+  }
+
+  if (
+    localWorkflow.kind === "turnInProgress" &&
+    projectedWorkflow.kind === "turnInProgress" &&
+    localWorkflow.agentDid === projectedWorkflow.agentDid &&
+    localWorkflow.sessionId === projectedWorkflow.sessionId &&
+    localWorkflow.requestId === projectedWorkflow.requestId &&
+    localWorkflow.turnState !== projectedWorkflow.turnState
+  ) {
+    return projectedWorkflow;
+  }
+
+  return localWorkflow;
+}
 
 export function isTerminalTurnState(
   turnState?: string | null,
@@ -126,6 +177,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&
+    input.localWorkflow.agentDid === input.selectedAgentDid &&
     (input.selectedSessionId === input.localWorkflow.sessionId ||
       input.session?.sessionId === input.localWorkflow.sessionId)
       ? (input.localWorkflow.requestId ?? null)
@@ -143,8 +195,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
 
   if (input.localWorkflow.kind === "awaitingObservation") {
     const selectedMatches =
-      input.selectedSessionId === input.localWorkflow.sessionId ||
-      input.session?.sessionId === input.localWorkflow.sessionId;
+      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      (input.selectedSessionId === input.localWorkflow.sessionId ||
+        (input.session?.sessionId === input.localWorkflow.sessionId &&
+          input.session.agentDid === input.localWorkflow.agentDid));
     const requestObserved =
       observedLatestRequestId === input.localWorkflow.requestId ||
       pendingRequestId === input.localWorkflow.requestId;
@@ -155,6 +209,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
+          agentDid: input.localWorkflow.agentDid,
           sessionId: input.localWorkflow.sessionId,
           requestId: input.localWorkflow.requestId,
           turnState: observedTurnState,
@@ -169,8 +224,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     }
   } else if (input.localWorkflow.kind === "turnInProgress") {
     const selectedMatches =
-      input.selectedSessionId === input.localWorkflow.sessionId ||
-      input.session?.sessionId === input.localWorkflow.sessionId;
+      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      (input.selectedSessionId === input.localWorkflow.sessionId ||
+        (input.session?.sessionId === input.localWorkflow.sessionId &&
+          input.session.agentDid === input.localWorkflow.agentDid));
 
     if (!selectedMatches) {
       workflow = { kind: "ready" };
@@ -182,6 +239,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         ? { kind: "ready" }
         : {
             kind: "turnInProgress",
+            agentDid: input.localWorkflow.agentDid,
             sessionId: input.localWorkflow.sessionId,
             requestId: input.localWorkflow.requestId,
             turnState: observedTurnState,
@@ -203,6 +261,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
+          agentDid: input.selectedAgentDid,
           sessionId: input.selectedSessionId,
           requestId: activeRequestId,
           turnState: observedTurnState,

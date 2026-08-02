@@ -59,6 +59,7 @@ pub struct ChatSendRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationRenameRequest {
+    pub agent_did: Option<String>,
     pub session_id: String,
     pub title: String,
 }

@@ -47,6 +47,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_conversation_rename,
             tauri_commands::chat::desktop_session_fork,
             tauri_commands::chat::desktop_request_resend,
+            tauri_commands::chat::desktop_request_retry,
             tauri_commands::config::desktop_agent_config_save,
             tauri_commands::config::desktop_behavior_save,
             tauri_commands::config::desktop_skill_save,

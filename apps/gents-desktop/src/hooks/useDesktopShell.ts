@@ -10,6 +10,7 @@ import {
 import {
   isTerminalTurnState,
   projectChatShell,
+  reconcileProjectedWorkflow,
   type ChatWorkflowState,
 } from "@source-inc/gents-desktop-chat";
 import {
@@ -39,6 +40,13 @@ export type DesktopShellBridge = {
   listenToUpdates: DesktopClientUpdatedListenerFactory;
 };
 
+export type DesktopStartupPhase =
+  | "loading-configuration"
+  | "starting-client"
+  | "configuration-error"
+  | "client-error"
+  | "ready";
+
 export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const autostartAttempted = useRef(false);
   const autoRestartInFlight = useRef(false);
@@ -50,8 +58,16 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const snapshotRefreshSeq = useRef(0);
   const sessionRefreshSeq = useRef(0);
   const newConversationAgentRef = useRef<string | null>(null);
+  const startupPhaseRef = useRef<DesktopStartupPhase>("loading-configuration");
+  /** Coalesce concurrent shell start paths (autostart + pair + add-peer). */
+  const startClientInFlight = useRef<Promise<DesktopClientSnapshot | null> | null>(
+    null,
+  );
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const [session, setSession] = useState<DesktopSessionSnapshot | null>(null);
+  const [startupPhase, setStartupPhaseState] = useState<DesktopStartupPhase>(
+    "loading-configuration",
+  );
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -132,6 +148,17 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   );
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
 
+  function setStartupPhase(next: DesktopStartupPhase) {
+    startupPhaseRef.current = next;
+    setStartupPhaseState(next);
+  }
+
+  useEffect(() => {
+    setLocalWorkflow((current) =>
+      reconcileProjectedWorkflow(current, shellProjection.workflow),
+    );
+  }, [shellProjection.workflow]);
+
   const selectedTrackedRequestId =
     trackedRequestIdForSession(selectedSessionId, shellProjection.workflow) ??
     (!isTerminalTurnState(shellProjection.turnState)
@@ -144,16 +171,27 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   async function refreshSnapshot() {
     const refreshSeq = snapshotRefreshSeq.current + 1;
     snapshotRefreshSeq.current = refreshSeq;
+    const resolvingConfiguration = startupPhaseRef.current === "loading-configuration";
     setLoading(true);
     try {
       const next = await api.fetchDesktopSnapshot();
       if (snapshotRefreshSeq.current === refreshSeq) {
         setSnapshot(next);
         setError(null);
+        if (resolvingConfiguration) {
+          setStartupPhase(
+            next.client || next.bootstrap.savedPeers.length === 0
+              ? "ready"
+              : "starting-client",
+          );
+        }
       }
     } catch (err) {
       if (snapshotRefreshSeq.current === refreshSeq) {
         setError(String(err));
+        if (resolvingConfiguration) {
+          setStartupPhase("configuration-error");
+        }
       }
     } finally {
       if (snapshotRefreshSeq.current === refreshSeq) {
@@ -193,17 +231,43 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     }
   }
 
-  async function onStartClient() {
+  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot | null> {
+    if (startClientInFlight.current) {
+      return startClientInFlight.current;
+    }
+
     setStarting(true);
     setError(null);
-    try {
-      const next = await api.startDesktopClient();
-      setSnapshot(next);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setStarting(false);
-    }
+    const pending = (async () => {
+      let started = false;
+      try {
+        const next = await api.startDesktopClient();
+        setSnapshot(next);
+        started = true;
+        return next;
+      } catch (err) {
+        setError(String(err));
+        return null;
+      } finally {
+        if (startupPhaseRef.current === "starting-client") {
+          setStartupPhase(started ? "ready" : "client-error");
+        }
+        startClientInFlight.current = null;
+        setStarting(false);
+      }
+    })();
+    startClientInFlight.current = pending;
+    return pending;
+  }
+
+  async function onStartClient() {
+    await ensureDesktopClientStarted();
+  }
+
+  async function onRetryStartup() {
+    autostartAttempted.current = false;
+    setStartupPhase("loading-configuration");
+    await refreshSnapshot();
   }
 
   async function restartDesktopClient(reason: string) {
@@ -306,6 +370,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   } = createDesktopShellPeerActions({
     api,
     snapshot,
+    ensureDesktopClientStarted,
     setAddingPeer,
     setError,
     setRepairingP2P,
@@ -416,6 +481,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   return {
     snapshot,
     session,
+    startupPhase,
     loading,
     starting,
     stopping,
@@ -427,6 +493,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     runningTask,
     error,
     onDismissError,
+    onRetryStartup,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,

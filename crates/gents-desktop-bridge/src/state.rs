@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use gents_desktop_core::client::{ClientCore, DesktopPaths};
 use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
+use tokio::sync::watch;
 
 use crate::config::{AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy};
 use crate::snapshot::projection::SnapshotGrants;
@@ -19,8 +20,23 @@ pub struct ResolvedBridgePolicy {
     pub snapshot_grants: SnapshotGrants,
 }
 
+/// Outcome of a single-flight `desktop_client_start`.
+///
+/// Concurrent start callers share one in-flight open of the embedded node so a
+/// second `NodeBuilder` cannot race the first for the RocksDB LOCK file.
+#[derive(Debug, Clone)]
+pub enum ClientStartProgress {
+    Pending,
+    Ready,
+    Failed(String),
+}
+
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
+    /// Serializes start *install* / shutdown mutations against bridge state.
+    /// Long-running node open does **not** hold this lock (see single-flight
+    /// `start_inflight` instead) so a cancelled Tauri command cannot drop the
+    /// lock while RocksDB is still opening on a background thread.
     pub client_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
 }
@@ -33,6 +49,10 @@ pub struct DesktopBridge {
     pub codex_login_cancel: Option<codex_login::ShutdownHandle>,
     /// Cancel flag for an in-flight Grok device-code login poll.
     pub grok_login_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Shared progress for an in-flight client start. The sender is owned by
+    /// the detached starter task; waiters hold receivers and do not open a
+    /// second node.
+    pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
 }
 
 impl DesktopAppState {
@@ -43,6 +63,7 @@ impl DesktopAppState {
                 updates_task: None,
                 codex_login_cancel: None,
                 grok_login_cancel: None,
+                start_inflight: None,
             }),
             client_lifecycle: tokio::sync::Mutex::new(()),
             policy,

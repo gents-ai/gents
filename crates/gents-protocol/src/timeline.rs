@@ -2,8 +2,8 @@
 //!
 //! Every client shell — desktop today, mobile next — must render a session's
 //! transcript in the **same order**, interleaving assistant/user messages with
-//! their tool groups, placing the pending turn, appending orphan tool groups,
-//! and the live-assistant overlay last. The *order and the message↔tool-group
+//! their tool groups, placing the pending turn, and ordering orphan tool groups
+//! around the live-assistant overlay. The *order and the message↔tool-group
 //! partition* are semantics; only the pixels are presentation.
 //!
 //! That ordering used to live only in the desktop Tauri bridge
@@ -20,15 +20,35 @@ pub enum TimelineRole {
     Assistant,
 }
 
+/// The ordering-relevant projection of one transcript message.
+///
+/// A shell fills this from its rich view; the skeleton reads only these fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMessageInput {
+    /// Stable identity for first-wins dedup (the desktop `message_key`).
     pub key: String,
     /// Ordering key and tool-group attach key. `None` sorts first, matching the
     /// `BTreeMap<Option<i64>, _>` grouping the desktop bridge uses.
     pub sequence: Option<i64>,
     pub role: TimelineRole,
+    /// Whether this message contributes a visible message slot. A message can
+    /// survive dedup, emit no slot (e.g. a user turn with no rendered content),
+    /// and still own a tool group — so this is separate from dedup.
     pub emits_item: bool,
+    /// Opaque secondary dedup token (the desktop presentation key). `None` opts
+    /// out of presentation dedup. The skeleton only compares tokens for
+    /// equality — it never inspects content, so it stays presentation-neutral.
     pub dedup_token: Option<String>,
+}
+
+/// Where the live-assistant overlay belongs relative to orphan tool groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayPlacement {
+    /// Append the overlay after every orphan tool group.
+    Tail,
+    /// Insert the overlay immediately before the orphan group belonging to the
+    /// active, still-unmaterialized assistant turn.
+    BeforeOrphan { message_sequence: Option<i64> },
 }
 
 /// The live-assistant overlay's ordering-relevant state.
@@ -37,8 +57,11 @@ pub struct OverlayInput {
     /// True when the overlay's content equals the trailing assistant message
     /// already in the timeline — in which case it must NOT be re-emitted.
     pub matches_trailing_assistant: bool,
+    pub placement: OverlayPlacement,
 }
 
+/// One ordered slot. A shell maps each to its rich, platform-specific item;
+/// the *order and identity* of the slots is the shared contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimelineSlot {
     Message {
@@ -65,6 +88,24 @@ fn sequence_lt(left: Option<i64>, right: Option<i64>) -> bool {
     }
 }
 
+/// Build the canonical timeline slot order (#608).
+///
+/// `messages` are the already-content-filtered transcript messages in arbitrary
+/// order (the shell decides which messages are worth showing — that is
+/// presentation). `group_sequences` are the `message_sequence` keys that have
+/// at least one tool call. `has_pending` / `overlay` gate the two tail slots.
+///
+/// Discipline, mirrored by `ClientShell.Timeline.buildOrder`:
+/// 1. sort messages by `sequence` (None first),
+/// 2. first-wins dedup by `key`, then by `dedup_token`,
+/// 3. each surviving message emits its slot (if `emits_item`) immediately
+///    followed by its tool group (if it owns one), marking that group attached,
+/// 4. the pending turn,
+/// 5. orphan tool groups — those attached to no surviving message — in sequence
+///    order, inserting the overlay immediately before the specifically targeted
+///    active group when it owns a still-running, unmaterialized tool turn,
+/// 7. otherwise the overlay at the tail, iff present and not a duplicate of the
+///    trailing assistant.
 pub fn build_timeline_order(
     messages: &[TimelineMessageInput],
     group_sequences: &[Option<i64>],
@@ -129,16 +170,24 @@ pub fn build_timeline_order(
         }
     });
     orphans.dedup();
+    let show_overlay = overlay.is_some_and(|overlay| !overlay.matches_trailing_assistant);
+    let target_orphan = overlay.and_then(|overlay| match overlay.placement {
+        OverlayPlacement::Tail => None,
+        OverlayPlacement::BeforeOrphan { message_sequence } => Some(message_sequence),
+    });
+    let mut overlay_placed = false;
     for sequence in orphans {
+        if show_overlay && !overlay_placed && target_orphan == Some(sequence) {
+            slots.push(TimelineSlot::Overlay);
+            overlay_placed = true;
+        }
         slots.push(TimelineSlot::ToolGroup {
             message_sequence: sequence,
         });
     }
 
-    if let Some(overlay) = overlay {
-        if !overlay.matches_trailing_assistant {
-            slots.push(TimelineSlot::Overlay);
-        }
+    if show_overlay && !overlay_placed {
+        slots.push(TimelineSlot::Overlay);
     }
 
     slots
@@ -207,7 +256,8 @@ mod tests {
     }
 
     /// Lean `overlay_shown_iff` + `overlay_is_last`: the overlay is emitted iff
-    /// present and not a duplicate of the trailing assistant, and it is last.
+    /// present and not a duplicate of the trailing assistant, and remains last
+    /// when no running orphan tool requires early placement.
     #[test]
     fn overlay_is_shown_conditionally_and_last() {
         let messages = vec![msg("a", 0, TimelineRole::Assistant)];
@@ -219,6 +269,7 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: false,
+                placement: OverlayPlacement::Tail,
             }),
         );
         assert_eq!(
@@ -233,6 +284,7 @@ mod tests {
             true,
             Some(OverlayInput {
                 matches_trailing_assistant: true,
+                placement: OverlayPlacement::Tail,
             }),
         );
         assert!(
@@ -242,6 +294,101 @@ mod tests {
 
         let absent = build_timeline_order(&messages, &groups, true, None);
         assert!(!absent.contains(&TimelineSlot::Overlay));
+    }
+
+    #[test]
+    fn overlay_precedes_orphan_groups_for_running_unmaterialized_tool_turn() {
+        let messages = vec![msg("user", 0, TimelineRole::User)];
+        let groups = vec![Some(1)];
+        let slots = build_timeline_order(
+            &messages,
+            &groups,
+            true,
+            Some(OverlayInput {
+                matches_trailing_assistant: false,
+                placement: OverlayPlacement::BeforeOrphan {
+                    message_sequence: Some(1),
+                },
+            }),
+        );
+
+        let overlay_pos = slots
+            .iter()
+            .position(|slot| matches!(slot, TimelineSlot::Overlay))
+            .expect("overlay");
+        let tool_pos = slots
+            .iter()
+            .position(|slot| {
+                matches!(
+                    slot,
+                    TimelineSlot::ToolGroup {
+                        message_sequence: Some(1)
+                    }
+                )
+            })
+            .expect("orphan tool group");
+        assert!(
+            overlay_pos < tool_pos,
+            "live reasoning must precede its running orphan tool group: {slots:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_preserves_earlier_terminal_orphans_before_active_target() {
+        let messages = vec![msg("user", 0, TimelineRole::User)];
+        let groups = vec![Some(1), Some(2)];
+        let slots = build_timeline_order(
+            &messages,
+            &groups,
+            true,
+            Some(OverlayInput {
+                matches_trailing_assistant: false,
+                placement: OverlayPlacement::BeforeOrphan {
+                    message_sequence: Some(2),
+                },
+            }),
+        );
+
+        assert_eq!(
+            slots,
+            vec![
+                TimelineSlot::Message {
+                    key: "user".to_string(),
+                    sequence: Some(0),
+                    role: TimelineRole::User,
+                },
+                TimelineSlot::Pending,
+                TimelineSlot::ToolGroup {
+                    message_sequence: Some(1),
+                },
+                TimelineSlot::Overlay,
+                TimelineSlot::ToolGroup {
+                    message_sequence: Some(2),
+                },
+            ],
+            "historical orphan tools must stay before live reasoning"
+        );
+    }
+
+    #[test]
+    fn overlay_follows_terminal_orphan_groups() {
+        let messages = vec![msg("user", 0, TimelineRole::User)];
+        let groups = vec![Some(1)];
+        let slots = build_timeline_order(
+            &messages,
+            &groups,
+            true,
+            Some(OverlayInput {
+                matches_trailing_assistant: false,
+                placement: OverlayPlacement::Tail,
+            }),
+        );
+
+        assert_eq!(
+            slots.last(),
+            Some(&TimelineSlot::Overlay),
+            "the next live assistant turn must follow terminal orphan tools: {slots:?}"
+        );
     }
 
     /// Lean `pending_shown_iff`: the pending turn appears iff a turn is pending,

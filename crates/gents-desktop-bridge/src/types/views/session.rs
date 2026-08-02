@@ -33,6 +33,8 @@ pub struct ToolCallView {
     pub result: Option<String>,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
+    pub child_request_id: Option<String>,
+    pub await_mode: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -83,6 +85,12 @@ pub struct RenderedToolCallView {
     pub tool_name: String,
     pub status: Option<String>,
     pub status_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub child_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub await_mode: Option<String>,
     pub args: Option<ToolDetailValueView>,
     pub result: Option<ToolDetailValueView>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -200,6 +208,13 @@ pub struct GoalView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct RetryEligibilityView {
+    pub eligible: bool,
+    pub denial_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSnapshot {
     pub session_id: String,
     pub agent_did: Option<String>,
@@ -210,6 +225,7 @@ pub struct DesktopSessionSnapshot {
     pub goal: Option<GoalView>,
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
+    pub retry_eligibility: RetryEligibilityView,
     pub latest_response: Option<ResponseView>,
     pub active_response_overlay: Option<ResponseView>,
     pub pending_turn: Option<PendingTurnView>,

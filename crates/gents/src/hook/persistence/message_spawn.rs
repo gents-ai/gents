@@ -156,7 +156,7 @@ impl DefraSessionHook {
             if !matches!(message, Message::User { .. }) {
                 anyhow::bail!("only user tool-result messages may carry a message key");
             }
-            let sequence = session::append_message_with_key_and_requester_did(
+            let (sequence, _) = session::append_message_once_with_key_and_requester_did(
                 &self.node,
                 &session_id,
                 &self.agent_did,
