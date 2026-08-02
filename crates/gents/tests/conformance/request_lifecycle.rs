@@ -335,6 +335,129 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     assert_eq!(recovery_reachable_count, 3);
 }
 
+/// Persisted `(status, lifecycle_state)` pair for a terminal request, mirroring
+/// the bridge documented in `proofs/README.md`: terminal work carries a terminal
+/// `lifecycle_state`, and `failed` is persisted with `status="error"`.
+fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
+    match lifecycle_state {
+        "completed" => ("completed", "completed"),
+        "failed" => ("error", "failed"),
+        "superseded" => ("superseded", "superseded"),
+        "dead" => ("dead", "dead"),
+        "interrupted" => ("interrupted", "interrupted"),
+        other => panic!("not a terminal lifecycle_state: {other}"),
+    }
+}
+
+async fn force_terminal_persisted_state(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    lifecycle_state: &str,
+) {
+    let (status, lifecycle_state) = terminal_persisted_pair(lifecycle_state);
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "forcing terminal persisted state failed: {:?}",
+        resp.errors
+    );
+}
+
+/// S1 (`terminal_irreversibility`) asserted against PRODUCTION writers rather
+/// than against the writer inventory at the top of this file.
+///
+/// This models the race the persisted CAS filters exist for: this runtime still
+/// holds a live `RequestLifecycle` that believes it owns the request, while
+/// another actor — a recovery sweep, a replicated peer, an operator interrupt —
+/// has already terminalized the row. Every terminal writer must leave the
+/// persisted document untouched, so no `terminal -> *` edge is reachable.
+///
+/// Unlike the `illegal` branch of the generated-case test (which consults the
+/// hand-written inventory and so cannot see an unlisted writer), this drives the
+/// real writers and asserts on persisted state. Extending the same treatment to
+/// the whole illegal partition is #994.
+#[tokio::test]
+async fn terminal_persisted_requests_reject_every_live_lifecycle_writer() {
+    const TERMINAL_STATES: [&str; 5] = [
+        "completed",
+        "failed",
+        "superseded",
+        "dead",
+        "interrupted",
+    ];
+    const WRITERS: [&str; 4] = ["complete", "fail", "interrupt", "advance"];
+
+    for terminal in TERMINAL_STATES {
+        let db = test_db(&format!("terminal-irreversibility-{terminal}")).await;
+
+        for writer in WRITERS {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let created_at = chrono::Utc::now().to_rfc3339();
+            let doc_id =
+                create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+            let mut lifecycle = request_lifecycle_for_case(
+                &db,
+                doc_id.clone(),
+                request_id.clone(),
+                session_id.clone(),
+                created_at.clone(),
+            );
+
+            // Take real ownership first, so the local state machine permits the
+            // call and the persisted CAS filter is what actually decides.
+            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+            lifecycle.prepare_session_with_identity().await.unwrap();
+            if writer == "advance" {
+                lifecycle.begin_execution().await.unwrap();
+                let response_doc_id = create_response_with_status(
+                    &db.node,
+                    &format!("resp-{request_id}"),
+                    &request_id,
+                    &session_id,
+                    "streaming",
+                )
+                .await;
+                lifecycle.set_response_doc_id(&response_doc_id);
+            }
+
+            // Another actor terminalizes the row underneath the live lifecycle.
+            force_terminal_persisted_state(&db.node, &doc_id, terminal).await;
+
+            // The writer may return Ok (no rows matched) or Err; the contract is
+            // about the persisted document, not the return value.
+            let _ = match writer {
+                "complete" => lifecycle.complete().await,
+                "fail" => lifecycle.fail().await,
+                "interrupt" => lifecycle.transition_to_interrupted().await,
+                "advance" => lifecycle.advance().await,
+                other => panic!("unhandled writer {other}"),
+            };
+
+            let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+            let (expected_status, expected_lifecycle_state) = terminal_persisted_pair(terminal);
+            assert_eq!(
+                snap.lifecycle_state, expected_lifecycle_state,
+                "writer {writer} moved a persisted {terminal} request to {} — terminal states must be irreversible (S1)",
+                snap.lifecycle_state
+            );
+            assert_eq!(
+                snap.status, expected_status,
+                "writer {writer} changed the persisted status of a {terminal} request"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn interactive_claim_snapshot_matches_claimed_waiting() {
     let db = test_db("interactive-claim").await;
