@@ -39,10 +39,17 @@ The load-bearing facts are:
   every terminal outcome — including the queued-persist failure path —
   contributes zero to both counters (the S9 analog for in-memory bookkeeping).
 
+The model's `release` action drops the permit and in-flight contributions
+atomically. Rust refines that edge by returning the semaphore permit
+*before* decrementing `in_flight` on every release path — the release can
+synchronously install a replacement controller, so the reverse order would
+let a drained controller briefly hold an outstanding permit.
+
 No contract JSON is emitted for this module; the Rust fence is
 `crates/gents/src/admission/tests.rs`
 (`queued_persist_failure_releases_queue_capacity`,
-`assigned_permit_is_visible_to_drain_detection`), which drives the real
+`assigned_permit_is_visible_to_drain_detection`,
+`drained_signal_implies_permit_returned`), which drives the real
 controller through these paths and asserts the modeled contributions.
 -/
 

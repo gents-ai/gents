@@ -1332,3 +1332,60 @@ async fn assigned_permit_is_visible_to_drain_detection() {
         "released admission must drain the controller"
     );
 }
+
+/// Issue #1001 review follow-up: the drained signal must imply the semaphore
+/// permit is already returned. `release_in_flight` can synchronously install
+/// a replacement controller (`controller_drained` → `install_pending_if_ready`),
+/// so if the permit outlived the release, a fresh full-capacity controller
+/// could coexist with an outstanding old permit — and the window is unbounded
+/// because `AdmissionPermit::drop` locks the terminal-failure observer after
+/// the release. Holding that lock from the test stalls the drop mid-body
+/// deterministically. Lean:
+/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
+#[tokio::test]
+async fn drained_signal_implies_permit_returned() {
+    let node = test_node().await;
+    let controller = super::controller::BackendAdmissionController::new(
+        1,
+        config("backend-drain-order", 1, 4),
+        std::sync::Weak::new(),
+    );
+    let observer: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+
+    let permit = controller
+        .clone()
+        .acquire(
+            node.clone(),
+            pending_call("req-drain-order-a", "backend-drain-order"),
+            None,
+            Some(observer.clone()),
+        )
+        .await
+        .expect("admission fills the only slot");
+    controller.close();
+
+    // Stall the drop after its in-flight release point: the drop body locks
+    // the observer before it finishes, and the permit field cannot be
+    // destroyed until the body returns.
+    let stall = observer.lock().unwrap();
+    let dropper = std::thread::spawn(move || drop(permit));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !controller.is_drained() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "permit drop never released the in-flight unit"
+        );
+        std::thread::yield_now();
+    }
+
+    assert_eq!(
+        controller.available_permits_for_test(),
+        1,
+        "drained controller must hold no outstanding semaphore permits (#1001)"
+    );
+
+    drop(stall);
+    dropper.join().expect("permit drop thread");
+    assert_eq!(controller.available_permits_for_test(), 1);
+    assert!(controller.is_drained());
+}

@@ -12,7 +12,7 @@ use super::stream_guard::StreamGuardLifecycle;
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
     controller: Arc<BackendAdmissionController>,
-    _permit: OwnedSemaphorePermit,
+    permit: Option<OwnedSemaphorePermit>,
     call: InferenceCallRecord,
     _doc_id: String,
     terminal: Option<PermitTerminal>,
@@ -41,7 +41,7 @@ impl AdmissionPermit {
         Self {
             node,
             controller,
-            _permit: permit,
+            permit: Some(permit),
             call,
             _doc_id: doc_id,
             terminal: None,
@@ -132,6 +132,13 @@ impl StreamGuardLifecycle for AdmissionPermit {
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
+        // Return the semaphore permit before the in-flight release: the
+        // release can synchronously install a replacement controller, and a
+        // drained controller must hold no outstanding permits (#1001; Lean
+        // `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`).
+        // Field drop runs only after this body — including the observer lock
+        // below — so the permit must be taken explicitly here.
+        drop(self.permit.take());
         self.controller.release_in_flight();
         if self.finished {
             return;

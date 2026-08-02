@@ -219,6 +219,8 @@ impl BackendAdmissionController {
         // write; that is intentional — queued rows hold no reconstructed slot
         // and the startup inference-call sweep terminalizes them.
         if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
+            // Permit before in-flight release, as in `start_permit`.
+            drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
         }
         in_flight.disarm();
@@ -242,7 +244,16 @@ impl BackendAdmissionController {
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        let doc_id = persist_call_started(node.clone(), &call).await?;
+        let doc_id = match persist_call_started(node.clone(), &call).await {
+            Ok(doc_id) => doc_id,
+            Err(error) => {
+                // Return the permit before `in_flight` drops and releases:
+                // parameters drop in reverse declaration order, which would
+                // otherwise let a drained signal precede the permit return.
+                drop(permit);
+                return Err(error);
+            }
+        };
         in_flight.disarm();
         Ok(AdmissionPermit::new(
             node,
@@ -311,6 +322,10 @@ impl BackendAdmissionController {
 impl BackendAdmissionController {
     pub(super) fn queue_waiters_for_test(&self) -> usize {
         self.waiters.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn available_permits_for_test(&self) -> usize {
+        self.semaphore.available_permits()
     }
 }
 
