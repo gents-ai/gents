@@ -179,6 +179,24 @@ private def witnessTranscripts : List (String × List ProviderRow) :=
       [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)
           [Item.call 1, Item.other 5, Item.text 6]
       , toolResult 1 1 ])
+  , -- Empty messages: Rust drops them, asymmetrically across the two stages
+    -- (an empty user message goes in stage 1, an empty assistant message is
+    -- carried through and pruned in stage 2). The row-only model kept both.
+    ("empty-messages-are-dropped",
+      [ mkRow 0 .assistant .ordinary []
+      , mkRow 1 .user .ordinary []
+      , userText 2 0 ])
+  , -- An empty message does *not* end the active turn: Rust clears pending
+    -- calls only on plain content. The pair must survive it intact.
+    ("empty-message-does-not-break-an-open-turn",
+      [ assistantCalls 0 [1]
+      , mkRow 1 .user .ordinary []
+      , toolResult 2 1 ])
+  , ("empty-assistant-message-between-paired-turns",
+      [ assistantCalls 0 [1]
+      , toolResult 1 1
+      , mkRow 2 .assistant .ordinary []
+      , userText 3 0 ])
   , ("interleaved-blocks",
       [ assistantCalls 0 [1]
       , toolResult 1 1
@@ -197,6 +215,30 @@ emitted call ids off the content, and it is the hypothesis
 theorem witnessesAreCoherent :
     ∀ witness ∈ witnessTranscripts, PromptAssembly.Provider.AllCoherent witness.2 := by
   decide
+
+/-- The *other* premise of `Provider.sanitizeForProvider_sound` and
+`_idempotent`. Without this the contract's claim — that production reproducing
+an emitted output thereby inherits provider-validity — does not actually follow,
+because the theorem would be quantified over inputs the witnesses need not
+satisfy. Checked by `decide`, so a witness that reuses a call id across rows
+fails the build. -/
+theorem witnessesHaveUniqueCallIds :
+    ∀ witness ∈ witnessTranscripts,
+      PromptAssembly.UniqueCallIds
+        (PromptAssembly.Provider.project witness.2) := by
+  decide
+
+/-- Both premises together, so the soundness the emitted rows rest on is
+discharged for every witness rather than asserted in a comment. -/
+theorem witnessOutputsAreProviderValid :
+    ∀ witness ∈ witnessTranscripts,
+      PromptAssembly.ProviderValid
+        (PromptAssembly.Provider.project
+          (PromptAssembly.Provider.sanitizeForProvider witness.2)) := by
+  intro witness hwitness
+  exact PromptAssembly.Provider.sanitizeForProvider_sound
+    (witnessesHaveUniqueCallIds witness hwitness)
+    (witnessesAreCoherent witness hwitness)
 
 private def splitCases (rows : List ProviderRow) : List PromptAssemblySplitCase :=
   (List.range (rows.length + 1)).map fun index =>

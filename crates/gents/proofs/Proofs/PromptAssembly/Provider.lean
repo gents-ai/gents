@@ -40,7 +40,57 @@ it.
 the provider-bound history. So `filterCallsByP` below adopts Rust's rule — keep
 the row when non-call content survives, demoting its kind to `.ordinary` — and
 soundness is re-proven against it. `sanitize` and its theorems are left
-untouched; `refines_sanitize` relates the two.
+untouched; `project_sanitizeForProvider_eq_sanitize` relates the two.
+
+## Empty messages
+
+The same enrichment exposed a second divergence. Rust drops empty messages, and
+does it asymmetrically: `drop_orphaned_tool_results` pushes a user message only
+when content survives, while assistant messages ride through and are pruned by
+`drop_unpaired_tool_calls`. The row-only model has no notion of an empty message
+and kept every `.ordinary` row. `emptyUserRow` / `emptyAssistantRow` model the
+two prunes, `NonDegenerate` names the invariant they establish, and the fixpoint
+theorems take it as a hypothesis — an input still carrying an empty row is not a
+fixpoint, because sanitizing it removes that row.
+
+## Model boundary: call-occurrence multiplicity
+
+`MessageKind.assistantToolCalls` carries a `Finset ToolCallId`, so the row model
+cannot express the *same* call id appearing twice in one turn: two occurrences
+and one collapse to the same row. `Coherent` inherits that blindness, equating a
+content list's call *set* with `callIds`.
+
+This is a genuine limit, not an oversight, and it is why the model did not catch
+the duplicate-key defect fixed alongside this file: Rust paired through a
+`HashSet`, so a turn announcing the same id twice was closed by a single result
+while both calls survived — provider-invalid output from the function whose job
+is to prevent exactly that. `drop_unpaired_tool_calls` now drops duplicate
+occurrences within a turn, which restores the correspondence by making the set
+abstraction *true* of production output rather than merely assumed.
+
+Modeling multiplicity properly would mean replacing `Finset` in the shared
+`Transcript.MessageKind`, which every pairing theorem in `Transcript` and
+`PairingReconcile` is stated over. That is a larger change than this one. The
+occurrence-level behaviour is fenced in Rust instead, by
+`compaction::tests::duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call`
+and `::call_key_reuse_across_turns_survives`.
+
+## Model boundary: global vs per-turn resolution
+
+`resolvedInP` is a single set over the whole transcript, while Rust scopes
+resolution to the *active turn* (`resolved_keys_per_turn`). The two coincide
+exactly under `UniqueCallIds` — the hypothesis of `sanitizeForProvider_sound`,
+which forbids a call id announced by one turn from appearing anywhere in the
+rest — so the model and production agree on every input the theorems speak
+about, and `witnessesHaveUniqueCallIds` discharges that for every emitted
+witness.
+
+They diverge only when an id is *reused across turns*, which `UniqueCallIds`
+excludes but arbitrary loaded history does not. A global set lets an earlier
+turn's result resolve a later turn's reuse, stranding a dangling call — the
+second defect review found. Rust must be correct without the precondition, so it
+scopes per turn; the reused-id shape is fenced by
+`compaction::tests::incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first`.
 -/
 
 namespace PromptAssembly.Provider
@@ -76,8 +126,92 @@ instance (pr : ProviderRow) : Decidable (Coherent pr) := by
   unfold Coherent
   cases pr.row.kind <;> infer_instance
 
+/-- `UniqueCallIds` is the other premise of `sanitizeForProvider_sound`. Making
+it decidable lets the contract witnesses discharge it by `decide`, so a witness
+that reuses a call id fails the build rather than silently voiding the soundness
+claim the emitted rows rest on. -/
+instance decidableDisjointCallIds (s t : Finset ToolExecution.ToolCallId) :
+    Decidable (Disjoint s t) :=
+  decidable_of_iff (s ∩ t = ∅) Finset.disjoint_iff_inter_eq_empty.symm
+
+instance decidableUniqueCallIds :
+    (rows : List Transcript.MessageRow) → Decidable (UniqueCallIds rows)
+  | [] => .isTrue trivial
+  | row :: rest =>
+    let _ := decidableUniqueCallIds rest
+    match hk : row.kind with
+    | .assistantToolCalls callIds =>
+        decidable_of_iff
+          (Disjoint callIds (callsIn rest) ∧ UniqueCallIds rest)
+          (uniqueCallIds_cons_assistant row rest callIds hk).symm
+    | .toolResult callId key =>
+        decidable_of_iff (UniqueCallIds rest)
+          (uniqueCallIds_cons_result row rest callId key hk).symm
+    | .ordinary =>
+        decidable_of_iff (UniqueCallIds rest)
+          (uniqueCallIds_cons_ordinary row rest hk).symm
+
 abbrev AllCoherent (rows : List ProviderRow) : Prop :=
   ∀ pr ∈ rows, Coherent pr
+
+/-- A row whose message would be *empty* at the orphan stage.
+
+Rust drops empty messages, and the two stages do it asymmetrically:
+`drop_orphaned_tool_results` pushes a user message only when content survives
+(so an empty user message goes there), while assistant messages are carried
+forward unconditionally and pruned in `drop_unpaired_tool_calls`. A
+`.toolResult` row denotes a user message carrying exactly one tool result, so it
+is never empty in this sense — the orphan branch already removes it when the
+result is unpaired. -/
+def emptyUserRow (pr : ProviderRow) : Bool :=
+  match pr.row.role with
+  | .user => pr.content.isEmpty
+  | .assistant => false
+
+/-- An assistant row carrying nothing. A coherent `.ordinary` row announces no
+calls, so the content filter is the identity on it and emptiness is decided by
+the content alone. -/
+def emptyAssistantRow (pr : ProviderRow) : Bool :=
+  match pr.row.role with
+  | .assistant => pr.content.isEmpty
+  | .user => false
+
+/-- A row that denotes a non-empty message. Rust drops empty messages, so this
+is what the fixpoint theorems need: an input that still carries empty rows is
+not a fixpoint of the sanitizer, because sanitizing it removes them.
+
+`.toolResult` rows are always non-degenerate — the row denotes a user message
+carrying exactly one tool result, which is its content. -/
+def NonDegenerate (pr : ProviderRow) : Prop :=
+  match pr.row.kind with
+  | .toolResult _ _ => True
+  | _ => pr.content ≠ []
+
+instance (pr : ProviderRow) : Decidable (NonDegenerate pr) := by
+  unfold NonDegenerate
+  cases pr.row.kind <;> infer_instance
+
+abbrev AllNonDegenerate (rows : List ProviderRow) : Prop :=
+  ∀ pr ∈ rows, NonDegenerate pr
+
+theorem not_emptyUserRow_of_nonDegenerate {pr : ProviderRow}
+    (h : NonDegenerate pr) (hk : pr.row.kind = .ordinary) : emptyUserRow pr = false := by
+  unfold NonDegenerate at h
+  rw [hk] at h
+  unfold emptyUserRow
+  cases pr.row.role with
+  | user => simpa using h
+  | assistant => rfl
+
+theorem not_emptyAssistantRow_of_nonDegenerate {pr : ProviderRow}
+    (h : NonDegenerate pr) (hk : pr.row.kind = .ordinary) :
+    emptyAssistantRow pr = false := by
+  unfold NonDegenerate at h
+  rw [hk] at h
+  unfold emptyAssistantRow
+  cases pr.row.role with
+  | user => rfl
+  | assistant => simpa using h
 
 /-! ## Stage 3 — content ordering -/
 
@@ -139,7 +273,14 @@ def dropOrphanedFromP (pending : Finset ToolExecution.ToolCallId) :
         if callId ∈ pending then pr :: dropOrphanedFromP (pending.erase callId) rest
         else dropOrphanedFromP pending rest
     | .assistantToolCalls callIds => pr :: dropOrphanedFromP callIds rest
-    | .ordinary => pr :: dropOrphanedFromP ∅ rest
+    | .ordinary =>
+        -- An empty user message does *not* end the active tool-call turn: Rust
+        -- clears `pending_calls` only when the message carries plain content,
+        -- and an empty message carries none. Recursing with `∅` here would
+        -- strand a valid call/result pair that merely had an empty message
+        -- between them. A *non-empty* ordinary row does end the turn.
+        if emptyUserRow pr then dropOrphanedFromP pending rest
+        else pr :: dropOrphanedFromP ∅ rest
 
 def dropOrphanedResultsP (rows : List ProviderRow) : List ProviderRow :=
   dropOrphanedFromP ∅ rows
@@ -165,13 +306,23 @@ theorem dropOrphanedFromP_cons_assistant
   simp only [dropOrphanedFromP, h]
 
 theorem dropOrphanedFromP_cons_ordinary (h : pr.row.kind = .ordinary) :
-    dropOrphanedFromP pending (pr :: rest) = pr :: dropOrphanedFromP ∅ rest := by
+    dropOrphanedFromP pending (pr :: rest) =
+      if emptyUserRow pr then dropOrphanedFromP pending rest
+      else pr :: dropOrphanedFromP ∅ rest := by
   simp only [dropOrphanedFromP, h]
 
 end DropOrphanedReduction
 
-/-- Stage 1 commutes with projection: it is exactly the modeled transform. -/
-theorem project_dropOrphanedFromP (rows : List ProviderRow) :
+/-- Stage 1 commutes with projection **on non-degenerate rows**.
+
+It does not commute in general: this stage drops empty user messages (Rust
+`drop_orphaned_tool_results` pushes a user message only when content survives)
+while the row-only `dropOrphanedFrom` has no notion of an empty message and
+keeps every `.ordinary` row. Soundness below therefore does not use this lemma;
+it uses the two set-level facts that follow, which hold unconditionally because
+an empty row carries neither calls nor results. -/
+theorem project_dropOrphanedFromP (rows : List ProviderRow)
+    (hnd : AllNonDegenerate rows) :
     ∀ pending,
       project (dropOrphanedFromP pending rows) =
         dropOrphanedFrom pending (project rows) := by
@@ -179,27 +330,101 @@ theorem project_dropOrphanedFromP (rows : List ProviderRow) :
   | nil => intro pending; rfl
   | cons pr rest ih =>
     intro pending
+    have hhead : NonDegenerate pr := hnd pr (List.mem_cons_self _ _)
+    have hrest : AllNonDegenerate rest := fun r hr => hnd r (List.mem_cons_of_mem _ hr)
     cases hk : pr.row.kind with
     | toolResult callId key =>
       rw [dropOrphanedFromP_cons_result pr rest pending callId key hk,
         project_cons,
         dropOrphanedFrom_cons_result pr.row (project rest) pending callId key hk]
       by_cases hmem : callId ∈ pending
-      · rw [if_pos hmem, if_pos hmem, project_cons, ih (pending.erase callId)]
-      · rw [if_neg hmem, if_neg hmem, ih pending]
+      · rw [if_pos hmem, if_pos hmem, project_cons, ih hrest (pending.erase callId)]
+      · rw [if_neg hmem, if_neg hmem, ih hrest pending]
     | assistantToolCalls callIds =>
       rw [dropOrphanedFromP_cons_assistant pr rest pending callIds hk,
         project_cons, project_cons,
         dropOrphanedFrom_cons_assistant pr.row (project rest) pending callIds hk,
-        ih callIds]
+        ih hrest callIds]
     | ordinary =>
       rw [dropOrphanedFromP_cons_ordinary pr rest pending hk,
+        if_neg (by simp [not_emptyUserRow_of_nonDegenerate hhead hk]),
         project_cons, project_cons,
-        dropOrphanedFrom_cons_ordinary pr.row (project rest) pending hk, ih ∅]
+        dropOrphanedFrom_cons_ordinary pr.row (project rest) pending hk, ih hrest ∅]
 
-@[simp] theorem project_dropOrphanedResultsP (rows : List ProviderRow) :
+theorem project_dropOrphanedResultsP (rows : List ProviderRow)
+    (hnd : AllNonDegenerate rows) :
     project (dropOrphanedResultsP rows) = dropOrphanedResults (project rows) :=
-  project_dropOrphanedFromP rows ∅
+  project_dropOrphanedFromP rows hnd ∅
+
+/-- Dropping empty rows removes no announcements: they carry no calls. -/
+theorem callsIn_project_dropOrphanedFromP (rows : List ProviderRow) :
+    ∀ pending,
+      callsIn (project (dropOrphanedFromP pending rows)) = callsIn (project rows) := by
+  induction rows with
+  | nil => intro pending; rfl
+  | cons pr rest ih =>
+    intro pending
+    cases hk : pr.row.kind with
+    | toolResult callId key =>
+      rw [dropOrphanedFromP_cons_result pr rest pending callId key hk, project_cons,
+        callsIn_cons_result pr.row (project rest) callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem, project_cons,
+          callsIn_cons_result pr.row _ callId key hk, ih (pending.erase callId)]
+      · rw [if_neg hmem, ih pending]
+    | assistantToolCalls callIds =>
+      rw [dropOrphanedFromP_cons_assistant pr rest pending callIds hk, project_cons,
+        project_cons, callsIn_cons_assistant pr.row _ callIds hk,
+        callsIn_cons_assistant pr.row (project rest) callIds hk, ih callIds]
+    | ordinary =>
+      rw [dropOrphanedFromP_cons_ordinary pr rest pending hk, project_cons,
+        callsIn_cons_ordinary pr.row (project rest) hk]
+      by_cases hempty : emptyUserRow pr
+      · rw [if_pos hempty, ih pending]
+      · rw [if_neg hempty, project_cons, callsIn_cons_ordinary pr.row _ hk, ih ∅]
+
+/-- Dropping empty rows resolves nothing new: they carry no results. -/
+theorem resolvedIn_project_dropOrphanedFromP_subset (rows : List ProviderRow) :
+    ∀ pending,
+      resolvedIn (project (dropOrphanedFromP pending rows))
+        ⊆ pending ∪ callsIn (project rows) := by
+  induction rows with
+  | nil => intro pending c hc; simp at hc
+  | cons pr rest ih =>
+    intro pending c hc
+    cases hk : pr.row.kind with
+    | toolResult callId key =>
+      rw [dropOrphanedFromP_cons_result pr rest pending callId key hk] at hc
+      rw [project_cons, callsIn_cons_result pr.row (project rest) callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem, project_cons,
+          resolvedIn_cons_result pr.row _ callId key hk] at hc
+        rcases Finset.mem_insert.mp hc with rfl | hcTail
+        · exact Finset.mem_union_left _ hmem
+        · exact (Finset.mem_union.mp ((ih (pending.erase callId)) hcTail)).elim
+            (fun hp => Finset.mem_union_left _ (Finset.mem_of_mem_erase hp))
+            (fun hcall => Finset.mem_union_right _ hcall)
+      · rw [if_neg hmem] at hc
+        exact (ih pending) hc
+    | assistantToolCalls callIds =>
+      rw [dropOrphanedFromP_cons_assistant pr rest pending callIds hk, project_cons,
+        resolvedIn_cons_assistant pr.row _ callIds hk] at hc
+      rw [project_cons, callsIn_cons_assistant pr.row (project rest) callIds hk]
+      exact (Finset.mem_union.mp ((ih callIds) hc)).elim
+        (fun hp => Finset.mem_union_right _ (Finset.mem_union_left _ hp))
+        (fun hcall => Finset.mem_union_right _ (Finset.mem_union_right _ hcall))
+    | ordinary =>
+      rw [dropOrphanedFromP_cons_ordinary pr rest pending hk] at hc
+      rw [project_cons, callsIn_cons_ordinary pr.row (project rest) hk]
+      by_cases hempty : emptyUserRow pr
+      · -- The turn stays open across an empty message, so `pending` survives
+        -- and the bound is the induction hypothesis at the same `pending`.
+        rw [if_pos hempty] at hc
+        exact (ih pending) hc
+      · rw [if_neg hempty, project_cons,
+          resolvedIn_cons_ordinary pr.row _ hk] at hc
+        exact Finset.mem_union_right _
+          ((Finset.mem_union.mp ((ih ∅) hc)).elim (by intro h; simp at h) id)
 
 theorem allCoherent_dropOrphanedFromP {rows : List ProviderRow}
     (h : AllCoherent rows) : ∀ pending, AllCoherent (dropOrphanedFromP pending rows) := by
@@ -226,9 +451,13 @@ theorem allCoherent_dropOrphanedFromP {rows : List ProviderRow}
       · exact ih hrest callIds pr htail
     | ordinary =>
       rw [dropOrphanedFromP_cons_ordinary row rest pending hk] at hpr
-      rcases List.mem_cons.mp hpr with rfl | htail
-      · exact hhead
-      · exact ih hrest ∅ pr htail
+      by_cases hempty : emptyUserRow row
+      · rw [if_pos hempty] at hpr
+        exact ih hrest pending pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · exact hhead
+        · exact ih hrest ∅ pr htail
 
 /-! ## Stage 2 — unpaired tool calls
 
@@ -289,7 +518,13 @@ def filterCallsByP (resolved : Finset ToolExecution.ToolCallId) :
     | .assistantToolCalls callIds =>
         if restrictContent resolved pr.content = [] then filterCallsByP resolved rest
         else restrictRow resolved pr callIds :: filterCallsByP resolved rest
-    | _ => pr :: filterCallsByP resolved rest
+    | .ordinary =>
+        -- Rust prunes an assistant message here when nothing survives the
+        -- content filter, including one that never announced a call. User rows
+        -- were already pruned in stage 1.
+        if emptyAssistantRow pr then filterCallsByP resolved rest
+        else pr :: filterCallsByP resolved rest
+    | .toolResult _ _ => pr :: filterCallsByP resolved rest
 
 def resolvedInP (rows : List ProviderRow) : Finset ToolExecution.ToolCallId :=
   resolvedIn (project rows)
@@ -321,7 +556,9 @@ theorem filterCallsByP_cons_result (h : pr.row.kind = .toolResult callId key) :
   simp only [filterCallsByP, h]
 
 theorem filterCallsByP_cons_ordinary (h : pr.row.kind = .ordinary) :
-    filterCallsByP resolved (pr :: rest) = pr :: filterCallsByP resolved rest := by
+    filterCallsByP resolved (pr :: rest) =
+      if emptyAssistantRow pr then filterCallsByP resolved rest
+      else pr :: filterCallsByP resolved rest := by
   simp only [filterCallsByP, h]
 
 end FilterReduction
@@ -385,9 +622,13 @@ theorem allCoherent_filterCallsByP {rows : List ProviderRow}
       · exact ih hrest pr htail
     | ordinary =>
       rw [filterCallsByP_cons_ordinary row rest resolved hk] at hpr
-      rcases List.mem_cons.mp hpr with rfl | htail
-      · exact hhead
-      · exact ih hrest pr htail
+      by_cases hempty : emptyAssistantRow row
+      · rw [if_pos hempty] at hpr
+        exact ih hrest pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · exact hhead
+        · exact ih hrest pr htail
 
 /-! ## Irrelevance: resolved ids a list never announces cannot change the filter -/
 
@@ -547,9 +788,8 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
           allCoherent_dropOrphanedFromP hrestCoh _
         have hcallsTail :
             callsIn (project (dropOrphanedFromP (pending.erase callId) rest))
-              = callsIn (project rest) := by
-          rw [project_dropOrphanedFromP rest (pending.erase callId)]
-          exact callsIn_dropOrphanedFrom (project rest) (pending.erase callId)
+              = callsIn (project rest) :=
+          callsIn_project_dropOrphanedFromP rest (pending.erase callId)
         have hirrel :
             Disjoint {callId}
               (callsIn (project (dropOrphanedFromP (pending.erase callId) rest))) := by
@@ -594,9 +834,8 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
       rw [dropOrphanedFromP_cons_assistant row rest pending callIds hk]
       have hRsub :
           resolvedIn (project (dropOrphanedFromP callIds rest))
-            ⊆ callIds ∪ callsIn (project rest) := by
-        rw [project_dropOrphanedFromP rest callIds]
-        exact resolvedIn_dropOrphanedFrom_subset (project rest) callIds
+            ⊆ callIds ∪ callsIn (project rest) :=
+        resolvedIn_project_dropOrphanedFromP_subset rest callIds
       have hstart : pending ∩ resolvedIn (project (dropOrphanedFromP callIds rest)) = ∅ :=
         Finset.disjoint_iff_inter_eq_empty.mp
           ((Finset.disjoint_union_right.mpr ⟨hdisjPair.1, hdisjPair.2⟩).mono_right hRsub)
@@ -643,15 +882,26 @@ theorem activeBlockValidFrom_filterCallsByP (rows : List ProviderRow) :
         rwa [callsIn_cons_ordinary row.row (project rest) hk] at hdisj
       rw [dropOrphanedFromP_cons_ordinary row rest pending hk]
       have hRsub : resolvedIn (project (dropOrphanedFromP ∅ rest)) ⊆ callsIn (project rest) := by
-        rw [project_dropOrphanedFromP rest ∅]
-        simpa using resolvedIn_dropOrphanedFrom_subset (project rest) ∅
+        simpa using resolvedIn_project_dropOrphanedFromP_subset rest ∅
       have hstart : pending ∩ resolvedIn (project (dropOrphanedFromP ∅ rest)) = ∅ :=
         Finset.disjoint_iff_inter_eq_empty.mp (hdisj'.mono_right hRsub)
-      rw [project_cons,
-        resolvedIn_cons_ordinary row.row (project (dropOrphanedFromP ∅ rest)) hk,
-        filterCallsByP_cons_ordinary row (dropOrphanedFromP ∅ rest) _ hk,
-        project_cons, activeBlockValidFrom_cons_ordinary row.row _ _ hk]
-      exact ⟨hstart, ih ∅ huniq' (Finset.disjoint_empty_left _) hrestCoh⟩
+      have htail := ih ∅ huniq' (Finset.disjoint_empty_left _) hrestCoh
+      by_cases hemptyUser : emptyUserRow row
+      · -- An empty user message does not end the turn, so the recursion carries
+        -- `pending` through unchanged and the goal *is* the induction
+        -- hypothesis at this `pending`.
+        rw [if_pos hemptyUser]
+        exact ih pending huniq' hdisj' hrestCoh
+      · rw [if_neg hemptyUser, project_cons,
+          resolvedIn_cons_ordinary row.row (project (dropOrphanedFromP ∅ rest)) hk,
+          filterCallsByP_cons_ordinary row (dropOrphanedFromP ∅ rest) _ hk]
+        by_cases hemptyAssistant : emptyAssistantRow row
+        · -- An empty assistant message: carried through stage 1, pruned here.
+          rw [if_pos hemptyAssistant, hstart]
+          simpa using htail
+        · rw [if_neg hemptyAssistant, project_cons,
+            activeBlockValidFrom_cons_ordinary row.row _ _ hk]
+          exact ⟨hstart, htail⟩
 
 /-- **Soundness of the full three-stage production sanitizer.** -/
 theorem sanitizeForProvider_sound {rows : List ProviderRow}
@@ -696,29 +946,36 @@ theorem restrictContent_eq_self {resolved : Finset ToolExecution.ToolCallId}
         cond_true, List.cons.injEq, true_and]
       simpa [restrictContent] using ih hrest
 
-theorem dropOrphanedFromP_eq_self (rows : List ProviderRow) :
+theorem dropOrphanedFromP_eq_self (rows : List ProviderRow)
+    (hnd : AllNonDegenerate rows) :
     ∀ pending, ActiveBlockValidFrom pending (project rows) →
       dropOrphanedFromP pending rows = rows := by
   induction rows with
   | nil => intro pending _; rfl
   | cons row rest ih =>
     intro pending hvalid
+    have hhead : NonDegenerate row := hnd row (List.mem_cons_self _ _)
+    have hrestNd : AllNonDegenerate rest := fun r hr => hnd r (List.mem_cons_of_mem _ hr)
     rw [project_cons] at hvalid
     cases hk : row.row.kind with
     | toolResult callId key =>
       have h := (activeBlockValidFrom_cons_result row.row (project rest) pending
         callId key hk).mp hvalid
       rw [dropOrphanedFromP_cons_result row rest pending callId key hk, if_pos h.1,
-        ih (pending.erase callId) h.2]
+        ih hrestNd (pending.erase callId) h.2]
     | assistantToolCalls callIds =>
       have h := (activeBlockValidFrom_cons_assistant row.row (project rest) pending
         callIds hk).mp hvalid
-      rw [dropOrphanedFromP_cons_assistant row rest pending callIds hk, ih callIds h.2]
+      rw [dropOrphanedFromP_cons_assistant row rest pending callIds hk,
+        ih hrestNd callIds h.2]
     | ordinary =>
       have h := (activeBlockValidFrom_cons_ordinary row.row (project rest) pending hk).mp hvalid
-      rw [dropOrphanedFromP_cons_ordinary row rest pending hk, ih ∅ h.2]
+      rw [dropOrphanedFromP_cons_ordinary row rest pending hk,
+        if_neg (by simp [not_emptyUserRow_of_nonDegenerate hhead hk]),
+        ih hrestNd ∅ h.2]
 
-theorem filterCallsByP_eq_self (rows : List ProviderRow) :
+theorem filterCallsByP_eq_self (rows : List ProviderRow)
+    (hnd : AllNonDegenerate rows) :
     ∀ (R pending : Finset ToolExecution.ToolCallId),
       ActiveBlockValidFrom pending (project rows) →
       NonemptyAnnouncements (project rows) →
@@ -730,7 +987,9 @@ theorem filterCallsByP_eq_self (rows : List ProviderRow) :
   | cons row rest ih =>
     intro R pending hvalid hne hcoh hres
     have hhead : Coherent row := hcoh row (List.mem_cons_self _ _)
+    have hheadNd : NonDegenerate row := hnd row (List.mem_cons_self _ _)
     have hrestCoh : AllCoherent rest := fun r hr => hcoh r (List.mem_cons_of_mem _ hr)
+    have hrestNd : AllNonDegenerate rest := fun r hr => hnd r (List.mem_cons_of_mem _ hr)
     rw [project_cons] at hvalid hne hres
     have hres' : resolvedIn (project rest) ⊆ R :=
       (resolvedIn_subset_cons row.row (project rest)).trans hres
@@ -762,20 +1021,21 @@ theorem filterCallsByP_eq_self (rows : List ProviderRow) :
           cases innerRow
           simp_all
       rw [filterCallsByP_cons_assistant row rest R callIds hk, if_neg hnotNil, hrow,
-        ih R callIds h.2 hne'.2 hrestCoh hres']
+        ih hrestNd R callIds h.2 hne'.2 hrestCoh hres']
     | toolResult callId key =>
       have h := (activeBlockValidFrom_cons_result row.row (project rest) pending
         callId key hk).mp hvalid
       have hne' := (nonemptyAnnouncements_cons_other row.row (project rest)
         (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp hne
       rw [filterCallsByP_cons_result row rest R callId key hk,
-        ih R (pending.erase callId) h.2 hne' hrestCoh hres']
+        ih hrestNd R (pending.erase callId) h.2 hne' hrestCoh hres']
     | ordinary =>
       have h := (activeBlockValidFrom_cons_ordinary row.row (project rest) pending hk).mp hvalid
       have hne' := (nonemptyAnnouncements_cons_other row.row (project rest)
         (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)).mp hne
       rw [filterCallsByP_cons_ordinary row rest R hk,
-        ih R ∅ h.2 hne' hrestCoh hres']
+        if_neg (by simp [not_emptyAssistantRow_of_nonDegenerate hheadNd hk]),
+        ih hrestNd R ∅ h.2 hne' hrestCoh hres']
 
 /-- Every announcement the sanitizer emits is non-empty: a row that announced
 nothing that resolved is either dropped or demoted to `.ordinary`. -/
@@ -808,10 +1068,13 @@ theorem nonemptyAnnouncements_filterCallsByP
           (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)]
       exact ih
     | ordinary =>
-      rw [filterCallsByP_cons_ordinary row rest R hk, project_cons,
-        nonemptyAnnouncements_cons_other _ _
-          (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)]
-      exact ih
+      rw [filterCallsByP_cons_ordinary row rest R hk]
+      by_cases hempty : emptyAssistantRow row
+      · rw [if_pos hempty]; exact ih
+      · rw [if_neg hempty, project_cons,
+          nonemptyAnnouncements_cons_other _ _
+            (by intro c hc; rw [hk] at hc; exact MessageKind.noConfusion hc)]
+        exact ih
 
 theorem nonemptyAnnouncements_sanitizeForProvider (rows : List ProviderRow) :
     NonemptyAnnouncements (project (sanitizeForProvider rows)) := by
@@ -825,16 +1088,155 @@ theorem allCoherent_sanitizeForProvider {rows : List ProviderRow}
   exact allCoherent_normalizeOrder
     (allCoherent_filterCallsByP _ (allCoherent_dropOrphanedFromP hcoh ∅))
 
+/-! ### The sanitizer's output carries no empty messages
+
+This is what makes the fixpoint hypothesis discharge for `sanitizeForProvider`'s
+own output, and therefore what makes idempotence hold: an output that still
+carried an empty row would not be a fixpoint, because a second pass would drop
+it. -/
+
+/-- What stage 1 guarantees about `.ordinary` rows: no empty *user* message
+survives it. Stage 2 removes the assistant counterpart, and the two together
+give `NonDegenerate`. -/
+def OrphanStagePruned (pr : ProviderRow) : Prop :=
+  match pr.row.kind with
+  | .ordinary => emptyUserRow pr = false
+  | _ => True
+
+theorem nonDegenerate_of_pruned {pr : ProviderRow} (hk : pr.row.kind = .ordinary)
+    (hu : emptyUserRow pr = false) (ha : emptyAssistantRow pr = false) :
+    NonDegenerate pr := by
+  unfold NonDegenerate
+  rw [hk]
+  unfold emptyUserRow at hu
+  unfold emptyAssistantRow at ha
+  cases hrole : pr.row.role with
+  | user => rw [hrole] at hu; simpa using hu
+  | assistant => rw [hrole] at ha; simpa using ha
+
+theorem orphanStagePruned_dropOrphanedFromP (rows : List ProviderRow) :
+    ∀ pending, ∀ pr ∈ dropOrphanedFromP pending rows, OrphanStagePruned pr := by
+  induction rows with
+  | nil => intro pending pr hpr; simp at hpr
+  | cons row rest ih =>
+    intro pending pr hpr
+    cases hk : row.row.kind with
+    | toolResult callId key =>
+      rw [dropOrphanedFromP_cons_result row rest pending callId key hk] at hpr
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · unfold OrphanStagePruned; rw [hk]; trivial
+        · exact ih (pending.erase callId) pr htail
+      · rw [if_neg hmem] at hpr
+        exact ih pending pr hpr
+    | assistantToolCalls callIds =>
+      rw [dropOrphanedFromP_cons_assistant row rest pending callIds hk] at hpr
+      rcases List.mem_cons.mp hpr with rfl | htail
+      · unfold OrphanStagePruned; rw [hk]; trivial
+      · exact ih callIds pr htail
+    | ordinary =>
+      rw [dropOrphanedFromP_cons_ordinary row rest pending hk] at hpr
+      by_cases hempty : emptyUserRow row
+      · rw [if_pos hempty] at hpr
+        exact ih pending pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · unfold OrphanStagePruned; rw [hk]; simpa using hempty
+        · exact ih ∅ pr htail
+
+theorem allNonDegenerate_filterCallsByP {rows : List ProviderRow}
+    (R : Finset ToolExecution.ToolCallId)
+    (hpruned : ∀ pr ∈ rows, OrphanStagePruned pr) :
+    AllNonDegenerate (filterCallsByP R rows) := by
+  induction rows with
+  | nil => intro pr hpr; simp at hpr
+  | cons row rest ih =>
+    have hhead : OrphanStagePruned row := hpruned row (List.mem_cons_self _ _)
+    have hrest : ∀ r ∈ rest, OrphanStagePruned r := fun r hr =>
+      hpruned r (List.mem_cons_of_mem _ hr)
+    intro pr hpr
+    cases hk : row.row.kind with
+    | assistantToolCalls callIds =>
+      rw [filterCallsByP_cons_assistant row rest R callIds hk] at hpr
+      by_cases hnil : restrictContent R row.content = []
+      · rw [if_pos hnil] at hpr
+        exact ih hrest pr hpr
+      · rw [if_neg hnil] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · unfold NonDegenerate
+          by_cases hempty : callIds ∩ R = ∅
+          · rw [show (restrictRow R row callIds).row.kind = MessageKind.ordinary by
+              simp [restrictRow, restrictedKind, hempty]]
+            simpa [restrictRow] using hnil
+          · rw [show (restrictRow R row callIds).row.kind
+                = MessageKind.assistantToolCalls (callIds ∩ R) by
+              simp [restrictRow, restrictedKind, hempty]]
+            simpa [restrictRow] using hnil
+        · exact ih hrest pr htail
+    | toolResult callId key =>
+      rw [filterCallsByP_cons_result row rest R callId key hk] at hpr
+      rcases List.mem_cons.mp hpr with rfl | htail
+      · unfold NonDegenerate; rw [hk]; trivial
+      · exact ih hrest pr htail
+    | ordinary =>
+      rw [filterCallsByP_cons_ordinary row rest R hk] at hpr
+      by_cases hempty : emptyAssistantRow row
+      · rw [if_pos hempty] at hpr
+        exact ih hrest pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · have hu : emptyUserRow pr = false := by
+            unfold OrphanStagePruned at hhead; rwa [hk] at hhead
+          exact nonDegenerate_of_pruned hk hu (by simpa using hempty)
+        · exact ih hrest pr htail
+
+theorem nonDegenerate_normalizeRow {pr : ProviderRow} (h : NonDegenerate pr) :
+    NonDegenerate (normalizeRow pr) := by
+  unfold NonDegenerate at h ⊢
+  simp only [normalizeRow_row]
+  cases hk : pr.row.kind with
+  | toolResult callId key => trivial
+  | assistantToolCalls callIds =>
+    rw [hk] at h
+    simp only [normalizeRow]
+    intro hnil
+    exact h (by
+      have := Content.length_normalize pr.content
+      rw [hnil] at this
+      simpa using this.symm)
+  | ordinary =>
+    rw [hk] at h
+    simp only [normalizeRow]
+    intro hnil
+    exact h (by
+      have := Content.length_normalize pr.content
+      rw [hnil] at this
+      simpa using this.symm)
+
+theorem allNonDegenerate_normalizeOrder {rows : List ProviderRow}
+    (h : AllNonDegenerate rows) : AllNonDegenerate (normalizeOrder rows) := by
+  intro pr hpr
+  obtain ⟨source, hsource, rfl⟩ := List.mem_map.mp hpr
+  exact nonDegenerate_normalizeRow (h source hsource)
+
+theorem allNonDegenerate_sanitizeForProvider (rows : List ProviderRow) :
+    AllNonDegenerate (sanitizeForProvider rows) := by
+  unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP
+  exact allNonDegenerate_normalizeOrder
+    (allNonDegenerate_filterCallsByP _ (orphanStagePruned_dropOrphanedFromP rows ∅))
+
 /-- **Fixpoint.** Already-narrowed, already-ordered provider input is untouched. -/
 theorem sanitizeForProvider_fixpoint {rows : List ProviderRow}
     (hvalid : ProviderValid (project rows))
     (hne : NonemptyAnnouncements (project rows))
     (hcoh : AllCoherent rows)
+    (hnd : AllNonDegenerate rows)
     (hordered : normalizeOrder rows = rows) :
     sanitizeForProvider rows = rows := by
   unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP resolvedInP
-  rw [dropOrphanedFromP_eq_self rows ∅ hvalid.activeBlockValid]
-  rw [filterCallsByP_eq_self rows (resolvedIn (project rows)) ∅
+  rw [dropOrphanedFromP_eq_self rows hnd ∅ hvalid.activeBlockValid]
+  rw [filterCallsByP_eq_self rows hnd (resolvedIn (project rows)) ∅
     hvalid.activeBlockValid hne hcoh (Finset.Subset.refl _)]
   exact hordered
 
@@ -845,7 +1247,8 @@ theorem sanitizeForProvider_idempotent {rows : List ProviderRow}
   refine sanitizeForProvider_fixpoint
     (sanitizeForProvider_sound huniq hcoh)
     (nonemptyAnnouncements_sanitizeForProvider rows)
-    (allCoherent_sanitizeForProvider hcoh) ?_
+    (allCoherent_sanitizeForProvider hcoh)
+    (allNonDegenerate_sanitizeForProvider rows) ?_
   unfold sanitizeForProvider
   exact normalizeOrder_idempotent _
 
@@ -917,22 +1320,68 @@ theorem allCallsOnly_dropOrphanedFromP {rows : List ProviderRow}
       · exact ih hrest callIds pr htail
     | ordinary =>
       rw [dropOrphanedFromP_cons_ordinary row rest pending hk] at hpr
+      by_cases hempty : emptyUserRow row
+      · rw [if_pos hempty] at hpr
+        exact ih hrest pending pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · exact hhead
+        · exact ih hrest ∅ pr htail
+
+/-- Stage 1 only ever drops rows, so it preserves non-degeneracy. -/
+theorem allNonDegenerate_dropOrphanedFromP {rows : List ProviderRow}
+    (h : AllNonDegenerate rows) :
+    ∀ pending, AllNonDegenerate (dropOrphanedFromP pending rows) := by
+  induction rows with
+  | nil => intro pending pr hpr; simp at hpr
+  | cons row rest ih =>
+    intro pending pr hpr
+    have hhead : NonDegenerate row := h row (List.mem_cons_self _ _)
+    have hrest : AllNonDegenerate rest := fun r hr => h r (List.mem_cons_of_mem _ hr)
+    cases hk : row.row.kind with
+    | toolResult callId key =>
+      rw [dropOrphanedFromP_cons_result row rest pending callId key hk] at hpr
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · exact hhead
+        · exact ih hrest (pending.erase callId) pr htail
+      · rw [if_neg hmem] at hpr
+        exact ih hrest pending pr hpr
+    | assistantToolCalls callIds =>
+      rw [dropOrphanedFromP_cons_assistant row rest pending callIds hk] at hpr
       rcases List.mem_cons.mp hpr with rfl | htail
       · exact hhead
-      · exact ih hrest ∅ pr htail
+      · exact ih hrest callIds pr htail
+    | ordinary =>
+      rw [dropOrphanedFromP_cons_ordinary row rest pending hk] at hpr
+      by_cases hempty : emptyUserRow row
+      · rw [if_pos hempty] at hpr
+        exact ih hrest pending pr hpr
+      · rw [if_neg hempty] at hpr
+        rcases List.mem_cons.mp hpr with rfl | htail
+        · exact hhead
+        · exact ih hrest ∅ pr htail
 
-/-- On the calls-only fragment, stage 2 projects onto the row model's `filterCallsBy`. -/
+/-- On the calls-only fragment, stage 2 projects onto the row model's `filterCallsBy`.
+
+Non-degeneracy is needed for the same reason stage 1 needed it: the row-only
+model keeps every `.ordinary` row, while this stage prunes empty assistant
+messages the way Rust does. -/
 theorem project_filterCallsByP_of_callsOnly (rows : List ProviderRow)
     (R : Finset ToolExecution.ToolCallId)
-    (hcoh : AllCoherent rows) (honly : AllCallsOnly rows) :
+    (hcoh : AllCoherent rows) (honly : AllCallsOnly rows)
+    (hnd : AllNonDegenerate rows) :
     project (filterCallsByP R rows) = filterCallsBy R (project rows) := by
   induction rows with
   | nil => rfl
   | cons row rest ih =>
     have hhead : Coherent row := hcoh row (List.mem_cons_self _ _)
     have hheadOnly : CallsOnlyAssistant row := honly row (List.mem_cons_self _ _)
+    have hheadNd : NonDegenerate row := hnd row (List.mem_cons_self _ _)
     have hrestCoh : AllCoherent rest := fun r hr => hcoh r (List.mem_cons_of_mem _ hr)
     have hrestOnly : AllCallsOnly rest := fun r hr => honly r (List.mem_cons_of_mem _ hr)
+    have hrestNd : AllNonDegenerate rest := fun r hr => hnd r (List.mem_cons_of_mem _ hr)
     cases hk : row.row.kind with
     | assistantToolCalls callIds =>
       have hcontent : Content.callsOf row.content = callIds := by
@@ -944,33 +1393,40 @@ theorem project_filterCallsByP_of_callsOnly (rows : List ProviderRow)
       by_cases hempty : callIds ∩ R = ∅
       · have hnil : restrictContent R row.content = [] :=
           restrictContent_eq_nil_of_inter_empty hitems (by rw [hcontent]; exact hempty)
-        rw [if_pos hnil, if_pos hempty, ih hrestCoh hrestOnly]
+        rw [if_pos hnil, if_pos hempty, ih hrestCoh hrestOnly hrestNd]
       · have hnil : restrictContent R row.content ≠ [] := by
           intro hnil
           exact hempty (inter_eq_empty_of_restrictContent_nil hhead hk hnil)
-        rw [if_neg hnil, if_neg hempty, project_cons, ih hrestCoh hrestOnly]
+        rw [if_neg hnil, if_neg hempty, project_cons, ih hrestCoh hrestOnly hrestNd]
         congr 1
         simp [restrictRow, restrictedKind, hempty, withKind]
     | toolResult callId key =>
       rw [filterCallsByP_cons_result row rest R callId key hk, project_cons, project_cons,
         filterCallsBy_cons_result row.row (project rest) R callId key hk,
-        ih hrestCoh hrestOnly]
+        ih hrestCoh hrestOnly hrestNd]
     | ordinary =>
-      rw [filterCallsByP_cons_ordinary row rest R hk, project_cons, project_cons,
-        filterCallsBy_cons_ordinary row.row (project rest) R hk, ih hrestCoh hrestOnly]
+      rw [filterCallsByP_cons_ordinary row rest R hk,
+        if_neg (by simp [not_emptyAssistantRow_of_nonDegenerate hheadNd hk]),
+        project_cons, project_cons,
+        filterCallsBy_cons_ordinary row.row (project rest) R hk, ih hrestCoh hrestOnly hrestNd]
 
-/-- **Conditional refinement.** On the calls-only fragment the enriched
-production model and the row-only `sanitize` agree exactly.
+/-- **Conditional refinement.** On the calls-only, non-degenerate fragment the
+enriched production model and the row-only `sanitize` agree exactly.
 
-Off that fragment they differ by design — see the module docstring. -/
+Off that fragment they differ by design, in two ways, both of them cases the
+row-only model cannot express: an assistant message carrying text alongside an
+unresolved call (see the module docstring), and an empty message, which
+production drops and `sanitize` keeps. -/
 theorem project_sanitizeForProvider_eq_sanitize {rows : List ProviderRow}
-    (hcoh : AllCoherent rows) (honly : AllCallsOnly rows) :
+    (hcoh : AllCoherent rows) (honly : AllCallsOnly rows)
+    (hnd : AllNonDegenerate rows) :
     project (sanitizeForProvider rows) = sanitize (project rows) := by
   unfold sanitizeForProvider dropUnpairedCallsP dropOrphanedResultsP resolvedInP sanitize
     dropUnpairedCalls dropOrphanedResults
   rw [project_normalizeOrder,
     project_filterCallsByP_of_callsOnly (dropOrphanedFromP ∅ rows) _
-      (allCoherent_dropOrphanedFromP hcoh ∅) (allCallsOnly_dropOrphanedFromP honly ∅),
-    project_dropOrphanedFromP rows ∅]
+      (allCoherent_dropOrphanedFromP hcoh ∅) (allCallsOnly_dropOrphanedFromP honly ∅)
+      (allNonDegenerate_dropOrphanedFromP hnd ∅),
+    project_dropOrphanedFromP rows hnd ∅]
 
 end PromptAssembly.Provider

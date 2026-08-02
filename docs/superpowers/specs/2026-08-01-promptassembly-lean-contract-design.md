@@ -101,6 +101,34 @@ call, user prose):
 The emitted witness `assistant-prose-survives-its-unpaired-call` pins exactly
 this.
 
+### Two more, found in review
+
+Review of PR #999 surfaced two further gaps, both real:
+
+**Empty messages.** Rust drops them, asymmetrically — `drop_orphaned_tool_results`
+pushes a user message only when content survives, while assistant messages ride
+through and are pruned by `drop_unpaired_tool_calls`. The row-only model kept
+every `.ordinary` row. Modeled via `emptyUserRow` / `emptyAssistantRow`, with
+`NonDegenerate` as the invariant the two prunes establish; the fixpoint theorems
+now take it as a hypothesis, because an input still carrying an empty row is not
+a fixpoint. Witnesses `empty-messages-are-dropped` (3 → 1) and
+`empty-assistant-message-between-paired-turns` (4 → 3) pin it.
+
+**Duplicate call ids — a production bug.** `MessageKind.assistantToolCalls`
+carries a `Finset`, so the model cannot see the same id twice in one turn. That
+blindness hid a defect: Rust paired through a `HashSet`, so a turn announcing
+one id twice was closed by a *single* result while *both* calls survived —
+provider-invalid output from the function whose entire job is to prevent it.
+Measured: 2 calls, 1 result.
+
+Fixed in `drop_unpaired_tool_calls` by dropping duplicate occurrences within a
+turn (cross-turn reuse is untouched, since pairing resets per turn). That also
+makes the `Finset` abstraction *true* of production output rather than merely
+assumed. Modeling multiplicity properly would mean replacing `Finset` in the
+shared `Transcript.MessageKind`, which every pairing theorem in `Transcript` and
+`PairingReconcile` is stated over — a larger change than this one, so the
+occurrence-level behaviour is fenced in Rust and the boundary documented.
+
 ## Design
 
 ### Lean layer 1 — `Proofs/PromptAssembly/Content.lean`

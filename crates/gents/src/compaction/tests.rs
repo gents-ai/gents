@@ -1332,3 +1332,165 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+// ---------------------------------------------------------------------------
+// Pairing-scope regressions, all found by review of the generated PromptAssembly
+// conformance fence (#992). Each is a shape the Lean row model cannot express,
+// so each is fenced here.
+// ---------------------------------------------------------------------------
+
+fn scoped_call(id: &str) -> AssistantContent {
+    AssistantContent::ToolCall(ToolCall {
+        id: id.to_string(),
+        call_id: Some(id.to_string()),
+        function: crate::llm::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    })
+}
+
+fn scoped_result(id: &str) -> Message {
+    Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: id.to_string(),
+            call_id: Some(id.to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: format!("{id}-result"),
+            })],
+        })],
+    }
+}
+
+fn count_calls_and_results(messages: &[Message]) -> (usize, usize) {
+    let calls = messages
+        .iter()
+        .map(|message| match message {
+            Message::Assistant { content, .. } => content
+                .iter()
+                .filter(|item| matches!(item, AssistantContent::ToolCall(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum();
+    let results = messages
+        .iter()
+        .map(|message| match message {
+            Message::User { content } => content
+                .iter()
+                .filter(|item| matches!(item, UserContent::ToolResult(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum();
+    (calls, results)
+}
+
+/// Duplicate call keys inside one assistant turn used to leave a dangling call:
+/// `drop_orphaned_tool_results` pairs through a set, so it closed the turn with
+/// a single result while `drop_unpaired_tool_calls` kept both calls.
+#[test]
+fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1"), scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "every surviving call must be closed by a result: {out:?}"
+    );
+}
+
+/// Reuse of a call key across *different* turns, both closed, is legitimate —
+/// pairing resets per turn — and must survive the duplicate-key repair.
+#[test]
+fn call_key_reuse_across_turns_survives() {
+    let history = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+    ];
+    assert_eq!(
+        super::sanitize_history_for_provider(history.clone()),
+        history,
+        "per-turn key reuse must be preserved"
+    );
+}
+
+/// Resolution is scoped to the active turn. A *second* turn reusing a call key
+/// but never answered must not be resolved by the *first* turn's result — which
+/// a single global set of resolved keys would do, stranding a dangling call in
+/// provider input.
+#[test]
+fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "the unanswered second-turn call must be dropped: {out:?}"
+    );
+}
+
+/// An empty message does not end the active tool-call turn: Rust clears
+/// `pending_calls` only on plain content, and an empty message carries none.
+/// A valid call/result pair separated by one must survive intact.
+#[test]
+fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        Message::User { content: vec![] },
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "the pair must survive an intervening empty message: {out:?}"
+    );
+    assert_eq!(out.len(), 2, "the empty message itself must be gone: {out:?}");
+}
+
+/// A *non-empty* ordinary message does end the turn, so a result arriving after
+/// it is orphaned and both it and its now-unpaired call go.
+#[test]
+fn plain_message_between_a_call_and_its_result_ends_the_turn() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        text_msg("user", "moved on"),
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (0, 0),
+        "conversation resumed, so the stale pair must go: {out:?}"
+    );
+}
