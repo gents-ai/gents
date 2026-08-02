@@ -323,11 +323,12 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
             }
             "illegal" => {
                 illegal_count += 1;
-                // NOTE: this consults the writer inventory above, not production
-                // behaviour — an unlisted writer is invisible here. Inverting the
-                // fence (drive every production writer from every state and assert
-                // the observed edge set is a subset of legal + recoveryReachable)
-                // is tracked in #994.
+                // This consults the writer inventory above, which catches drift
+                // between the inventory and the Lean contract. The claim that
+                // production cannot REACH these edges is carried by
+                // `production_request_writers_only_reach_contracted_edges`, which
+                // drives the real writers and asserts the observed edge set falls
+                // inside legal + recoveryReachable.
                 assert!(
                     rust_request_transition_action(&case.from, &case.to).is_none()
                         && rust_request_recovery_sweep_writer(&case.from, &case.to).is_none(),
@@ -396,22 +397,52 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     assert_eq!(recovery_reachable_count, 3);
 }
 
-/// Persisted `(status, lifecycle_state)` pair for a terminal request, mirroring
-/// the bridge documented in `proofs/README.md`: terminal work carries a terminal
+/// Persisted `(status, lifecycle_state)` pair for a request, mirroring the bridge
+/// documented in `proofs/README.md`: in-flight work is `status="processing"` with
+/// the finer `lifecycle_state`, terminal work carries a terminal
 /// `lifecycle_state`, and `failed` is persisted with `status="error"`.
-fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
+fn persisted_status_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
     match lifecycle_state {
+        "pending" => ("pending", "pending"),
+        "claimed" => ("processing", "claimed"),
+        "processing" => ("processing", "processing"),
+        "inputRequired" => ("processing", "inputRequired"),
         "completed" => ("completed", "completed"),
         "failed" => ("error", "failed"),
         "superseded" => ("superseded", "superseded"),
         "dead" => ("dead", "dead"),
         "interrupted" => ("interrupted", "interrupted"),
-        other => panic!("not a terminal lifecycle_state: {other}"),
+        other => panic!("unknown lifecycle_state: {other}"),
     }
+}
+
+fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
+    assert!(
+        matches!(
+            lifecycle_state,
+            "completed" | "failed" | "superseded" | "dead" | "interrupted"
+        ),
+        "not a terminal lifecycle_state: {lifecycle_state}"
+    );
+    persisted_status_pair(lifecycle_state)
+}
+
+async fn force_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
+    let (status, lifecycle_state) = persisted_status_pair(lifecycle_state);
+    force_persisted_pair(node, doc_id, status, lifecycle_state).await;
 }
 
 async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     let (status, lifecycle_state) = terminal_persisted_pair(lifecycle_state);
+    force_persisted_pair(node, doc_id, status, lifecycle_state).await;
+}
+
+async fn force_persisted_pair(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
@@ -427,6 +458,170 @@ async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifec
         "forcing terminal persisted state failed: {:?}",
         resp.errors
     );
+}
+
+/// Every `RequestLifecycle` writer that mutates `AgentRequest`, driven from every
+/// persisted start state, with the observed edge recorded from the document.
+///
+/// This is the INVERSION of the `illegal` branch in the generated-case test
+/// (#994). That branch asks "does my hand-written inventory list a writer for this
+/// pair?", which is a statement about the table, not the code — a writer the table
+/// omits is invisible to it, which is how three edges with real writers stayed
+/// classified `illegal`. This asks the opposite and stronger question: drive the
+/// real writers, see which edges they actually produce, and require that set to
+/// fall inside what the contract permits.
+///
+/// NOT driven, and so still outside this fence:
+/// - `advance`, which issues `update_AgentResponse` only.
+/// - `queue::reconcile_coalesced_pending_request` (pending -> superseded), whose
+///   CAS requires a second coalescing duplicate to act on.
+/// - `ToolCallLifecycle::reconcile_subagent_liveness` (-> dead), which needs a
+///   running-bridge plus expired-child fixture.
+///   Both remain tracked in #994.
+#[tokio::test]
+async fn production_request_writers_only_reach_contracted_edges() {
+    const START_STATES: [&str; 9] = [
+        "pending",
+        "claimed",
+        "processing",
+        "inputRequired",
+        "completed",
+        "failed",
+        "superseded",
+        "dead",
+        "interrupted",
+    ];
+    const WRITERS: [&str; 7] = [
+        "claim",
+        "claim_after_ttl_lapse",
+        "begin_execution",
+        "complete",
+        "fail",
+        "interrupt",
+        "repair_terminal_requests",
+    ];
+
+    let mut observed: std::collections::BTreeSet<(String, String)> = Default::default();
+
+    for start in START_STATES {
+        let db = test_db(&format!("production-edges-{}", start.to_lowercase())).await;
+
+        for writer in WRITERS {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let created_at = chrono::Utc::now().to_rfc3339();
+            let doc_id =
+                create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+            let mut lifecycle = request_lifecycle_for_case(
+                &db,
+                doc_id.clone(),
+                request_id.clone(),
+                session_id.clone(),
+                created_at.clone(),
+            );
+
+            // Take ownership through the real path where the start state allows
+            // it, so the LOCAL state machine permits the call and the persisted
+            // CAS filter is what decides. Then pin the persisted row to the start
+            // state under test, as a concurrent actor would.
+            if start != "pending" {
+                assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+                lifecycle.prepare_session_with_identity().await.unwrap();
+                if start == "processing" {
+                    lifecycle.begin_execution().await.unwrap();
+                }
+                if !matches!(start, "claimed" | "processing") {
+                    force_persisted_state(&db.node, &doc_id, start).await;
+                }
+            }
+
+            if writer == "repair_terminal_requests" {
+                create_response_with_status(
+                    &db.node,
+                    &format!("resp-{request_id}"),
+                    &request_id,
+                    &session_id,
+                    "complete",
+                )
+                .await;
+            }
+
+            let before = fetch_request_snapshot(&db.node, &doc_id)
+                .await
+                .lifecycle_state;
+            assert_eq!(
+                before, start,
+                "fixture for {start}/{writer} did not reach the intended start state"
+            );
+
+            match writer {
+                "claim" => {
+                    let _ = lifecycle.claim().await;
+                }
+                "claim_after_ttl_lapse" => {
+                    // The expiry writer is reached THROUGH claim(): a pre-claim
+                    // request whose TTL has lapsed terminalizes to `dead`.
+                    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+                    set_valid_until(&db.node, &doc_id, &past).await;
+                    let _ = lifecycle.claim().await;
+                }
+                "begin_execution" => {
+                    let _ = lifecycle.begin_execution().await;
+                }
+                "complete" => {
+                    let _ = lifecycle.complete().await;
+                }
+                "fail" => {
+                    let _ = lifecycle.fail().await;
+                }
+                "interrupt" => {
+                    let _ = lifecycle.transition_to_interrupted().await;
+                }
+                "repair_terminal_requests" => {
+                    let _ = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID).await;
+                }
+                other => panic!("unhandled writer {other}"),
+            }
+
+            let after = fetch_request_snapshot(&db.node, &doc_id)
+                .await
+                .lifecycle_state;
+            if after != before {
+                observed.insert((before, after));
+            }
+        }
+    }
+
+    // Coverage floor. Without this the subset assertion below could be satisfied
+    // vacuously by a fixture that silently stopped driving its writer.
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("pending", "claimed"),
+        ("pending", "dead"),
+        ("pending", "interrupted"),
+        ("claimed", "processing"),
+        ("claimed", "completed"),
+        ("claimed", "failed"),
+        ("claimed", "interrupted"),
+        ("processing", "completed"),
+        ("processing", "failed"),
+        ("processing", "interrupted"),
+    ]
+    .into_iter()
+    .map(|(from, to)| (from.to_string(), to.to_string()))
+    .collect();
+    let missing: Vec<_> = expected.difference(&observed).collect();
+    assert!(
+        missing.is_empty(),
+        "production writers stopped reaching edges this test is supposed to cover: {missing:?}"
+    );
+
+    for (from, to) in &observed {
+        let classification = rust_request_transition_classification(from, to);
+        assert!(
+            matches!(classification, "legal" | "recoveryReachable"),
+            "production writers reached {from} -> {to}, which the contract classifies {classification}"
+        );
+    }
 }
 
 /// S1 (`terminal_irreversibility`) asserted against PRODUCTION writers rather
