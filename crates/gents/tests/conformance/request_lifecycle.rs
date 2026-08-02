@@ -26,7 +26,7 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
 /// contract assert that Rust has no writer for edges the product performs.
 fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
-        ("claimed", "completed") => Some("RequestLifecycle::complete"),
+        ("claimed", "completed") => Some("RequestLifecycle::repair_terminal_requests"),
         ("claimed", "dead") | ("processing", "dead") => {
             Some("ToolCallLifecycle::reconcile_subagent_liveness")
         }
@@ -46,13 +46,17 @@ fn rust_request_transition_classification(from: &str, to: &str) -> &'static str 
     }
 }
 
-/// Drive the real production writer for a recovery-reachable edge and assert it
-/// persists the modelled post-state.
+/// Drive the real recovery sweep named by the contract and assert it persists the
+/// modelled post-state.
 ///
-/// Only `claimed -> completed` is driven here: it is reachable through the
-/// ordinary `RequestLifecycle` surface. The two `-> dead` edges run inside
-/// `reconcile_subagent_liveness`, which needs a running-bridge plus expired-child
-/// fixture; driving them is tracked in #994.
+/// `claimed -> completed` is driven through `repair_terminal_requests` — the sweep
+/// the boundary statement actually describes — with the terminal response document
+/// the sweep requires. Driving `complete()` instead would prove something else
+/// entirely: that the ORDINARY writer can take this edge (see
+/// `ordinary_complete_also_takes_the_claimed_to_completed_edge` below).
+///
+/// The two `-> dead` edges run inside `reconcile_subagent_liveness`, which needs a
+/// running-bridge plus expired-child fixture; driving them is tracked in #994.
 async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
     if !(case.from == "claimed" && case.to == "completed") {
         return;
@@ -71,12 +75,29 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
         created_at.clone(),
     );
 
-    // Claim, then complete WITHOUT begin_execution: this is terminal repair
-    // finishing a claimed request whose response already landed, and it
-    // exercises `complete()`'s persisted from-set including `claimed`.
+    // Leave the row persisted `claimed`, as a crashed executor would.
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle.prepare_session_with_identity().await.unwrap();
-    lifecycle.complete().await.unwrap();
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(snap.lifecycle_state, "claimed");
+
+    // The sweep only repairs a stuck request whose durable response already
+    // reached a terminal outcome; without one it reports `awaiting_outcome`.
+    create_response_with_status(
+        &db.node,
+        &format!("resp-{request_id}"),
+        &request_id,
+        &session_id,
+        "complete",
+    )
+    .await;
+
+    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+        .await
+        .expect("terminal repair sweep must succeed");
+    assert_eq!(
+        report.repaired, 1,
+        "terminal repair should have repaired the stuck claimed request, got {report:?}"
+    );
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -87,6 +108,46 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
         case.to,
         rust_request_recovery_sweep_writer(&case.from, &case.to),
         snap.lifecycle_state
+    );
+}
+
+/// `complete()` accepts a persisted from-set of `{claimed, processing}`, so the
+/// ORDINARY writer can also take `claimed -> completed` — an edge the contract
+/// describes as recovery-only.
+///
+/// This is pinned as a deliberate, visible fact rather than left implicit. The
+/// wide from-set is INTENDED and should stay: a crash between `begin_execution`'s
+/// write and the completion would otherwise strand the row, and the project
+/// prefers defensive behaviour around anything that can deadlock a request.
+/// Narrowing it would trade a benign extra edge for a liveness hazard.
+///
+/// The consequence is that the edge is not exclusively a recovery concern, which
+/// is why it is published as `recoveryReachable` rather than folded into the legal
+/// transition relation.
+#[tokio::test]
+async fn ordinary_complete_also_takes_the_claimed_to_completed_edge() {
+    let db = test_db("ordinary-complete-from-claimed").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    let mut lifecycle = request_lifecycle_for_case(
+        &db,
+        doc_id.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        created_at.clone(),
+    );
+
+    // No begin_execution: the row stays persisted `claimed`.
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle.prepare_session_with_identity().await.unwrap();
+    lifecycle.complete().await.unwrap();
+
+    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
+    assert_eq!(
+        snap.lifecycle_state, "completed",
+        "complete() from a persisted claimed row should still complete it"
     );
 }
 
@@ -349,11 +410,7 @@ fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str
     }
 }
 
-async fn force_terminal_persisted_state(
-    node: &EmbeddedNode,
-    doc_id: &str,
-    lifecycle_state: &str,
-) {
+async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     let (status, lifecycle_state) = terminal_persisted_pair(lifecycle_state);
     let escaped_doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
@@ -383,18 +440,28 @@ async fn force_terminal_persisted_state(
 ///
 /// Unlike the `illegal` branch of the generated-case test (which consults the
 /// hand-written inventory and so cannot see an unlisted writer), this drives the
-/// real writers and asserts on persisted state. Extending the same treatment to
-/// the whole illegal partition is #994.
+/// real writers and asserts on persisted state.
+///
+/// SCOPE — this does not cover every writer or the whole `terminal -> *`
+/// partition, and the name says only what is actually driven. Covered:
+/// `claim`, `begin_execution`, `complete`, `fail`, `transition_to_interrupted`,
+/// and the `repair_terminal_requests` recovery sweep. Deliberately excluded:
+/// `advance`, which issues `update_AgentResponse` and never touches
+/// `AgentRequest`, so asserting request irreversibility across it is
+/// tautological. Still uncovered: deduplication and expiry writers, and the
+/// remaining recovery mutations. Enumerating every writer and deriving the
+/// reachable edge set is #994.
 #[tokio::test]
-async fn terminal_persisted_requests_reject_every_live_lifecycle_writer() {
-    const TERMINAL_STATES: [&str; 5] = [
-        "completed",
-        "failed",
-        "superseded",
-        "dead",
-        "interrupted",
+async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers() {
+    const TERMINAL_STATES: [&str; 5] = ["completed", "failed", "superseded", "dead", "interrupted"];
+    const WRITERS: [&str; 6] = [
+        "claim",
+        "begin_execution",
+        "complete",
+        "fail",
+        "interrupt",
+        "repair_terminal_requests",
     ];
-    const WRITERS: [&str; 4] = ["complete", "fail", "interrupt", "advance"];
 
     for terminal in TERMINAL_STATES {
         let db = test_db(&format!("terminal-irreversibility-{terminal}")).await;
@@ -414,20 +481,26 @@ async fn terminal_persisted_requests_reject_every_live_lifecycle_writer() {
             );
 
             // Take real ownership first, so the local state machine permits the
-            // call and the persisted CAS filter is what actually decides.
-            assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.prepare_session_with_identity().await.unwrap();
-            if writer == "advance" {
-                lifecycle.begin_execution().await.unwrap();
-                let response_doc_id = create_response_with_status(
+            // call and the persisted CAS filter is what actually decides. `claim`
+            // is driven from a fresh lifecycle so it exercises the claim filter
+            // itself rather than a re-claim.
+            if writer != "claim" {
+                assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+                lifecycle.prepare_session_with_identity().await.unwrap();
+            }
+
+            // `repair_terminal_requests` only acts on a request whose durable
+            // response is already terminal, so give it one — otherwise the sweep
+            // short-circuits on `awaiting_outcome` and the assertion is vacuous.
+            if writer == "repair_terminal_requests" {
+                create_response_with_status(
                     &db.node,
                     &format!("resp-{request_id}"),
                     &request_id,
                     &session_id,
-                    "streaming",
+                    "complete",
                 )
                 .await;
-                lifecycle.set_response_doc_id(&response_doc_id);
             }
 
             // Another actor terminalizes the row underneath the live lifecycle.
@@ -435,11 +508,38 @@ async fn terminal_persisted_requests_reject_every_live_lifecycle_writer() {
 
             // The writer may return Ok (no rows matched) or Err; the contract is
             // about the persisted document, not the return value.
-            let _ = match writer {
-                "complete" => lifecycle.complete().await,
-                "fail" => lifecycle.fail().await,
-                "interrupt" => lifecycle.transition_to_interrupted().await,
-                "advance" => lifecycle.advance().await,
+            match writer {
+                "claim" => {
+                    let outcome = lifecycle.claim().await;
+                    if let Ok(outcome) = outcome {
+                        assert_ne!(
+                            outcome,
+                            ClaimOutcome::Claimed,
+                            "claim() reported success against a persisted {terminal} request"
+                        );
+                    }
+                }
+                "begin_execution" => {
+                    let _ = lifecycle.begin_execution().await;
+                }
+                "complete" => {
+                    let _ = lifecycle.complete().await;
+                }
+                "fail" => {
+                    let _ = lifecycle.fail().await;
+                }
+                "interrupt" => {
+                    let _ = lifecycle.transition_to_interrupted().await;
+                }
+                "repair_terminal_requests" => {
+                    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+                        .await
+                        .expect("terminal repair sweep must succeed");
+                    assert_eq!(
+                        report.repaired, 0,
+                        "terminal repair moved a persisted {terminal} request: {report:?}"
+                    );
+                }
                 other => panic!("unhandled writer {other}"),
             };
 

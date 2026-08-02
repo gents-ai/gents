@@ -28,6 +28,16 @@ const CANCELLED_MARKER: &str = "__gents_tool_lifecycle__:cancelled";
 /// follows after a `:` separator; the hook strips the marker before persisting or
 /// threading, so the model only ever sees the clean notice.
 const UNPARSEABLE_ARGS_MARKER: &str = "__gents_tool_lifecycle__:unparseableArgs";
+/// Internal sentinels for a tool dispatch that returned `Err`. Same reasoning as
+/// [`UNPARSEABLE_ARGS_MARKER`]: the rendered result string is the only channel
+/// between dispatch and the persistence classifier, and tool output is untrusted
+/// arbitrary text, so the failure signal must be something successful output
+/// cannot forge. A human-readable prefix like `ToolCallError:` is forgeable — a
+/// tool that merely *prints* that token (a log tail, a source listing, an
+/// MCP/subagent relay) would be persisted as a failed call, and its text parsed
+/// as a structured command-policy denial.
+const TOOL_CALL_ERROR_MARKER: &str = "__gents_tool_lifecycle__:toolCallError";
+const JSON_ERROR_MARKER: &str = "__gents_tool_lifecycle__:jsonError";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedToolTerminal {
@@ -171,6 +181,50 @@ pub(crate) fn unparseable_args_notice(result: &str) -> Option<&str> {
     result
         .strip_prefix(UNPARSEABLE_ARGS_MARKER)
         .map(|rest| rest.strip_prefix(':').unwrap_or(rest))
+}
+
+/// Which `ToolError` arm a dispatch-failure marker records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolDispatchFailure {
+    ToolCallError,
+    JsonError,
+}
+
+/// Build the tool result for a failed dispatch: a collision-free marker the hook
+/// maps to `failed(class)`, carrying the detail text after a `:` separator.
+pub(crate) fn tool_dispatch_failure_result(kind: ToolDispatchFailure, detail: &str) -> String {
+    let marker = match kind {
+        ToolDispatchFailure::ToolCallError => TOOL_CALL_ERROR_MARKER,
+        ToolDispatchFailure::JsonError => JSON_ERROR_MARKER,
+    };
+    format!("{marker}:{detail}")
+}
+
+/// If `result` carries a dispatch-failure marker, return its kind and the detail
+/// after the marker. Callers strip the marker before threading the result back to
+/// the model.
+pub(crate) fn tool_dispatch_failure(result: &str) -> Option<(ToolDispatchFailure, &str)> {
+    for (marker, kind) in [
+        (TOOL_CALL_ERROR_MARKER, ToolDispatchFailure::ToolCallError),
+        (JSON_ERROR_MARKER, ToolDispatchFailure::JsonError),
+    ] {
+        if let Some(rest) = result.strip_prefix(marker) {
+            return Some((kind, rest.strip_prefix(':').unwrap_or(rest)));
+        }
+    }
+    None
+}
+
+/// Strip any internal lifecycle marker, yielding the model-facing text. The
+/// markers are runtime bookkeeping and must never reach the provider.
+pub(crate) fn model_facing_tool_result(result: &str) -> &str {
+    if let Some(notice) = unparseable_args_notice(result) {
+        return notice;
+    }
+    if let Some((_, detail)) = tool_dispatch_failure(result) {
+        return detail;
+    }
+    result
 }
 
 struct RuntimeManagedTool {
