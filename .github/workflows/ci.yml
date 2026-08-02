@@ -74,8 +74,7 @@ jobs:
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
-    needs: [rename-guard, lean-proofs]
-    if: ${{ always() }}
+    needs: rename-guard
     runs-on: [self-hosted, macOS, ARM64, studio]
     strategy:
       fail-fast: false
@@ -85,18 +84,6 @@ jobs:
     # sccache persists compiler output, while target artifacts are job-local.
     timeout-minutes: 180
     steps:
-      - name: Require rename guard
-        if: ${{ needs.rename-guard.result != 'success' }}
-        run: |
-          echo "::error::rename-guard must pass before the Rust and CLI suites run (got '${{ needs.rename-guard.result }}')."
-          exit 1
-
-      - name: Require Lean/Rust contract gate
-        if: ${{ needs.lean-proofs.result != 'success' }}
-        run: |
-          echo "::error::lean-proofs must pass before the Rust and CLI suites run (got '${{ needs.lean-proofs.result }}')."
-          exit 1
-
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -109,9 +96,12 @@ jobs:
           git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-          targets: wasm32-unknown-unknown
+
+      - name: Install support-suite Rust components
+        if: matrix.suite == 'support'
+        run: |
+          rustup component add rustfmt
+          rustup target add wasm32-unknown-unknown
 
       - name: Install elan
         run: |
