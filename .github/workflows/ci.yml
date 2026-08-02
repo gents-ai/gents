@@ -364,6 +364,18 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:ui:fuzz -- --time-limit 30s
 
+      # Bombadil has no --seed; the recorded trace is the only exact-replay
+      # handle. Upload it on success too so a failing run can be bisected
+      # against a known-good trace (npm run test:ui:fuzz -- --reproduce <dir>).
+      - name: Upload Bombadil trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-ui-bombadil-trace
+          if-no-files-found: ignore
+          retention-days: 30
+          path: apps/gents-desktop/test-results/bombadil
+
       - name: Upload desktop UI artifacts
         if: failure()
         uses: actions/upload-artifact@v4
