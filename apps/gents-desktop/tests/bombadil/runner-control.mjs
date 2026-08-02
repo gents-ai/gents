@@ -77,8 +77,17 @@ export async function stopProcess(
   if (!termSignalSent) {
     return;
   }
-  const exitPromise = alreadyExited ? Promise.resolve() : waitForExit(child);
-  await Promise.race([exitPromise, delay(graceMs)]);
+  if (alreadyExited) {
+    // The leader exited on its own, so the group signal only targets surviving
+    // children (Chrome). Poll for their drain across the full SIGTERM grace —
+    // racing against the leader's (already settled) exit would reduce the
+    // grace window to zero and escalate straight to SIGKILL.
+    if (await waitForProcessGroupDrain(child.pid, graceMs, killByPid)) {
+      return;
+    }
+  } else {
+    await Promise.race([waitForExit(child), delay(graceMs)]);
+  }
 
   let sentFinalKill = false;
   if (killProcessGroup) {
@@ -100,6 +109,15 @@ export async function stopProcess(
         : Promise.resolve(true),
     ]);
     if (leaderDrain.kind === "timeout" || !groupDrained) {
+      if (alreadyExited) {
+        // The run's own exit status is authoritative; a straggling (possibly
+        // zombie, awaiting reaping) group member must not turn a finished run
+        // into a failure. Surface it loudly and leave cleanup to the OS.
+        console.warn(
+          `[bombadil] process group ${child.pid ?? "unknown"} did not drain within ${killDrainMs}ms after SIGKILL; leaving cleanup to the OS`,
+        );
+        return;
+      }
       throw new Error(
         `process group ${child.pid ?? "unknown"} did not drain within ${killDrainMs}ms after SIGKILL`,
       );
