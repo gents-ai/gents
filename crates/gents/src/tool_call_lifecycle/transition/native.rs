@@ -364,7 +364,12 @@ impl ToolCallLifecycle {
 
     /// Running → TimedOut. Called by the runtime deadline wrapper and startup
     /// recovery when a running tool call exceeds its effective deadline.
-    pub async fn timeout(&mut self) -> Result<()> {
+    ///
+    /// Returns whether this caller won the durable running-state compare.
+    /// A loser adopts the already-terminal durable row (another actor —
+    /// interrupt, recovery sweep, or the tool itself — terminalized first),
+    /// preserving that terminal's state and recorded cause.
+    pub async fn timeout(&mut self) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "timeout")?;
 
         let doc_id = self
@@ -393,7 +398,10 @@ impl ToolCallLifecycle {
         let mutation = format!(
             r#"mutation {{
                 update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
                     input: {{
                         result: "{escaped_result}",
                         status: "completed",
@@ -410,14 +418,24 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        execute_mutation_with_retry(&self.node, &mutation, "timeout")
+        let response = execute_mutation_with_retry(&self.node, &mutation, "timeout")
             .await
             .context("timeout mutation")?;
+        if !response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentToolCall"))
+            .is_some_and(response_has_documents)
+        {
+            // Another actor terminalized first — adopt the durable terminal.
+            self.sync_after_lost_running_compare("timeout").await?;
+            return Ok(false);
+        }
 
         self.state = ToolCallState::TimedOut;
         self.failure_class = Some(FailureClass::External);
         self.cancel_cause = Some(CancelCause::Deadline);
-        Ok(())
+        Ok(true)
     }
 
     /// Pending → Cancelled. Used when a tool call is cancelled before

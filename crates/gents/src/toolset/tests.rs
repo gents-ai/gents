@@ -574,42 +574,45 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
 
     let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
     let _block_ms = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_MS", "200");
-    let blocking_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(GlobTool::new(
-        context.clone(),
-        DEFAULT_MAX_MATCHES,
-    )));
-    let second_tool = crate::tool_call_lifecycle::runtime::wrap_tool(Box::new(ReadFileTool::new(
-        context,
-        DEFAULT_MAX_FILE_CHARS,
-    )));
+    let blocking_tool: Box<dyn crate::llm::tool::ToolDyn> =
+        Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
+    let second_tool: Box<dyn crate::llm::tool::ToolDyn> =
+        Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
     let started = Instant::now();
     let first_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(15);
-    let first_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let first_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(first_deadline),
         tokio_util::sync::CancellationToken::new(),
-        blocking_tool.call(r#"{"pattern":"*.txt"}"#.to_string()),
+        crate::tool_call_lifecycle::runtime::call_tool_managed(
+            blocking_tool.as_ref(),
+            r#"{"pattern":"*.txt"}"#.to_string(),
+        ),
     )
-    .await
-    .expect("managed timeout is returned as tool output");
+    .await;
     let first_elapsed = started.elapsed();
 
     let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
-    let second_result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let second_outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(second_deadline),
         tokio_util::sync::CancellationToken::new(),
-        second_tool.call(r#"{"path":"second.txt"}"#.to_string()),
+        crate::tool_call_lifecycle::runtime::call_tool_managed(
+            second_tool.as_ref(),
+            r#"{"path":"second.txt"}"#.to_string(),
+        ),
     )
-    .await
-    .expect("second queued request should advance after first timeout");
+    .await;
     let queue_elapsed = started.elapsed();
 
     tokio::time::sleep(Duration::from_millis(225)).await;
     let _ = std::fs::remove_dir_all(&root);
 
-    assert_eq!(
-        crate::tool_call_lifecycle::runtime::classify_managed_tool_result(&first_result),
-        Some(crate::tool_call_lifecycle::runtime::ManagedToolTerminal::TimedOut)
+    assert!(
+        matches!(
+            first_outcome,
+            crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
+        ),
+        "blocking native tool must resolve to a typed timeout, got {first_outcome:?}"
     );
     assert!(
         first_elapsed < Duration::from_millis(150),
@@ -619,7 +622,12 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         queue_elapsed < Duration::from_millis(150),
         "single-worker queue should advance before the blocking native work returns, elapsed={queue_elapsed:?}"
     );
-    assert!(second_result.contains("second request"));
+    match &second_outcome {
+        crate::tool_call_lifecycle::ToolOutcome::Completed(text) => {
+            assert!(text.contains("second request"));
+        }
+        other => panic!("second read should complete, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1689,7 +1697,7 @@ async fn bash_timeout_reports_metadata_instead_of_error() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn bash_request_deadline_returns_lifecycle_timeout_marker() {
+async fn bash_request_deadline_resolves_to_typed_timeout() {
     let root = temp_root("gents-bash-request-deadline");
     let tool = ReadOnlyBashTool::new(
         ToolContext::new(root, false).unwrap(),
@@ -1698,26 +1706,26 @@ async fn bash_request_deadline_returns_lifecycle_timeout_marker() {
     );
     let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(100);
 
-    let output = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let args = serde_json::to_string(&serde_json::json!({
+        "command": "sleep",
+        "args": ["2"],
+        "timeout_secs": 5,
+    }))
+    .unwrap();
+    let outcome = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(deadline),
         tokio_util::sync::CancellationToken::new(),
-        crate::llm::tool::Tool::call(
-            &tool,
-            BashArgs {
-                command: "sleep".to_string(),
-                args: vec!["2".to_string()],
-                cwd: None,
-                timeout_secs: Some(5),
-                raw_json: false,
-            },
-        ),
+        crate::tool_call_lifecycle::runtime::call_tool_managed(boxed.as_ref(), args),
     )
-    .await
-    .unwrap();
+    .await;
 
-    assert_eq!(
-        crate::tool_call_lifecycle::runtime::classify_managed_tool_result(&output),
-        Some(crate::tool_call_lifecycle::runtime::ManagedToolTerminal::TimedOut)
+    assert!(
+        matches!(
+            outcome,
+            crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
+        ),
+        "bash exceeding the request deadline must resolve to a typed timeout, got {outcome:?}"
     );
 }
 

@@ -122,14 +122,16 @@ impl DefraSessionHook {
                     .await?
             else {
                 if now >= parent_deadline_at {
-                    // Terminalize the bridge as dead (parent deadline exceeded
-                    // before the child was ever materialized), mirroring the
-                    // running-edge deadline path so the bridge does not leak in
-                    // a `running` state.
+                    // Terminalize the bridge as timedOut (parent deadline
+                    // exceeded before the child was ever materialized),
+                    // mirroring the running-edge deadline path so the bridge
+                    // does not leak in a `running` state. No child terminal
+                    // evidence exists, so `bridge_failure` is not licensed
+                    // here (#1002) — the deadline transition is.
                     if let Some(mut lifecycle) =
                         self.take_owned_in_flight_lifecycle(internal_call_id).await
                     {
-                        let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await;
+                        let _ = lifecycle.timeout().await;
                     }
                     return Ok(foreground_terminal_failure_payload(
                         child_request_id,
@@ -215,7 +217,11 @@ impl DefraSessionHook {
                         .await?;
                         continue;
                     };
-                    if !lifecycle.bridge_failure(ChildTerminal::Dead).await? {
+                    // The child may still be live: take the licensed deadline
+                    // transition (`timedOut`), never a fabricated
+                    // `ChildTerminal::Dead` (#1002). The child's own
+                    // terminalization belongs to the subagent-liveness sweep.
+                    if !lifecycle.timeout().await? {
                         return self
                             .foreground_external_bridge_terminal_payload(
                                 parent_context,
@@ -482,7 +488,10 @@ impl DefraSessionHook {
                         )
                         .await?
                     {
-                        let projected = match lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                        // Licensed deadline transition — no fabricated child
+                        // terminal evidence (#1002); see
+                        // `await_foreground_subagent`'s deadline arm.
+                        let projected = match lifecycle.timeout().await {
                             Ok(projected) => projected,
                             Err(error) => {
                                 return self

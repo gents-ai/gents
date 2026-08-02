@@ -834,20 +834,21 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            if lifecycle.is_subagent_bridge() {
-                if lifecycle.await_mode() == AwaitMode::Foreground {
-                    lifecycle.bridge_failure(ChildTerminal::Dead).await?;
-                } else {
-                    tracing::debug!(
-                        "leaving background subagent bridge running after parent deadline sweep"
-                    );
-                }
+            if lifecycle.is_subagent_bridge() && lifecycle.await_mode() != AwaitMode::Foreground {
+                tracing::debug!(
+                    "leaving background subagent bridge running after parent deadline sweep"
+                );
             } else if lifecycle.state()
                 == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
             {
                 lifecycle.timeout_while_held().await?;
             } else {
-                lifecycle.timeout().await?;
+                // Foreground subagent bridges take the same deadline
+                // transition as native tools: `timedOut`, never a fabricated
+                // `ChildTerminal::Dead` — the child may still be live, and its
+                // terminalization belongs to the subagent-liveness sweep
+                // (#1002; Lean `ToolExecution.Transition.timeout`).
+                let _ = lifecycle.timeout().await?;
             }
         }
         Ok(count)
