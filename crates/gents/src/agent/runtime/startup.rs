@@ -9,15 +9,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::context::{RuntimeContext, StartupBarrier};
-use crate::admission::{AdmissionRegistry, BackendAdmissionConfig, InferenceCall};
+use crate::admission::{AdmissionRegistry, BackendAdmissionConfig};
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{DocumentResolveContext, Gents, ProcessLifecycleState};
 use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
-use crate::lifecycle::RequestLifecycle;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
-use crate::tool_call_lifecycle::ToolCallLifecycle;
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 
 enum BackgroundTaskResult {
@@ -638,9 +636,12 @@ pub(in crate::agent) async fn run_agent(
 }
 
 async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_behavior_id: &str) {
+    // Sweep order lives in `startup_recovery`, not here: the inference-call
+    // sweep is parent-gated and must run after request repair (#1001).
+    let outcome = crate::startup_recovery::run_startup_recovery(node, agent_did).await;
     let mut recovered_any = false;
 
-    match ToolCallLifecycle::recover_all(node, agent_did).await {
+    match outcome.tool_calls {
         Ok(report) => {
             if report.tool_calls_recovered > 0 {
                 recovered_any = true;
@@ -660,7 +661,7 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
         }
     }
 
-    match InferenceCall::recover_all(node, agent_did).await {
+    match outcome.inference_calls {
         Ok(report) => {
             if report.calls_recovered > 0 {
                 recovered_any = true;
@@ -680,7 +681,7 @@ async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_
         }
     }
 
-    match RequestLifecycle::recover_all(node, agent_did).await {
+    match outcome.requests {
         Ok(report) => {
             if report.requests_recovered > 0 {
                 recovered_any = true;

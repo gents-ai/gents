@@ -21,7 +21,12 @@ pub(super) struct BackendAdmissionController {
     pub(super) config: BackendAdmissionConfig,
     semaphore: Arc<Semaphore>,
     waiters: AtomicUsize,
-    running: AtomicUsize,
+    /// Admissions counted from acquisition *intent* (before any semaphore
+    /// outcome) until release. Drain detection reads this counter, so a
+    /// semaphore permit — including one assigned to a parked waiter whose
+    /// task has not resumed — is never invisible to `is_drained()` (#1001;
+    /// Lean `InferenceCall.ControllerBookkeeping.permit_implies_in_flight`).
+    in_flight: AtomicUsize,
     closed: AtomicBool,
     registry: Weak<AdmissionRegistryInner>,
 }
@@ -39,7 +44,7 @@ impl BackendAdmissionController {
             config,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             waiters: AtomicUsize::new(0),
-            running: AtomicUsize::new(0),
+            in_flight: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
             registry,
         })
@@ -59,7 +64,7 @@ impl BackendAdmissionController {
     }
 
     pub(super) fn is_drained(&self) -> bool {
-        self.running.load(Ordering::SeqCst) == 0
+        self.in_flight.load(Ordering::SeqCst) == 0
     }
 
     pub(super) async fn acquire(
@@ -69,6 +74,12 @@ impl BackendAdmissionController {
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
+        // Count this admission in flight before touching the semaphore, and
+        // release it on every non-admitted exit. `AdmissionRegistry::reconcile`
+        // closes and then checks `is_drained()`; the closed flag and this
+        // counter are both SeqCst, so an acquirer that missed the close is
+        // always visible to that check.
+        let in_flight = InFlightGuard::new(self.clone());
         if self.is_closed() {
             let call = self.call_record(pending, 0);
             if let Err(error) =
@@ -89,6 +100,7 @@ impl BackendAdmissionController {
                         node,
                         permit,
                         call,
+                        in_flight,
                         cancel_observer,
                         terminal_failure_observer,
                     )
@@ -120,6 +132,7 @@ impl BackendAdmissionController {
                                 node,
                                 permit,
                                 call,
+                                in_flight,
                                 cancel_observer,
                                 terminal_failure_observer,
                             )
@@ -160,14 +173,26 @@ impl BackendAdmissionController {
         };
 
         let call = self.call_record(pending, queue_depth);
-        let doc_id = super::persistence::persist_call_queued(node.clone(), &call)
-            .await
-            .map_err(super::persistence::completion_persistence_error)?;
-        let queued_guard = QueuedCallGuard {
+        // The guard exists before the fallible durable write: a persist error
+        // must still release the waiter unit, or each failure permanently
+        // shrinks the queue toward `QueueFull` (#1001; Lean
+        // `InferenceCall.ControllerBookkeeping.persist_error_releases_waiter`).
+        // It arms terminal-persist-on-drop only once the queued row is durable
+        // — before that there is no row to terminalize.
+        let mut queued_guard = QueuedCallGuard {
             node: node.clone(),
             controller: self.clone(),
             call: call.clone(),
-            persist_on_drop: true,
+            persist_on_drop: false,
+        };
+        let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
+            Ok(doc_id) => {
+                queued_guard.arm();
+                doc_id
+            }
+            Err(error) => {
+                return Err(super::persistence::completion_persistence_error(error));
+            }
         };
         let permit = match self.semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
@@ -190,11 +215,15 @@ impl BackendAdmissionController {
             }
         };
         drop(queued_guard.disarm());
-        self.running.fetch_add(1, Ordering::SeqCst);
+        // A failure here leaves the durable row `queued` with no terminal
+        // write; that is intentional — queued rows hold no reconstructed slot
+        // and the startup inference-call sweep terminalizes them.
         if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
-            self.release_running();
+            // Permit before in-flight release, as in `start_permit`.
+            drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
         }
+        in_flight.disarm();
         Ok(AdmissionPermit::new(
             node,
             self,
@@ -211,25 +240,30 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         permit: OwnedSemaphorePermit,
         call: InferenceCallRecord,
+        in_flight: InFlightGuard,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        self.running.fetch_add(1, Ordering::SeqCst);
-        match persist_call_started(node.clone(), &call).await {
-            Ok(doc_id) => Ok(AdmissionPermit::new(
-                node,
-                self,
-                permit,
-                call,
-                doc_id,
-                cancel_observer,
-                terminal_failure_observer,
-            )),
+        let doc_id = match persist_call_started(node.clone(), &call).await {
+            Ok(doc_id) => doc_id,
             Err(error) => {
-                self.release_running();
-                Err(error)
+                // Return the permit before `in_flight` drops and releases:
+                // parameters drop in reverse declaration order, which would
+                // otherwise let a drained signal precede the permit return.
+                drop(permit);
+                return Err(error);
             }
-        }
+        };
+        in_flight.disarm();
+        Ok(AdmissionPermit::new(
+            node,
+            self,
+            permit,
+            call,
+            doc_id,
+            cancel_observer,
+            terminal_failure_observer,
+        ))
     }
 
     fn try_enter_queue(&self) -> Option<usize> {
@@ -252,8 +286,8 @@ impl BackendAdmissionController {
         self.waiters.fetch_sub(1, Ordering::SeqCst);
     }
 
-    pub(super) fn release_running(&self) {
-        let previous = self.running.fetch_sub(1, Ordering::SeqCst);
+    pub(super) fn release_in_flight(&self) {
+        let previous = self.in_flight.fetch_sub(1, Ordering::SeqCst);
         if previous == 1 && self.is_closed() {
             if let Some(registry) = self.registry.upgrade() {
                 let backend_id = self.backend_id.clone();
@@ -284,6 +318,17 @@ impl BackendAdmissionController {
     }
 }
 
+#[cfg(test)]
+impl BackendAdmissionController {
+    pub(super) fn queue_waiters_for_test(&self) -> usize {
+        self.waiters.load(Ordering::SeqCst)
+    }
+
+    pub(super) fn available_permits_for_test(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+}
+
 pub(super) struct QueuedCallGuard {
     node: Arc<EmbeddedNode>,
     controller: Arc<BackendAdmissionController>,
@@ -292,9 +337,44 @@ pub(super) struct QueuedCallGuard {
 }
 
 impl QueuedCallGuard {
+    fn arm(&mut self) {
+        self.persist_on_drop = true;
+    }
+
     pub(super) fn disarm(mut self) -> Self {
         self.persist_on_drop = false;
         self
+    }
+}
+
+/// Holds one unit of the controller's `in_flight` count from acquisition
+/// intent until either the admission is handed to an `AdmissionPermit`
+/// (`disarm`; the permit's drop releases through `release_in_flight`) or the
+/// acquire path exits without admitting.
+struct InFlightGuard {
+    controller: Arc<BackendAdmissionController>,
+    armed: bool,
+}
+
+impl InFlightGuard {
+    fn new(controller: Arc<BackendAdmissionController>) -> Self {
+        controller.in_flight.fetch_add(1, Ordering::SeqCst);
+        Self {
+            controller,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.controller.release_in_flight();
+        }
     }
 }
 

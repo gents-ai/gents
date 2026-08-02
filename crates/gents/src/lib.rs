@@ -40,6 +40,7 @@ pub mod oauth_credential;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub mod startup_readiness;
+pub mod startup_recovery;
 pub mod xai_grok_oauth;
 pub mod xai_oauth_login;
 pub mod xai_oauth_refresh;

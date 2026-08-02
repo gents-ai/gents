@@ -191,6 +191,11 @@ async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero()
 }
 
 #[tokio::test]
+async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
+    recovery_sweeps::startup_recovery_order_terminalizes_crash_orphaned_calls().await;
+}
+
+#[tokio::test]
 async fn single_claimer_watcher_never_claims_foreign_replica() {
     replicated_request_convergence::single_claimer_watcher_never_claims_foreign_replica().await;
 }
