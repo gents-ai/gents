@@ -1473,7 +1473,11 @@ fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
         (1, 1),
         "the pair must survive an intervening empty message: {out:?}"
     );
-    assert_eq!(out.len(), 2, "the empty message itself must be gone: {out:?}");
+    assert_eq!(
+        out.len(),
+        2,
+        "the empty message itself must be gone: {out:?}"
+    );
 }
 
 /// A *non-empty* ordinary message does end the turn, so a result arriving after
