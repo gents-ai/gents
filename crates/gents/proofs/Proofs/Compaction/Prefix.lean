@@ -322,22 +322,44 @@ theorem sanitize_drop_noop {msgs : List MessageRow} {n : Nat}
     (drop_preserves_providerValid _ n (providerView_sound huniq) hboundary)
     (nonemptyAnnouncements_drop n _ (providerView_nonempty_announcements msgs))
 
-/-- Reusing a tool-call id across turns breaks prefix stability, and therefore
-breaks the compacted-prefix correspondence.
+/-- Reusing a tool-call id across turns breaks prefix stability **under global
+resolution**, and therefore breaks the compacted-prefix correspondence.
 
 `dropUnpairedCalls` credits an announcement from the *global* resolved set, so a
 later turn that reuses an id resurrects an earlier announcement that the shorter
 view had dropped as unpaired. The prefix changes under append and a stored count
 no longer names the rows it was measured against.
 
-`UniqueCallIds` is what rules this out, and it is a real hypothesis rather than
-a structural fact: production call ids come from the provider. Rust checks it
-(`compaction::has_unique_call_ids`) and skips compaction when it fails, rather
-than assuming it. See `boundary.compaction.unique-call-ids-checked`. -/
+`UniqueCallIds` rules this out, and it is a real hypothesis rather than a
+structural fact: production call ids come from the provider.
+
+**This is a property of the coarser `providerView`, not of the runtime.**
+Production scopes resolution to the active turn, and
+`reused_call_id_is_prefix_stable_per_turn` below shows the same witness is
+stable there. `compaction::has_unique_call_ids` is retained as defence in depth
+rather than as the only thing standing between the runtime and this hazard. See
+`boundary.compaction.unique-call-ids-checked`. -/
 theorem reused_call_id_breaks_prefix_stability :
     ∃ a b : List MessageRow,
       pendingAfter ∅ a = ∅ ∧
         (providerView (a ++ b)).take (providerView a).length ≠ providerView a := by
+  refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
+          [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
+           ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩
+  · decide
+  · decide
+
+/-- The same witness, under the per-turn resolution production implements: the
+earlier announcement is *not* resurrected, so the prefix is stable.
+
+This is why the runtime no longer exhibits the hazard above. The reused id is
+credited only inside its own turn, so appending the later turn cannot change
+what the shorter view already decided. -/
+theorem reused_call_id_is_prefix_stable_per_turn :
+    ∃ a b : List MessageRow,
+      pendingAfter ∅ a = ∅ ∧
+        (providerViewTurn (a ++ b)).take (providerViewTurn a).length =
+          providerViewTurn a := by
   refine ⟨[⟨0, 0, 0, .assistant, .assistantToolCalls {1}⟩, ⟨1, 0, 1, .user, .ordinary⟩],
           [⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩,
            ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 0⟩⟩], ?_, ?_⟩

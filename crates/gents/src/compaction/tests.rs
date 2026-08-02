@@ -1109,9 +1109,18 @@ fn reused_call_ids_are_detected() {
     assert!(!has_unique_call_ids(&reused));
 }
 
+/// Resolution is scoped to the active turn, so a later turn reusing a call id
+/// does *not* resurrect an earlier unpaired announcement and the prefix stays
+/// stable. Under the global resolved set this shifted — `Compaction.
+/// reused_call_id_breaks_prefix_stability` still exhibits that for the coarser
+/// model, and `reused_call_id_is_prefix_stable_per_turn` shows the same witness
+/// is stable under the per-turn view production implements (#992).
+///
+/// `has_unique_call_ids` is retained as defence in depth, not as the only thing
+/// preventing this.
 #[test]
-fn reused_call_ids_really_do_shift_the_provider_view_prefix() {
-    // The concrete harm the check exists to prevent, in runtime terms.
+fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
+    // The harm the unique-id check was introduced to prevent, now absent.
     let prefix = vec![
         tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
         text_msg("user", "next turn"),
@@ -1131,14 +1140,15 @@ fn reused_call_ids_really_do_shift_the_provider_view_prefix() {
         1,
         "the unpaired announcement is dropped while nothing resolves it"
     );
-    assert_ne!(
+    assert_eq!(
         long_view
             .iter()
             .take(short_view.len())
             .cloned()
             .collect::<Vec<_>>(),
         short_view,
-        "reuse resurrects the earlier announcement, so the prefix is not stable"
+        "per-turn resolution must not resurrect the earlier announcement, so the \
+         prefix stays stable under append"
     );
 }
 

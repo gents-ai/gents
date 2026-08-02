@@ -21,8 +21,8 @@ single reduction the compaction writer and the request reader both index.
 namespace Compaction
 
 open Transcript (MessageRow MessageKind ToolResultKey)
-open PromptAssembly (sanitize dropOrphanedFrom filterCallsBy resolvedIn callsIn withKind
-                     UniqueCallIds ProviderValid)
+open PromptAssembly (sanitize sanitizeTurn dropOrphanedFrom filterCallsBy resolvedIn callsIn
+                     withKind UniqueCallIds ProviderValid)
 
 theorem stripRow_withKind_assistant (row : MessageRow)
     (callIds : Finset ToolExecution.ToolCallId) :
@@ -103,9 +103,29 @@ compaction writer records `messages_compacted` against it, and the request
 reader drops that many rows from it. Rust: `compaction::provider_view`. -/
 def providerView (msgs : List MessageRow) : List MessageRow := sanitize (strip msgs)
 
+/-- The provider view production actually computes.
+
+`drop_unpaired_tool_calls` scopes resolution to the active turn
+(`resolved_keys_per_turn`), so a later turn reusing a call id cannot resurrect
+an earlier unpaired announcement. `providerViewTurn_eq_providerView` shows this
+is the same list as `providerView` whenever `UniqueCallIds` holds — which is the
+hypothesis every theorem below already carries — so the accounting results
+transfer verbatim while the model now names what the runtime does. -/
+def providerViewTurn (msgs : List MessageRow) : List MessageRow :=
+  sanitizeTurn (strip msgs)
+
+theorem providerViewTurn_eq_providerView {msgs : List MessageRow}
+    (huniq : UniqueCallIds msgs) : providerViewTurn msgs = providerView msgs :=
+  PromptAssembly.sanitizeTurn_eq_sanitize (strip_preserves_uniqueCallIds huniq)
+
 theorem providerView_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
     ProviderValid (providerView msgs) :=
   PromptAssembly.sanitize_sound (strip_preserves_uniqueCallIds huniq)
+
+theorem providerViewTurn_sound {msgs : List MessageRow} (huniq : UniqueCallIds msgs) :
+    ProviderValid (providerViewTurn msgs) := by
+  rw [providerViewTurn_eq_providerView huniq]
+  exact providerView_sound huniq
 
 /-- What lets `compact()` re-normalize its own input for free, so
 `messages_compacted` indexes the canonical space whoever the caller is. -/
