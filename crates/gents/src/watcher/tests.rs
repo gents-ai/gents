@@ -377,14 +377,15 @@ async fn mark_as_deprecated_background_completion_wakeup(
     session_id: &str,
 ) {
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let metadata =
-        crate::lifecycle::queue::queue_metadata_json(&crate::lifecycle::queue::QueueHints {
-            source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
-            policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
-            key: Some(format!("background_completion:{session_id}")),
-            queued_after_request_id: Some("legacy-parent".to_string()),
-            interrupted_request_id: None,
-        });
+    let metadata = serde_json::json!({
+        "queue": {
+            "source": "background_completion",
+            "policy": "coalesce",
+            "key": format!("background_completion:{session_id}"),
+            "queued_after_request_id": "legacy-parent"
+        }
+    })
+    .to_string();
     let metadata = crate::graphql::escape_graphql_string(&metadata);
     let mutation = format!(
         r#"mutation {{

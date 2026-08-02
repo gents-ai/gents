@@ -39,7 +39,8 @@ pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
     CONTEXT_BUDGET_TOOL_NAME,
 };
-pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+pub use denial::CommandPolicyDenial;
+pub(crate) use denial::DenialReason;
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
 #[cfg(feature = "agent-memory")]
@@ -60,7 +61,16 @@ const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 const DEFAULT_MAX_MATCHES: usize = 200;
-const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
+// Foreground default aligned with other agent frameworks (Claude Code and
+// grok-build both default to 120s); deployments raise or lower it with
+// `--command-timeout-secs`, which is also the foreground ceiling (#985).
+pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
+// Lifetime budget for commands backgrounded via spawn_process. Background
+// runs are exempt from the foreground ceiling — cancel_process and the
+// completion notification are the lifecycle controls — but keep a 10-hour
+// backstop (grok-build uses the same bound) so an orphaned job cannot run
+// forever (#985).
+pub(crate) const BACKGROUND_COMMAND_TIMEOUT_SECS: u64 = 36_000;
 pub(crate) const SPAWN_SUBAGENT_TOOL_NAME: &str = "spawn_subagent";
 pub(crate) const WAIT_SUBAGENT_TOOL_NAME: &str = "wait_subagent";
 pub(crate) const LIST_SUBAGENTS_TOOL_NAME: &str = "list_subagents";

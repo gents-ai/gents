@@ -486,6 +486,69 @@ impl CompletionModel for MockSummaryModel {
     }
 }
 
+#[tokio::test]
+async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
+    let model = MockSummaryModel::new(
+        &serde_json::json!({
+            "summary": "Older turns were compacted to honor the provider input budget.",
+            "files_read": [],
+            "files_modified": [],
+            "key_decisions": [],
+            "pending_questions": []
+        })
+        .to_string(),
+    );
+    let config = crate::agent::loop_stream::LoopConfig {
+        preamble: None,
+        context_message: None,
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
+        deadline: None,
+        max_turns: 0,
+    };
+    let compactor = DefraCompactor::new(Arc::new(model), config);
+    let messages = (0..8)
+        .flat_map(|turn| {
+            [
+                text_msg("user", &format!("request {turn}: {}", "x".repeat(400))),
+                text_msg(
+                    "assistant",
+                    &format!("response {turn}: {}", "y".repeat(400)),
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !needs_compaction(&messages, 100_000, 0.75),
+        "the history-only guard must be below threshold for this regression"
+    );
+    let result = compactor
+        .compact(
+            messages,
+            100_000,
+            &CompactionOptions {
+                threshold: 0.75,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                force_summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        result.summary.is_some(),
+        "a complete-input budget trigger must not silently no-op in the compactor"
+    );
+    assert!(result.messages_compacted > 0);
+}
+
 /// Counts provider calls and always fails transiently — to prove compaction
 /// does not retry. `Clone` shares the counter (the loop clones the model).
 #[derive(Clone)]
@@ -613,7 +676,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     let long_result = "x".repeat(5000);
     let messages = vec![
         text_msg("user", "read this file"),
-        tool_call_msg("read", r#"{"file_path": "/tmp/test.rs"}"#),
+        tool_call_msg("read_file", r#"{"path": "/tmp/test.rs"}"#),
         tool_result_msg("call-1", &long_result),
         text_msg("assistant", "I saw the file"),
     ];
@@ -622,23 +685,11 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert_eq!(stripped.len(), 4);
     assert_eq!(files.files_read, vec!["/tmp/test.rs"]);
     assert!(files.files_modified.is_empty());
-
-    if let Message::User { content } = &stripped[2] {
-        if let UserContent::ToolResult(tr) = first_content(content) {
-            if let ToolResultContent::Text(text) = first_content(&tr.content) {
-                assert_eq!(
-                    text.text,
-                    "[tool: read, call_id: call-1, 5000 bytes — see DefraDB AgentToolCall for full output]"
-                );
-            } else {
-                panic!("expected text content");
-            }
-        } else {
-            panic!("expected tool result");
-        }
-    } else {
-        panic!("expected user message");
-    }
+    assert_eq!(
+        sole_tool_result_text(&stripped[2]),
+        "[tool: read_file(/tmp/test.rs), call_id: call-1, 5000 bytes \
+         — see DefraDB AgentToolCall for full output]"
+    );
 }
 
 #[test]
@@ -653,6 +704,485 @@ fn strip_extracts_read_and_modified_files() {
     let (_, files) = strip_tool_results(messages);
     assert_eq!(files.files_read, vec!["/src/main.rs"]);
     assert_eq!(files.files_modified, vec!["/src/lib.rs"]);
+}
+
+fn sole_tool_result_text(message: &Message) -> String {
+    let Message::User { content } = message else {
+        panic!("expected user message");
+    };
+    let UserContent::ToolResult(tool_result) = first_content(content) else {
+        panic!("expected tool result");
+    };
+    let ToolResultContent::Text(text) = first_content(&tool_result.content) else {
+        panic!("expected text content");
+    };
+    text.text.clone()
+}
+
+#[test]
+fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
+    // A command or MCP tool can return arbitrary text, including text shaped
+    // like one of our own stubs. Recognizing the shape must never license
+    // skipping the rewrite: the payload has to go regardless, or a large result
+    // would survive every provider-view pass and defeat compaction entirely.
+    let spoof = format!(
+        "[tool: read_file(/etc/passwd), call_id: call-1, 12 bytes \
+         — see DefraDB AgentToolCall for full output]{}",
+        "P".repeat(5000)
+    );
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "cat spoof"}"#),
+        tool_result_msg("call-1", &spoof),
+    ];
+
+    let (stripped, _) = strip_tool_results(messages);
+    let out = sole_tool_result_text(&stripped[1]);
+    assert!(
+        !out.contains(&"P".repeat(5000)),
+        "the payload must not survive stripping: {out}"
+    );
+    assert!(
+        out.starts_with("[tool: bash, call_id: call-1,"),
+        "the stub is rebuilt from the real call, not from the spoofed text: {out}"
+    );
+}
+
+#[test]
+fn strip_is_idempotent_and_preserves_the_original_byte_count() {
+    let long_result = "x".repeat(5000);
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/tmp/test.rs"}"#),
+        tool_result_msg("call-1", &long_result),
+    ];
+
+    let (once, _) = strip_tool_results(messages);
+    let (twice, _) = strip_tool_results(once.clone());
+
+    assert_eq!(once, twice, "strip must be idempotent");
+    let stub = sole_tool_result_text(&twice[1]);
+    assert!(
+        stub.contains("5000 bytes"),
+        "reapplying strip must not re-measure the stub: {stub}"
+    );
+}
+
+#[test]
+fn strip_marks_already_truncated_output_without_sniffing_the_word() {
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+        tool_result_msg("call-1", "the build log says truncated somewhere"),
+    ];
+    let (stripped, _) = strip_tool_results(messages);
+    assert!(
+        !sole_tool_result_text(&stripped[1]).contains(", truncated"),
+        "ordinary output mentioning the word must not be flagged as truncated"
+    );
+
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+        tool_result_msg("call-1", "output\n[Full output: DefraDB doc bafy123]"),
+    ];
+    let (stripped, _) = strip_tool_results(messages);
+    assert!(sole_tool_result_text(&stripped[1]).contains(", truncated"));
+}
+
+#[test]
+fn pretruncation_does_not_panic_on_a_multibyte_boundary() {
+    // "é" is two bytes, so byte 2000 lands inside a codepoint.
+    let payload = format!("{}é{}", "a".repeat(1999), "b".repeat(500));
+    let messages = vec![
+        tool_call_msg("bash", r#"{"command": "cat notes"}"#),
+        tool_result_msg("call-1", &payload),
+    ];
+    let truncated = super::history::pretruncate_tool_results(messages, 2000);
+    assert!(sole_tool_result_text(&truncated[1]).contains("pre-truncated"));
+}
+
+#[test]
+fn file_activity_classifies_the_registered_file_tools() {
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        tool_call_msg("write_file", r#"{"path": "/src/lib.rs"}"#),
+        tool_result_msg("call-1", "ok"),
+        tool_call_msg("edit_file", r#"{"path": "/src/edit.rs"}"#),
+        tool_result_msg("call-1", "ok"),
+        tool_call_msg("grep", r#"{"path": "/src/grep.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+        tool_call_msg("glob", r#"{"path": "/src/glob.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+        tool_call_msg("list_files", r#"{"path": "/src/list.rs"}"#),
+        tool_result_msg("call-1", "hit"),
+    ];
+
+    let (_, files) = strip_tool_results(messages);
+    assert_eq!(
+        files.files_read,
+        vec![
+            "/src/glob.rs",
+            "/src/grep.rs",
+            "/src/list.rs",
+            "/src/main.rs"
+        ]
+    );
+    assert_eq!(files.files_modified, vec!["/src/edit.rs", "/src/lib.rs"]);
+}
+
+#[test]
+fn dry_run_edits_are_not_recorded_as_modifications() {
+    let messages = vec![
+        tool_call_msg(
+            "edit_file",
+            r#"{"path": "/src/preview.rs", "dry_run": true}"#,
+        ),
+        tool_result_msg("call-1", "would change 3 lines"),
+    ];
+
+    let (_, files) = strip_tool_results(messages);
+    assert!(
+        files.files_modified.is_empty(),
+        "a dry run writes nothing: {:?}",
+        files.files_modified
+    );
+    assert_eq!(
+        files.files_read,
+        vec!["/src/preview.rs"],
+        "it did read the file to build the preview"
+    );
+}
+
+#[test]
+fn calls_without_a_result_are_not_recorded_as_modifications() {
+    // The turn was interrupted before the write ran: an assistant announcement
+    // with no paired result must not be persisted under "Files modified", where
+    // it would be rendered into later prompts as state the run never produced.
+    let messages = vec![
+        tool_call_msg("write_file", r#"{"path": "/src/never_written.rs"}"#),
+        text_msg("user", "actually, stop"),
+    ];
+
+    let (_, files) = strip_tool_results(messages);
+    assert!(
+        files.files_modified.is_empty(),
+        "unpaired call must not count: {:?}",
+        files.files_modified
+    );
+
+    // The same history *with* a result does count.
+    let completed = vec![
+        tool_call_msg("write_file", r#"{"path": "/src/written.rs"}"#),
+        tool_result_msg("call-1", "ok"),
+    ];
+    let (_, files) = strip_tool_results(completed);
+    assert_eq!(files.files_modified, vec!["/src/written.rs"]);
+}
+
+#[test]
+fn every_registered_file_tool_is_classified() {
+    // Guards against a file tool being added to toolset::file_tools without a
+    // matching classification here, which would silently empty the compaction
+    // summary's file lists — the defect this test exists to keep from recurring.
+    for name in ["read_file", "list_files", "glob", "grep"] {
+        assert!(
+            super::history::is_read_tool(name),
+            "{name} is not classified as a read tool"
+        );
+    }
+    for name in ["write_file", "edit_file"] {
+        assert!(
+            super::history::is_write_tool(name),
+            "{name} is not classified as a write tool"
+        );
+    }
+}
+
+#[test]
+fn split_never_separates_a_tool_call_from_its_result() {
+    // A budget that retains roughly the last message would land the boundary
+    // between the assistant tool call and the user tool result.
+    let messages = vec![
+        text_msg("user", &"a".repeat(4000)),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    let (old, recent) = super::history::split_messages_for_summary(messages, 40);
+
+    assert_eq!(
+        old.len(),
+        1,
+        "only the bulky user turn should be summarized"
+    );
+    assert_eq!(
+        recent.len(),
+        2,
+        "the assistant turn and its result stay together"
+    );
+    assert!(
+        matches!(&recent[0], Message::Assistant { .. }),
+        "the retained tail must start at the assistant announcement"
+    );
+}
+
+#[test]
+fn pair_safe_boundary_retreats_to_the_turn_start() {
+    let messages = vec![
+        text_msg("user", "go"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    assert_eq!(super::history::pair_safe_boundary(&messages, 2), 1);
+    assert_eq!(super::history::pair_safe_boundary(&messages, 3), 3);
+    assert_eq!(super::history::pair_safe_boundary(&messages, 1), 1);
+}
+
+#[test]
+fn provider_view_is_idempotent() {
+    let history = vec![
+        tool_result_msg("orphan-1", "result with no call"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+    let (once, _) = provider_view(history);
+    let (twice, _) = provider_view(once.clone());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
+    // An orphaned tool result at the head: sanitize removes it, so the
+    // unsanitized and sanitized indexings of the compacted prefix diverge.
+    // Under the old order (strip -> drop -> sanitize) a count measured in the
+    // sanitized space was applied to the unsanitized one, shifting the boundary.
+    let history = vec![
+        tool_result_msg("orphan-1", "result with no call"),
+        text_msg("user", "first real turn"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        text_msg("assistant", "done"),
+        text_msg("user", "second turn"),
+    ];
+
+    let (view, _) = provider_view(history.clone());
+    assert_eq!(
+        view.len(),
+        5,
+        "sanitize must remove the orphaned result from the view"
+    );
+
+    // Compaction summarized the first row *of the view* — a pair-safe boundary,
+    // which is the only kind the writer ever records.
+    let compacted = 1usize;
+    assert_eq!(
+        super::history::pair_safe_boundary(&view, compacted),
+        compacted,
+        "the modelled writer only ever records a pair-safe boundary"
+    );
+    let retained = view.iter().skip(compacted).cloned().collect::<Vec<_>>();
+
+    // The next request rebuilds the view from the same durable history and
+    // drops the same count. It must land on exactly the retained rows.
+    let (reread, _) = provider_view(history.clone());
+    assert_eq!(
+        reread.into_iter().skip(compacted).collect::<Vec<_>>(),
+        retained
+    );
+
+    // The old order is the defect: the count was measured against the sanitized
+    // list but applied to the unsanitized one, which still carries the orphan at
+    // index 0. Dropping one row there removes the orphan instead of the
+    // summarized turn, so "first real turn" survives verbatim alongside its own
+    // summary.
+    let (stripped, _) = strip_tool_results(history);
+    let old_order =
+        sanitize_history_for_provider(stripped.into_iter().skip(compacted).collect::<Vec<_>>());
+    assert_eq!(
+        old_order.len(),
+        retained.len() + 1,
+        "the old order retains one row too many"
+    );
+    assert_eq!(
+        old_order.first(),
+        Some(&text_msg("user", "first real turn")),
+        "and the row it retains is the one that was summarized"
+    );
+}
+
+#[test]
+fn legacy_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
+    // Counts written before the pair-safe splitter used an arbitrary budget
+    // index and carry no version marker, so an upgraded session can drop
+    // between an assistant ToolCall and its ToolResult. Left alone the orphan
+    // reaches compact(), which re-normalizes its input and would record its
+    // next count in a shifted space — the accounting defect, reopened for
+    // exactly the sessions that predate the fix.
+    let history = vec![
+        text_msg("user", "first"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+        text_msg("assistant", "done"),
+    ];
+    let (view, _) = provider_view(history);
+
+    // A legacy count of 2 lands between the call and its result.
+    let legacy = 2usize;
+    assert_ne!(
+        super::history::pair_safe_boundary(&view, legacy),
+        legacy,
+        "the fixture must actually straddle a turn, or this proves nothing"
+    );
+
+    let dropped = view.iter().skip(legacy).cloned().collect::<Vec<_>>();
+    assert!(
+        !pair_closed_messages(&dropped),
+        "dropping at a legacy boundary orphans the result"
+    );
+
+    let repaired = sanitize_history_for_provider(dropped);
+    assert!(
+        pair_closed_messages(&repaired),
+        "re-narrowing after the drop must remove the orphan"
+    );
+
+    // And it is a no-op at a boundary this runtime would have written.
+    let safe = super::history::pair_safe_boundary(&view, legacy);
+    let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
+    assert_eq!(
+        sanitize_history_for_provider(safe_tail.clone()),
+        safe_tail,
+        "Compaction.sanitize_drop_noop: free for counts this runtime writes"
+    );
+}
+
+fn pair_closed_messages(messages: &[Message]) -> bool {
+    let announced = messages
+        .iter()
+        .flat_map(|message| match message {
+            Message::Assistant { content, .. } => content
+                .iter()
+                .filter_map(|item| match item {
+                    AssistantContent::ToolCall(tool_call) => Some(
+                        tool_call
+                            .call_id
+                            .clone()
+                            .unwrap_or_else(|| tool_call.id.clone()),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect::<std::collections::HashSet<_>>();
+    messages.iter().all(|message| match message {
+        Message::User { content } => content.iter().all(|item| match item {
+            UserContent::ToolResult(tool_result) => announced.contains(
+                &tool_result
+                    .call_id
+                    .clone()
+                    .unwrap_or_else(|| tool_result.id.clone()),
+            ),
+            _ => true,
+        }),
+        _ => true,
+    })
+}
+
+#[test]
+fn reused_call_ids_are_detected() {
+    let unique = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        tool_result_msg("call-1", "a"),
+    ];
+    assert!(has_unique_call_ids(&unique));
+
+    // The same id announced by two different turns: a later result resurrects
+    // the earlier announcement in the provider view, shifting a stored prefix
+    // count. `Compaction.reused_call_id_breaks_prefix_stability` is the model's
+    // version of this.
+    let reused = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        text_msg("user", "next turn"),
+        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
+        tool_result_msg("call-1", "b"),
+    ];
+    assert!(!has_unique_call_ids(&reused));
+}
+
+/// Resolution is scoped to the active turn, so a later turn reusing a call id
+/// does *not* resurrect an earlier unpaired announcement and the prefix stays
+/// stable. Under the global resolved set this shifted — `Compaction.
+/// reused_call_id_breaks_prefix_stability` still exhibits that for the coarser
+/// model, and `reused_call_id_is_prefix_stable_per_turn` shows the same witness
+/// is stable under the per-turn view production implements (#992).
+///
+/// `has_unique_call_ids` is retained as defence in depth, not as the only thing
+/// preventing this.
+#[test]
+fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
+    // The harm the unique-id check was introduced to prevent, now absent.
+    let prefix = vec![
+        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
+        text_msg("user", "next turn"),
+    ];
+    let suffix = vec![
+        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
+        tool_result_msg("call-1", "b"),
+    ];
+
+    let (short_view, _) = provider_view(prefix.clone());
+    let mut whole = prefix;
+    whole.extend(suffix);
+    let (long_view, _) = provider_view(whole);
+
+    assert_eq!(
+        short_view.len(),
+        1,
+        "the unpaired announcement is dropped while nothing resolves it"
+    );
+    assert_eq!(
+        long_view
+            .iter()
+            .take(short_view.len())
+            .cloned()
+            .collect::<Vec<_>>(),
+        short_view,
+        "per-turn resolution must not resurrect the earlier announcement, so the \
+         prefix stays stable under append"
+    );
+}
+
+#[test]
+fn safe_to_reduce_requires_every_retained_tool_result_to_be_terminal() {
+    let messages = vec![
+        text_msg("user", "go"),
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+
+    assert!(safe_to_reduce(&messages, &AllTerminal));
+    assert!(!safe_to_reduce(&messages, &NoneKnown));
+
+    // No tool results at all: nothing to gate on.
+    let plain = vec![text_msg("user", "go"), text_msg("assistant", "ok")];
+    assert!(safe_to_reduce(&plain, &NoneKnown));
+}
+
+struct StreamingIndex;
+
+impl ResponseStatusIndex for StreamingIndex {
+    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
+        Some(ResponseStatus::Streaming)
+    }
+}
+
+#[test]
+fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
+    let messages = vec![
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        tool_result_msg("call-1", "fn main() {}"),
+    ];
+    assert!(!safe_to_reduce(&messages, &StreamingIndex));
 }
 
 #[test]
@@ -779,10 +1309,11 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     }
 
     let history = session::load_history(&node, "session-1").await.unwrap();
-    let (stripped_history, _) = strip_tool_results(history);
+    let durable_before = history.clone();
+    let (provider_history, _) = provider_view(history);
     let result = compactor
         .compact(
-            stripped_history,
+            provider_history,
             2000,
             &CompactionOptions {
                 threshold: 0.50,
@@ -816,7 +1347,19 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     assert!(entries[0].summary.contains("inspected the source files"));
 
     let resumed_history = session::load_history(&node, "session-1").await.unwrap();
-    let (resumed_history, _) = strip_tool_results(resumed_history);
+    // Compaction is a projection: it writes a summary entry and drops a prefix
+    // from the *provider view*. The durable AgentMessage rows that
+    // `run_timeline` reconstructs a request's event stream from must be
+    // untouched.
+    assert_eq!(
+        durable_before, resumed_history,
+        "compaction must not mutate the durable transcript the timeline is built from"
+    );
+
+    // Read side: rebuild the same provider view and drop the same count. This
+    // is the write/read correspondence — the count was measured against
+    // `provider_view` above, so it must be applied to `provider_view` here.
+    let (resumed_history, _) = provider_view(resumed_history);
     let compacted_count = entries
         .iter()
         .map(|entry| entry.messages_compacted as usize)
@@ -861,4 +1404,170 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     assert_eq!(built.messages[1..], resumed_history[..]);
 
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+// ---------------------------------------------------------------------------
+// Pairing-scope regressions, all found by review of the generated PromptAssembly
+// conformance fence (#992). Each is a shape the Lean row model cannot express,
+// so each is fenced here.
+// ---------------------------------------------------------------------------
+
+fn scoped_call(id: &str) -> AssistantContent {
+    AssistantContent::ToolCall(ToolCall {
+        id: id.to_string(),
+        call_id: Some(id.to_string()),
+        function: crate::llm::message::ToolFunction {
+            name: "echo".to_string(),
+            arguments: serde_json::json!({}),
+        },
+        signature: None,
+        additional_params: None,
+    })
+}
+
+fn scoped_result(id: &str) -> Message {
+    Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: id.to_string(),
+            call_id: Some(id.to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: format!("{id}-result"),
+            })],
+        })],
+    }
+}
+
+fn count_calls_and_results(messages: &[Message]) -> (usize, usize) {
+    let calls = messages
+        .iter()
+        .map(|message| match message {
+            Message::Assistant { content, .. } => content
+                .iter()
+                .filter(|item| matches!(item, AssistantContent::ToolCall(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum();
+    let results = messages
+        .iter()
+        .map(|message| match message {
+            Message::User { content } => content
+                .iter()
+                .filter(|item| matches!(item, UserContent::ToolResult(_)))
+                .count(),
+            _ => 0,
+        })
+        .sum();
+    (calls, results)
+}
+
+/// Duplicate call keys inside one assistant turn used to leave a dangling call:
+/// `drop_orphaned_tool_results` pairs through a set, so it closed the turn with
+/// a single result while `drop_unpaired_tool_calls` kept both calls.
+#[test]
+fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1"), scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "every surviving call must be closed by a result: {out:?}"
+    );
+}
+
+/// Reuse of a call key across *different* turns, both closed, is legitimate —
+/// pairing resets per turn — and must survive the duplicate-key repair.
+#[test]
+fn call_key_reuse_across_turns_survives() {
+    let history = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+    ];
+    assert_eq!(
+        super::sanitize_history_for_provider(history.clone()),
+        history,
+        "per-turn key reuse must be preserved"
+    );
+}
+
+/// Resolution is scoped to the active turn. A *second* turn reusing a call key
+/// but never answered must not be resolved by the *first* turn's result — which
+/// a single global set of resolved keys would do, stranding a dangling call in
+/// provider input.
+#[test]
+fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        scoped_result("c1"),
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "the unanswered second-turn call must be dropped: {out:?}"
+    );
+}
+
+/// An empty message does not end the active tool-call turn: Rust clears
+/// `pending_calls` only on plain content, and an empty message carries none.
+/// A valid call/result pair separated by one must survive intact.
+#[test]
+fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        Message::User { content: vec![] },
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (1, 1),
+        "the pair must survive an intervening empty message: {out:?}"
+    );
+    assert_eq!(
+        out.len(),
+        2,
+        "the empty message itself must be gone: {out:?}"
+    );
+}
+
+/// A *non-empty* ordinary message does end the turn, so a result arriving after
+/// it is orphaned and both it and its now-unpaired call go.
+#[test]
+fn plain_message_between_a_call_and_its_result_ends_the_turn() {
+    let out = super::sanitize_history_for_provider(vec![
+        Message::Assistant {
+            id: None,
+            content: vec![scoped_call("c1")],
+        },
+        text_msg("user", "moved on"),
+        scoped_result("c1"),
+    ]);
+    assert_eq!(
+        count_calls_and_results(&out),
+        (0, 0),
+        "conversation resumed, so the stale pair must go: {out:?}"
+    );
 }

@@ -347,6 +347,269 @@ theorem filterCallsBy_eq_self (l : List MessageRow) :
       rw [filterCallsBy_cons_ordinary row rest R hk,
         ih R ∅ h.2 hne' hres']
 
+/-! ## Per-turn resolution agrees with global resolution
+
+`filterCallsBy` credits an announcement from the global resolved set;
+`filterCallsByTurn` credits it only from its own turn. They coincide under
+`UniqueCallIds`, which every theorem here already assumes — so the per-turn
+model production implements is fenced by the same results. -/
+
+/-- Every result closes a call owned by the nearest preceding announcement.
+This is `ActiveBlockValidFrom` without the `pending = ∅` obligations, i.e.
+exactly the shape `dropOrphanedFrom` leaves behind. -/
+def ResultsOwnedFrom (pending : Finset ToolExecution.ToolCallId) :
+    List MessageRow → Prop
+  | [] => True
+  | row :: rest =>
+    match row.kind with
+    | .toolResult callId _ =>
+        callId ∈ pending ∧ ResultsOwnedFrom (pending.erase callId) rest
+    | .assistantToolCalls callIds => ResultsOwnedFrom callIds rest
+    | .ordinary => ResultsOwnedFrom ∅ rest
+
+theorem resultsOwnedFrom_dropOrphanedFrom (l : List MessageRow) :
+    ∀ pending, ResultsOwnedFrom pending (dropOrphanedFrom pending l) := by
+  induction l with
+  | nil => intro pending; trivial
+  | cons row rest ih =>
+    intro pending
+    cases hk : row.kind with
+    | toolResult callId key =>
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem]
+        show ResultsOwnedFrom pending (row :: _)
+        unfold ResultsOwnedFrom
+        rw [hk]
+        exact ⟨hmem, ih (pending.erase callId)⟩
+      · rw [if_neg hmem]; exact ih pending
+    | assistantToolCalls callIds =>
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk]
+      show ResultsOwnedFrom pending (row :: _)
+      unfold ResultsOwnedFrom
+      rw [hk]
+      exact ih callIds
+    | ordinary =>
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk]
+      show ResultsOwnedFrom pending (row :: _)
+      unfold ResultsOwnedFrom
+      rw [hk]
+      exact ih ∅
+
+/-- Owned results only ever name pending or later-announced calls. -/
+theorem resolvedIn_subset_of_resultsOwned (l : List MessageRow) :
+    ∀ pending, ResultsOwnedFrom pending l → resolvedIn l ⊆ pending ∪ callsIn l := by
+  induction l with
+  | nil => intro pending _ c hc; simp at hc
+  | cons row rest ih =>
+    intro pending howned c hc
+    unfold ResultsOwnedFrom at howned
+    cases hk : row.kind with
+    | toolResult callId key =>
+      rw [hk] at howned
+      rw [resolvedIn_cons_result row rest callId key hk] at hc
+      rw [callsIn_cons_result row rest callId key hk]
+      rcases Finset.mem_insert.mp hc with rfl | htail
+      · exact Finset.mem_union_left _ howned.1
+      · exact (Finset.mem_union.mp (ih (pending.erase callId) howned.2 htail)).elim
+          (fun hp => Finset.mem_union_left _ (Finset.mem_of_mem_erase hp))
+          (fun hcall => Finset.mem_union_right _ hcall)
+    | assistantToolCalls callIds =>
+      rw [hk] at howned
+      rw [resolvedIn_cons_assistant row rest callIds hk] at hc
+      rw [callsIn_cons_assistant row rest callIds hk]
+      exact (Finset.mem_union.mp (ih callIds howned hc)).elim
+        (fun hp => Finset.mem_union_right _ (Finset.mem_union_left _ hp))
+        (fun hcall => Finset.mem_union_right _ (Finset.mem_union_right _ hcall))
+    | ordinary =>
+      rw [hk] at howned
+      rw [resolvedIn_cons_ordinary row rest hk] at hc
+      rw [callsIn_cons_ordinary row rest hk]
+      exact Finset.mem_union_right _
+        ((Finset.mem_union.mp (ih ∅ howned hc)).elim (by intro h; simp at h) id)
+
+/-- **The crux.** A turn's announcements can only be resolved inside that turn:
+anything later belongs to a later announcement, which `UniqueCallIds` keeps
+disjoint. -/
+theorem inter_resolvedIn_eq_inter_resolvedInTurn (l : List MessageRow) :
+    ∀ callIds, ResultsOwnedFrom callIds l → Disjoint callIds (callsIn l) →
+      callIds ∩ resolvedIn l = callIds ∩ resolvedInTurn l := by
+  induction l with
+  | nil => intro callIds _ _; simp
+  | cons row rest ih =>
+    intro callIds howned hdisj
+    unfold ResultsOwnedFrom at howned
+    cases hk : row.kind with
+    | toolResult callId key =>
+      rw [hk] at howned
+      have hdisj' : Disjoint callIds (callsIn rest) := by
+        rwa [callsIn_cons_result row rest callId key hk] at hdisj
+      rw [resolvedIn_cons_result row rest callId key hk,
+        resolvedInTurn_cons_result row rest callId key hk]
+      -- Both sides insert the same id; the tails agree by induction after
+      -- erasing it, and `callId` itself is in `callIds` either way.
+      apply Finset.ext
+      intro c
+      by_cases hc : c = callId
+      · subst hc; simp [howned.1]
+      · have htail := ih (callIds.erase callId) howned.2 (by
+          rw [Finset.disjoint_left]
+          intro x hx hcall
+          exact Finset.disjoint_left.mp hdisj' (Finset.mem_of_mem_erase hx) hcall)
+        have hmem : ∀ (S : Finset ToolExecution.ToolCallId),
+            (c ∈ callIds ∩ insert callId S) ↔ (c ∈ callIds.erase callId ∩ S) := by
+          intro S
+          simp [Finset.mem_inter, Finset.mem_insert, Finset.mem_erase, hc]
+        rw [hmem (resolvedIn rest), hmem (resolvedInTurn rest), htail]
+    | assistantToolCalls callIds' =>
+      rw [hk] at howned
+      rw [resolvedIn_cons_assistant row rest callIds' hk,
+        resolvedInTurn_cons_assistant row rest callIds' hk, Finset.inter_empty]
+      -- A new announcement ends the turn. Everything the tail resolves is owned
+      -- by that announcement or a later one, all inside `callsIn rest`, which
+      -- `UniqueCallIds` keeps disjoint from `callIds`.
+      have hsub : resolvedIn rest ⊆ callIds' ∪ callsIn rest :=
+        resolvedIn_subset_of_resultsOwned rest callIds' howned
+      have hdisjPair : Disjoint callIds callIds' ∧ Disjoint callIds (callsIn rest) := by
+        rw [callsIn_cons_assistant row rest callIds' hk,
+          Finset.disjoint_union_right] at hdisj
+        exact hdisj
+      exact Finset.disjoint_iff_inter_eq_empty.mp
+        ((Finset.disjoint_union_right.mpr ⟨hdisjPair.1, hdisjPair.2⟩).mono_right hsub)
+    | ordinary =>
+      rw [hk] at howned
+      rw [resolvedIn_cons_ordinary row rest hk,
+        resolvedInTurn_cons_ordinary row rest hk, Finset.inter_empty]
+      have hdisj' : Disjoint callIds (callsIn rest) := by
+        rwa [callsIn_cons_ordinary row rest hk] at hdisj
+      have hsub : resolvedIn rest ⊆ callsIn rest := by
+        simpa using resolvedIn_subset_of_resultsOwned rest ∅ howned
+      exact Finset.disjoint_iff_inter_eq_empty.mp (hdisj'.mono_right hsub)
+
+theorem uniqueCallIds_dropOrphanedFrom (l : List MessageRow) :
+    ∀ pending, UniqueCallIds l → UniqueCallIds (dropOrphanedFrom pending l) := by
+  induction l with
+  | nil => intro pending _; simp
+  | cons row rest ih =>
+    intro pending huniq
+    cases hk : row.kind with
+    | toolResult callId key =>
+      have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
+      rw [dropOrphanedFrom_cons_result row rest pending callId key hk]
+      by_cases hmem : callId ∈ pending
+      · rw [if_pos hmem, uniqueCallIds_cons_result row _ callId key hk]
+        exact ih (pending.erase callId) huniq'
+      · rw [if_neg hmem]; exact ih pending huniq'
+    | assistantToolCalls callIds =>
+      have hpair := (uniqueCallIds_cons_assistant row rest callIds hk).mp huniq
+      rw [dropOrphanedFrom_cons_assistant row rest pending callIds hk,
+        uniqueCallIds_cons_assistant row _ callIds hk]
+      refine ⟨?_, ih callIds hpair.2⟩
+      rw [callsIn_dropOrphanedFrom rest callIds]
+      exact hpair.1
+    | ordinary =>
+      have huniq' := (uniqueCallIds_cons_ordinary row rest hk).mp huniq
+      rw [dropOrphanedFrom_cons_ordinary row rest pending hk,
+        uniqueCallIds_cons_ordinary row _ hk]
+      exact ih ∅ huniq'
+
+/-- Per-turn and global resolution produce the same list on owned, unique-id
+input. `R` is the ambient global set; the hypothesis says it decides exactly
+`l`'s own announcements. -/
+theorem filterCallsByTurn_eq_filterCallsBy (l : List MessageRow) :
+    ∀ (R pending : Finset ToolExecution.ToolCallId),
+      ResultsOwnedFrom pending l →
+      UniqueCallIds l →
+      Disjoint pending (callsIn l) →
+      (∀ c ∈ callsIn l, (c ∈ R ↔ c ∈ resolvedIn l)) →
+      filterCallsByTurn l = filterCallsBy R l := by
+  induction l with
+  | nil => intro R pending _ _ _ _; rfl
+  | cons row rest ih =>
+    intro R pending howned huniq hdisj hR
+    unfold ResultsOwnedFrom at howned
+    cases hk : row.kind with
+    | assistantToolCalls callIds =>
+      rw [hk] at howned
+      have hpair := (uniqueCallIds_cons_assistant row rest callIds hk).mp huniq
+      have hdisjPair : Disjoint pending callIds ∧ Disjoint pending (callsIn rest) := by
+        rw [callsIn_cons_assistant row rest callIds hk,
+          Finset.disjoint_union_right] at hdisj
+        exact hdisj
+      have hresolvedEq : resolvedIn (row :: rest) = resolvedIn rest :=
+        resolvedIn_cons_assistant row rest callIds hk
+      have hcallsSub : callIds ⊆ callsIn (row :: rest) := by
+        rw [callsIn_cons_assistant row rest callIds hk]
+        exact Finset.subset_union_left
+      -- `R` decides this row's announcements exactly as the global set does,
+      -- and the crux confines them to this turn.
+      have hinter : callIds ∩ R = callIds ∩ resolvedInTurn rest := by
+        have hstep : callIds ∩ R = callIds ∩ resolvedIn rest := by
+          apply Finset.ext; intro c
+          simp only [Finset.mem_inter]
+          constructor
+          · rintro ⟨hcall, hr⟩
+            exact ⟨hcall, hresolvedEq ▸ (hR c (hcallsSub hcall)).mp hr⟩
+          · rintro ⟨hcall, hres⟩
+            exact ⟨hcall, (hR c (hcallsSub hcall)).mpr (hresolvedEq ▸ hres)⟩
+        rw [hstep]
+        exact inter_resolvedIn_eq_inter_resolvedInTurn rest callIds howned hpair.1
+      have hRrest : ∀ c ∈ callsIn rest, (c ∈ R ↔ c ∈ resolvedIn rest) := by
+        intro c hc
+        rw [← hresolvedEq]
+        exact hR c (by
+          rw [callsIn_cons_assistant row rest callIds hk]
+          exact Finset.mem_union_right _ hc)
+      rw [filterCallsByTurn_cons_assistant row rest callIds hk,
+        filterCallsBy_cons_assistant row rest R callIds hk, hinter,
+        ih R callIds howned hpair.2 hpair.1 hRrest]
+    | toolResult callId key =>
+      rw [hk] at howned
+      have huniq' := (uniqueCallIds_cons_result row rest callId key hk).mp huniq
+      have hdisj' : Disjoint pending (callsIn rest) := by
+        rwa [callsIn_cons_result row rest callId key hk] at hdisj
+      -- The closed call belongs to an earlier announcement, so `UniqueCallIds`
+      -- keeps it out of everything the tail announces.
+      have hnotCall : callId ∉ callsIn rest :=
+        fun hc => Finset.disjoint_left.mp hdisj' howned.1 hc
+      have hRrest : ∀ c ∈ callsIn rest, (c ∈ R ↔ c ∈ resolvedIn rest) := by
+        intro c hc
+        have hne : c ≠ callId := fun h => hnotCall (h ▸ hc)
+        have := hR c (by rwa [callsIn_cons_result row rest callId key hk])
+        rw [resolvedIn_cons_result row rest callId key hk] at this
+        simpa [Finset.mem_insert, hne] using this
+      rw [filterCallsByTurn_cons_result row rest callId key hk,
+        filterCallsBy_cons_result row rest R callId key hk,
+        ih R (pending.erase callId) howned.2 huniq'
+          (by
+            rw [Finset.disjoint_left]
+            intro x hx hcall
+            exact Finset.disjoint_left.mp hdisj' (Finset.mem_of_mem_erase hx) hcall)
+          hRrest]
+    | ordinary =>
+      rw [hk] at howned
+      have huniq' := (uniqueCallIds_cons_ordinary row rest hk).mp huniq
+      have hRrest : ∀ c ∈ callsIn rest, (c ∈ R ↔ c ∈ resolvedIn rest) := by
+        intro c hc
+        have := hR c (by rwa [callsIn_cons_ordinary row rest hk])
+        rwa [resolvedIn_cons_ordinary row rest hk] at this
+      rw [filterCallsByTurn_cons_ordinary row rest hk,
+        filterCallsBy_cons_ordinary row rest R hk,
+        ih R ∅ howned huniq' (Finset.disjoint_empty_left _) hRrest]
+
+/-- **The alignment.** The per-turn sanitizer production implements and the
+global-resolution model the pairing theorems are stated over are the same
+function on unique-id transcripts. -/
+theorem sanitizeTurn_eq_sanitize {msgs : List MessageRow}
+    (huniq : UniqueCallIds msgs) : sanitizeTurn msgs = sanitize msgs := by
+  unfold sanitizeTurn sanitize dropUnpairedCallsTurn dropUnpairedCalls dropOrphanedResults
+  exact filterCallsByTurn_eq_filterCallsBy (dropOrphanedFrom ∅ msgs)
+    (resolvedIn (dropOrphanedFrom ∅ msgs)) ∅
+    (resultsOwnedFrom_dropOrphanedFrom msgs ∅)
+    (uniqueCallIds_dropOrphanedFrom msgs ∅ huniq)
+    (Finset.disjoint_empty_left _)
+    (fun _ _ => Iff.rfl)
+
 theorem sanitize_fixpoint {msgs : List MessageRow} (hvalid : ProviderValid msgs)
     (hne : NonemptyAnnouncements msgs) : sanitize msgs = msgs := by
   unfold sanitize dropUnpairedCalls dropOrphanedResults

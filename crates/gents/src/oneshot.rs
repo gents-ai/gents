@@ -47,12 +47,10 @@ pub async fn run_openai_oneshot_with_tools(
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
     tools.extend(extra_tools);
     let tools = Arc::new(tools);
+    // Background executions run through `call_tool_managed`, which owns the
+    // deadline/cancellation envelope — no per-tool wrapper needed.
     let background_tool_registry = BackgroundToolRegistry::from_tools(
-        tool_surface
-            .build_tools(&tool_runtime)?
-            .into_iter()
-            .map(crate::tool_call_lifecycle::runtime::wrap_tool)
-            .collect(),
+        tool_surface.build_tools(&tool_runtime)?,
         &tool_surface.background_tools().allowlist,
     );
 
@@ -156,6 +154,51 @@ pub async fn run_openai_oneshot_with_tools(
                 client,
             )
             .await
+        }
+        BackendProviderKind::XaiGrokOAuth => {
+            let build_context = format!(
+                "building Grok OAuth completion client for behavior {} against {}",
+                behavior.behavior_id, behavior.backend_endpoint
+            );
+            if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
+                let client = crate::xai_grok_oauth::build_chat_completions_client(
+                    node.clone(),
+                    behavior.agent_did(),
+                    &behavior.backend_endpoint,
+                )
+                .await
+                .with_context(|| build_context.clone())?;
+                run_oneshot_with_completion_client(
+                    node,
+                    behavior,
+                    prompt,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    background_tool_registry,
+                    client,
+                )
+                .await
+            } else {
+                let client = crate::xai_grok_oauth::build_responses_client(
+                    node.clone(),
+                    behavior.agent_did(),
+                    &behavior.backend_endpoint,
+                )
+                .await
+                .with_context(|| build_context.clone())?;
+                run_oneshot_with_completion_client(
+                    node,
+                    behavior,
+                    prompt,
+                    prompt_builder,
+                    preamble,
+                    tools,
+                    background_tool_registry,
+                    client,
+                )
+                .await
+            }
         }
     }
 }

@@ -25,9 +25,21 @@ The proofs are strongest where the runtime is a state machine:
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
-  #448): `sanitize` soundness/fixpoint/idempotence/split-stability over the
+  #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
-  entry chokepoint), and the fixed layer order of the assembled request
+  entry chokepoint), the fixed layer order of the assembled request, and the
+  output-reserved provider-input budget that triggers compaction before the
+  provider context is overcommitted (`PromptAssembly/Budget.lean`).
+  `Provider.sanitizeForProvider` models the full three-stage composition
+  production runs (`normalize_assistant_content_order ∘
+  drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser
+  row-only `sanitize` is related to it by a *conditional* refinement,
+  `project_sanitizeForProvider_eq_sanitize`, which holds on assistant rows
+  whose content is nothing but tool calls. The two genuinely differ outside
+  that fragment: on an assistant message carrying text alongside a tool call
+  that never resolved, production keeps the message and its text while
+  `sanitize` drops the row. The model follows production there — see the
+  `Proofs/PromptAssembly/Provider.lean` module docstring.
 
 They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool
@@ -147,7 +159,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, and cancellation properties |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -167,8 +179,9 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
-| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, and per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
+| `Proofs/Compaction/` | Transcript reduction (#993): the payload-stubbing `strip`, the canonical `providerView = sanitize ∘ strip` with `strip_sanitize_commute` and idempotence, prefix stability under append and the compacted-prefix index correspondence, and the `summarize` reducer parameterised over the production split policy with pair closure proven over it. Fences: `tests/conformance/streaming_compaction.rs`. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -188,7 +201,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -339,9 +352,12 @@ Operational meaning:
 - `inputRequired` is reserved for a blocked external-input cycle; current Rust
   runtime code does not emit it because autonomous tool calls run inline, and
   active runtime filters exclude it until that loop is modeled
-- `dead` is persisted only for stale pre-claim TTL expiry; post-claim provider
-  failure, retry exhaustion, tool failure, and deadline expiry are terminal
-  `failed`
+- `dead` is persisted by the request machine only for stale pre-claim TTL
+  expiry; post-claim provider failure, retry exhaustion, tool failure, and
+  deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
+  is the one exception: it terminalizes an expired `claimed`/`processing` child
+  as `dead` (`Proofs/Recovery/`), published in the contract as
+  `recoveryReachable` under `boundary.request.recovery-sweep-reachable`
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
@@ -662,7 +678,8 @@ generalize one lane's fixtures to the other.
 | Durable state | Bridge row + child `AgentRequest` (lineage, depth, interrupt flag) + notification message + coalesced wake row | Tool row (result, cancel_cause) + notification message + coalesced wake row |
 | Volatile state | Foreground waiter state in the owned loop | Execution registries and the live output ring buffer |
 | Restart, live parent | **Leave bridge running**; project when the child terminal is durable | **Interrupt**: terminalize `cancelled`, notification reason `interrupted_on_restart`, one coalesced wake |
-| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / `recover_all` interrupt path |
+| Restart, terminal parent | Preserve the durable bridge for child-terminal projection | **Fail**: terminalize `failed`, notification reason `parent_terminal`, one coalesced wake |
+| Completion path | `project_background_subagent_completion` / recovery child-precedence | Native tool completion / startup and periodic ownership recovery |
 
 Model → conformance → Rust bindings:
 
@@ -678,7 +695,7 @@ Model → conformance → Rust bindings:
   (`restartDisposition`) with exhaustive characterizations
   (`restart_interrupt_iff_native_background_live_parent`,
   `leave_running_iff_preserved_shapes`,
-  `notification_iff_restart_interrupt`,
+  `notification_iff_terminalized_native_background`,
   `deadline_precedes_restart_interrupt`). The `restart_disposition_cases`
   rows are **computed from the model** and driven through the real
   `ToolCallLifecycle::recover_all` by
@@ -688,7 +705,9 @@ Model → conformance → Rust bindings:
   under a cleanly completed parent) and the notification + coalesced-wake
   side effects with idempotence under a second pass.
 - **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
-  bridges, subagent liveness #465, terminal-parent owned tools #837) →
+  bridges, subagent liveness #465, terminal-parent owned tools #837, and
+  orphaned native-background ownership repair, including volatile execution
+  reservations and retryable completion-notification/wake obligations) →
   `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
 - **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
   three-way `read_tool_output` dispatch (terminal → persisted completion;
@@ -744,6 +763,50 @@ Model → conformance → Rust bindings:
 - **Cross-node subagent completion/cancel** — `tla/SubagentCompletion.tla`
   and `tla/SubagentCancelPropagation.tla` (subagent lane only; native tool
   backgrounding is single-node and carried by Lean).
+
+### Compaction
+
+`Proofs/Compaction` models transcript reduction — the one place where the
+durable transcript and the provider view diverge on purpose, and therefore the
+place where "everything persisted can be projected back out" is most at risk.
+
+Before #993 the model was vacuous: `stubMessageKind` was literally
+`| .toolResult callId key => .toolResult callId key`, so every preservation
+property quantified over `id` and proved that doing nothing preserves meaning.
+The current model quantifies over the production policy:
+
+- **`strip`** rewrites a tool result's payload into a pointer stub and touches
+  nothing else — never a constructor, never a call id. `strip_idempotent` is
+  earned by production recognizing an existing stub rather than re-stubbing it.
+- **`providerView = sanitize ∘ strip`** is the single narrowing both the
+  compaction writer and the request reader index.
+  `strip_sanitize_commute` settles the question #993 raised as unproven —
+  stripping first does *not* change which pairs `sanitize` considers orphaned —
+  and settling it affirmatively is what licenses reordering the compacted-prefix
+  drop past sanitization.
+- **`providerView_append`** proves the provider view of a longer history begins
+  with the provider view of the shorter one, given the suffix contributes no
+  result for a call announced in the prefix. Two checkable sufficient conditions
+  are provided; production satisfies the second, since a new request appends its
+  user prompt before anything else. `compacted_prefix_correspondence` is the
+  theorem the runtime fix rests on: the count the writer records names exactly
+  the rows the reader drops.
+- **`summarize`** is parameterised over the token-budget split index rather than
+  pinning a token function — what must hold is that *whatever* index the budget
+  picks, the reducer stays sound. `pairSafeBoundary` retreats that index to the
+  nearest turn boundary, and `raw_split_can_orphan` witnesses that the retreat is
+  load-bearing: an unadjusted split leaves a tool result whose call was dropped.
+
+`IsValidReducer` carries whole-view coherence (`preservesCoherent`) rather than
+pair closure alone, and `ViewCoherent` includes provider-validity and the
+assistant-role structure of announcements. Pair closure of a compacted
+transcript is not preserved by an arbitrary drop; the previous, narrower fields
+sufficed only because the modelled reducer was `id`.
+
+The runtime counterpart of `safeToReduce` is `compaction::safe_to_reduce`,
+resolved at session scope — see
+`boundary.compaction.safe-to-reduce-session-scope` for the refinement and its
+accepted failure mode.
 
 ### Client Turn Projection
 

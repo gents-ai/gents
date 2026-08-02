@@ -487,6 +487,30 @@
           "markdownDescription": "Denies the desktop_event_trigger_save command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_grok_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-grok-login",
+          "markdownDescription": "Enables the desktop_grok_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_grok_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-grok-login",
+          "markdownDescription": "Denies the desktop_grok_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_grok_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-grok-login-cancel",
+          "markdownDescription": "Enables the desktop_grok_login_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_grok_login_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-grok-login-cancel",
+          "markdownDescription": "Denies the desktop_grok_login_cancel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_inference_profile_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-inference-profile-delete",
@@ -1129,10 +1153,10 @@
           "markdownDescription": "Local runtime provisioning\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`",
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`",
           "type": "string",
           "const": "config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`"
         },
         {
           "description": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`",

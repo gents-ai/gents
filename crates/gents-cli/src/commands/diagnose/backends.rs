@@ -172,7 +172,7 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                 });
             }
         };
-        if provider_kind != BackendProviderKind::ChatGptCodex {
+        if !provider_kind.is_agent_scoped_oauth() {
             match discover_backend_models(
                 &client,
                 provider_kind,

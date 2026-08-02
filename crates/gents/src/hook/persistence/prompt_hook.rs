@@ -376,11 +376,18 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-        result: &str,
+        outcome: &crate::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
+        use crate::tool_call_lifecycle::ToolOutcome;
+
         self.release_live_output(internal_call_id).await;
         let persist_result: anyhow::Result<HookAction> = async {
-            if let Some(terminal) = classify_managed_tool_result(result) {
+            // Managed terminals terminate the turn; they carry no model-facing
+            // text and never thread back to the provider.
+            if matches!(
+                outcome,
+                ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
+            ) {
                 let lifecycle = self
                     .in_flight_lifecycles
                     .lock()
@@ -388,33 +395,34 @@ impl DefraSessionHook {
                     .remove(internal_call_id);
 
                 if let Some(mut lc) = lifecycle {
-                    match terminal {
-                        ManagedToolTerminal::TimedOut => lc.timeout().await?,
-                        ManagedToolTerminal::Cancelled => {
+                    match outcome {
+                        ToolOutcome::TimedOut { .. } => {
+                            let _ = lc.timeout().await?;
+                        }
+                        _ => {
                             let _ = lc.cancel_during_run(CancelCause::Interrupted).await?;
                         }
                     }
                 } else {
                     tracing::debug!(
                         tool_call_id = %internal_call_id,
-                        lifecycle_state = ?terminal,
-                        "managed terminal tool result arrived after lifecycle was already swept"
+                        outcome = ?outcome,
+                        "managed terminal tool outcome arrived after lifecycle was already swept"
                     );
                 }
 
-                let reason = match terminal {
-                    ManagedToolTerminal::TimedOut => "tool call deadline exceeded",
-                    ManagedToolTerminal::Cancelled => "tool call cancelled",
+                let reason = match outcome {
+                    ToolOutcome::TimedOut { .. } => "tool call deadline exceeded",
+                    _ => "tool call cancelled",
                 };
                 return Ok(HookAction::Terminate {
                     reason: reason.to_string(),
                 });
             }
 
-            let (result, force_argument_invalid) = match unparseable_args_notice(result) {
-                Some(notice) => (notice, true),
-                None => (result, false),
-            };
+            // The outcome arrives as data, so there is nothing to classify or
+            // strip: the model-facing text is the only text there is.
+            let result = outcome.model_facing_text();
 
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
@@ -463,17 +471,18 @@ impl DefraSessionHook {
                     )
                 })?;
 
-            if force_argument_invalid {
-                lc.fail(&truncated.text, FailureClass::ArgumentInvalid)
-                    .await?;
-            } else if let Some(failure) = classify_runtime_failure(result_for_persistence) {
-                if let Some(denial) = failure.command_denial.as_ref() {
-                    lc.fail_with_command_denial(&truncated.text, denial).await?;
-                } else {
-                    lc.fail(&truncated.text, failure.failure_class).await?;
+            match outcome {
+                ToolOutcome::Completed(_) => lc.complete(&truncated.text).await?,
+                ToolOutcome::Failed { class, denial, .. } => {
+                    if let Some(denial) = denial.as_ref() {
+                        lc.fail_with_command_denial(&truncated.text, denial).await?;
+                    } else {
+                        lc.fail(&truncated.text, *class).await?;
+                    }
                 }
-            } else {
-                lc.complete(&truncated.text).await?;
+                ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled => {
+                    unreachable!("managed terminals returned above")
+                }
             }
 
             if should_persist_message {

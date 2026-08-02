@@ -72,6 +72,18 @@ pub(crate) enum Command {
     CodexLogin(CodexLoginArgs),
     #[command(about = "Probe a DefraDB-backed ChatGPT OAuth credential")]
     CodexAuthProbe(CodexAuthProbeArgs),
+    #[command(
+        name = "grok-login",
+        alias = "xai-login",
+        about = "Sign in with Grok / xAI subscription OAuth and store credentials in DefraDB"
+    )]
+    GrokLogin(GrokLoginArgs),
+    #[command(
+        name = "grok-auth-probe",
+        alias = "xai-auth-probe",
+        about = "Probe a DefraDB-backed Grok / xAI OAuth credential (read-only)"
+    )]
+    GrokAuthProbe(GrokAuthProbeArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
@@ -262,6 +274,36 @@ pub(crate) struct CodexLoginArgs {
     pub(crate) issuer: Option<String>,
     #[arg(long, help = "OAuth client ID override for testing")]
     pub(crate) client_id: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GrokAuthProbeArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "xai-oauth")]
+    pub(crate) provider: String,
+    #[arg(
+        long,
+        default_value_t = 20,
+        help = "Maximum number of model slugs to print"
+    )]
+    pub(crate) max_models: usize,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GrokLoginArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "xai-oauth")]
+    pub(crate) provider: String,
 }
 
 #[derive(clap::Args)]
@@ -506,8 +548,8 @@ pub(crate) struct ServeArgs {
     pub(crate) tool_ceiling: Option<ToolCeilingArg>,
     #[arg(
         long,
-        default_value_t = 10,
-        help = "Maximum foreground Bash command duration in seconds"
+        default_value_t = 120,
+        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs and also the foreground cap (backgrounded runs use the built-in background lifetime budget)"
     )]
     pub(crate) command_timeout_secs: u64,
     #[arg(long = "cli-tool")]
@@ -866,6 +908,8 @@ pub(crate) enum BackendPresetArg {
     OpenRouter,
     #[value(name = "chatgpt-codex")]
     ChatGptCodex,
+    #[value(name = "xai-oauth", alias = "grok-oauth")]
+    XaiGrokOAuth,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -881,6 +925,7 @@ impl BackendPresetArg {
             Self::OpenAi => "openai",
             Self::OpenRouter => "openrouter",
             Self::ChatGptCodex => "chatgpt-codex",
+            Self::XaiGrokOAuth => "xai-oauth",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -891,6 +936,7 @@ impl BackendPresetArg {
         match self {
             Self::OpenRouter => BackendProviderKind::OpenRouter,
             Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
+            Self::XaiGrokOAuth => BackendProviderKind::XaiGrokOAuth,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::Ollama
@@ -905,6 +951,7 @@ impl BackendPresetArg {
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
+            Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -920,6 +967,7 @@ impl BackendPresetArg {
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_MODEL_NAME),
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
+            Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
             Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
         }
     }
@@ -930,6 +978,7 @@ impl BackendPresetArg {
             Self::OpenRouter => Some("OPENROUTER_API_KEY"),
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
+            | Self::XaiGrokOAuth
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,
@@ -942,6 +991,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible
             | Self::OpenRouter
             | Self::ChatGptCodex
+            | Self::XaiGrokOAuth
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,

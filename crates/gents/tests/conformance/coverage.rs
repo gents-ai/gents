@@ -172,8 +172,8 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 31);
-    assert_eq!(lean_recovery_equivalence_cases().len(), 31);
+    assert_eq!(lean_recovery_sweep_cases().len(), 37);
+    assert_eq!(lean_recovery_equivalence_cases().len(), 37);
     assert_eq!(lean_recovery_outcome_cases().len(), 4);
     assert_eq!(lean_transcript_cases().len(), 7);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
@@ -266,11 +266,14 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
     let expected_boundary_ids = [
         "boundary.request.input-required-reserved",
         "boundary.request.dead-preclaim-only",
+        "boundary.request.recovery-sweep-reachable",
         "boundary.tool-call.permanent-without-retry-evidence",
         "boundary.mcp.call-tool-dispatch-retry-evidence",
         "boundary.inference-slots.running-row-derived",
         "boundary.fleet-slot-accounting.derived-view",
         "boundary.command-policy.host-execution-assumptions",
+        "boundary.compaction.safe-to-reduce-session-scope",
+        "boundary.compaction.unique-call-ids-checked",
         "boundary.trigger.dispatch-source-delivery",
         "boundary.persistence.abstract-lifecycle",
         "boundary.storage.hook-failure-policy",
@@ -758,6 +761,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CompactionReducerCases".to_string(),
         ));
     }
+    if !snapshot.prompt_assembly_sanitize_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblySanitizeCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_layer_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyLayerCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_repair_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyRepairCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_budget_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyBudgetCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_delivery_transition_case_count,
         snapshot.event_delivery_transition_cases.len(),
@@ -995,6 +1022,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "bridge_step_cases",
         "transcript_cases",
         "compaction_reducer_cases",
+        "prompt_assembly_cases",
         "streaming_response_cases",
         "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",

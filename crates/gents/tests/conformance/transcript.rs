@@ -238,7 +238,7 @@ async fn persist_completed_tool_sequence(
             Some(model_call_id.clone()),
             &internal_call_id,
             tool_args,
-            &payload,
+            &gents::tool_call_lifecycle::ToolOutcome::Completed(payload.clone()),
         )
         .await,
         HookAction::Continue
@@ -527,7 +527,7 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
                     Some(model_call_id.clone()),
                     &internal_call_id,
                     tool_args,
-                    &payload,
+                    &gents::tool_call_lifecycle::ToolOutcome::Completed(payload.clone()),
                 )
                 .await,
                 HookAction::Continue

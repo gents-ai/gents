@@ -122,14 +122,16 @@ impl DefraSessionHook {
                     .await?
             else {
                 if now >= parent_deadline_at {
-                    // Terminalize the bridge as dead (parent deadline exceeded
-                    // before the child was ever materialized), mirroring the
-                    // running-edge deadline path so the bridge does not leak in
-                    // a `running` state.
+                    // Terminalize the bridge as timedOut (parent deadline
+                    // exceeded before the child was ever materialized),
+                    // mirroring the running-edge deadline path so the bridge
+                    // does not leak in a `running` state. No child terminal
+                    // evidence exists, so `bridge_failure` is not licensed
+                    // here (#1002) — the deadline transition is.
                     if let Some(mut lifecycle) =
                         self.take_owned_in_flight_lifecycle(internal_call_id).await
                     {
-                        let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await;
+                        let _ = lifecycle.timeout().await;
                     }
                     return Ok(foreground_terminal_failure_payload(
                         child_request_id,
@@ -215,7 +217,11 @@ impl DefraSessionHook {
                         .await?;
                         continue;
                     };
-                    if !lifecycle.bridge_failure(ChildTerminal::Dead).await? {
+                    // The child may still be live: take the licensed deadline
+                    // transition (`timedOut`), never a fabricated
+                    // `ChildTerminal::Dead` (#1002). The child's own
+                    // terminalization belongs to the subagent-liveness sweep.
+                    if !lifecycle.timeout().await? {
                         return self
                             .foreground_external_bridge_terminal_payload(
                                 parent_context,
@@ -482,7 +488,10 @@ impl DefraSessionHook {
                         )
                         .await?
                     {
-                        let projected = match lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                        // Licensed deadline transition — no fabricated child
+                        // terminal evidence (#1002); see
+                        // `await_foreground_subagent`'s deadline arm.
+                        let projected = match lifecycle.timeout().await {
                             Ok(projected) => projected,
                             Err(error) => {
                                 return self
@@ -858,27 +867,24 @@ impl DefraSessionHook {
 
     pub(super) async fn load_authorized_background_tool(
         &self,
-        parent_request_id: &str,
+        caller: &ProcessControlScope,
         tool_call_id: &str,
     ) -> anyhow::Result<ToolCallLifecycle> {
-        let session_id = self
-            .state
-            .lock()
-            .await
-            .session_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
         let Some(lifecycle) =
-            ToolCallLifecycle::load(self.node.clone(), &session_id, tool_call_id).await?
+            ToolCallLifecycle::load(self.node.clone(), &caller.session_id, tool_call_id).await?
         else {
             anyhow::bail!("background tool call {tool_call_id} was not found");
         };
-        if lifecycle.request_id() != parent_request_id
-            || lifecycle.await_mode() != AwaitMode::Background
+        if !caller.authorizes(
+            lifecycle.request_id(),
+            lifecycle.session_id(),
+            lifecycle.agent_did(),
+            lifecycle.requester_did(),
+        ) || lifecycle.await_mode() != AwaitMode::Background
             || lifecycle.is_subagent_bridge()
         {
             anyhow::bail!(
-                "background tool call {tool_call_id} is not owned by this parent request"
+                "background tool call {tool_call_id} is not manageable by this session principal"
             );
         }
         Ok(lifecycle)
@@ -886,45 +892,47 @@ impl DefraSessionHook {
 
     pub(super) async fn await_background_tool(
         &self,
-        parent_request_id: &str,
+        caller: &ProcessControlScope,
         tool_call_id: &str,
-        parent_deadline_at: chrono::DateTime<chrono::Utc>,
+        caller_deadline_at: chrono::DateTime<chrono::Utc>,
+        wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
         loop {
             let now = chrono::Utc::now();
             let lifecycle = self
-                .load_authorized_background_tool(parent_request_id, tool_call_id)
+                .load_authorized_background_tool(caller, tool_call_id)
                 .await?;
             if lifecycle.is_terminal() {
                 return self.background_tool_envelope(lifecycle, "terminal").await;
             }
 
-            if crate::interrupt::fetch_interrupt_requested_at(&self.node, parent_request_id)
+            // Waiting is observational. Ending or interrupting this caller's
+            // turn must not revoke the separately budgeted background job.
+            if crate::interrupt::fetch_interrupt_requested_at(&self.node, &caller.request_id)
                 .await?
                 .is_some()
             {
-                self.cancel_background_tool_lifecycle(lifecycle, CancelCause::Interrupted)
-                    .await?;
-                let lifecycle = self
-                    .load_authorized_background_tool(parent_request_id, tool_call_id)
-                    .await?;
                 return self
-                    .background_tool_envelope(lifecycle, "parent_cancelled")
+                    .background_tool_envelope(lifecycle, "caller_interrupted")
                     .await;
             }
 
-            if now >= parent_deadline_at {
-                self.cancel_background_tool_lifecycle(lifecycle, CancelCause::Deadline)
-                    .await?;
-                let lifecycle = self
-                    .load_authorized_background_tool(parent_request_id, tool_call_id)
-                    .await?;
+            if now >= caller_deadline_at {
                 return self
-                    .background_tool_envelope(lifecycle, "parent_deadline_exceeded")
+                    .background_tool_envelope(lifecycle, "caller_deadline_exceeded")
                     .await;
             }
 
-            let remaining = (parent_deadline_at - now)
+            // Bounded wait (#985): report the process as still running — do
+            // NOT cancel it; the run continues and completion is delivered
+            // via the background completion notification.
+            if now >= wait_deadline_at {
+                return self
+                    .background_tool_envelope(lifecycle, "wait_timeout")
+                    .await;
+            }
+
+            let remaining = (caller_deadline_at.min(wait_deadline_at) - now)
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
             tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
@@ -935,14 +943,19 @@ impl DefraSessionHook {
         &self,
         mut lifecycle: ToolCallLifecycle,
         cause: CancelCause,
-    ) -> anyhow::Result<bool> {
+        completion_reason: &str,
+    ) -> anyhow::Result<(ToolCallLifecycle, bool)> {
         self.background_executions
             .cancel(lifecycle.tool_call_id())
             .await;
-        if lifecycle.is_running() {
-            return lifecycle.cancel_during_run(cause).await;
-        }
-        Ok(false)
+        let won_terminal_compare = if lifecycle.is_running() {
+            lifecycle
+                .cancel_during_run_owned(cause, completion_reason)
+                .await?
+        } else {
+            false
+        };
+        Ok((lifecycle, won_terminal_compare))
     }
 
     pub(super) async fn background_tool_envelope(

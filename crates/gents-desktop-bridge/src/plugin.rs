@@ -68,6 +68,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::inference_setup::desktop_probe_inference_endpoint,
             tauri_commands::inference_setup::desktop_codex_login,
             tauri_commands::inference_setup::desktop_codex_login_cancel,
+            tauri_commands::inference_setup::desktop_grok_login,
+            tauri_commands::inference_setup::desktop_grok_login_cancel,
             tauri_commands::tasks::desktop_task_save,
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,

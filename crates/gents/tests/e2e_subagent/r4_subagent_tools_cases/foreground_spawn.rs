@@ -59,8 +59,12 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
     assert_eq!(tool.result.as_deref(), Some("foreground final answer"));
 }
 
+/// Parent-deadline expiry takes the licensed deadline transition on the
+/// bridge row (`timedOut`) rather than fabricating child terminal evidence
+/// (#1002 defect 2). The model-facing payload still reports status "dead" —
+/// the established projection of a timed-out bridge.
 #[tokio::test]
-async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
+async fn foreground_spawn_subagent_parent_deadline_times_out_bridge() {
     let parent_deadline = chrono::Utc::now() + chrono::Duration::milliseconds(250);
     let fixture = setup_spawn_fixture_with_flags_and_deadline(
         "foreground_spawn_deadline",
@@ -97,7 +101,7 @@ async fn foreground_spawn_subagent_parent_deadline_marks_bridge_dead() {
         .is_some_and(|reason| reason.contains("parent request deadline exceeded")));
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg-deadline").await;
-    assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("timedOut"));
 }
 
 #[tokio::test]

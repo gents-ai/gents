@@ -54,6 +54,9 @@ pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 /// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 
+/// One-shot auth URL emission during the guided Grok login flow.
+pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
+
 /// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
@@ -130,6 +133,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_probe_inference_endpoint", "config-write"),
         ("desktop_codex_login", "config-write"),
         ("desktop_codex_login_cancel", "config-write"),
+        ("desktop_grok_login", "config-write"),
+        ("desktop_grok_login_cancel", "config-write"),
         // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
@@ -215,6 +220,7 @@ pub fn current_contract() -> BridgeContract {
         events: vec![
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
+            GROK_LOGIN_URL_EVENT.to_string(),
         ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),
@@ -535,6 +541,8 @@ mod tests {
             ("desktop_probe_inference_endpoint", "mutate"),
             ("desktop_codex_login", "mutate"),
             ("desktop_codex_login_cancel", "mutate"),
+            ("desktop_grok_login", "mutate"),
+            ("desktop_grok_login_cancel", "mutate"),
             ("desktop_task_save", "mutate"),
             ("desktop_schedule_save", "mutate"),
             ("desktop_schedule_run", "mutate"),

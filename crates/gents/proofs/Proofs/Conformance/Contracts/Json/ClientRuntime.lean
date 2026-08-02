@@ -98,7 +98,10 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"gate_open\":" ++ boolString witness.gateOpen ++ ","
     ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
     ++ "\"reducer_is_identity\":"
-      ++ boolString witness.reducerIsIdentity
+      ++ boolString witness.reducerIsIdentity ++ ","
+    ++ "\"split_index\":" ++ toString witness.splitIndex ++ ","
+    ++ "\"safe_boundary\":" ++ toString witness.safeBoundary ++ ","
+    ++ "\"retained_count\":" ++ toString witness.retainedCount
     ++ "}"
 
 def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
@@ -114,6 +117,16 @@ def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=
     ++ "\"terminal_state\":" ++ jsonString witness.terminalState ++ ","
     ++ "\"measure_before\":" ++ toString witness.measureBefore ++ ","
     ++ "\"measure_after\":" ++ toString witness.measureAfter ++ ","
+    ++ "\"deadline_expired\":" ++ jsonOptionalBool witness.deadlineExpired ++ ","
+    ++ "\"unclaimed_expired\":" ++ jsonOptionalBool witness.unclaimedExpired ++ ","
+    ++ "\"parent_live\":" ++ jsonOptionalBool witness.parentLive ++ ","
+    ++ "\"parent_interrupted\":" ++ jsonOptionalBool witness.parentInterrupted ++ ","
+    ++ "\"parent_terminal\":" ++ jsonOptionalBool witness.parentTerminal ++ ","
+    ++ "\"execution_registered\":"
+      ++ jsonOptionalBool witness.executionRegistered ++ ","
+    ++ "\"recovery_cause\":" ++ jsonOptionalString witness.recoveryCause ++ ","
+    ++ "\"notification_reason\":"
+      ++ jsonOptionalString witness.notificationReason ++ ","
     ++ "\"deadline_audit_ref\":"
     ++ jsonString witness.deadlineAuditRef
     ++ "}"
@@ -150,6 +163,9 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"terminal_state\":" ++ jsonOptionalString witness.terminalState ++ ","
     ++ "\"notification_reason\":"
       ++ jsonOptionalString witness.notificationReason ++ ","
+    ++ "\"queue_source\":" ++ jsonOptionalString witness.queueSource ++ ","
+    ++ "\"queue_key_prefix\":"
+      ++ jsonOptionalString witness.queueKeyPrefix ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
     ++ "}"
 

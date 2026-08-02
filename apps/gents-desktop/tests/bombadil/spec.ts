@@ -1,4 +1,4 @@
-import { always } from "@antithesishq/bombadil";
+import { always, eventually } from "@antithesishq/bombadil";
 import { extract } from "@antithesishq/bombadil/browser";
 export * from "@antithesishq/bombadil/browser/defaults";
 
@@ -157,10 +157,12 @@ const emptyPrimarySurfaceProblems = extract((state) => {
         selector,
         mounted: Boolean(surface),
         textLength: normalizeText(surface?.textContent ?? "").length,
+        declaresLoading: Boolean(
+          surface?.querySelector('[role="status"], [aria-busy="true"]'),
+        ),
       };
     })
-    .filter((surface) => surface.mounted && surface.textLength === 0)
-    .map((surface) => surface.selector);
+    .filter((surface) => surface.mounted && surface.textLength === 0);
 });
 
 export const desktop_shell_stays_mounted = always(
@@ -202,8 +204,26 @@ export const desktop_shell_does_not_stack_dialogs = always(
   () => dialogProblems.current.length === 0,
 );
 
-export const desktop_primary_surfaces_are_not_empty = always(
-  () => emptyPrimarySurfaceProblems.current.length === 0,
+// A mounted primary surface with no text and no declared loading state
+// ([role="status"] / [aria-busy="true"]) is blank — a rendering bug, caught
+// immediately.
+export const desktop_primary_surfaces_are_never_blank = always(
+  () =>
+    emptyPrimarySurfaceProblems.current.filter((surface) => !surface.declaresLoading)
+      .length === 0,
+);
+
+// The transcript panel legitimately renders a text-free loading skeleton
+// between selecting a session and its snapshot arriving (issue #996), so a
+// continuous "never textually empty" assertion is wrong by design. What the
+// app does guarantee is settling: a loading surface must produce content
+// within the bound. A skeleton stuck past the bound (e.g. a dropped session
+// subscription) still fails.
+export const desktop_primary_surfaces_settle = always(
+  eventually(() => emptyPrimarySurfaceProblems.current.length === 0).within(
+    5,
+    "seconds",
+  ),
 );
 
 export const transcript_does_not_render_adjacent_duplicate_messages = always(() => {

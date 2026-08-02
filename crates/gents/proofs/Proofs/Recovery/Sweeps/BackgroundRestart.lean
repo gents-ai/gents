@@ -16,11 +16,11 @@ terminalized rows production deliberately preserves.
 This module is the total, executable model of that classifier:
 
 * **native background tool** (`await_mode = background`, no child request)
-  with a live parent → terminalize as
-  `TerminalizeBackgroundedAsInterrupted` (→ `cancelled`), with a durable
-  completion notification (`interrupted_on_restart`) and a coalesced
-  background-completion wake obligation — the in-memory execution and its
-  live output ring buffer died with the process;
+  with a resolvable parent → every terminal restart disposition carries a
+  durable completion notification and coalesced background-completion wake;
+  the reason distinguishes restart interruption, deadline expiry, and the
+  two terminal-parent shapes — the in-memory execution and its live output
+  ring buffer died with the process;
 * **background subagent bridge** (`await_mode = background`, child request
   linked) with a live parent → **leave running** — the durable bridge row is
   the work, and the child terminal projects later;
@@ -168,29 +168,87 @@ def restartDisposition (row : RestartRow) : RestartDisposition :=
   else
     .leaveRunning
 
-/-- Durable side effect owed after terminalizing a native background tool on
-    restart: the `<tool-completion status="cancelled">` notification reason.
-    Delivery is transcript-only: recovery must not create a synthetic request
-    or wake an agent turn. -/
+/-- Project the periodic orphan observation onto the startup classifier's
+    parent vocabulary. The boolean priority matches
+    `orphanedBackgroundToolCause`. -/
+def OrphanedBackgroundToolRow.parentObservation
+    (row : OrphanedBackgroundToolRow) : ParentObservation :=
+  if row.parentLive then .live
+  else if row.parentInterrupted then .interrupted
+  else if row.parentTerminal then .otherTerminal
+  else .missing
+
+def OrphanedBackgroundToolRow.toRestartRow
+    (row : OrphanedBackgroundToolRow) : RestartRow :=
+  { awaitMode := row.call.awaitMode
+  , cancelPolicy := row.call.cancelPolicy
+  , childLinked := row.call.childRequestId.isSome
+  , parent := row.parentObservation
+  , deadlineExpired := row.deadlineExpired
+  , unclaimedExpired := row.unclaimedExpired
+  }
+
+/-- The periodic orphan classifier is the native-background restriction of
+    the startup classifier, including cause precedence. -/
+theorem orphanedBackgroundToolCause_matches_restartDisposition
+    (row : OrphanedBackgroundToolRow)
+    (h_background : row.call.awaitMode = .background)
+    (h_native : row.call.childRequestId = none) :
+    (orphanedBackgroundToolCause row).map ToolRecoveryCause.toContract =
+      (restartDisposition row.toRestartRow).causeContract := by
+  cases h_deadline : row.deadlineExpired <;>
+    cases h_unclaimed : row.unclaimedExpired <;>
+    cases h_live : row.parentLive <;>
+    cases h_interrupted : row.parentInterrupted <;>
+    cases h_terminal : row.parentTerminal <;>
+    simp [orphanedBackgroundToolCause, OrphanedBackgroundToolRow.toRestartRow,
+      OrphanedBackgroundToolRow.parentObservation, restartDisposition,
+      RestartRow.isNativeBackgroundTool, RestartRow.isDetachedBridge,
+      RestartDisposition.causeContract, h_background, h_native, h_deadline,
+      h_unclaimed, h_live, h_interrupted, h_terminal,
+      ParentObservation.observedTerminal]
+
+/-- Durable side effects owed after terminalizing a native background tool on
+    restart: the cause-specific `<tool-completion>` notification reason and
+    the coalesced wake queue vocabulary
+    (`background_completion:<parent session>`). -/
 structure RestartNotificationObligation where
   notificationReason : String
+  queueSource : String
+  queueKeyPrefix : String
   deriving DecidableEq, Repr
 
-def restartNotificationObligation : RestartNotificationObligation :=
-  { notificationReason := "interrupted_on_restart" }
+def restartNotificationObligation
+    (cause : ToolRecoveryCause) : RestartNotificationObligation :=
+  { notificationReason :=
+      match cause with
+      | .deadlineExceeded => "deadline_exceeded"
+      | .parentInterrupted => "parent_interrupted"
+      | .parentTerminal => "parent_terminal"
+      | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
+      | .unclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout"
+      | _ => "tool_failed"
+  , queueSource := "background_completion"
+  , queueKeyPrefix := "background_completion:"
+  }
 
-/-- The transcript notification is owed exactly on the restart-interrupt arm. -/
-def RestartDisposition.notification :
-    RestartDisposition → Option RestartNotificationObligation
-  | .terminalize .terminalizeBackgroundedAsInterrupted =>
-      some restartNotificationObligation
-  | _ => none
+/-- A terminalized native background process with a resolvable parent always
+    owes a notification + wake. This includes the normal cross-turn shape:
+    the spawning request completed before the process restart. -/
+def RestartRow.notification (row : RestartRow) :
+    Option RestartNotificationObligation :=
+  if row.isNativeBackgroundTool ∧ row.parent ≠ .missing then
+    match restartDisposition row with
+    | .terminalize cause => some (restartNotificationObligation cause)
+    | .leaveRunning => none
+  else
+    none
 
 /-! ## Pointwise theorems (the four #937 arms) -/
 
 /-- RB1: a native background tool with a live parent and no expiry is
     interrupted on restart — terminal `cancelled` plus the durable
-    transcript-notification obligation. -/
+    notification/wake obligation. -/
 theorem native_background_tool_live_parent_interrupted_on_restart
     (row : RestartRow)
     (h_native : row.isNativeBackgroundTool)
@@ -200,14 +258,15 @@ theorem native_background_tool_live_parent_interrupted_on_restart
     restartDisposition row =
         .terminalize .terminalizeBackgroundedAsInterrupted ∧
       (restartDisposition row).terminalStateContract = some "cancelled" ∧
-      (restartDisposition row).notification =
-        some restartNotificationObligation := by
+      row.notification =
+        some (restartNotificationObligation
+          .terminalizeBackgroundedAsInterrupted) := by
   have h : restartDisposition row =
       .terminalize .terminalizeBackgroundedAsInterrupted := by
     simp [restartDisposition, h_native, h_live, h_deadline, h_unclaimed]
   refine ⟨h, ?_, ?_⟩
   · rw [h]; rfl
-  · rw [h]; rfl
+  · simp [RestartRow.notification, h_native, h_live, h]
 
 /-- RB2: a background subagent bridge with a live parent is left running on
     restart — the durable bridge row survives the process and projects the
@@ -302,15 +361,13 @@ theorem terminalize_lands_terminal
     isTerminal cause.terminalState :=
   cause.terminalState_terminal
 
-/-- The transcript-notification obligation is owed exactly on the
-    restart-interrupt arm. It carries no request-producing wake side effect;
-    subagent bridges left running receive their notification from completion
-    projection later. -/
-theorem notification_iff_restart_interrupt (row : RestartRow) :
-    (restartDisposition row).notification =
-        some restartNotificationObligation ↔
-      restartDisposition row =
-        .terminalize .terminalizeBackgroundedAsInterrupted := by
+/-- Notification is owed exactly when a resolvable native background process
+    is terminalized. Subagent bridges owe nothing here; their notification
+    comes from child-completion projection later. -/
+theorem notification_iff_terminalized_native_background (row : RestartRow) :
+    row.notification.isSome = true ↔
+      (row.isNativeBackgroundTool ∧ row.parent ≠ .missing ∧
+        restartDisposition row ≠ .leaveRunning) := by
   rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
     deadlineExpired, unclaimedExpired⟩
   cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>

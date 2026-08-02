@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDyn;
@@ -45,7 +45,7 @@ pub struct BackgroundToolRegistry {
 
 #[derive(Default)]
 struct BackgroundToolRegistryInner {
-    tools: HashMap<String, Arc<Mutex<Box<dyn ToolDyn>>>>,
+    tools: HashMap<String, Arc<dyn ToolDyn>>,
     allowlist: Vec<String>,
 }
 
@@ -61,7 +61,7 @@ impl BackgroundToolRegistry {
         for tool in tools {
             let name = tool.name();
             if allowed.contains(&name) {
-                registry_tools.insert(name, Arc::new(Mutex::new(tool)));
+                registry_tools.insert(name, Arc::from(tool));
             }
         }
         let mut allowlist = allowed.into_iter().collect::<Vec<_>>();
@@ -74,7 +74,7 @@ impl BackgroundToolRegistry {
         }
     }
 
-    pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<Mutex<Box<dyn ToolDyn>>>> {
+    pub(crate) fn get(&self, tool_name: &str) -> Option<Arc<dyn ToolDyn>> {
         self.inner.tools.get(tool_name).cloned()
     }
 
@@ -89,28 +89,113 @@ struct BackgroundExecution {
 }
 
 #[derive(Clone, Default)]
+struct BackgroundLiveOutputState {
+    registry: LiveToolOutputRegistry,
+    flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
+    flusher_running: Arc<AtomicBool>,
+}
+
+impl BackgroundLiveOutputState {
+    async fn writer_for(
+        &self,
+        tool_call_id: impl Into<String>,
+    ) -> crate::background_tools::LiveToolOutputWriter {
+        self.registry.writer_for(tool_call_id).await
+    }
+
+    async fn remove(&self, tool_call_id: &str) {
+        self.registry.remove(tool_call_id).await;
+        self.flushed_seq.lock().await.remove(tool_call_id);
+    }
+
+    async fn record_flushed_seq_if_live(&self, tool_call_id: &str, seq: i64) {
+        self.flushed_seq
+            .lock()
+            .await
+            .insert(tool_call_id.to_string(), seq);
+        // Close the mutation/worker-cleanup race: if cleanup removed the live
+        // buffer while the durable write was in flight, do not resurrect its
+        // sequence marker after cleanup has already run.
+        if self.registry.snapshot(tool_call_id).await.is_none() {
+            self.flushed_seq.lock().await.remove(tool_call_id);
+        }
+    }
+}
+
+/// Process-wide volatile state for ordinary background tool calls.
+///
+/// Sharing this registry across request hooks keeps both cancellation tokens
+/// and live output buffers reachable until each process becomes terminal.
+#[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
-    inner: Arc<Mutex<HashMap<String, BackgroundExecution>>>,
+    inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
+    live_outputs: BackgroundLiveOutputState,
 }
 
 impl BackgroundExecutionRegistry {
     pub async fn cancel(&self, tool_call_id: &str) -> bool {
-        let Some(execution) = self.inner.lock().await.get(tool_call_id).cloned() else {
+        let Some(execution) = self.lock_executions().get(tool_call_id).cloned() else {
             return false;
         };
         execution.cancellation_token.cancel();
         true
     }
 
-    pub(crate) async fn insert(&self, tool_call_id: String, cancellation_token: CancellationToken) {
-        self.inner
-            .lock()
-            .await
-            .insert(tool_call_id, BackgroundExecution { cancellation_token });
+    pub(crate) fn reserve(
+        &self,
+        tool_call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> BackgroundExecutionReservation {
+        self.lock_executions().insert(
+            tool_call_id.clone(),
+            BackgroundExecution { cancellation_token },
+        );
+        BackgroundExecutionReservation {
+            registry: self.clone(),
+            tool_call_id,
+            armed: true,
+        }
     }
 
     pub(crate) async fn remove(&self, tool_call_id: &str) {
-        self.inner.lock().await.remove(tool_call_id);
+        self.remove_now(tool_call_id);
+    }
+
+    pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
+        self.lock_executions().contains_key(tool_call_id)
+    }
+
+    fn remove_now(&self, tool_call_id: &str) {
+        self.lock_executions().remove(tool_call_id);
+    }
+
+    fn lock_executions(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackgroundExecution>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Cancellation-safe ownership reservation for the durable-running handoff.
+/// Dropping the caller future before `tokio::spawn` transfers ownership removes
+/// the volatile entry synchronously, so periodic recovery can see the orphan.
+pub(crate) struct BackgroundExecutionReservation {
+    registry: BackgroundExecutionRegistry,
+    tool_call_id: String,
+    armed: bool,
+}
+
+impl BackgroundExecutionReservation {
+    pub(crate) fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BackgroundExecutionReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.registry.remove_now(&self.tool_call_id);
+        }
     }
 }
 
@@ -320,9 +405,7 @@ pub struct DefraSessionHook {
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
-    background_live_outputs: LiveToolOutputRegistry,
-    live_output_flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
-    live_output_flusher_running: Arc<std::sync::atomic::AtomicBool>,
+    background_live_outputs: BackgroundLiveOutputState,
 }
 
 enum PolicyDecision {
@@ -337,6 +420,8 @@ impl DefraSessionHook {
         agent_did: &str,
         failure_policy: FailurePolicy,
     ) -> Self {
+        let background_executions = BackgroundExecutionRegistry::default();
+        let background_live_outputs = background_executions.live_outputs.clone();
         Self {
             node,
             agent_did: agent_did.to_string(),
@@ -362,10 +447,8 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
-            background_executions: BackgroundExecutionRegistry::default(),
-            background_live_outputs: LiveToolOutputRegistry::default(),
-            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
-            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            background_executions,
+            background_live_outputs,
         }
     }
 
@@ -378,6 +461,8 @@ impl DefraSessionHook {
     ) -> anyhow::Result<Self> {
         session::ensure_session(&node, session_id, agent_name, agent_did).await?;
         let max_seq = session::max_sequence(&node, session_id).await?;
+        let background_executions = BackgroundExecutionRegistry::default();
+        let background_live_outputs = background_executions.live_outputs.clone();
 
         Ok(Self {
             node,
@@ -404,10 +489,8 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
-            background_executions: BackgroundExecutionRegistry::default(),
-            background_live_outputs: LiveToolOutputRegistry::default(),
-            live_output_flushed_seq: Arc::new(Mutex::new(HashMap::new())),
-            live_output_flusher_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            background_executions,
+            background_live_outputs,
         })
     }
 
@@ -420,6 +503,7 @@ impl DefraSessionHook {
         mut self,
         registry: BackgroundExecutionRegistry,
     ) -> Self {
+        self.background_live_outputs = registry.live_outputs.clone();
         self.background_executions = registry;
         self
     }
@@ -520,26 +604,27 @@ impl DefraSessionHook {
             .any(|name| name == tool_name)
     }
 
-    pub(crate) fn foreground_live_output_writer(
+    pub(crate) async fn foreground_live_output_writer(
         &self,
         internal_call_id: &str,
     ) -> crate::background_tools::LiveToolOutputWriter {
+        let writer = self
+            .background_live_outputs
+            .writer_for(internal_call_id)
+            .await;
         self.ensure_live_output_flusher();
-        self.background_live_outputs.writer_for(internal_call_id)
+        writer
     }
 
     pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
         self.background_live_outputs.remove(tool_call_id).await;
-        self.live_output_flushed_seq
-            .lock()
-            .await
-            .remove(tool_call_id);
     }
 
     pub(crate) fn ensure_live_output_flusher(&self) {
         use std::sync::atomic::Ordering;
         if self
-            .live_output_flusher_running
+            .background_live_outputs
+            .flusher_running
             .swap(true, Ordering::AcqRel)
         {
             return;
@@ -556,39 +641,67 @@ impl DefraSessionHook {
                         tracing::debug!(error = %error, "live output flush failed");
                     }
                 }
-                if hook.background_live_outputs.live_ids().await.is_empty() {
+                if hook
+                    .background_live_outputs
+                    .registry
+                    .live_ids()
+                    .await
+                    .is_empty()
+                {
                     break;
                 }
             }
-            hook.live_output_flusher_running
+            hook.background_live_outputs
+                .flusher_running
                 .store(false, std::sync::atomic::Ordering::Release);
+            // Close the empty-check/stop race: a writer that arrived after
+            // the loop's last check saw the guard as running and did not spawn
+            // a replacement, so re-check after releasing the shared guard.
+            if !hook
+                .background_live_outputs
+                .registry
+                .live_ids()
+                .await
+                .is_empty()
+            {
+                hook.ensure_live_output_flusher();
+            }
         });
     }
 
     pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
         const TAIL_PERSIST_BYTES: usize = 4096;
 
-        let live_ids = self.background_live_outputs.live_ids().await;
+        let live_ids = self.background_live_outputs.registry.live_ids().await;
         {
-            let mut flushed = self.live_output_flushed_seq.lock().await;
+            let mut flushed = self.background_live_outputs.flushed_seq.lock().await;
             flushed.retain(|id, _| live_ids.contains(id));
         }
 
         let mut count = 0usize;
         for tool_call_id in live_ids {
-            let Some(snapshot) = self.background_live_outputs.snapshot(&tool_call_id).await else {
+            let Some(snapshot) = self
+                .background_live_outputs
+                .registry
+                .snapshot(&tool_call_id)
+                .await
+            else {
                 continue;
             };
             let seq = snapshot.combined.total_bytes_seen as i64;
             if seq == 0 {
                 continue;
             }
+            if self
+                .background_live_outputs
+                .flushed_seq
+                .lock()
+                .await
+                .get(&tool_call_id)
+                .copied()
+                == Some(seq)
             {
-                let mut flushed = self.live_output_flushed_seq.lock().await;
-                if flushed.get(&tool_call_id).copied() == Some(seq) {
-                    continue;
-                }
-                flushed.insert(tool_call_id.clone(), seq);
+                continue;
             }
             let bytes = &snapshot.combined.bytes;
             let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
@@ -694,9 +807,10 @@ impl DefraSessionHook {
                     errors = ?response.errors,
                     "live output tail flush failed; will retry next tick"
                 );
-                let mut flushed = self.live_output_flushed_seq.lock().await;
-                flushed.remove(&tool_call_id);
             } else {
+                self.background_live_outputs
+                    .record_flushed_seq_if_live(&tool_call_id, seq)
+                    .await;
                 count += 1;
             }
         }
@@ -720,20 +834,21 @@ impl DefraSessionHook {
 
         let count = lifecycles.len();
         for mut lifecycle in lifecycles {
-            if lifecycle.is_subagent_bridge() {
-                if lifecycle.await_mode() == AwaitMode::Foreground {
-                    lifecycle.bridge_failure(ChildTerminal::Dead).await?;
-                } else {
-                    tracing::debug!(
-                        "leaving background subagent bridge running after parent deadline sweep"
-                    );
-                }
+            if lifecycle.is_subagent_bridge() && lifecycle.await_mode() != AwaitMode::Foreground {
+                tracing::debug!(
+                    "leaving background subagent bridge running after parent deadline sweep"
+                );
             } else if lifecycle.state()
                 == crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
             {
                 lifecycle.timeout_while_held().await?;
             } else {
-                lifecycle.timeout().await?;
+                // Foreground subagent bridges take the same deadline
+                // transition as native tools: `timedOut`, never a fabricated
+                // `ChildTerminal::Dead` — the child may still be live, and its
+                // terminalization belongs to the subagent-liveness sweep
+                // (#1002; Lean `ToolExecution.Transition.timeout`).
+                let _ = lifecycle.timeout().await?;
             }
         }
         Ok(count)

@@ -464,7 +464,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            tool_result,
+            &crate::tool_call_lifecycle::ToolOutcome::Completed(tool_result.to_string()),
         )
         .await,
         HookAction::Continue
@@ -639,7 +639,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
-            "source bytes",
+            &crate::tool_call_lifecycle::ToolOutcome::Completed("source bytes".to_string()),
         )
         .await,
         HookAction::Continue
@@ -801,7 +801,9 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 Some(call_id),
                 &internal_id,
                 &args,
-                &format!("source bytes {index}"),
+                &crate::tool_call_lifecycle::ToolOutcome::Completed(format!(
+                    "source bytes {index}"
+                )),
             )
             .await,
             HookAction::Continue
@@ -950,7 +952,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
             Some(call_id.to_string()),
             call_id,
             tool_args,
-            tool_output
+            &crate::tool_call_lifecycle::ToolOutcome::Completed(tool_output.to_string())
         )
         .await,
         HookAction::Continue
@@ -1381,7 +1383,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             crate::test_support::CORRUPT_TOOL_ARGS_589,
-            "described:list_hosts",
+            &crate::tool_call_lifecycle::ToolOutcome::Completed("described:list_hosts".to_string()),
         )
         .await,
         HookAction::Continue

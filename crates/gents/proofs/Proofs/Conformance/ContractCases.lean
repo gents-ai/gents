@@ -13,3 +13,4 @@ import Proofs.Conformance.ContractCases.CancelPropagation
 import Proofs.Conformance.ContractCases.SubagentDelegation
 import Proofs.Conformance.ContractCases.Transcript
 import Proofs.Conformance.ContractCases.ManagedExec
+import Proofs.Conformance.ContractCases.PromptAssembly

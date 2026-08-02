@@ -297,7 +297,7 @@ pub(crate) async fn build_desired_state_live_bundle(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let backend_ids = collect_string_field_values(&behavior_rows, "backend_id")
+    let backend_scope = collect_string_field_values(&behavior_rows, "backend_id")
         .into_iter()
         .chain(
             desired_manifest
@@ -305,9 +305,7 @@ pub(crate) async fn build_desired_state_live_bundle(
                 .iter()
                 .map(|value| value.backend_id.clone()),
         )
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     let profile_ids = collect_string_field_values(&behavior_rows, "inference_profile_id")
         .into_iter()
         .chain(
@@ -342,26 +340,41 @@ pub(crate) async fn build_desired_state_live_bundle(
     };
     sort_document_rows(&mut tool_selection_rows, "selection_id");
 
-    let mut backend_rows = if backend_ids.is_empty() {
-        Vec::new()
-    } else {
-        graphql_rows(
-            access,
-            "InferenceBackend",
-            &format!(
-                r#"{{
-                    InferenceBackend(
-                        filter: {{ backend_id: {{ _in: {} }} }}
-                    ) {{
-                        {fields}
-                    }}
-                }}"#,
-                graphql_string_list_literal(&backend_ids),
-                fields = EXPORT_INFERENCE_BACKEND_FIELDS,
-            ),
-        )
-        .await?
-    };
+    // InferenceBackend documents are node-global (no agent_did), so fetch
+    // them all: a backend absent from the manifest and referenced by nothing
+    // must surface as live_only so --prune can remove it (#981). Backends
+    // another agent's behavior still references belong to that agent's scope
+    // and are excluded so this manifest can never prune them.
+    let behavior_backend_ref_rows = graphql_rows(
+        access,
+        "AgentBehavior",
+        "{ AgentBehavior { agent_did backend_id } }",
+    )
+    .await?;
+    let foreign_backend_refs = behavior_backend_ref_rows
+        .iter()
+        .filter(|row| row.get("agent_did").and_then(Value::as_str) != Some(agent_did))
+        .filter_map(|row| row.get("backend_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut backend_rows = graphql_rows(
+        access,
+        "InferenceBackend",
+        &format!(
+            r#"{{
+                InferenceBackend {{
+                    {fields}
+                }}
+            }}"#,
+            fields = EXPORT_INFERENCE_BACKEND_FIELDS,
+        ),
+    )
+    .await?;
+    backend_rows.retain(|row| {
+        row.get("backend_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| backend_scope.contains(id) || !foreign_backend_refs.contains(id))
+    });
     sort_document_rows(&mut backend_rows, "backend_id");
 
     let mut profile_rows = if profile_ids.is_empty() {

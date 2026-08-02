@@ -1,9 +1,6 @@
 use serde::Deserialize;
 
-use super::shared::{
-    default_command_timeout_secs, default_max_file_chars, default_max_list_entries,
-    default_max_matches,
-};
+use super::shared::{default_max_file_chars, default_max_list_entries, default_max_matches};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ListFilesArgs {
@@ -88,8 +85,11 @@ pub(super) struct BashArgs {
     pub args: Vec<String>,
     #[serde(default)]
     pub cwd: Option<String>,
-    #[serde(default = "default_command_timeout_secs")]
-    pub timeout_secs: u64,
+    // None means "apply the tool's configured default" — resolution happens
+    // at call time so the applied value always matches the advertised schema
+    // default and the background lifetime budget (#985).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub raw_json: bool,
 }

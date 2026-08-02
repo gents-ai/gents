@@ -7,9 +7,7 @@ use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, timeout_result,
-};
+use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
@@ -211,11 +209,16 @@ pub(crate) async fn run_command(
         } => (code, false, stdout, stderr),
         ManagedExecOutcome::TimedOut { stdout, stderr, .. } => {
             if request_deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline) {
-                return Ok(timeout_result(request_deadline));
+                // Never model-facing: the dispatcher's envelope shares this
+                // deadline and its `biased` select resolves the call to
+                // `ToolOutcome::TimedOut` before this text can thread.
+                return Ok("command was stopped at the request deadline".to_string());
             }
             (None, true, stdout, stderr)
         }
-        ManagedExecOutcome::Cancelled { .. } => return Ok(cancelled_result()),
+        // Never model-facing: the envelope's (fired) cancellation branch is
+        // polled first and resolves the call to `ToolOutcome::Cancelled`.
+        ManagedExecOutcome::Cancelled { .. } => return Ok("command was cancelled".to_string()),
         ManagedExecOutcome::SpawnFailed { error } => {
             return Err(anyhow!("spawning managed command failed: {error}").into())
         }

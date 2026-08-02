@@ -10,6 +10,7 @@ import type {
   CascadeCancelPreview,
   ChatSendResult,
   CodexLoginResult,
+  GrokLoginResult,
   DesktopClientSnapshot,
   DesktopInterruptRequestRequest,
   DesktopListSubagentTreeRequest,
@@ -152,6 +153,11 @@ export type DesktopApiAdapter = {
     provider?: string | null,
   ) => Promise<CodexLoginResult>;
   cancelCodexLogin: () => Promise<void>;
+  grokLogin: (
+    agentDid: string,
+    provider?: string | null,
+  ) => Promise<GrokLoginResult>;
+  cancelGrokLogin: () => Promise<void>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

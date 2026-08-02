@@ -6,6 +6,7 @@ import Proofs.Background.Properties
 import Proofs.Background.Executable
 import Proofs.Background.ToolOutput
 import Proofs.Background.CompletionContinuation
+import Proofs.Background.ProcessControl
 
 /-!
 # Subagent

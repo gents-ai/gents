@@ -371,3 +371,81 @@ pub(super) fn generated_tool_execution_cases_cover_preflight_and_retry_contracts
         assert_eq!(case.disposition, "doNotRetry", "{name}");
     }
 }
+
+/// Issue #1002 defect 1: `timeout()` must CAS on `running` like every sibling
+/// terminal transition (`complete`, `fail`, `cancel_during_run`,
+/// `bridge_complete`/`bridge_failure`, `recover_tool_call_row`).
+///
+/// The documented race, driven through the real writers: a native tool is
+/// running past its deadline while its parent request is interrupted. The
+/// periodic `reconcile_terminal_parent_owned_tools` sweep terminalizes the row
+/// first (`cancelled` / cause `interrupted`), and only then does the deadline
+/// wrapper's `timeout()` fire on the stale in-memory handle. Lean's
+/// `ToolExecution.Transition.timeout` requires `pre.state = .running`, and
+/// terminal irreversibility requires state AND recorded cause to survive — so
+/// the straggler must lose the compare and adopt the durable terminal instead
+/// of overwriting it with `timedOut`.
+#[tokio::test]
+async fn timeout_adopts_terminal_written_by_terminal_parent_sweep() {
+    let db = test_db("tc-timeout-cas").await;
+
+    let request_id = "timeout-cas-request";
+    let session_id = "timeout-cas-session";
+    let created_at = chrono::Utc::now().to_rfc3339();
+    // Parent request already interrupted while the tool ran past its deadline.
+    crate::support::create_request(&db.node, request_id, session_id, "interrupted", &created_at)
+        .await;
+
+    let mut lc = ToolCallLifecycle::new(
+        db.node.clone(),
+        request_id.into(),
+        session_id.into(),
+        crate::support::AGENT_DID.to_string(),
+        "timeout-cas-tool-call".into(),
+        0,
+        "test_tool".into(),
+        "{}".into(),
+        // Already expired: the timeout writer is enabled the moment the
+        // sweep loses interest in the row.
+        chrono::Utc::now() - chrono::Duration::seconds(5),
+    );
+    lc.start_running().await.unwrap();
+
+    // Actor A: the sweep terminalizes the running tool under its terminal
+    // parent (interrupted parent => cancelled / cause interrupted).
+    let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(
+        &db.node,
+        crate::support::AGENT_DID,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report.tool_calls_terminalized, 1,
+        "sweep should terminalize the running tool under its interrupted parent"
+    );
+
+    // Actor B: the straggler timeout path fires on the stale handle. It must
+    // lose the running-state compare and adopt the durable terminal.
+    let won = lc.timeout().await.unwrap();
+    assert!(
+        !won,
+        "timeout() must report a lost compare when the row was already terminal"
+    );
+
+    let snapshots = fetch_tool_call_snapshots_for_session(&db.node, session_id).await;
+    assert_eq!(snapshots.len(), 1, "exactly one persisted tool-call row");
+    assert_eq!(
+        snapshots[0].lifecycle_state.as_deref(),
+        Some("cancelled"),
+        "timeout() must not overwrite a terminal another actor already recorded"
+    );
+    assert_eq!(
+        snapshots[0].cancel_cause.as_deref(),
+        Some("interrupted"),
+        "the recorded cancellation cause must be preserved"
+    );
+    assert_eq!(
+        snapshots[0].tool_failure_class, None,
+        "the sweep's cancelled terminal carries no failure class; timeout() must not stamp one"
+    );
+}

@@ -143,6 +143,18 @@ export function cancelCodexLogin(api?: DesktopApiAdapter) {
   return getDesktopApiAdapter(api).cancelCodexLogin();
 }
 
+export function grokLogin(
+  agentDid: string,
+  provider?: string | null,
+  api?: DesktopApiAdapter,
+) {
+  return getDesktopApiAdapter(api).grokLogin(agentDid, provider);
+}
+
+export function cancelGrokLogin(api?: DesktopApiAdapter) {
+  return getDesktopApiAdapter(api).cancelGrokLogin();
+}
+
 export function saveInferenceProfileConfig(
   request: InferenceProfileSaveRequest,
   api?: DesktopApiAdapter,

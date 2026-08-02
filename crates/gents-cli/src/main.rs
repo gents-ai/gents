@@ -41,6 +41,7 @@ const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-5.5";
+const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.5";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
@@ -434,6 +435,8 @@ async fn async_main() -> Result<()> {
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
         Command::CodexAuthProbe(args) => commands::codex_auth_probe::codex_auth_probe(args).await,
+        Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
+        Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,
         Command::Show { command } => commands::show::dispatch(command).await,

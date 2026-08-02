@@ -440,6 +440,188 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
     Ok(())
 }
 
+/// Regression test for #981: renaming an inference backend in the manifest
+/// must surface the old live document as live_only and let --prune delete it
+/// once the behavior no longer references it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_apply_prunes_live_only_inference_backends_when_requested_locally() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let root = tempdir.path().join("infra").join("agents").join("default");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-backend-prune-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let agent_name = format!("cli-backend-prune-{}", Uuid::new_v4().simple());
+
+    run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+
+    run_cli_text(
+        &home_dir,
+        &[
+            "config",
+            "export",
+            "--root",
+            root.to_str().expect("utf-8 root"),
+        ],
+    )?;
+
+    let backends_dir = root.join("inference-backends");
+    let backend_entry = fs::read_dir(&backends_dir)
+        .context("reading inference-backends dir after export")?
+        .next()
+        .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
+    let old_backend_id = backend_entry
+        .file_name()
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
+        .to_string();
+    let new_backend_id = format!("{old_backend_id}-renamed");
+
+    let mut backend = read_json_file(&backends_dir.join(&old_backend_id).join("object.json"))?;
+    backend["backend_id"] = Value::String(new_backend_id.clone());
+    write_json_file(
+        &backends_dir.join(&new_backend_id).join("object.json"),
+        &backend,
+    )?;
+    fs::remove_dir_all(backends_dir.join(&old_backend_id))
+        .context("removing renamed backend dir")?;
+
+    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let behavior_id = principal
+        .get("default_behavior_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
+        .to_string();
+    let behavior_path = root
+        .join("agent-behaviors")
+        .join(&behavior_id)
+        .join("object.json");
+    let mut behavior = read_json_file(&behavior_path)?;
+    behavior["backend_id"] = Value::String(new_backend_id.clone());
+    write_json_file(&behavior_path, &behavior)?;
+
+    let root_str = root
+        .to_str()
+        .ok_or_else(|| anyhow!("manifest root path is not UTF-8"))?;
+    let explicit_home = home_dir.join(".gents");
+    let explicit_home_str = explicit_home
+        .to_str()
+        .ok_or_else(|| anyhow!("explicit home path is not UTF-8"))?;
+
+    let drift = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(
+        drift
+            .pointer("/counts/inference_backends/live_only")
+            .and_then(Value::as_u64),
+        Some(1),
+        "stale backend must be reported live_only: {drift}"
+    );
+    assert_eq!(
+        drift
+            .pointer("/counts/inference_backends/create")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    // First prune pass creates the renamed backend and repoints the
+    // behavior; deleting the old backend is blocked while the live behavior
+    // still references it.
+    let first_prune = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        first_prune.get("status").and_then(Value::as_str),
+        Some("applied")
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/pruned/inference_backends")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        first_prune
+            .pointer("/remaining/inference_backends/live_only")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let second_prune = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "apply",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+            "--prune",
+        ],
+    )?;
+    assert_eq!(
+        second_prune
+            .pointer("/planned/inference_backends/delete")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        second_prune
+            .pointer("/pruned/inference_backends")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+
+    let exact = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "diff",
+            "--root",
+            root_str,
+            "--home",
+            explicit_home_str,
+        ],
+    )?;
+    assert_eq!(exact.get("ok").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        exact
+            .pointer("/counts/inference_backends/live_only")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_force_rebinds_concrete_manifest_to_home_identity_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

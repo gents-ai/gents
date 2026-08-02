@@ -126,12 +126,10 @@ impl RuntimeContext {
             )));
         }
         let loop_tools = std::sync::Arc::new(loop_tools);
+        // Background executions run through `call_tool_managed`, which owns
+        // the deadline/cancellation envelope — no per-tool wrapper needed.
         let background_tool_registry = BackgroundToolRegistry::from_tools(
-            tool_surface
-                .build_tools(&self.tool_runtime)?
-                .into_iter()
-                .map(crate::tool_call_lifecycle::runtime::wrap_tool)
-                .collect(),
+            tool_surface.build_tools(&self.tool_runtime)?,
             &tool_surface.background_tools().allowlist,
         );
         tracing::info!(
@@ -256,6 +254,69 @@ impl RuntimeContext {
                     client,
                 )
                 .await
+            }
+            BackendProviderKind::XaiGrokOAuth => {
+                let build_context = format!(
+                    "building Grok OAuth completion client for behavior {} against {}",
+                    behavior.behavior_id, behavior.backend_endpoint
+                );
+                let timeout_error = || {
+                    anyhow::anyhow!(
+                        "timed out after {:?} building the Grok OAuth completion client",
+                        self.startup_readiness.build_timeout
+                    )
+                };
+                if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
+                    let client = tokio::time::timeout(
+                        self.startup_readiness.build_timeout,
+                        crate::xai_grok_oauth::build_chat_completions_client(
+                            self.node.clone(),
+                            behavior.agent_did(),
+                            &behavior.backend_endpoint,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| timeout_error())
+                    .and_then(|result| result)
+                    .with_context(|| build_context.clone())?;
+                    self.run_behavior_with_client(
+                        behavior,
+                        request_rx,
+                        shutdown,
+                        prompt_builder,
+                        preamble,
+                        loop_tools.clone(),
+                        background_tool_registry,
+                        tool_surface.approval_required_tools().to_vec(),
+                        client,
+                    )
+                    .await
+                } else {
+                    let client = tokio::time::timeout(
+                        self.startup_readiness.build_timeout,
+                        crate::xai_grok_oauth::build_responses_client(
+                            self.node.clone(),
+                            behavior.agent_did(),
+                            &behavior.backend_endpoint,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| timeout_error())
+                    .and_then(|result| result)
+                    .with_context(|| build_context.clone())?;
+                    self.run_behavior_with_client(
+                        behavior,
+                        request_rx,
+                        shutdown,
+                        prompt_builder,
+                        preamble,
+                        loop_tools.clone(),
+                        background_tool_registry,
+                        tool_surface.approval_required_tools().to_vec(),
+                        client,
+                    )
+                    .await
+                }
             }
         }
     }

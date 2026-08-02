@@ -44,16 +44,15 @@ use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
 };
 
-use crate::llm::tool::{ToolDyn, ToolError, UnparseableArgsKind};
+use crate::llm::tool::ToolDyn;
 use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, deadline_remaining,
-    scope_request_tool_execution_with_workspace_and_live_output, timeout_result,
-    unparseable_args_notice, unparseable_args_result,
+    current_tool_runtime_context, deadline_remaining,
+    scope_request_tool_execution_with_workspace_and_live_output, ToolOutcome,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
@@ -544,21 +543,20 @@ where
                                 reason
                             }
                             _ => {
-                                let live_output = hook.as_ref().map(|hook| {
-                                    hook.foreground_live_output_writer(&internal_call_id)
-                                });
-                                let full_result = dispatch_tool(
+                                let live_output = match hook.as_ref() {
+                                    Some(hook) => Some(
+                                        hook.foreground_live_output_writer(&internal_call_id)
+                                            .await,
+                                    ),
+                                    None => None,
+                                };
+                                let outcome = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
                                     tool_args.clone(),
                                     live_output,
                                 )
                                 .await;
-                                let (bounded, _, _) = truncate_text(
-                                    &full_result,
-                                    tool_result_truncation_mode(&tool_name),
-                                    &TruncationLimits::default(),
-                                );
 
                                 if let Some(hook) = hook.as_ref() {
                                     let result_action = hook
@@ -567,7 +565,7 @@ where
                                             tool_call.call_id.clone(),
                                             &internal_call_id,
                                             &tool_args,
-                                            &full_result,
+                                            &outcome,
                                         )
                                         .await;
                                     if let HookAction::Terminate { reason } = result_action {
@@ -582,11 +580,14 @@ where
                                         )))?;
                                     }
                                 }
-                                // The internal marker must never reach the model.
-                                match unparseable_args_notice(&bounded) {
-                                    Some(notice) => notice.to_string(),
-                                    None => bounded,
-                                }
+                                // The typed outcome's model-facing accessor is
+                                // the only text that may thread to the model.
+                                let (bounded, _, _) = truncate_text(
+                                    outcome.model_facing_text(),
+                                    tool_result_truncation_mode(&tool_name),
+                                    &TruncationLimits::default(),
+                                );
+                                bounded
                             }
                         };
 
@@ -935,22 +936,30 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-async fn dispatch_tool(
+pub(crate) async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
     live_output: Option<crate::background_tools::LiveToolOutputWriter>,
-) -> String {
+) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        return format!("error: unknown tool '{name}'");
+        // An unresolved tool name is a dispatch FAILURE, not tool output.
+        // Models hallucinate tool names and stale surfaces outlive their
+        // tools, so this is a routine path, not an exotic one; classifying it
+        // `Completed` would reproduce the durability bug the typed channel
+        // exists to close (#400/D6). The detail text is unchanged so the model
+        // sees what it always saw.
+        return ToolOutcome::from_tool_call_error(&format!("error: unknown tool '{name}'"));
     };
 
     let Some(scope) = current_tool_runtime_context() else {
-        return tool_outcome_to_result(name, tool.call(args).await);
+        return ToolOutcome::from_dispatch(name, tool.call(args).await);
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-        return timeout_result(scope.deadline_at);
+        return ToolOutcome::TimedOut {
+            deadline_at: scope.deadline_at,
+        };
     }
 
     let deadline_at = scope.deadline_at;
@@ -970,37 +979,9 @@ async fn dispatch_tool(
     );
     tokio::select! {
         biased;
-        _ = scope.cancellation_token.cancelled() => cancelled_result(),
-        _ = &mut deadline => timeout_result(scope.deadline_at),
-        result = call => tool_outcome_to_result(name, result),
-    }
-}
-
-fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
-    match outcome {
-        Ok(result) => result,
-        Err(ToolError::UnparseableArgs { kind, reason }) => {
-            tracing::warn!(
-                tool = name,
-                %kind,
-                %reason,
-                "tool-call arguments unparseable after repair; notifying model"
-            );
-            let guidance = match kind {
-                UnparseableArgsKind::Truncated => {
-                    "the arguments were cut off — your response hit the token limit before the \
-                     JSON was complete; re-call the tool with a shorter, complete arguments object"
-                }
-                UnparseableArgsKind::Malformed => {
-                    "the arguments were not valid JSON; re-call the tool with valid JSON \
-                     (escape any backslash as \\\\)"
-                }
-            };
-            unparseable_args_result(&format!(
-                "tool '{name}' arguments could not be parsed: {guidance}."
-            ))
-        }
-        Err(error) => error.to_string(),
+        _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
+        _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
+        result = call => ToolOutcome::from_dispatch(name, result),
     }
 }
 

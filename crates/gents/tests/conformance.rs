@@ -16,7 +16,8 @@ use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::{HookAction, ToolCallHookAction};
 use gents::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
+    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
@@ -98,6 +99,8 @@ mod client_runtime;
 mod codex_shim;
 #[path = "conformance/command_policy.rs"]
 mod command_policy;
+#[path = "conformance/compaction_gate.rs"]
+mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
@@ -190,6 +193,11 @@ async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero()
 }
 
 #[tokio::test]
+async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
+    recovery_sweeps::startup_recovery_order_terminalizes_crash_orphaned_calls().await;
+}
+
+#[tokio::test]
 async fn single_claimer_watcher_never_claims_foreign_replica() {
     replicated_request_convergence::single_claimer_watcher_never_claims_foreign_replica().await;
 }
@@ -228,7 +236,7 @@ async fn drain_wakeups_never_interrupts_foreign_replica() {
 
 #[tokio::test]
 async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
-    background::generated_r6_backgrounding_cases_pin_tool_backgrounding_contract();
+    background::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract().await;
 }
 
 #[tokio::test]
@@ -307,6 +315,11 @@ async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract()
 #[test]
 fn generated_compaction_reducer_cases_pin_contract() {
     streaming_compaction::generated_compaction_reducer_cases_pin_contract();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compaction_gate_blocks_reduction_while_a_response_streams() {
+    compaction_gate::compaction_gate_blocks_reduction_while_a_response_streams().await;
 }
 
 #[tokio::test]

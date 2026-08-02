@@ -8,7 +8,7 @@ use crate::background_tools::r4c_args::{
 };
 use crate::background_tools::{
     BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs, SpawnSubagentArgs, WaitSubagentArgs,
-    WaitToolArgs,
+    WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
 use crate::tool_call_lifecycle::AwaitMode;
 use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
@@ -442,7 +442,7 @@ impl Tool for SpawnProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately."
+            description: "Spawn a background process by running an allowlisted long-running tool (e.g. a shell command). Returns a process handle immediately. You are notified automatically when it completes — end your turn instead of polling or sleep-waiting; use wait_process only for short bounded waits."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -478,13 +478,22 @@ impl Tool for WaitProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Wait for a background process to reach a terminal state.".to_string(),
+            description: format!(
+                "Wait up to timeout_secs for a background process in this session to reach a terminal state, including a handle returned on an earlier turn. A wait timeout, caller interruption, or caller deadline returns status \"running\" without cancelling the process. You are notified when it completes, so prefer ending your turn over waiting repeatedly. Default {DEFAULT_WAIT_PROCESS_TIMEOUT_SECS}s, maximum {MAX_WAIT_PROCESS_TIMEOUT_SECS}s."
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "tool_call_id": {
                         "type": "string",
                         "description": "Process handle returned by spawn_process."
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
+                        "minimum": 1,
+                        "maximum": MAX_WAIT_PROCESS_TIMEOUT_SECS,
+                        "description": "How long to wait before returning a still-running snapshot; the process is never cancelled by a wait timeout."
                     }
                 },
                 "required": ["tool_call_id"]
@@ -508,7 +517,7 @@ impl Tool for ListProcessesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List this request's background processes.".to_string(),
+            description: "List background processes manageable by this session principal, including processes started on earlier turns.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -546,7 +555,7 @@ impl Tool for ReadProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read an incremental, byte-addressed slice of a background process's \
+            description: "Read an incremental, byte-addressed slice of a manageable background process in this session, including one started on an earlier turn. \
 captured output. stdout and stderr are merged in capture order behind a single byte cursor \
 (stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
 gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
@@ -598,7 +607,7 @@ impl Tool for CancelProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Cancel a running background process.".to_string(),
+            description: "Cancel a manageable running background process in this session, including one started on an earlier turn.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

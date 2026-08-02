@@ -11,8 +11,24 @@ import { runWithWatchdogRetry, stopProcess } from "./runner-control.mjs";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
+if (hasOption(args, "--seed")) {
+  console.error(
+    [
+      "[bombadil] Bombadil (0.6.x) has no PRNG seed; exploration randomness lives in the",
+      "[bombadil] host binary and cannot be replayed from a number. Exact replay uses the",
+      "[bombadil] recorded trace instead — every run writes one and prints it when it exits:",
+      "[bombadil]",
+      "[bombadil]   npm run test:ui:fuzz -- --reproduce <output-directory>",
+      "[bombadil]",
+      "[bombadil] CI uploads every run's trace as the 'desktop-ui-bombadil-trace' artifact",
+      "[bombadil] (on success too, so failures can be bisected against a known-good trace).",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
 const headed = consumeFlag(args, "--headed");
 const keepRunning = consumeFlag(args, "--no-exit-on-violation");
+const replayRequested = hasOption(args, "--reproduce");
 const port = await choosePort(process.env.BOMBADIL_VITE_PORT);
 const origin = `http://127.0.0.1:${port}`;
 const harnessUrl = `${origin}/tests/ui-harness/harness.html`;
@@ -20,6 +36,7 @@ const defaultOutputPath = process.env.BOMBADIL_OUTPUT_PATH
   ? resolve(process.env.BOMBADIL_OUTPUT_PATH)
   : resolve(rootDir, "test-results", "bombadil", String(Date.now()));
 let bombadilProcess = null;
+let lastAttemptOutputPath = null;
 
 const vite = spawn(
   process.execPath,
@@ -54,7 +71,9 @@ try {
   if (!headed) {
     bombadilArgs.push("--headless");
   }
-  if (!keepRunning) {
+  // --exit-on-violation is mutually exclusive with --reproduce (a replay
+  // always runs the whole trace and reports the violations it finds).
+  if (!keepRunning && !replayRequested) {
     bombadilArgs.push("--exit-on-violation");
   }
   if (!hasOption(args, "--time-limit") && !hasOption(args, "--reproduce")) {
@@ -78,6 +97,7 @@ try {
         setOutputPath(attemptArgs, `${outputPath}-watchdog-retry-${attempt - 1}`);
       }
       const attemptOutputPath = outputPathFromArgs(attemptArgs);
+      lastAttemptOutputPath = attemptOutputPath;
       await writeRunReadme(attemptOutputPath, harnessUrl, attemptArgs);
 
       console.log(`[bombadil] harness: ${harnessUrl}`);
@@ -120,6 +140,36 @@ try {
     killProcessGroup: process.platform !== "win32",
   });
   await stopProcess(vite);
+  printReproductionHandle(lastAttemptOutputPath, process.exitCode ?? 0);
+}
+
+function printReproductionHandle(outputPath, exitCode) {
+  if (!outputPath || outputPath === "(bombadil default)" || replayRequested) {
+    return;
+  }
+  const verdict = exitCode === 0 ? "PASSED" : `FAILED (exit ${exitCode})`;
+  const lines = [
+    "",
+    "============== BOMBADIL REPRODUCTION HANDLE ==============",
+    `Result: ${verdict}`,
+    `Trace:  ${resolve(rootDir, outputPath, "trace.jsonl")}`,
+    "",
+    "Replay this exact run (Bombadil has no --seed; the trace is the seed):",
+    "",
+    `  npm run test:ui:fuzz -- --reproduce ${shellQuote(resolve(rootDir, outputPath))}`,
+    "",
+  ];
+  if (process.env.CI) {
+    lines.push(
+      "This directory is uploaded as a CI artifact — 'desktop-ui-bombadil-trace'",
+      "in the desktop-ui job, inside 'desktop-ui-qa-artifacts' in the QA sweep —",
+      "kept on success too, so a failure can be bisected against a known-good",
+      "trace. Download it, then point --reproduce at the extracted directory.",
+      "",
+    );
+  }
+  lines.push("==========================================================");
+  console.log(lines.join("\n"));
 }
 
 async function resolveChromeExecutable() {
@@ -263,6 +313,8 @@ async function writeRunReadme(outputPath, harnessUrl, bombadilArgs) {
       "- The npm wrapper starts Vite on a fresh local port before replaying.",
       "- A watchdog retry writes to the adjacent `-watchdog-retry-1` directory so both attempts remain inspectable.",
       "- Use this directory path in GitHub bug issues as the artifact reference.",
+      "- Bombadil has no --seed; `trace.jsonl` here IS the reproduction handle.",
+      "- CI uploads this directory as the `desktop-ui-bombadil-trace` artifact on every run (success included), so failures can be bisected against a known-good trace.",
       "",
     ].join("\n"),
   );

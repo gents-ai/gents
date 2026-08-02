@@ -1108,7 +1108,7 @@ impl<'de> Deserialize<'de> for DocIdRow {
 
 pub(super) fn generated_compaction_reducer_cases_pin_contract() {
     let cases = lean_compaction_reducer_cases();
-    assert_eq!(cases.len(), 10);
+    assert_eq!(cases.len(), 16);
 
     let expected_names = [
         "identity_reducer_is_no_op",
@@ -1121,6 +1121,12 @@ pub(super) fn generated_compaction_reducer_cases_pin_contract() {
         "reduction_allowed_when_response_terminal",
         "no_orphaned_tool_results_after_strip",
         "reapply_preserves_view_coherent",
+        "summarize_retains_straddling_turn",
+        "summarize_drops_whole_turns",
+        "summarize_blocked_when_response_streaming",
+        "summarize_cannot_split_a_leading_turn",
+        "provider_view_is_idempotent",
+        "provider_view_drops_orphaned_result",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -1156,13 +1162,26 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
         case.name
     );
     assert_eq!(
+        reduced.len(),
+        case.retained_count,
+        "{}: retained_count",
+        case.name
+    );
+    assert_eq!(
         preserves_pair_closure(&input, &reduced),
         case.preserves_pairs,
         "{}: preserves_pairs",
         case.name
     );
+    // Lean's `StrictlyIncreasingMessages` survives a reducer that *drops* rows,
+    // so the runtime analogue is "the retained shapes are a subsequence of the
+    // input shapes" — not "the shapes are unchanged", which only held while the
+    // modelled reducer was `id`.
     assert_eq!(
-        abstract_prompt_view(&input) == abstract_prompt_view(&reduced),
+        is_subsequence(
+            &abstract_prompt_view(&reduced),
+            &abstract_prompt_view(&input)
+        ),
         case.preserves_order,
         "{}: preserves_order",
         case.name
@@ -1185,10 +1204,21 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
 
     if case.name == "strip_is_strictly_idempotent" {
         let reapplied = gents::compaction::strip_tool_results(reduced.clone()).0;
+        // Full payload equality, not just the structural projection: production
+        // recovers a stub's recorded facts rather than re-measuring it, which is what
+        // `Compaction.strip_idempotent` states.
         assert_eq!(
-            abstract_prompt_view(&reduced),
-            abstract_prompt_view(&reapplied),
-            "{}: strip is idempotent on the Lean structural projection",
+            reduced, reapplied,
+            "{}: strip must be idempotent on runtime payloads, not just shapes",
+            case.name
+        );
+    }
+
+    if case.name == "provider_view_is_idempotent" {
+        let reapplied = gents::compaction::provider_view(reduced.clone()).0;
+        assert_eq!(
+            reduced, reapplied,
+            "{}: provider_view must be idempotent on runtime payloads (Compaction.providerView_idempotent)",
             case.name
         );
     }
@@ -1215,11 +1245,78 @@ fn apply_compaction_reducer(
 ) -> Vec<Message> {
     match case.reducer.as_str() {
         "identity" => input,
-        "strip_tool_results" => gents::compaction::strip_tool_results(input).0,
+        "strip" => gents::compaction::strip_tool_results(input).0,
+        "provider_view" => gents::compaction::provider_view(input).0,
+        "summarize" => drive_summarize(case, input),
         "any_valid" if case.safe_to_reduce => gents::compaction::strip_tool_results(input).0,
         "any_valid" => input,
         other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
     }
+}
+
+/// Drives the summarize reducer through *production*.
+///
+/// The gate and the boundary are both production's: `safe_to_reduce` and
+/// `pair_safe_boundary` are the functions under test, checked against the model
+/// rather than reimplemented here. Before #993 this case computed the gate
+/// inside the test, so the test could not detect the gate's absence from
+/// production at all.
+fn drive_summarize(
+    case: &lean_vocab_test::LeanCompactionReducerCase,
+    input: Vec<Message>,
+) -> Vec<Message> {
+    let gate_open = if case.safe_to_reduce {
+        gents::compaction::safe_to_reduce(&input, &gents::compaction::AllTerminal)
+    } else {
+        gents::compaction::safe_to_reduce(&input, &gents::compaction::NoneKnown)
+    };
+    assert_eq!(
+        gate_open, case.safe_to_reduce,
+        "{}: production safe_to_reduce must agree with the modelled gate",
+        case.name
+    );
+
+    let boundary = gents::compaction::pair_safe_boundary(&input, case.split_index);
+    assert_eq!(
+        boundary, case.safe_boundary,
+        "{}: production pair_safe_boundary must match Compaction.pairSafeBoundary",
+        case.name
+    );
+    assert_eq!(
+        boundary > 0,
+        case.gate_open,
+        "{}: a boundary that retreats to zero leaves nothing to summarize",
+        case.name
+    );
+
+    // Checking `pair_safe_boundary` alone would not notice production dropping
+    // the call to it from `split_messages_for_summary`. Sweep every budget
+    // through the live splitter and require the retained tail to stay
+    // pair-closed — the property `summarize_preserves_pairs` states, fenced
+    // against the real code path rather than a helper.
+    if pair_closed(&input) {
+        let total_tokens = gents::compaction::estimate_message_tokens(&input);
+        for budget in 0..=total_tokens + 1 {
+            let (_, recent) = gents::compaction::split_for_summary(input.clone(), budget);
+            assert!(
+                pair_closed(&recent),
+                "{}: split_for_summary orphaned a tool result at budget {budget}",
+                case.name
+            );
+        }
+    }
+
+    if !gate_open || boundary == 0 {
+        return input;
+    }
+    input.into_iter().skip(boundary).collect()
+}
+
+fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
+    let mut cursor = haystack.iter();
+    needle
+        .iter()
+        .all(|item| cursor.any(|candidate| candidate == item))
 }
 
 fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {

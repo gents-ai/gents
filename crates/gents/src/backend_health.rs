@@ -24,7 +24,6 @@ use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::{
     list_enabled_backends, set_backend_probe_status_with_last_probe, InferenceBackend,
     UNKNOWN_PROBE_STATUS,
@@ -232,7 +231,7 @@ pub async fn probe_backends_cycle(
     let mut probed_ids = HashSet::new();
 
     for backend in backends {
-        if backend.provider_kind == BackendProviderKind::ChatGptCodex {
+        if backend.provider_kind.is_agent_scoped_oauth() {
             continue;
         }
         probed_ids.insert(backend.backend_id.clone());
@@ -508,7 +507,7 @@ mod tests {
         InferenceBackend {
             backend_id: backend_id.to_string(),
             name: backend_id.to_string(),
-            provider_kind: BackendProviderKind::OpenAiCompatible,
+            provider_kind: crate::backend_provider::BackendProviderKind::OpenAiCompatible,
             openai_wire_api: None,
             endpoint,
             api_key: None,
@@ -623,7 +622,7 @@ mod tests {
         // Dead endpoint, but ChatGPT-Codex: OAuthCredential is agent-scoped,
         // so the runtime-level prober must leave it alone entirely.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string(), "healthy");
-        codex.provider_kind = BackendProviderKind::ChatGptCodex;
+        codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
         let outcome =
             probe_backends_cycle(&client, &[codex], Utc::now(), &health_map, &options).await;
         assert!(outcome.flipped.is_empty());

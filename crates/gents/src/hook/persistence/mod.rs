@@ -19,26 +19,22 @@ use crate::background_tools::{
     load_parent_subagent_context, load_spawn_bridge_row, load_steer_subagent_target,
     pending_automated_wakeup_request_ids, project_child_terminal, resolve_context_target,
     try_load_authorized_child_edge, BackgroundToolArgs, CancelSubagentArgs, CancelToolArgs,
-    ParentSubagentContext, ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget,
-    WaitSubagentArgs, WaitToolArgs,
+    ParentSubagentContext, ProcessControlScope, ReadToolOutputOutcome, SpawnSubagentArgs,
+    SteerSubagentTarget, WaitSubagentArgs, WaitToolArgs,
 };
 use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::document_config::{load_agent_behavior, SubagentTarget};
 use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
-use crate::tool_call_lifecycle::runtime::{
-    classify_managed_tool_result, unparseable_args_notice, ManagedToolTerminal,
-};
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use crate::toolset::{
-    CommandPolicyDenial, CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME,
-    FAN_OUT_AND_SYNTHESIZE_TOOL_NAME, LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME,
-    READ_PROCESS_TOOL_NAME, READ_SUBAGENT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
-    SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
-    WAIT_SUBAGENT_TOOL_NAME,
+    CANCEL_PROCESS_TOOL_NAME, CANCEL_SUBAGENT_TOOL_NAME, FAN_OUT_AND_SYNTHESIZE_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, LIST_SUBAGENTS_TOOL_NAME, READ_PROCESS_TOOL_NAME,
+    READ_SUBAGENT_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME,
+    STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
 use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
 
