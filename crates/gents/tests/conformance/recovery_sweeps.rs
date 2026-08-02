@@ -459,6 +459,70 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
     );
 }
 
+/// Issue #1001 defect 2: the startup inference-call sweep is parent-gated, so
+/// it must run after request repair. Drives the real ordered startup sweep
+/// (`gents::startup_recovery::run_startup_recovery`) over a crash shape — a
+/// parent stuck `processing` with a linked `running` call and no live loop —
+/// and requires the orphan to terminalize in the FIRST startup pass.
+/// Lean: `Recovery.request_before_inference_converges`
+/// (`Proofs/Recovery/StartupOrder.lean`).
+pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
+    let db = test_db("startup-recovery-order-1001").await;
+    let request_id = "startup-order-1001-request";
+    let session_id = "startup-order-1001-session";
+    create_request(
+        &db.node,
+        request_id,
+        session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    insert_inference_call(&db.node, request_id, "running").await;
+
+    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    let requests = outcome.requests.expect("startup request recovery");
+    assert!(
+        requests.requests_recovered >= 1,
+        "crash-stuck parent must terminalize at startup: {requests:?}"
+    );
+    let calls = outcome.inference_calls.expect("startup inference recovery");
+    assert_eq!(
+        calls.calls_recovered, 1,
+        "crash-orphaned running call must be terminalized in the first startup \
+         pass, not survive until the next restart (#1001)"
+    );
+
+    let parent = fetch_request_recovery_row(&db.node, request_id).await;
+    assert_eq!(
+        parent.lifecycle_state.as_str(),
+        "failed",
+        "crash-stuck parent repairs to failed from its recovery error response"
+    );
+    let row = fetch_inference_recovery_row(&db.node, request_id).await;
+    assert_eq!(
+        row.call_state.as_str(),
+        "failed",
+        "orphaned running call must not keep holding a reconstructed slot"
+    );
+    let slot_row = InferenceCallSlotRow::new(BACKEND_ID, row.call_state.as_str());
+    assert_eq!(
+        reconstructed_running_slot_count([slot_row], BACKEND_ID),
+        0,
+        "post-recovery rows must reconstruct zero held slots"
+    );
+
+    let second = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    assert_eq!(
+        second
+            .inference_calls
+            .expect("second startup inference recovery")
+            .calls_recovered,
+        0,
+        "startup recovery must be idempotent across restarts"
+    );
+}
+
 pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
     let db = test_db("recovery-465-convergence").await;
 

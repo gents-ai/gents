@@ -132,7 +132,7 @@ impl StreamGuardLifecycle for AdmissionPermit {
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
-        self.controller.release_running();
+        self.controller.release_in_flight();
         if self.finished {
             return;
         }

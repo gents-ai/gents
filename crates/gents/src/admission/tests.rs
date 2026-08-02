@@ -1150,3 +1150,185 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
     );
     assert_reconstructed_slot_count(&rows, "backend-a", 0);
 }
+
+fn pending_call(request_id: &str, backend_id: &str) -> super::controller::PendingCallMetadata {
+    super::controller::PendingCallMetadata {
+        call_id: format!("call-{request_id}"),
+        runtime_instance_id: "runtime-test".to_string(),
+        request_id: request_id.to_string(),
+        call_seq: 1,
+        backend_id: backend_id.to_string(),
+        behavior_id: "default".to_string(),
+        agent_did: "did:test:test".to_string(),
+        call_kind: CallKind::Inference,
+        attempt: 1,
+    }
+}
+
+fn call_state_for_request(rows: &[Value], request_id: &str) -> Option<String> {
+    rows.iter()
+        .find(|row| row.get("request_id").and_then(Value::as_str) == Some(request_id))
+        .and_then(|row| row.get("call_state").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+}
+
+/// Issue #1001 defect 1. A failed durable queued write must release the
+/// queue-waiter unit; pre-fix, the waiter counter leaked one unit per persist
+/// failure and `max_queue_depth` failures wedged the backend at `QueueFull`
+/// while idle. Lean:
+/// `InferenceCall.ControllerBookkeeping.persist_error_releases_waiter`.
+#[tokio::test]
+async fn queued_persist_failure_releases_queue_capacity() {
+    let node = test_node().await;
+    // A node without ensured schemas rejects InferenceCall writes, forcing
+    // the durable queued write inside the queue path to fail while the
+    // in-memory counters run their real paths.
+    let schemaless = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let controller = super::controller::BackendAdmissionController::new(
+        1,
+        config("backend-queue-leak", 1, 1),
+        std::sync::Weak::new(),
+    );
+
+    let held = controller
+        .clone()
+        .acquire(
+            node.clone(),
+            pending_call("req-leak-a", "backend-queue-leak"),
+            None,
+            None,
+        )
+        .await
+        .expect("first admission fills the only slot");
+
+    let error = match controller
+        .clone()
+        .acquire(
+            schemaless,
+            pending_call("req-leak-b", "backend-queue-leak"),
+            None,
+            None,
+        )
+        .await
+    {
+        Ok(_) => panic!("queued persist must fail without schemas"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("persisting InferenceCall failed"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        controller.queue_waiters_for_test(),
+        0,
+        "persist failure leaked a queue-waiter unit (#1001)"
+    );
+
+    // Queue capacity must be intact: the next caller queues instead of being
+    // wedged into QueueFull, and completes once the held permit releases.
+    let queued = tokio::spawn(controller.clone().acquire(
+        node.clone(),
+        pending_call("req-leak-c", "backend-queue-leak"),
+        None,
+        None,
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(held);
+    let permit = tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("queued acquire must not hang")
+        .expect("queued acquire task join")
+        .expect("queue capacity must be available after the failed persist");
+    drop(permit);
+}
+
+/// Issue #1001 defect 3. A permit assigned to a parked waiter whose task has
+/// not resumed must stay visible to drain detection; pre-fix, the in-flight
+/// count was incremented only after the acquire resumed, so
+/// `AdmissionRegistry::reconcile` could observe a closed controller as
+/// drained and install a fresh full-capacity controller while the old permit
+/// was live, briefly exceeding `max_concurrent`. Lean:
+/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
+#[tokio::test]
+async fn assigned_permit_is_visible_to_drain_detection() {
+    use std::future::Future;
+
+    let node = test_node().await;
+    let controller = super::controller::BackendAdmissionController::new(
+        1,
+        config("backend-drain-race", 1, 4),
+        std::sync::Weak::new(),
+    );
+
+    let held = controller
+        .clone()
+        .acquire(
+            node.clone(),
+            pending_call("req-drain-a", "backend-drain-race"),
+            None,
+            None,
+        )
+        .await
+        .expect("first admission fills the only slot");
+
+    // Park a second acquire in the queue, driving it manually with a no-op
+    // waker so the runtime never resumes it: the semaphore can then hand it
+    // the released permit while its task is unpolled — the acquire→count
+    // window from #1001.
+    let mut queued = Box::pin(controller.clone().acquire(
+        node.clone(),
+        pending_call("req-drain-b", "backend-drain-race"),
+        None,
+        None,
+    ));
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    let parked_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(
+            queued.as_mut().poll(&mut cx).is_pending(),
+            "queued acquire cannot complete while the permit is held"
+        );
+        let rows = call_rows(node.as_ref()).await;
+        if call_state_for_request(&rows, "req-drain-b").as_deref() == Some("queued") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < parked_deadline,
+            "queued InferenceCall row never became durable"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The durable write is the last await before the semaphore park; a few
+    // more polls carry the future onto the semaphore waiter list so the
+    // released permit below is assigned rather than returned to the pool.
+    // The assertions do not depend on this heuristic landing: in-flight is
+    // counted from acquisition intent, so `is_drained()` stays false either
+    // way — and pre-#1001 it reported drained either way.
+    for _ in 0..20 {
+        assert!(queued.as_mut().poll(&mut cx).is_pending());
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Releasing the held permit assigns it to the parked waiter without the
+    // waiter's task running.
+    drop(held);
+
+    assert!(
+        !controller.is_drained(),
+        "controller with an assigned-but-unresumed permit reported drained (#1001)"
+    );
+
+    let permit = tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("queued acquire resumes once the permit is assigned")
+        .expect("the parked waiter holds a real permit");
+    assert!(!controller.is_drained());
+    drop(permit);
+    assert!(
+        controller.is_drained(),
+        "released admission must drain the controller"
+    );
+}
