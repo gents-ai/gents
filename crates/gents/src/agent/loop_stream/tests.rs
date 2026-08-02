@@ -1945,9 +1945,20 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
         super::dispatch_tool(&tools, "echo", "{}".to_string(), None).await,
         "ECHOED".to_string()
     );
+    // An unresolved tool name is a dispatch FAILURE, so it carries the
+    // collision-free marker the persistence classifier keys on. Without it the
+    // call terminalizes `completed` and a hallucinated tool name is durably
+    // recorded as a successful call (fenced end-to-end by
+    // `hook::tests::hook_maps_unknown_tool_dispatch_to_failed_lifecycle`).
+    let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None).await;
+    let (kind, detail) = crate::tool_call_lifecycle::runtime::tool_dispatch_failure(&unknown)
+        .expect("unknown tool must be marked as a dispatch failure");
+    assert_eq!(kind, ToolDispatchFailure::ToolCallError);
+    assert_eq!(detail, "error: unknown tool 'missing'");
+    // The model still sees exactly the text it always saw.
     assert_eq!(
-        super::dispatch_tool(&tools, "missing", "{}".to_string(), None).await,
-        "error: unknown tool 'missing'".to_string()
+        crate::tool_call_lifecycle::runtime::model_facing_tool_result(&unknown),
+        "error: unknown tool 'missing'"
     );
 }
 

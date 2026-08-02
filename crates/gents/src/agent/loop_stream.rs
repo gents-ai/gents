@@ -887,14 +887,24 @@ fn value_to_json_string(value: &serde_json::Value) -> String {
     }
 }
 
-async fn dispatch_tool(
+pub(crate) async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
     live_output: Option<crate::background_tools::LiveToolOutputWriter>,
 ) -> String {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
-        return format!("error: unknown tool '{name}'");
+        // Marked, not a bare string: an unresolved tool name is a dispatch
+        // FAILURE, and an unmarked result classifies as `None` and terminalizes
+        // the call `completed`. Models hallucinate tool names and stale surfaces
+        // outlive their tools, so this is a routine path, not an exotic one — it
+        // would otherwise reproduce exactly the durability bug this marker exists
+        // to close. The detail text is unchanged so the model sees what it always
+        // saw.
+        return tool_dispatch_failure_result(
+            ToolDispatchFailure::ToolCallError,
+            &format!("error: unknown tool '{name}'"),
+        );
     };
 
     let Some(scope) = current_tool_runtime_context() else {

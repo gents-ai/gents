@@ -471,6 +471,18 @@ async fn force_persisted_pair(
 /// real writers, see which edges they actually produce, and require that set to
 /// fall inside what the contract permits.
 ///
+/// Each writer is placed in its own locally-permitted state and the persisted row
+/// is then forced independently, so the in-memory `ensure_state` guard never
+/// short-circuits ahead of the mutation and the persisted CAS filter is what
+/// decides every case. Verified by weakening a CAS in production (dropping the
+/// `status` predicate from the terminal transition): this test then reports
+/// `production writers reached interrupted -> completed`.
+///
+/// One sensitivity limit worth knowing: fixtures force CANONICAL
+/// `(status, lifecycle_state)` pairs, and the terminal CAS conjoins both. Widening
+/// only a writer's `lifecycle_state` from-set therefore stays undetectable here —
+/// correctly, since the `status` predicate still makes the edge unreachable.
+///
 /// NOT driven, and so still outside this fence:
 /// - `advance`, which issues `update_AgentResponse` only.
 /// - `queue::reconcile_coalesced_pending_request` (pending -> superseded), whose
@@ -520,20 +532,29 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 created_at.clone(),
             );
 
-            // Take ownership through the real path where the start state allows
-            // it, so the LOCAL state machine permits the call and the persisted
-            // CAS filter is what decides. Then pin the persisted row to the start
-            // state under test, as a concurrent actor would.
-            if start != "pending" {
-                assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-                lifecycle.prepare_session_with_identity().await.unwrap();
-                if start == "processing" {
-                    lifecycle.begin_execution().await.unwrap();
-                }
-                if !matches!(start, "claimed" | "processing") {
-                    force_persisted_state(&db.node, &doc_id, start).await;
+            // Put the lifecycle in the LOCAL state this writer requires, so its
+            // in-memory `ensure_state` guard always passes and the persisted CAS
+            // filter is the only thing that can reject the write. Deriving the
+            // local state from the START STATE instead would let the guard
+            // short-circuit before any mutation was issued — a widened CAS
+            // admitting an illegal edge would then pass unnoticed.
+            //
+            //   claim / claim_after_ttl_lapse -> local Pending  (claim.rs:195)
+            //   begin_execution               -> local Claimed  (claim.rs:70)
+            //   complete / fail               -> local Claimed | Streaming
+            //   interrupt                     -> no local guard
+            //   repair_terminal_requests      -> associated fn, no local state
+            match writer {
+                "claim" | "claim_after_ttl_lapse" | "repair_terminal_requests" => {}
+                _ => {
+                    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+                    lifecycle.prepare_session_with_identity().await.unwrap();
                 }
             }
+
+            // Then pin the persisted row to the start state under test,
+            // independently of local state, as a concurrent actor would.
+            force_persisted_state(&db.node, &doc_id, start).await;
 
             if writer == "repair_terminal_requests" {
                 create_response_with_status(
