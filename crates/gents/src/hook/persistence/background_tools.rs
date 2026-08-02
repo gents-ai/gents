@@ -163,7 +163,13 @@ impl DefraSessionHook {
                     cancellation_token.clone(),
                     workspace_cwd,
                     Some(live_output_writer),
-                    async { target_tool.call(target_args).await },
+                    async {
+                        crate::tool_call_lifecycle::runtime::call_tool_managed(
+                            target_tool.as_ref(),
+                            target_args,
+                        )
+                        .await
+                    },
                 )
                 .await
             })
@@ -171,106 +177,105 @@ impl DefraSessionHook {
             .await;
 
             match execution {
-                Ok(result) => match result {
-                    Ok(output) => match classify_managed_tool_result(&output) {
-                        Some(ManagedToolTerminal::TimedOut) => {
-                            let won_terminal_compare =
-                                match lifecycle.bridge_failure(ChildTerminal::Dead).await {
-                                    Ok(updated) => updated,
-                                    Err(error) => {
-                                        tracing::warn!(
-                                            tool_call_id = %execution_call_id,
-                                            error = %error,
-                                            "failed to terminalize timed-out background tool"
-                                        );
-                                        false
-                                    }
-                                };
-                            if let Some(Err(error)) = project_background_completion_if_owned(
-                                won_terminal_compare,
-                                crate::background_completion::append_background_tool_completion(
-                                    node.as_ref(),
-                                    &execution_session_id,
-                                    &execution_request_id,
-                                    &execution_call_id,
-                                    &execution_tool_name,
-                                    "failed",
-                                    "",
-                                    Some("deadline_exceeded"),
-                                ),
-                            )
-                            .await
-                            {
-                                tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
-                            }
-                        }
-                        Some(ManagedToolTerminal::Cancelled) => {
-                            let won_terminal_compare =
-                                match lifecycle.bridge_failure(ChildTerminal::Interrupted).await {
-                                    Ok(updated) => updated,
-                                    Err(error) => {
-                                        tracing::warn!(
-                                            tool_call_id = %execution_call_id,
-                                            error = %error,
-                                            "failed to terminalize cancelled background tool"
-                                        );
-                                        false
-                                    }
-                                };
-                            if let Some(Err(error)) = project_background_completion_if_owned(
-                                won_terminal_compare,
-                                crate::background_completion::append_background_tool_completion(
-                                    node.as_ref(),
-                                    &execution_session_id,
-                                    &execution_request_id,
-                                    &execution_call_id,
-                                    &execution_tool_name,
-                                    "cancelled",
-                                    "",
-                                    Some("explicit_cancel"),
-                                ),
-                            )
-                            .await
-                            {
-                                tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
-                            }
-                        }
-                        None => {
-                            let notification_result = output.clone();
-                            let won_terminal_compare = match lifecycle.bridge_complete(output).await
-                            {
+                Ok(outcome) => match outcome {
+                    crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
+                        let won_terminal_compare =
+                            match lifecycle.bridge_failure(ChildTerminal::Dead).await {
                                 Ok(updated) => updated,
                                 Err(error) => {
                                     tracing::warn!(
                                         tool_call_id = %execution_call_id,
                                         error = %error,
-                                        "failed to complete background tool"
+                                        "failed to terminalize timed-out background tool"
                                     );
                                     false
                                 }
                             };
-                            if let Some(Err(error)) = project_background_completion_if_owned(
-                                won_terminal_compare,
-                                crate::background_completion::append_background_tool_completion(
-                                    node.as_ref(),
-                                    &execution_session_id,
-                                    &execution_request_id,
-                                    &execution_call_id,
-                                    &execution_tool_name,
-                                    "completed",
-                                    &notification_result,
-                                    None,
-                                ),
-                            )
-                            .await
-                            {
-                                tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
-                            }
+                        if let Some(Err(error)) = project_background_completion_if_owned(
+                            won_terminal_compare,
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "failed",
+                                "",
+                                Some("deadline_exceeded"),
+                            ),
+                        )
+                        .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
                         }
-                    },
-                    Err(error) => {
-                        let reason = format!("{error:#}");
-                        let failure_class = classify_runtime_error(&reason);
+                    }
+                    crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
+                        let won_terminal_compare =
+                            match lifecycle.bridge_failure(ChildTerminal::Interrupted).await {
+                                Ok(updated) => updated,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        tool_call_id = %execution_call_id,
+                                        error = %error,
+                                        "failed to terminalize cancelled background tool"
+                                    );
+                                    false
+                                }
+                            };
+                        if let Some(Err(error)) = project_background_completion_if_owned(
+                            won_terminal_compare,
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "cancelled",
+                                "",
+                                Some("explicit_cancel"),
+                            ),
+                        )
+                        .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
+                        }
+                    }
+                    crate::tool_call_lifecycle::ToolOutcome::Completed(output) => {
+                        let notification_result = output.clone();
+                        let won_terminal_compare = match lifecycle.bridge_complete(output).await {
+                            Ok(updated) => updated,
+                            Err(error) => {
+                                tracing::warn!(
+                                    tool_call_id = %execution_call_id,
+                                    error = %error,
+                                    "failed to complete background tool"
+                                );
+                                false
+                            }
+                        };
+                        if let Some(Err(error)) = project_background_completion_if_owned(
+                            won_terminal_compare,
+                            crate::background_completion::append_background_tool_completion(
+                                node.as_ref(),
+                                &execution_session_id,
+                                &execution_request_id,
+                                &execution_call_id,
+                                &execution_tool_name,
+                                "completed",
+                                &notification_result,
+                                None,
+                            ),
+                        )
+                        .await
+                        {
+                            tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
+                        }
+                    }
+                    crate::tool_call_lifecycle::ToolOutcome::Failed {
+                        class: failure_class,
+                        text: reason,
+                        ..
+                    } => {
                         let won_terminal_compare = match lifecycle
                             .bridge_failure(ChildTerminal::Failed {
                                 reason: reason.clone(),

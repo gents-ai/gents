@@ -39,7 +39,8 @@ pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
     CONTEXT_BUDGET_TOOL_NAME,
 };
-pub(crate) use denial::{CommandPolicyDenial, DenialReason};
+pub use denial::CommandPolicyDenial;
+pub(crate) use denial::DenialReason;
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{GetGoalArgs, UpdateGoalArgs};
 #[cfg(feature = "agent-memory")]

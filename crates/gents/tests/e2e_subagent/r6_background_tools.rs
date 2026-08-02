@@ -219,7 +219,8 @@ async fn wait_for_tool_completion_message(
     tool_call_id: &str,
 ) -> MessageRow {
     let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
         if let Some(message) = fetch_messages(node, session_id)
             .await
             .into_iter()
@@ -227,9 +228,11 @@ async fn wait_for_tool_completion_message(
         {
             return message;
         }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("tool completion message for {tool_call_id} was not appended");
+        }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-    panic!("tool completion message for {tool_call_id} was not appended");
 }
 
 async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<serde_json::Value> {
@@ -746,12 +749,11 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
         .as_deref()
         .is_some_and(|result| { result.contains("intentional background tool panic") }));
 
-    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-    let messages = fetch_messages(db.node.as_ref(), &session_id).await;
-    let notification = messages
-        .iter()
-        .find(|message| message.content.contains(&marker))
-        .expect("panic recovery must append a completion notification");
+    // The notification append is a separate mutation after the terminal row
+    // write (the row carries `completionPending:tool_panicked` until the side
+    // effects land), so await it rather than reading messages once.
+    let notification =
+        wait_for_tool_completion_message(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert!(notification.content.contains(r#"status="failed""#));
     assert!(notification
         .content

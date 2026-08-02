@@ -1325,12 +1325,13 @@ async fn managed_terminal_tool_result_terminates_loop() {
     let prompt = Message::user("run the slow tool");
     ready_hook_for(&hook).await;
 
-    // The tool returns a managed timeout marker; on_tool_result classifies it as
-    // a terminal timeout and the loop ends with an error rather than continuing.
-    let marker = crate::tool_call_lifecycle::runtime::timeout_result(None);
+    // With the typed outcome channel a tool CANNOT fabricate a managed
+    // terminal: run the loop with an already-expired request deadline so the
+    // dispatcher's own envelope produces `ToolOutcome::TimedOut`, and
+    // on_tool_result terminates the loop.
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
         name: "echo".to_string(),
-        output: marker,
+        output: "unreachable".to_string(),
     })];
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
     let stream = run_loop_stream(
@@ -1343,10 +1344,21 @@ async fn managed_terminal_tool_result_terminates_loop() {
     );
     futures::pin_mut!(stream);
 
-    let mut items = Vec::new();
-    while let Some(item) = stream.next().await {
-        items.push(item);
-    }
+    // The daemon installs the tool runtime scope around stream polling; an
+    // already-expired deadline makes the dispatcher's envelope resolve the
+    // tool call to `ToolOutcome::TimedOut`.
+    let items = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+        tokio_util::sync::CancellationToken::new(),
+        async {
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        },
+    )
+    .await;
 
     let last = items.last().expect("stream should yield at least one item");
     assert!(last.is_err(), "expected a terminal error; got {last:?}");
@@ -1943,29 +1955,28 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
 
     assert_eq!(
         super::dispatch_tool(&tools, "echo", "{}".to_string(), None).await,
-        "ECHOED".to_string()
+        crate::tool_call_lifecycle::ToolOutcome::Completed("ECHOED".to_string())
     );
-    // An unresolved tool name is a dispatch FAILURE, so it carries the
-    // collision-free marker the persistence classifier keys on. Without it the
-    // call terminalizes `completed` and a hallucinated tool name is durably
-    // recorded as a successful call (fenced end-to-end by
+    // An unresolved tool name is a dispatch FAILURE carried as typed data.
+    // Classifying it `Completed` would durably record a hallucinated tool name
+    // as a successful call (fenced end-to-end by
     // `hook::tests::hook_maps_unknown_tool_dispatch_to_failed_lifecycle`).
     let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None).await;
-    let (kind, detail) = crate::tool_call_lifecycle::runtime::tool_dispatch_failure(&unknown)
-        .expect("unknown tool must be marked as a dispatch failure");
-    assert_eq!(kind, ToolDispatchFailure::ToolCallError);
-    assert_eq!(detail, "error: unknown tool 'missing'");
+    match &unknown {
+        crate::tool_call_lifecycle::ToolOutcome::Failed {
+            denial: None, text, ..
+        } => {
+            assert_eq!(text, "error: unknown tool 'missing'");
+        }
+        other => panic!("unknown tool must classify as a dispatch failure, got {other:?}"),
+    }
     // The model still sees exactly the text it always saw.
-    assert_eq!(
-        crate::tool_call_lifecycle::runtime::model_facing_tool_result(&unknown),
-        "error: unknown tool 'missing'"
-    );
+    assert_eq!(unknown.model_facing_text(), "error: unknown tool 'missing'");
 }
 
 #[tokio::test]
-async fn dispatch_tool_marks_unparseable_args_with_collision_free_marker() {
+async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     use crate::llm::tool::{Tool, ToolDefinition};
-    use crate::tool_call_lifecycle::runtime::unparseable_args_notice;
 
     // A tool whose Args require fields the (valid-JSON) call omits, so the real
     // parse seam raises UnparseableArgs.
@@ -1999,21 +2010,27 @@ async fn dispatch_tool_marks_unparseable_args_with_collision_free_marker() {
 
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
     // Truncated mid-string: escape-only repair cannot complete it, so it stays
-    // UnparseableArgs and dispatch wraps a notice in the collision-free marker
-    // (which on_tool_result maps to failed(ArgumentInvalid)) — not the tool output.
+    // UnparseableArgs and dispatch types it `Failed(ArgumentInvalid)` carrying
+    // the model-facing notice — not the tool output.
     let result =
         super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string(), None).await;
-    // The result must NOT use a forgeable human-readable prefix a real tool could emit.
-    assert!(
-        !result.starts_with("JsonError:"),
-        "must not key on a collidable prefix, got: {result}"
-    );
-    let notice =
-        unparseable_args_notice(&result).expect("dispatch must wrap the notice in the marker");
-    assert!(
-        !notice.contains("ran") && notice.contains("token limit"),
-        "the notice must replace the tool output and guide the model to shorten, got: {notice}"
-    );
+    match &result {
+        crate::tool_call_lifecycle::ToolOutcome::Failed {
+            class,
+            denial: None,
+            text,
+        } => {
+            assert_eq!(
+                *class,
+                crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+            );
+            assert!(
+                !text.contains("ran") && text.contains("token limit"),
+                "the notice must replace the tool output and guide the model to shorten, got: {text}"
+            );
+        }
+        other => panic!("unparseable args must classify ArgumentInvalid, got {other:?}"),
+    }
 }
 
 /// Loop-level fence: an unparseable-args tool call (a) does NOT run the tool,

@@ -159,7 +159,7 @@ impl DefraSessionHook {
         {
             Some(lifecycle) => lifecycle,
             None => {
-                return Ok(crate::tool_call_lifecycle::runtime::cancelled_result());
+                return Ok("tool call cancelled".to_string());
             }
         };
 
@@ -204,7 +204,7 @@ impl DefraSessionHook {
     ) -> String {
         match lifecycle.state() {
             crate::tool_call_lifecycle::ToolCallState::Cancelled => {
-                crate::tool_call_lifecycle::runtime::cancelled_result()
+                "tool call cancelled".to_string()
             }
             crate::tool_call_lifecycle::ToolCallState::TimedOut => {
                 "tool call deadline exceeded".to_string()
@@ -219,7 +219,7 @@ impl DefraSessionHook {
                 .await
                 .unwrap_or_else(|_| "tool call completed".to_string())
             }
-            _ => crate::tool_call_lifecycle::runtime::cancelled_result(),
+            _ => "tool call cancelled".to_string(),
         }
     }
 
@@ -842,7 +842,10 @@ impl DefraSessionHook {
                     )
                     .await?
                 {
-                    let _ = lifecycle.bridge_failure(ChildTerminal::Dead).await?;
+                    // Parent-deadline expiry takes the licensed deadline
+                    // transition (`timedOut`), never a fabricated
+                    // `ChildTerminal::Dead` for a possibly-live child (#1002).
+                    let _ = lifecycle.timeout().await?;
                 }
                 self.discard_in_flight_lifecycle(&bridge.tool_call_id).await;
                 return Ok(WorkflowOutcome {

@@ -5,9 +5,7 @@ use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::{
-    cancelled_result, current_tool_runtime_context, timeout_result,
-};
+use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
@@ -21,13 +19,21 @@ fn effective_deadline(
     request_deadline.map_or(cap, |deadline| deadline.min(cap))
 }
 
+/// Text for a managed-exec timeout. When the REQUEST deadline is what
+/// expired, this text never reaches the model: the dispatcher's envelope
+/// shares the same deadline and its `biased` select polls the (already
+/// elapsed) deadline branch before the tool's result, so the call resolves to
+/// `ToolOutcome::TimedOut` deterministically. A per-call cap expiry, by
+/// contrast, is an ordinary model-actionable tool result.
 fn fs_runner_timed_out_result(
     tool_name: &str,
     request_deadline: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     if request_deadline.is_some_and(|deadline| now >= deadline) {
-        return timeout_result(request_deadline);
+        return format!(
+            "native filesystem runner for {tool_name} was stopped at the request deadline"
+        );
     }
     format!(
         "native filesystem runner for {tool_name} exceeded the {MAX_FS_RUNNER_SECONDS}s per-call cap and was stopped before completing. Narrow the path or pattern (a more specific anchor prunes the walk), or split the search into smaller calls."
@@ -100,7 +106,11 @@ impl NativeFsRunner {
                 request_deadline,
                 chrono::Utc::now(),
             )),
-            ManagedExecOutcome::Cancelled { .. } => Ok(cancelled_result()),
+            // Never model-facing: the dispatcher's envelope polls its (fired)
+            // cancellation branch first and resolves to `ToolOutcome::Cancelled`.
+            ManagedExecOutcome::Cancelled { .. } => Ok(format!(
+                "native filesystem runner for {tool_name} was cancelled"
+            )),
             ManagedExecOutcome::SpawnFailed { error } => Err(anyhow!(
                 "native filesystem runner for {tool_name} failed to spawn: {error}"
             )
@@ -324,36 +334,29 @@ mod tests {
         );
     }
 
-    // The per-call cap must NOT surface as the lifecycle timeout marker: the
-    // hook maps that marker to lc.timeout() + HookAction::Terminate, killing
-    // the whole request. Only a genuinely expired REQUEST deadline may produce
-    // the marker; a cap expiry is an ordinary, model-actionable tool result.
+    // The per-call cap must NOT read as a request-deadline expiry: the
+    // dispatcher's envelope converts a genuine request-deadline expiry to
+    // `ToolOutcome::TimedOut` (terminating the request), while a cap expiry
+    // is an ordinary, model-actionable tool result.
     #[test]
-    fn cap_expiry_before_request_deadline_is_not_a_lifecycle_timeout() {
+    fn cap_expiry_before_request_deadline_is_an_ordinary_tool_result() {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", Some(now + ChronoDuration::hours(12)), now);
-        assert!(
-            !result.contains("__gents_tool_lifecycle__"),
-            "cap expiry must not carry the lifecycle marker: {result}"
-        );
         assert!(result.contains("per-call cap"), "{result}");
     }
 
     #[test]
-    fn cap_expiry_without_request_deadline_is_not_a_lifecycle_timeout() {
+    fn cap_expiry_without_request_deadline_is_an_ordinary_tool_result() {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", None, now);
-        assert!(!result.contains("__gents_tool_lifecycle__"), "{result}");
+        assert!(result.contains("per-call cap"), "{result}");
     }
 
     #[test]
-    fn expired_request_deadline_yields_lifecycle_timeout_marker() {
+    fn expired_request_deadline_yields_deadline_text() {
         let now = Utc::now();
         let deadline = now - ChronoDuration::seconds(1);
         let result = fs_runner_timed_out_result("grep", Some(deadline), now);
-        assert!(
-            result.starts_with("__gents_tool_lifecycle__:timedOut"),
-            "{result}"
-        );
+        assert!(result.contains("request deadline"), "{result}");
     }
 }

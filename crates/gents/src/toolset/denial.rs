@@ -215,7 +215,7 @@ impl DenialReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CommandPolicyDenial {
+pub struct CommandPolicyDenial {
     pub(crate) reason: DenialReason,
     pub(crate) policy_mode: String,
     pub(crate) policy_network: String,
