@@ -725,6 +725,8 @@ pub(crate) async fn append_background_tool_completion(
         .await?
         .is_some()
     {
+        mark_background_tool_completion_side_effects_done(node, parent_session_id, tool_call_id)
+            .await?;
         return Ok(());
     }
 
@@ -742,6 +744,8 @@ pub(crate) async fn append_background_tool_completion(
         },
     )
     .await?;
+    mark_background_tool_completion_side_effects_done(node, parent_session_id, tool_call_id)
+        .await?;
 
     if created_notification {
         tracing::debug!(
@@ -749,6 +753,83 @@ pub(crate) async fn append_background_tool_completion(
             parent_request_id,
             tool_call_id,
             "appended background tool completion notification"
+        );
+    }
+    Ok(())
+}
+
+async fn mark_background_tool_completion_side_effects_done(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Result<()> {
+    let tool_call_key = escape_graphql_string(&format!("{session_id}:{tool_call_id}"));
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
+                limit: 1
+            ) {{ _docID status lifecycle_state }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "query background completion tool row failed: {:?}",
+            response.errors
+        );
+    }
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
+    let doc_id = row
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
+    let status = row
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if status == "completed" {
+        return Ok(());
+    }
+    let lifecycle_state = row
+        .get("lifecycle_state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !(status == "completionPending" || status.starts_with("completionPending:"))
+        || !matches!(
+            lifecycle_state,
+            "completed" | "failed" | "timedOut" | "cancelled"
+        )
+    {
+        anyhow::bail!(
+            "background completion tool row {tool_call_key} is not awaiting terminal side effects"
+        );
+    }
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_status = escape_graphql_string(status);
+    let datetime_fields = agent_tool_call_datetime_update_fragment(node, doc_id, &[]).await?;
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    status: {{ _eq: "{escaped_status}" }}
+                }},
+                input: {{ status: "completed"{datetime_fields} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "mark background completion side effects done failed: {:?}",
+            response.errors
         );
     }
     Ok(())

@@ -23,6 +23,55 @@ def recoveryCase
   , deadlineAuditRef := deadlineAuditRef
   }
 
+def orphanedBackgroundRecoveryCase
+    (name : String)
+    (deadlineExpired unclaimedExpired parentLive parentInterrupted
+      parentTerminal executionRegistered : Bool) : RecoverySweepCase :=
+  let row : OrphanedBackgroundToolRow :=
+    { call := r6NativeToolFixture
+    , deadlineExpired := deadlineExpired
+    , unclaimedExpired := unclaimedExpired
+    , parentLive := parentLive
+    , parentInterrupted := parentInterrupted
+    , parentTerminal := parentTerminal
+    , executionRegistered := executionRegistered
+    }
+  let recovered := orphanedBackgroundToolRecover row
+  let cause := orphanedBackgroundToolCause row
+  let notificationReason :=
+    if row.parentLive || row.parentInterrupted || row.parentTerminal then
+      cause.map fun recoveryCause =>
+        match recoveryCause with
+        | .deadlineExceeded => "deadline_exceeded"
+        | .parentInterrupted => "parent_interrupted"
+        | .parentTerminal => "parent_terminal"
+        | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
+        | .childCompleted => "child_completed"
+        | .childFailed => "child_failed"
+        | .childDead => "child_dead"
+        | .childInterrupted => "child_interrupted"
+        | .childSuperseded => "child_superseded"
+        | .unclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout"
+    else
+      none
+  { (recoveryCase
+      orphanedBackgroundToolSweep
+      name
+      row.call.state.toDefraDB
+      recovered.call.state.toDefraDB
+      "r6-cross-turn-background-process-durability"
+      (orphanedBackgroundToolMeasure row)
+      (orphanedBackgroundToolMeasure recovered)) with
+    deadlineExpired := some row.deadlineExpired
+    unclaimedExpired := some row.unclaimedExpired
+    parentLive := some row.parentLive
+    parentInterrupted := some row.parentInterrupted
+    parentTerminal := some row.parentTerminal
+    executionRegistered := some row.executionRegistered
+    recoveryCause := cause.map ToolRecoveryCause.toContract
+    notificationReason := notificationReason
+  }
+
 def recoverySweepCases : List RecoverySweepCase :=
   [ recoveryCase
       requestRecoverySweep
@@ -97,11 +146,26 @@ def recoverySweepCases : List RecoverySweepCase :=
       "running"
       "cancelled"
       "r6-TerminalizeBackgroundedAsInterrupted"
-  , recoveryCase
-      orphanedBackgroundToolSweep
+  , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_without_execution_to_cancelled"
-      "running"
-      "cancelled"
+      false false true false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_expired_missing_parent_to_timed_out"
+      true false false false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_expired_terminal_parent_to_timed_out"
+      true false false false true false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_unclaimed_to_failed"
+      false true true false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_terminal_parent_to_failed"
+      false false false false true false
+  , recoveryCase
+      backgroundCompletionSideEffectSweep
+      "terminal_background_tool_missing_completion_side_effects_to_converged"
+      "failed"
+      "failed"
       "r6-cross-turn-background-process-durability"
   , recoveryCase
       toolCallRecoverySweep
@@ -283,6 +347,8 @@ def recoveryEquivalenceTheorem (sweepId : String) : String :=
     "Recovery.toolCallRecover_matches_uninterrupted"
   else if sweepId = orphanedBackgroundToolSweep.sweepId then
     "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
+  else if sweepId = backgroundCompletionSideEffectSweep.sweepId then
+    "Recovery.backgroundCompletionSideEffectRecover_matches_uninterrupted"
   else if sweepId = terminalParentOwnedToolSweep.sweepId then
     "Recovery.terminalParentToolRecover_matches_uninterrupted"
   else if sweepId = detachedBridgeRecoverySweep.sweepId then

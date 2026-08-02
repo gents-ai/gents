@@ -690,8 +690,9 @@ Model → conformance → Rust bindings:
   side effects with idempotence under a second pass.
 - **Recovery sweeps** — `Proofs/Recovery/Sweeps/*` (tool calls, detached
   bridges, subagent liveness #465, terminal-parent owned tools #837, and
-  orphaned native-background ownership repair) → `recovery_sweep_cases` →
-  `tests/conformance/recovery_sweeps.rs`.
+  orphaned native-background ownership repair, including volatile execution
+  reservations and retryable completion-notification/wake obligations) →
+  `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
 - **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
   three-way `read_tool_output` dispatch (terminal → persisted completion;
   running + live snapshot → ring-buffer tail; running + no snapshot — the

@@ -167,6 +167,14 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) terminal_state: String,
     pub(crate) measure_before: usize,
     pub(crate) measure_after: usize,
+    pub(crate) deadline_expired: Option<bool>,
+    pub(crate) unclaimed_expired: Option<bool>,
+    pub(crate) parent_live: Option<bool>,
+    pub(crate) parent_interrupted: Option<bool>,
+    pub(crate) parent_terminal: Option<bool>,
+    pub(crate) execution_registered: Option<bool>,
+    pub(crate) recovery_cause: Option<String>,
+    pub(crate) notification_reason: Option<String>,
     pub(crate) deadline_audit_ref: String,
 }
 

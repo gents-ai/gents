@@ -168,6 +168,46 @@ def restartDisposition (row : RestartRow) : RestartDisposition :=
   else
     .leaveRunning
 
+/-- Project the periodic orphan observation onto the startup classifier's
+    parent vocabulary. The boolean priority matches
+    `orphanedBackgroundToolCause`. -/
+def OrphanedBackgroundToolRow.parentObservation
+    (row : OrphanedBackgroundToolRow) : ParentObservation :=
+  if row.parentLive then .live
+  else if row.parentInterrupted then .interrupted
+  else if row.parentTerminal then .otherTerminal
+  else .missing
+
+def OrphanedBackgroundToolRow.toRestartRow
+    (row : OrphanedBackgroundToolRow) : RestartRow :=
+  { awaitMode := row.call.awaitMode
+  , cancelPolicy := row.call.cancelPolicy
+  , childLinked := row.call.childRequestId.isSome
+  , parent := row.parentObservation
+  , deadlineExpired := row.deadlineExpired
+  , unclaimedExpired := row.unclaimedExpired
+  }
+
+/-- The periodic orphan classifier is the native-background restriction of
+    the startup classifier, including cause precedence. -/
+theorem orphanedBackgroundToolCause_matches_restartDisposition
+    (row : OrphanedBackgroundToolRow)
+    (h_background : row.call.awaitMode = .background)
+    (h_native : row.call.childRequestId = none) :
+    (orphanedBackgroundToolCause row).map ToolRecoveryCause.toContract =
+      (restartDisposition row.toRestartRow).causeContract := by
+  cases h_deadline : row.deadlineExpired <;>
+    cases h_unclaimed : row.unclaimedExpired <;>
+    cases h_live : row.parentLive <;>
+    cases h_interrupted : row.parentInterrupted <;>
+    cases h_terminal : row.parentTerminal <;>
+    simp [orphanedBackgroundToolCause, OrphanedBackgroundToolRow.toRestartRow,
+      OrphanedBackgroundToolRow.parentObservation, restartDisposition,
+      RestartRow.isNativeBackgroundTool, RestartRow.isDetachedBridge,
+      RestartDisposition.causeContract, h_background, h_native, h_deadline,
+      h_unclaimed, h_live, h_interrupted, h_terminal,
+      ParentObservation.observedTerminal]
+
 /-- Durable side effects owed after terminalizing a native background tool on
     restart: the cause-specific `<tool-completion>` notification reason and
     the coalesced wake queue vocabulary

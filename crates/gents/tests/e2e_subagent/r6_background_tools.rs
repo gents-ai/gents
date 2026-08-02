@@ -528,7 +528,7 @@ async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
 
 #[tokio::test]
 async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let (db, hook, session_id, request_id) = setup_hook(
         "r6-background-periodic-live-owner",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
     )
@@ -547,15 +547,14 @@ async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    let report =
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
-            db.node.as_ref(),
-            crate::support::AGENT_DID,
-            &executions,
-        )
-        .await
-        .unwrap();
-    assert!(report.is_noop());
+    set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
+    let _runs = gents::run_periodic_recovery_sweeps(
+        db.node.as_ref(),
+        crate::support::AGENT_DID,
+        &executions,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
             .await
@@ -572,6 +571,164 @@ async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
             &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
         )
         .await;
+}
+
+#[tokio::test]
+async fn periodic_recovery_preserves_registered_worker_after_parent_interrupt() {
+    let (db, hook, session_id, request_id) = setup_hook(
+        "r6-background-periodic-interrupted-owner",
+        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+    )
+    .await;
+    let executions = BackgroundExecutionRegistry::default();
+    let hook = hook.with_background_execution_registry(executions.clone());
+    let receipt = skip_reason_json(
+        hook.on_tool_call(
+            "spawn_process",
+            None,
+            "meta-bg-periodic-interrupted-owner",
+            r#"{"tool_name":"slow_tool","args":{}}"#,
+        )
+        .await,
+    );
+    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+
+    set_parent_state(db.node.as_ref(), &request_id, "interrupted", "interrupted").await;
+    gents::run_periodic_recovery_sweeps(db.node.as_ref(), crate::support::AGENT_DID, &executions)
+        .await
+        .unwrap();
+    assert_eq!(
+        load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
+            .await
+            .lifecycle_state
+            .as_deref(),
+        Some("running")
+    );
+
+    let _ = hook
+        .on_tool_call(
+            "cancel_process",
+            None,
+            "meta-bg-periodic-interrupted-owner-cleanup",
+            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
+    let (db, _hook, session_id, request_id) = setup_hook(
+        "r6-background-periodic-deadline-precedence",
+        registry(Vec::new(), &[]),
+    )
+    .await;
+    let tool_call_id = "expired-terminal-parent-orphan";
+    let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+        db.node.clone(),
+        request_id.clone(),
+        session_id.clone(),
+        crate::support::AGENT_DID.to_string(),
+        tool_call_id.to_string(),
+        1,
+        "slow_tool".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() - chrono::Duration::seconds(1),
+    );
+    lifecycle.start_running().await.unwrap();
+    set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
+
+    gents::run_periodic_recovery_sweeps(
+        db.node.as_ref(),
+        crate::support::AGENT_DID,
+        &BackgroundExecutionRegistry::default(),
+    )
+    .await
+    .unwrap();
+    let row = load_tool_call(db.node.as_ref(), &session_id, tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("timedOut"));
+    assert_eq!(row.cancel_cause.as_deref(), Some("deadline"));
+}
+
+#[tokio::test]
+async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
+    let (db, _hook, session_id, request_id) = setup_hook(
+        "r6-background-malformed-recovery-row",
+        registry(Vec::new(), &[]),
+    )
+    .await;
+    let tool_call_id = "valid-orphan";
+    let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+        db.node.clone(),
+        request_id,
+        session_id.clone(),
+        crate::support::AGENT_DID.to_string(),
+        tool_call_id.to_string(),
+        1,
+        "slow_tool".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let malformed = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "malformed-recovery-row",
+                agent_did: "{}",
+                lifecycle_state: "running",
+                await_mode: "background"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(crate::support::AGENT_DID)
+    );
+    let response = db.node.execute(&malformed).await;
+    assert!(
+        !response.has_errors(),
+        "failed to seed malformed recovery row: {:?}",
+        response.errors
+    );
+
+    let report =
+        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+            db.node.as_ref(),
+            crate::support::AGENT_DID,
+            &BackgroundExecutionRegistry::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.tool_calls_terminalized, 1);
+    assert_eq!(
+        load_tool_call(db.node.as_ref(), &session_id, tool_call_id)
+            .await
+            .lifecycle_state
+            .as_deref(),
+        Some("cancelled")
+    );
+}
+
+async fn set_parent_state(
+    node: &EmbeddedNode,
+    request_id: &str,
+    status: &str,
+    lifecycle_state: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let status = escape_graphql_string(status);
+    let lifecycle_state = escape_graphql_string(lifecycle_state);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "failed to terminalize spawning request: {:?}",
+        response.errors
+    );
 }
 
 #[tokio::test]

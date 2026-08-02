@@ -271,8 +271,8 @@ pub mod subagent_request;
 mod transition;
 
 pub use recovery::{
-    OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
-    ToolCallRecoveryReport,
+    BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, SubagentLivenessReport,
+    TerminalParentToolReport, ToolCallRecoveryReport,
 };
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
@@ -465,6 +465,16 @@ impl ToolCallLifecycle {
 
     pub(crate) fn is_bridge(&self) -> bool {
         self.is_subagent_bridge() || self.is_background_tool_bridge()
+    }
+
+    pub(crate) fn terminal_persistence_status(&self, completion_reason: Option<&str>) -> String {
+        if self.is_background_tool_bridge() {
+            completion_reason
+                .map(|reason| format!("completionPending:{reason}"))
+                .unwrap_or_else(|| "completionPending".to_string())
+        } else {
+            "completed".to_string()
+        }
     }
 
     pub(crate) fn await_mode(&self) -> AwaitMode {

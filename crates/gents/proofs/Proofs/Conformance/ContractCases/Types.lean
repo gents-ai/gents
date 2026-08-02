@@ -268,6 +268,14 @@ structure RecoverySweepCase where
   measureBefore : Nat
   measureAfter : Nat
   deadlineAuditRef : String
+  deadlineExpired : Option Bool := none
+  unclaimedExpired : Option Bool := none
+  parentLive : Option Bool := none
+  parentInterrupted : Option Bool := none
+  parentTerminal : Option Bool := none
+  executionRegistered : Option Bool := none
+  recoveryCause : Option String := none
+  notificationReason : Option String := none
   deriving DecidableEq, Repr
 
 structure RecoveryOutcomeCase where

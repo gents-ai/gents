@@ -8,7 +8,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        32,
+        37,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -17,6 +17,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         "request_lifecycle_recover_all_streaming_responses",
         "tool_call_lifecycle_recover_all_running_calls",
         "tool_call_lifecycle_reconcile_orphaned_background_tools",
+        "tool_call_lifecycle_reconcile_background_completion_side_effects",
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
         "tool_call_lifecycle_recover_detached_bridge_rows",
         "inference_call_recover_all_stale_calls",
@@ -52,7 +53,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        32,
+        37,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -134,6 +135,9 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         }
         "tool_call_lifecycle_reconcile_orphaned_background_tools" => {
             "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
+        }
+        "tool_call_lifecycle_reconcile_background_completion_side_effects" => {
+            "Recovery.backgroundCompletionSideEffectRecover_matches_uninterrupted"
         }
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" => {
             "Recovery.terminalParentToolRecover_matches_uninterrupted"
@@ -848,7 +852,48 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "live terminal-parent tool case {} must be idempotent",
             case.name
         );
+    } else if case.sweep_id == "tool_call_lifecycle_reconcile_background_completion_side_effects" {
+        let report =
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+                .await
+                .unwrap();
+        assert_eq!(
+            report.side_effects_converged, 1,
+            "background completion case {} should converge one obligation",
+            case.name
+        );
+        let second =
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+                .await
+                .unwrap();
+        assert!(
+            second.is_noop(),
+            "background completion case {} must be idempotent",
+            case.name
+        );
+        assert_eq!(
+            load_restart_notification_messages(&db.node, &parent_session_id)
+                .await
+                .len(),
+            1,
+            "background completion case {} must converge exactly one notification",
+            case.name
+        );
+        assert_eq!(
+            load_restart_wake_rows(&db.node, &parent_session_id)
+                .await
+                .len(),
+            1,
+            "background completion case {} must converge exactly one wake",
+            case.name
+        );
     } else if case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools" {
+        assert_eq!(
+            case.execution_registered,
+            Some(false),
+            "orphaned background witness {} must be unregistered",
+            case.name
+        );
         let registry = gents::BackgroundExecutionRegistry::default();
         let report =
             ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, AGENT_DID, &registry)
@@ -859,6 +904,28 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "orphaned background case {} should terminalize one tool call",
             case.name
         );
+        let notifications = load_restart_notification_messages(&db.node, &parent_session_id).await;
+        match case.notification_reason.as_deref() {
+            Some(reason) => {
+                assert_eq!(
+                    notifications.len(),
+                    1,
+                    "orphaned background case {} must append exactly one notification",
+                    case.name
+                );
+                assert!(
+                    notifications[0].contains(&format!("<reason>{reason}</reason>")),
+                    "{}: orphan notification must carry Lean-pinned reason {reason}: {}",
+                    case.name,
+                    notifications[0]
+                );
+            }
+            None => assert!(
+                notifications.is_empty(),
+                "orphaned background case {} without an observed parent cannot notify",
+                case.name
+            ),
+        }
     } else {
         let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
             .await
@@ -883,6 +950,39 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         "tool recovery case {} must persist completed status with terminal lifecycle_state",
         case.name
     );
+    if case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools" {
+        match case.recovery_cause.as_deref() {
+            Some("deadlineExceeded") | Some("parentTerminal") => assert_eq!(
+                row.tool_failure_class.as_deref(),
+                Some("external"),
+                "{}: Lean-pinned recovery cause must preserve external failure classification",
+                case.name
+            ),
+            Some("unclaimedCrossDeploymentSpawn") => assert_eq!(
+                row.tool_failure_class.as_deref(),
+                Some("serviceUnavailable"),
+                "{}: unclaimed recovery must preserve service-unavailable classification",
+                case.name
+            ),
+            Some("TerminalizeBackgroundedAsInterrupted") | Some("parentInterrupted") => {
+                assert_eq!(
+                    row.tool_failure_class, None,
+                    "{}: cancellation recovery must not invent a failure class",
+                    case.name
+                );
+                assert_eq!(
+                    row.cancel_cause.as_deref(),
+                    Some("interrupted"),
+                    "{}: cancellation recovery must preserve interrupted cause",
+                    case.name
+                );
+            }
+            other => panic!(
+                "{}: missing or unsupported Lean recovery cause {other:?}",
+                case.name
+            ),
+        }
+    }
     if case.terminal_state == "timedOut" {
         assert_eq!(
             row.tool_failure_class.as_deref(),
@@ -977,122 +1077,109 @@ async fn seed_tool_parent_and_row(
     .await;
     let future_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let past_deadline = chrono::Utc::now() - chrono::Duration::seconds(5);
-    let mut lifecycle = match case.name.as_str() {
-        "tool_backgrounded_running_live_parent_to_cancelled"
-        | "orphaned_background_tool_without_execution_to_cancelled" => {
-            ToolCallLifecycle::new_background_tool(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                "spawn_process".to_string(),
-                "{}".to_string(),
-                future_deadline,
-            )
-        }
-        "tool_running_child_completed_to_completed"
-        | "tool_running_child_failed_to_failed"
-        | "tool_running_child_dead_to_failed"
-        | "tool_running_child_interrupted_to_cancelled" => {
-            let child_request_id = format!("{tool_call_id}-child");
-            let child_state = match case.name.as_str() {
-                "tool_running_child_completed_to_completed" => "completed",
-                "tool_running_child_failed_to_failed" => "failed",
-                "tool_running_child_dead_to_failed" => "dead",
-                "tool_running_child_interrupted_to_cancelled" => "interrupted",
-                _ => unreachable!(),
-            };
-            seed_child_request(&node, &child_request_id, child_state).await;
-            ToolCallLifecycle::new_subagent(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                "spawn_subagent".to_string(),
-                "{}".to_string(),
-                future_deadline,
-                AwaitMode::Foreground,
-                CancelPolicy::Cascade,
-                child_request_id,
-                "did:test:target".to_string(),
-            )
-        }
-        "detached_bridge_child_completed_to_completed"
-        | "detached_bridge_child_failed_to_failed"
-        | "detached_bridge_child_interrupted_to_cancelled"
-        | "detached_bridge_terminal_parent_to_failed"
-        | "detached_bridge_deadline_exceeded_to_timed_out" => {
-            let child_request_id = format!("{tool_call_id}-child");
-            let child_state = match case.name.as_str() {
-                "detached_bridge_child_completed_to_completed" => "completed",
-                "detached_bridge_child_failed_to_failed" => "failed",
-                "detached_bridge_child_interrupted_to_cancelled" => "interrupted",
-                _ => "processing",
-            };
-            seed_child_request(&node, &child_request_id, child_state).await;
-            if case.name == "detached_bridge_terminal_parent_to_failed" {
-                set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
-            }
-            ToolCallLifecycle::new_subagent(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                "spawn_subagent".to_string(),
-                "{}".to_string(),
-                if case.name == "detached_bridge_deadline_exceeded_to_timed_out" {
-                    past_deadline
-                } else {
-                    future_deadline
-                },
-                AwaitMode::Background,
-                CancelPolicy::Detach,
-                child_request_id,
-                "did:test:target".to_string(),
-            )
-        }
-        "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
+    let is_orphan_case = case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools";
+    let parent_observed = case.parent_live == Some(true)
+        || case.parent_interrupted == Some(true)
+        || case.parent_terminal == Some(true);
+    let mut lifecycle = if is_orphan_case {
+        ToolCallLifecycle::new_background_tool(
             node.clone(),
-            parent_request_id.to_string(),
+            if parent_observed {
+                parent_request_id.to_string()
+            } else {
+                format!("{parent_request_id}-missing")
+            },
             parent_session_id.to_string(),
             "did:test:test".to_string(),
             tool_call_id.to_string(),
             1,
-            "slow_tool".to_string(),
+            "spawn_process".to_string(),
             "{}".to_string(),
-            past_deadline,
-        ),
-        "tool_running_parent_interrupted_to_cancelled"
-        | "live_running_composite_parent_interrupted_to_cancelled" => {
-            set_request_status_and_lifecycle(&node, &parent_doc_id, "interrupted", "interrupted")
-                .await;
-            ToolCallLifecycle::new(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                if case.name == "live_running_composite_parent_interrupted_to_cancelled" {
-                    "fan_out_and_synthesize"
-                } else {
-                    "slow_tool"
+            future_deadline,
+        )
+    } else {
+        match case.name.as_str() {
+            "tool_backgrounded_running_live_parent_to_cancelled"
+            | "terminal_background_tool_missing_completion_side_effects_to_converged" => {
+                ToolCallLifecycle::new_background_tool(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "spawn_process".to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                )
+            }
+            "tool_running_child_completed_to_completed"
+            | "tool_running_child_failed_to_failed"
+            | "tool_running_child_dead_to_failed"
+            | "tool_running_child_interrupted_to_cancelled" => {
+                let child_request_id = format!("{tool_call_id}-child");
+                let child_state = match case.name.as_str() {
+                    "tool_running_child_completed_to_completed" => "completed",
+                    "tool_running_child_failed_to_failed" => "failed",
+                    "tool_running_child_dead_to_failed" => "dead",
+                    "tool_running_child_interrupted_to_cancelled" => "interrupted",
+                    _ => unreachable!(),
+                };
+                seed_child_request(&node, &child_request_id, child_state).await;
+                ToolCallLifecycle::new_subagent(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "spawn_subagent".to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                    AwaitMode::Foreground,
+                    CancelPolicy::Cascade,
+                    child_request_id,
+                    "did:test:target".to_string(),
+                )
+            }
+            "detached_bridge_child_completed_to_completed"
+            | "detached_bridge_child_failed_to_failed"
+            | "detached_bridge_child_interrupted_to_cancelled"
+            | "detached_bridge_terminal_parent_to_failed"
+            | "detached_bridge_deadline_exceeded_to_timed_out" => {
+                let child_request_id = format!("{tool_call_id}-child");
+                let child_state = match case.name.as_str() {
+                    "detached_bridge_child_completed_to_completed" => "completed",
+                    "detached_bridge_child_failed_to_failed" => "failed",
+                    "detached_bridge_child_interrupted_to_cancelled" => "interrupted",
+                    _ => "processing",
+                };
+                seed_child_request(&node, &child_request_id, child_state).await;
+                if case.name == "detached_bridge_terminal_parent_to_failed" {
+                    set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed")
+                        .await;
                 }
-                .to_string(),
-                "{}".to_string(),
-                future_deadline,
-            )
-        }
-        "tool_running_terminal_parent_to_failed"
-        | "live_running_tool_parent_terminal_to_failed" => {
-            set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
-            ToolCallLifecycle::new(
+                ToolCallLifecycle::new_subagent(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "spawn_subagent".to_string(),
+                    "{}".to_string(),
+                    if case.name == "detached_bridge_deadline_exceeded_to_timed_out" {
+                        past_deadline
+                    } else {
+                        future_deadline
+                    },
+                    AwaitMode::Background,
+                    CancelPolicy::Detach,
+                    child_request_id,
+                    "did:test:target".to_string(),
+                )
+            }
+            "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
@@ -1101,53 +1188,114 @@ async fn seed_tool_parent_and_row(
                 1,
                 "slow_tool".to_string(),
                 "{}".to_string(),
-                future_deadline,
-            )
+                past_deadline,
+            ),
+            "tool_running_parent_interrupted_to_cancelled"
+            | "live_running_composite_parent_interrupted_to_cancelled" => {
+                set_request_status_and_lifecycle(
+                    &node,
+                    &parent_doc_id,
+                    "interrupted",
+                    "interrupted",
+                )
+                .await;
+                ToolCallLifecycle::new(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    if case.name == "live_running_composite_parent_interrupted_to_cancelled" {
+                        "fan_out_and_synthesize"
+                    } else {
+                        "slow_tool"
+                    }
+                    .to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                )
+            }
+            "tool_running_terminal_parent_to_failed"
+            | "live_running_tool_parent_terminal_to_failed" => {
+                set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed")
+                    .await;
+                ToolCallLifecycle::new(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "slow_tool".to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                )
+            }
+            "live_detached_bridge_parent_failed_to_failed" => {
+                set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
+                let child_request_id = format!("{tool_call_id}-detached-child");
+                seed_child_request(&node, &child_request_id, "processing").await;
+                ToolCallLifecycle::new_subagent(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "spawn_subagent".to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                    AwaitMode::Background,
+                    CancelPolicy::Detach,
+                    child_request_id,
+                    "did:test:target".to_string(),
+                )
+            }
+            "tool_running_unclaimed_cross_deployment_spawn_to_failed" => {
+                let child_request_id = format!("{tool_call_id}-remote-child");
+                ToolCallLifecycle::new_subagent(
+                    node.clone(),
+                    parent_request_id.to_string(),
+                    parent_session_id.to_string(),
+                    "did:test:test".to_string(),
+                    tool_call_id.to_string(),
+                    1,
+                    "spawn_subagent".to_string(),
+                    "{}".to_string(),
+                    future_deadline,
+                    AwaitMode::Background,
+                    CancelPolicy::Cascade,
+                    child_request_id,
+                    "did:test:target".to_string(),
+                )
+            }
+            other => panic!("unhandled tool recovery case {other}"),
         }
-        "live_detached_bridge_parent_failed_to_failed" => {
-            set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
-            let child_request_id = format!("{tool_call_id}-detached-child");
-            seed_child_request(&node, &child_request_id, "processing").await;
-            ToolCallLifecycle::new_subagent(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                "spawn_subagent".to_string(),
-                "{}".to_string(),
-                future_deadline,
-                AwaitMode::Background,
-                CancelPolicy::Detach,
-                child_request_id,
-                "did:test:target".to_string(),
-            )
-        }
-        "tool_running_unclaimed_cross_deployment_spawn_to_failed" => {
-            let child_request_id = format!("{tool_call_id}-remote-child");
-            ToolCallLifecycle::new_subagent(
-                node.clone(),
-                parent_request_id.to_string(),
-                parent_session_id.to_string(),
-                "did:test:test".to_string(),
-                tool_call_id.to_string(),
-                1,
-                "spawn_subagent".to_string(),
-                "{}".to_string(),
-                future_deadline,
-                AwaitMode::Background,
-                CancelPolicy::Cascade,
-                child_request_id,
-                "did:test:target".to_string(),
-            )
-        }
-        other => panic!("unhandled tool recovery case {other}"),
     };
     lifecycle.start_running().await.unwrap();
 
-    if case.name == "tool_running_unclaimed_cross_deployment_spawn_to_failed" {
+    if case.name == "tool_running_unclaimed_cross_deployment_spawn_to_failed"
+        || case.unclaimed_expired == Some(true)
+    {
         set_tool_unclaimed_deadline(&node, tool_call_id, "2020-01-01T00:00:00Z").await;
+    }
+    if case.deadline_expired == Some(true) {
+        set_tool_deadline(&node, tool_call_id, "2020-01-01T00:00:00Z").await;
+    }
+    if case.parent_interrupted == Some(true) {
+        set_request_status_and_lifecycle(&node, &parent_doc_id, "interrupted", "interrupted").await;
+    } else if case.parent_terminal == Some(true) {
+        set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
+    }
+    if case.name == "terminal_background_tool_missing_completion_side_effects_to_converged" {
+        lifecycle
+            .bridge_failure(ChildTerminal::Failed {
+                reason: "seed terminal background failure".to_string(),
+                failure_class: FailureClass::External,
+            })
+            .await
+            .unwrap();
     }
 }
 
@@ -1269,6 +1417,39 @@ async fn set_tool_unclaimed_deadline(node: &EmbeddedNode, tool_call_id: &str, at
     assert!(
         !resp.has_errors(),
         "set tool unclaimed deadline failed: {:?}",
+        resp.errors
+    );
+}
+
+async fn set_tool_deadline(node: &EmbeddedNode, tool_call_id: &str, at: &str) {
+    #[derive(Debug, Deserialize)]
+    struct ToolDateTimeRow {
+        started_at: Option<String>,
+    }
+
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let read_query = format!(
+        r#"{{
+            AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_tool_call_id}" }} }}, limit: 1) {{
+                started_at
+            }}
+        }}"#
+    );
+    let row: ToolDateTimeRow = first_row(&node.execute(&read_query).await, "AgentToolCall");
+    let started_at = datetime_update_field("started_at", row.started_at.as_deref());
+    let at = escape_graphql_string(at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{ tool_call_id: {{ _eq: "{escaped_tool_call_id}" }} }},
+                input: {{ deadline_at: "{at}"{started_at} }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "set tool deadline failed: {:?}",
         resp.errors
     );
 }

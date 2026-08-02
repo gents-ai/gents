@@ -152,17 +152,37 @@ and closes the panic path without touching live registered workers. -/
 
 structure OrphanedBackgroundToolRow where
   call : ToolCallContext
-  cause : ToolRecoveryCause
+  deadlineExpired : Bool
+  unclaimedExpired : Bool
+  parentLive : Bool
+  parentInterrupted : Bool
+  parentTerminal : Bool
   executionRegistered : Bool
-  parentResolvable : Bool
   deriving Repr
+
+/-- The periodic orphan sweep uses the same precedence as startup recovery.
+    Parent flags are observations, not a caller-selected recovery cause. -/
+def orphanedBackgroundToolCause
+    (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
+  if row.deadlineExpired then
+    some .deadlineExceeded
+  else if row.unclaimedExpired then
+    some .unclaimedCrossDeploymentSpawn
+  else if row.parentLive then
+    some .terminalizeBackgroundedAsInterrupted
+  else if row.parentInterrupted then
+    some .parentInterrupted
+  else if row.parentTerminal then
+    some .parentTerminal
+  else
+    none
 
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
   row.call.awaitMode = .background ∧
   row.call.childRequestId = none ∧
   row.executionRegistered = false ∧
-  row.parentResolvable = true
+  (orphanedBackgroundToolCause row).isSome = true
 
 instance (row : OrphanedBackgroundToolRow) :
     Decidable (orphanedBackgroundToolStale row) := by
@@ -171,7 +191,9 @@ instance (row : OrphanedBackgroundToolRow) :
 
 def orphanedBackgroundToolRecover
     (row : OrphanedBackgroundToolRow) : OrphanedBackgroundToolRow :=
-  { row with call := { row.call with state := row.cause.terminalState } }
+  match orphanedBackgroundToolCause row with
+  | some cause => { row with call := { row.call with state := cause.terminalState } }
+  | none => row
 
 def orphanedBackgroundToolMeasure (row : OrphanedBackgroundToolRow) : Nat :=
   if orphanedBackgroundToolStale row then 1 else 0
@@ -185,20 +207,29 @@ theorem orphanedBackgroundTool_stale_positive :
 theorem orphanedBackgroundToolRecover_terminal :
     ∀ row, orphanedBackgroundToolStale row →
       isTerminal (orphanedBackgroundToolRecover row).call.state := by
-  intro row _h_stale
-  simpa [orphanedBackgroundToolRecover] using row.cause.terminalState_terminal
+  intro row h_stale
+  rcases h_stale with ⟨_, _, _, _, h_cause⟩
+  cases h : orphanedBackgroundToolCause row with
+  | none => simp [h] at h_cause
+  | some cause =>
+      simpa [orphanedBackgroundToolRecover, h] using cause.terminalState_terminal
 
 theorem orphanedBackgroundToolRecover_zero :
     ∀ row, orphanedBackgroundToolStale row →
       orphanedBackgroundToolMeasure (orphanedBackgroundToolRecover row) = 0 := by
-  intro row _h_stale
-  have h_terminal_not_running : row.cause.terminalState ≠ .running := by
-    cases row.cause <;> simp [ToolRecoveryCause.terminalState]
-  have h_not :
-      ¬ orphanedBackgroundToolStale (orphanedBackgroundToolRecover row) := by
-    intro h_stale
-    exact h_terminal_not_running h_stale.1
-  simp [orphanedBackgroundToolMeasure, h_not]
+  intro row h_stale
+  rcases h_stale with ⟨_, _, _, _, h_cause⟩
+  cases h : orphanedBackgroundToolCause row with
+  | none => simp [h] at h_cause
+  | some cause =>
+    have h_terminal_not_running : cause.terminalState ≠ .running := by
+      cases cause <;> simp [ToolRecoveryCause.terminalState]
+    have h_not :
+        ¬ orphanedBackgroundToolStale (orphanedBackgroundToolRecover row) := by
+      intro recovered_stale
+      exact h_terminal_not_running (by
+        simpa [orphanedBackgroundToolRecover, h] using recovered_stale.1)
+    simp [orphanedBackgroundToolMeasure, h_not]
 
 def orphanedBackgroundToolSweep : RecoverySweep :=
   { Row := OrphanedBackgroundToolRow
@@ -234,6 +265,106 @@ def orphanedBackgroundToolEquivalence :
       orphanedBackgroundToolRecover_matches_uninterrupted
   }
 
+/-! ## Retryable native-background completion side effects
+
+The terminal tool row is durable before its completion notification and wake.
+The persisted `status = completionPending` cursor therefore remains outstanding
+until both idempotent side effects converge, making a transient write failure
+periodically discoverable after the lifecycle row is already terminal. -/
+
+structure BackgroundCompletionSideEffectRow where
+  call : ToolCallContext
+  parentResolvable : Bool
+  sideEffectsDone : Bool
+  deriving Repr
+
+def isNativeBackgroundCall (call : ToolCallContext) : Prop :=
+  call.awaitMode = .background ∧ call.childRequestId = none
+
+instance (call : ToolCallContext) : Decidable (isNativeBackgroundCall call) := by
+  unfold isNativeBackgroundCall
+  infer_instance
+
+def backgroundCompletionSideEffectStale
+    (row : BackgroundCompletionSideEffectRow) : Prop :=
+  isTerminal row.call.state ∧
+  isNativeBackgroundCall row.call ∧
+  row.parentResolvable = true ∧
+  row.sideEffectsDone = false
+
+instance (row : BackgroundCompletionSideEffectRow) :
+    Decidable (backgroundCompletionSideEffectStale row) := by
+  unfold backgroundCompletionSideEffectStale
+  infer_instance
+
+def backgroundCompletionSideEffectRecover
+    (row : BackgroundCompletionSideEffectRow) : BackgroundCompletionSideEffectRow :=
+  { row with sideEffectsDone := true }
+
+def backgroundCompletionSideEffectMeasure
+    (row : BackgroundCompletionSideEffectRow) : Nat :=
+  if backgroundCompletionSideEffectStale row then 1 else 0
+
+theorem backgroundCompletionSideEffect_stale_positive :
+    ∀ row, backgroundCompletionSideEffectStale row →
+      backgroundCompletionSideEffectMeasure row > 0 := by
+  intro row h_stale
+  simp [backgroundCompletionSideEffectMeasure, h_stale]
+
+theorem backgroundCompletionSideEffectRecover_terminal :
+    ∀ row, backgroundCompletionSideEffectStale row →
+      isTerminal (backgroundCompletionSideEffectRecover row).call.state := by
+  intro _row h_stale
+  exact h_stale.1
+
+theorem backgroundCompletionSideEffectRecover_zero :
+    ∀ row, backgroundCompletionSideEffectStale row →
+      backgroundCompletionSideEffectMeasure
+        (backgroundCompletionSideEffectRecover row) = 0 := by
+  intro row _h_stale
+  have h_not : ¬ backgroundCompletionSideEffectStale
+      (backgroundCompletionSideEffectRecover row) := by
+    intro h
+    rcases h with ⟨_, _, _, h_done⟩
+    simp [backgroundCompletionSideEffectRecover] at h_done
+  simp [backgroundCompletionSideEffectMeasure, h_not]
+
+def backgroundCompletionSideEffectSweep : RecoverySweep :=
+  { Row := BackgroundCompletionSideEffectRow
+  , collection := .agentToolCall
+  , sweepId := "tool_call_lifecycle_reconcile_background_completion_side_effects"
+  , rustFunction := "ToolCallLifecycle::reconcile_background_completion_side_effects"
+  , cadence := .periodic
+  , implementationStatus := .implemented
+  , stale := backgroundCompletionSideEffectStale
+  , recover := backgroundCompletionSideEffectRecover
+  , terminal := fun row => isTerminal row.call.state
+  , measure := backgroundCompletionSideEffectMeasure
+  , h_stale_positive := backgroundCompletionSideEffect_stale_positive
+  , h_recover_terminal := backgroundCompletionSideEffectRecover_terminal
+  , h_recover_zero := backgroundCompletionSideEffectRecover_zero
+  }
+
+def backgroundCompletionSideEffectUninterrupted
+    (row : BackgroundCompletionSideEffectRow) : BackgroundCompletionSideEffectRow :=
+  backgroundCompletionSideEffectRecover row
+
+theorem backgroundCompletionSideEffectRecover_matches_uninterrupted :
+    ∀ row, backgroundCompletionSideEffectStale row →
+      backgroundCompletionSideEffectRecover row =
+        backgroundCompletionSideEffectUninterrupted row := by
+  intro _row _h_stale
+  rfl
+
+def backgroundCompletionSideEffectEquivalence :
+    RecoveryEquivalence backgroundCompletionSideEffectSweep :=
+  { uninterrupted := backgroundCompletionSideEffectUninterrupted
+  , h_recover_eq_uninterrupted :=
+      backgroundCompletionSideEffectRecover_matches_uninterrupted
+  }
+
+/- Native background calls are disjoint from this sweep: the orphan sweep owns
+   their volatile-registration gate and deadline/unclaimed precedence. -/
 structure TerminalParentToolRow where
   call : ToolCallContext
   parentTerminal : Bool
@@ -259,7 +390,15 @@ def terminalParentToolStale (row : TerminalParentToolRow) : Prop :=
   row.call.state = .running ∧
   (row.parentInterrupted = true ∨ row.parentTerminal = true) ∧
   ¬ (isDetachedBridgeCall row.call ∧ row.parentInterrupted = true) ∧
-  ¬ (isChildLinkedBridge row.call ∧ exclusiveCleanCompleted row)
+  ¬ (isChildLinkedBridge row.call ∧ exclusiveCleanCompleted row) ∧
+  ¬ isNativeBackgroundCall row.call
+
+theorem terminalParent_native_background_not_stale
+    (row : TerminalParentToolRow)
+    (h_native : isNativeBackgroundCall row.call) :
+    ¬ terminalParentToolStale row := by
+  intro h_stale
+  exact h_stale.2.2.2.2 h_native
 
 instance (row : TerminalParentToolRow) : Decidable (terminalParentToolStale row) := by
   unfold terminalParentToolStale
@@ -298,7 +437,7 @@ theorem terminalParentToolRecover_terminal :
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
   ·
     have h_term : row.parentTerminal = true := by
-      rcases h_stale with ⟨_, h_parent, _, _⟩
+      rcases h_stale with ⟨_, h_parent, _, _, _⟩
       cases h_parent with
       | inl h => exact absurd h (by simpa using h_int)
       | inr h => exact h
@@ -311,7 +450,7 @@ theorem terminalParentToolRecover_zero :
   intro row h_stale
   have h_not : ¬ terminalParentToolStale (terminalParentToolRecover row) := by
     intro h
-    rcases h with ⟨h_running, _, _, _⟩
+    rcases h with ⟨h_running, _, _, _, _⟩
     unfold terminalParentToolRecover at h_running
     by_cases h_int : row.parentInterrupted
     · simp [h_int, ToolRecoveryCause.terminalState] at h_running

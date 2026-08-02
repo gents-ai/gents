@@ -16,7 +16,8 @@ use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::{HookAction, ToolCallHookAction};
 use gents::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
+    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,

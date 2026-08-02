@@ -934,14 +934,19 @@ impl DefraSessionHook {
         &self,
         mut lifecycle: ToolCallLifecycle,
         cause: CancelCause,
-    ) -> anyhow::Result<()> {
+        completion_reason: &str,
+    ) -> anyhow::Result<(ToolCallLifecycle, bool)> {
         self.background_executions
             .cancel(lifecycle.tool_call_id())
             .await;
-        if lifecycle.is_running() {
-            lifecycle.cancel_during_run(cause).await?;
-        }
-        Ok(())
+        let won_terminal_compare = if lifecycle.is_running() {
+            lifecycle
+                .cancel_during_run_owned(cause, completion_reason)
+                .await?
+        } else {
+            false
+        };
+        Ok((lifecycle, won_terminal_compare))
     }
 
     pub(super) async fn background_tool_envelope(

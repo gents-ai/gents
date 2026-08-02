@@ -80,7 +80,9 @@ mod tests {
 
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
-        registry.insert("tool-1".to_string(), token.clone()).await;
+        registry
+            .reserve("tool-1".to_string(), token.clone())
+            .disarm();
 
         let mut lifecycle = ToolCallLifecycle::new_background_tool(
             node.clone(),
@@ -118,6 +120,61 @@ mod tests {
             .unwrap()
             .expect("tool row");
         assert!(row.is_cancelled());
+
+        let _ = std::fs::remove_dir_all(&data_path);
+    }
+
+    #[tokio::test]
+    async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
+        let data_path = std::env::temp_dir().join(format!(
+            "agent-tool-control-custom-cancel-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_schemas(&node).await.unwrap();
+
+        let mut lifecycle = ToolCallLifecycle::new_background_tool(
+            node.clone(),
+            "request-custom".to_string(),
+            "session-custom".to_string(),
+            "did:test:test".to_string(),
+            "tool-custom".to_string(),
+            1,
+            "bash_unrestricted".to_string(),
+            "{}".to_string(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+        );
+        lifecycle.start_running().await.unwrap();
+        assert!(lifecycle
+            .cancel_during_run_owned(CancelCause::UserCancelled, "operator requested drain")
+            .await
+            .unwrap());
+
+        let response = node
+            .execute(
+                r#"{
+                    AgentToolCall(filter: { tool_call_id: { _eq: "tool-custom" } }, limit: 1) {
+                        status
+                    }
+                }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let status = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("status"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(status, Some("completionPending:operator requested drain"));
 
         let _ = std::fs::remove_dir_all(&data_path);
     }

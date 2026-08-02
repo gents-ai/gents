@@ -59,6 +59,17 @@ pub struct OrphanedBackgroundToolReport {
     pub tool_calls_terminalized: usize,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackgroundCompletionSideEffectReport {
+    pub side_effects_converged: usize,
+}
+
+impl BackgroundCompletionSideEffectReport {
+    pub fn is_noop(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 impl OrphanedBackgroundToolReport {
     pub fn is_noop(&self) -> bool {
         *self == Self::default()
@@ -97,6 +108,32 @@ struct RunningToolCallRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     unclaimed_deadline_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TerminalBackgroundToolRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    result: String,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+    #[serde(default)]
+    cancel_cause: Option<String>,
+    #[serde(default)]
+    child_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -257,11 +294,13 @@ impl super::ToolCallLifecycle {
     ///    (not global `request_id` matches — that field is not unique).
     /// 2. Resolve the parent under the same DID; skip missing/foreign parents.
     /// 3. Require a terminal parent before any write.
-    /// 4. Detached bridges under an *interrupted* parent are left running.
-    /// 5. Child-linked bridges under a *cleanly completed* parent are left
+    /// 4. Leave every native background row to the registry-aware orphan
+    ///    sweep, regardless of parent state.
+    /// 5. Detached bridges under an *interrupted* parent are left running.
+    /// 6. Child-linked bridges under a *cleanly completed* parent are left
     ///    running — clean completion is not a cancel signal (live cascade and
     ///    recovery only cancel on cancel-worthy terminals).
-    /// 6. Then project already-terminal children onto bridges (matches startup
+    /// 7. Then project already-terminal children onto bridges (matches startup
     ///    child-precedence so restart and live ticks converge).
     ///
     /// Covers the durable bad state observed for `fan_out_and_synthesize`:
@@ -278,6 +317,13 @@ impl super::ToolCallLifecycle {
         for row in rows {
             // Defense in depth: never mutate a row whose stamped owner differs.
             if row.agent_did.as_deref() != Some(agent_did) {
+                continue;
+            }
+            // Native background rows belong exclusively to the orphan sweep,
+            // which checks volatile ownership and applies deadline/unclaimed
+            // precedence before parent state. Keeping this sweep disjoint
+            // prevents its earlier periodic slot from bypassing that classifier.
+            if is_background_tool_row(&row) {
                 continue;
             }
 
@@ -365,6 +411,7 @@ impl super::ToolCallLifecycle {
                 &row,
                 deadline_at,
                 outcome,
+                true,
                 remote_cancel_intent_at,
             )
             .await
@@ -428,30 +475,31 @@ impl super::ToolCallLifecycle {
             {
                 continue;
             }
-            let Some(request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
-                continue;
-            };
-            let Some(parent) = lookup_parent_request(node, agent_did, request_id).await? else {
-                continue;
+            let parent = match row.request_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(request_id) => lookup_parent_request(node, agent_did, request_id).await?,
+                None => None,
             };
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
-            let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
-                RecoveryOutcome::TimedOut
-            } else if request_is_interrupted(&parent) {
-                RecoveryOutcome::Cancelled
-            } else if request_is_terminal(&parent) {
-                RecoveryOutcome::Failed
-            } else {
-                RecoveryOutcome::BackgroundInterrupted
+            let Some(outcome) = classify_running_tool_recovery(&row, parent.as_ref(), Utc::now())
+            else {
+                continue;
             };
 
-            let updated = match recover_tool_call_row(node, &row, deadline_at, outcome, None).await
+            let updated = match recover_tool_call_row(
+                node,
+                &row,
+                deadline_at,
+                outcome,
+                parent.is_some(),
+                None,
+            )
+            .await
             {
                 Ok(updated) => updated,
                 Err(error) => {
                     tracing::warn!(
                         doc_id = %row.doc_id,
-                        request_id,
+                        request_id = row.request_id.as_deref().unwrap_or(""),
                         session_id = %row.session_id,
                         tool_call_id = %row.tool_call_id,
                         error = %error,
@@ -464,7 +512,9 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            append_recovered_background_tool_completion(node, &row, outcome).await;
+            if parent.is_some() {
+                append_recovered_background_tool_completion(node, &row, outcome).await;
+            }
             report.tool_calls_terminalized += 1;
         }
 
@@ -472,6 +522,75 @@ impl super::ToolCallLifecycle {
             tracing::info!(
                 tool_calls_terminalized = report.tool_calls_terminalized,
                 "reconciled orphaned background tools"
+            );
+        }
+        Ok(report)
+    }
+
+    /// Redrive the idempotent notification + session wake after the lifecycle
+    /// row is already terminal. Persisted `status=completionPending:<reason>`
+    /// (or the legacy unsuffixed cursor) advances to `completed` only after
+    /// both side effects converge, so transient failures remain discoverable.
+    pub async fn reconcile_background_completion_side_effects(
+        node: &EmbeddedNode,
+        agent_did: &str,
+    ) -> Result<BackgroundCompletionSideEffectReport> {
+        let rows = load_pending_background_completion_rows(node, agent_did).await?;
+        let mut report = BackgroundCompletionSideEffectReport::default();
+
+        for row in rows {
+            if row.agent_did.as_deref() != Some(agent_did)
+                || non_empty(row.child_request_id.as_deref()).is_some()
+            {
+                continue;
+            }
+            let Some(request_id) = non_empty(row.request_id.as_deref()) else {
+                continue;
+            };
+            if lookup_parent_request(node, agent_did, request_id)
+                .await?
+                .is_none()
+            {
+                continue;
+            }
+            let Some(session_id) = non_empty(row.session_id.as_deref()) else {
+                tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without session_id");
+                continue;
+            };
+            let Some(tool_call_id) = non_empty(row.tool_call_id.as_deref()) else {
+                tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without tool_call_id");
+                continue;
+            };
+            let Some((status, reason)) = background_completion_projection(&row) else {
+                continue;
+            };
+
+            match crate::background_completion::append_background_tool_completion(
+                node,
+                session_id,
+                request_id,
+                tool_call_id,
+                &row.tool_name,
+                status,
+                &row.result,
+                reason,
+            )
+            .await
+            {
+                Ok(()) => report.side_effects_converged += 1,
+                Err(error) => tracing::warn!(
+                    doc_id = %row.doc_id,
+                    tool_call_id,
+                    error = %error,
+                    "failed to redrive background completion side effects"
+                ),
+            }
+        }
+
+        if !report.is_noop() {
+            tracing::info!(
+                side_effects_converged = report.side_effects_converged,
+                "reconciled background completion side effects"
             );
         }
         Ok(report)
@@ -489,6 +608,48 @@ mod tests {
             Some(FailureClass::External)
         );
         assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
+    }
+
+    #[test]
+    fn background_completion_reason_comes_from_cursor_not_tool_text() {
+        let row = TerminalBackgroundToolRow {
+            doc_id: "doc-1".to_string(),
+            request_id: Some("request-1".to_string()),
+            agent_did: Some("did:test:agent".to_string()),
+            session_id: Some("session-1".to_string()),
+            tool_call_id: Some("tool-1".to_string()),
+            tool_name: "test_tool".to_string(),
+            status: "completionPending:tool_failed".to_string(),
+            result: "tool-controlled text says background tool panicked".to_string(),
+            lifecycle_state: Some("failed".to_string()),
+            cancel_cause: None,
+            child_request_id: None,
+        };
+        assert_eq!(
+            background_completion_projection(&row),
+            Some(("failed", Some("tool_failed")))
+        );
+    }
+
+    #[test]
+    fn background_completion_redrive_preserves_custom_cancel_reason() {
+        let row = TerminalBackgroundToolRow {
+            doc_id: "doc-custom".to_string(),
+            request_id: Some("request-custom".to_string()),
+            agent_did: Some("did:test:agent".to_string()),
+            session_id: Some("session-custom".to_string()),
+            tool_call_id: Some("tool-custom".to_string()),
+            tool_name: "test_tool".to_string(),
+            status: "completionPending:operator requested drain".to_string(),
+            result: String::new(),
+            lifecycle_state: Some("cancelled".to_string()),
+            cancel_cause: Some("userCancelled".to_string()),
+            child_request_id: None,
+        };
+        assert_eq!(
+            background_completion_projection(&row),
+            Some(("cancelled", Some("operator requested drain")))
+        );
     }
 
     #[test]
@@ -758,7 +919,6 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
         }
 
         let deadline_at = parse_datetime(row.deadline_at.as_deref());
-        let unclaimed_deadline_at = parse_datetime(row.unclaimed_deadline_at.as_deref());
         let parent = match row
             .request_id
             .as_deref()
@@ -777,37 +937,7 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
-        let outcome = if deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
-            Some(RecoveryOutcome::TimedOut)
-        } else if unclaimed_deadline_at.is_some_and(|deadline| Utc::now() >= deadline) {
-            Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
-        } else if is_background_tool_row(&row)
-            && parent
-                .as_ref()
-                .is_some_and(|parent| !request_is_terminal(parent))
-        {
-            Some(RecoveryOutcome::BackgroundInterrupted)
-        } else if is_detached_subagent_tool(&row)
-            && parent
-                .as_ref()
-                .is_some_and(|parent| request_is_interrupted(parent))
-        {
-            None
-        } else if parent.as_ref().is_some_and(request_is_cleanly_completed)
-            && child_request_id(&row).is_some()
-        {
-            // Clean parent completion is not a cancel signal for linked children.
-            None
-        } else if parent
-            .as_ref()
-            .is_some_and(|parent| request_is_interrupted(parent))
-        {
-            Some(RecoveryOutcome::Cancelled)
-        } else if parent.as_ref().is_some_and(request_is_terminal) {
-            Some(RecoveryOutcome::Failed)
-        } else {
-            None
-        };
+        let outcome = classify_running_tool_recovery(&row, parent.as_ref(), Utc::now());
 
         let Some(outcome) = outcome else {
             if is_background_subagent_tool(&row) {
@@ -849,23 +979,29 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
             }
         }
 
-        let updated =
-            match recover_tool_call_row(node, &row, deadline_at, outcome, remote_cancel_intent_at)
-                .await
-            {
-                Ok(updated) => updated,
-                Err(error) => {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        request_id = row.request_id.as_deref().unwrap_or(""),
-                        session_id = %row.session_id,
-                        tool_call_id = %row.tool_call_id,
-                        error = %error,
-                        "failed to recover running tool call"
-                    );
-                    continue;
-                }
-            };
+        let updated = match recover_tool_call_row(
+            node,
+            &row,
+            deadline_at,
+            outcome,
+            parent.is_some(),
+            remote_cancel_intent_at,
+        )
+        .await
+        {
+            Ok(updated) => updated,
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = row.request_id.as_deref().unwrap_or(""),
+                    session_id = %row.session_id,
+                    tool_call_id = %row.tool_call_id,
+                    error = %error,
+                    "failed to recover running tool call"
+                );
+                continue;
+            }
+        };
         if !updated {
             // Lost CAS against a concurrent terminal writer — leave the durable
             // terminal untouched (first-writer-wins).
@@ -904,13 +1040,7 @@ async fn append_recovered_background_tool_completion(
         | RecoveryOutcome::Failed
         | RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "failed",
     };
-    let reason = match outcome {
-        RecoveryOutcome::TimedOut => "deadline_exceeded",
-        RecoveryOutcome::Cancelled => "parent_interrupted",
-        RecoveryOutcome::Failed => "parent_terminal",
-        RecoveryOutcome::BackgroundInterrupted => "interrupted_on_restart",
-        RecoveryOutcome::UnclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout",
-    };
+    let reason = outcome.notification_reason();
     if let Err(error) = crate::background_completion::append_background_tool_completion(
         node,
         &row.session_id,
@@ -987,13 +1117,113 @@ async fn load_running_tool_call_rows_with_filter(
         anyhow::bail!("querying stuck running tool calls: {:?}", resp.errors);
     }
 
-    let rows: Vec<RunningToolCallRow> = resp
+    let values = resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .and_then(|value| value.as_array())
+        .cloned()
         .unwrap_or_default();
+    let mut rows = Vec::with_capacity(values.len());
+    for value in values {
+        match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
+            Ok(row) => rows.push(row),
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = value
+                        .get("_docID")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                    error = %error,
+                    "skipping malformed running tool-call row during recovery"
+                );
+            }
+        }
+    }
     Ok(rows)
+}
+
+async fn load_pending_background_completion_rows(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<Vec<TerminalBackgroundToolRow>> {
+    let agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentToolCall(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                await_mode: {{ _eq: "background" }},
+                lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
+                status: {{ _like: "completionPending%" }}
+            }}) {{
+                _docID
+                request_id
+                agent_did
+                session_id
+                tool_call_id
+                tool_name
+                status
+                result
+                lifecycle_state
+                cancel_cause
+                child_request_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying pending background completion side effects: {:?}",
+            response.errors
+        );
+    }
+    let values = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut rows = Vec::with_capacity(values.len());
+    for value in values {
+        match serde_json::from_value::<TerminalBackgroundToolRow>(value.clone()) {
+            Ok(row) => rows.push(row),
+            Err(error) => tracing::warn!(
+                doc_id = value
+                    .get("_docID")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+                error = %error,
+                "skipping malformed terminal background row during side-effect recovery"
+            ),
+        }
+    }
+    Ok(rows)
+}
+
+fn background_completion_projection(
+    row: &TerminalBackgroundToolRow,
+) -> Option<(&str, Option<&str>)> {
+    let persisted_reason = row.status.strip_prefix("completionPending:");
+    match row.lifecycle_state.as_deref()? {
+        "completed" => Some(("completed", None)),
+        "timedOut" => Some((
+            "failed",
+            Some(persisted_reason.unwrap_or("deadline_exceeded")),
+        )),
+        "cancelled" => Some((
+            "cancelled",
+            Some(persisted_reason.unwrap_or_else(|| {
+                if row.cancel_cause.as_deref() == Some("userCancelled") {
+                    "explicit_cancel"
+                } else {
+                    "parent_interrupted"
+                }
+            })),
+        )),
+        "failed" => Some(("failed", Some(persisted_reason.unwrap_or("tool_failed")))),
+        _ => None,
+    }
 }
 
 async fn lookup_parent_request(
@@ -1745,6 +1975,7 @@ async fn recover_tool_call_row(
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
+    completion_side_effects_owed: bool,
     remote_cancel_intent_at: Option<DateTime<Utc>>,
 ) -> Result<bool> {
     let now = Utc::now();
@@ -1773,6 +2004,11 @@ async fn recover_tool_call_row(
             )
         })
         .unwrap_or_default();
+    let terminal_status = if is_background_tool_row(row) && completion_side_effects_owed {
+        format!("completionPending:{}", outcome.notification_reason())
+    } else {
+        "completed".to_string()
+    };
 
     let mutation = format!(
         r#"mutation {{
@@ -1783,7 +2019,7 @@ async fn recover_tool_call_row(
                 }},
                 input: {{
                     result: "{escaped_result}",
-                    status: "completed",
+                    status: "{terminal_status}",
                     lifecycle_state: "{lifecycle_state}",
                     started_at: "{started_at_str}"{deadline_field},
                     completed_at: "{completed_at_str}",
@@ -1809,6 +2045,36 @@ fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
     non_empty(value)
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|datetime| datetime.with_timezone(&Utc))
+}
+
+/// Shared startup/periodic classifier. Branch order is Lean-fenced by
+/// `restartDisposition` and `orphanedBackgroundToolCause`.
+fn classify_running_tool_recovery(
+    row: &RunningToolCallRow,
+    parent: Option<&ParentRequestRow>,
+    now: DateTime<Utc>,
+) -> Option<RecoveryOutcome> {
+    if parse_datetime(row.deadline_at.as_deref()).is_some_and(|deadline| now >= deadline) {
+        Some(RecoveryOutcome::TimedOut)
+    } else if parse_datetime(row.unclaimed_deadline_at.as_deref())
+        .is_some_and(|deadline| now >= deadline)
+    {
+        Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
+    } else if is_background_tool_row(row)
+        && parent.is_some_and(|parent| !request_is_terminal(parent))
+    {
+        Some(RecoveryOutcome::BackgroundInterrupted)
+    } else if is_detached_subagent_tool(row) && parent.is_some_and(request_is_interrupted) {
+        None
+    } else if parent.is_some_and(request_is_cleanly_completed) && child_request_id(row).is_some() {
+        None
+    } else if parent.is_some_and(request_is_interrupted) {
+        Some(RecoveryOutcome::Cancelled)
+    } else if parent.is_some_and(request_is_terminal) {
+        Some(RecoveryOutcome::Failed)
+    } else {
+        None
+    }
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -1968,6 +2234,16 @@ async fn child_request_is_locally_owned(
 }
 
 impl RecoveryOutcome {
+    fn notification_reason(self) -> &'static str {
+        match self {
+            Self::TimedOut => "deadline_exceeded",
+            Self::Cancelled => "parent_interrupted",
+            Self::Failed => "parent_terminal",
+            Self::BackgroundInterrupted => "interrupted_on_restart",
+            Self::UnclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout",
+        }
+    }
+
     fn lifecycle_state(self) -> ToolCallState {
         match self {
             Self::TimedOut => ToolCallState::TimedOut,

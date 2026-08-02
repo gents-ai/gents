@@ -2,6 +2,20 @@ use super::*;
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
 
+async fn project_background_completion_if_owned<F>(
+    won_terminal_compare: bool,
+    projection: F,
+) -> Option<F::Output>
+where
+    F: std::future::Future,
+{
+    if won_terminal_compare {
+        Some(projection.await)
+    } else {
+        None
+    }
+}
+
 impl DefraSessionHook {
     pub(super) async fn persist_background_tool_call(
         &self,
@@ -124,15 +138,10 @@ impl DefraSessionHook {
         )
         .with_requester_did(self.active_requester_did().await);
         let cancellation_token = tokio_util::sync::CancellationToken::new();
-        self.background_executions
-            .insert(background_tool_call_id.clone(), cancellation_token.clone())
-            .await;
-        if let Err(error) = lifecycle.start_running().await {
-            self.background_executions
-                .remove(&background_tool_call_id)
-                .await;
-            return Err(error);
-        }
+        let execution_reservation = self
+            .background_executions
+            .reserve(background_tool_call_id.clone(), cancellation_token.clone());
+        lifecycle.start_running().await?;
 
         let node = self.node.clone();
         let executions = self.background_executions.clone();
@@ -165,15 +174,20 @@ impl DefraSessionHook {
                 Ok(result) => match result {
                     Ok(output) => match classify_managed_tool_result(&output) {
                         Some(ManagedToolTerminal::TimedOut) => {
-                            if let Err(error) = lifecycle.bridge_failure(ChildTerminal::Dead).await
-                            {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to terminalize timed-out background tool"
-                                );
-                            }
-                            if let Err(error) =
+                            let won_terminal_compare =
+                                match lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                                    Ok(updated) => updated,
+                                    Err(error) => {
+                                        tracing::warn!(
+                                            tool_call_id = %execution_call_id,
+                                            error = %error,
+                                            "failed to terminalize timed-out background tool"
+                                        );
+                                        false
+                                    }
+                                };
+                            if let Some(Err(error)) = project_background_completion_if_owned(
+                                won_terminal_compare,
                                 crate::background_completion::append_background_tool_completion(
                                     node.as_ref(),
                                     &execution_session_id,
@@ -183,23 +197,28 @@ impl DefraSessionHook {
                                     "failed",
                                     "",
                                     Some("deadline_exceeded"),
-                                )
-                                .await
+                                ),
+                            )
+                            .await
                             {
                                 tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
                             }
                         }
                         Some(ManagedToolTerminal::Cancelled) => {
-                            if let Err(error) =
-                                lifecycle.bridge_failure(ChildTerminal::Interrupted).await
-                            {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to terminalize cancelled background tool"
-                                );
-                            }
-                            if let Err(error) =
+                            let won_terminal_compare =
+                                match lifecycle.bridge_failure(ChildTerminal::Interrupted).await {
+                                    Ok(updated) => updated,
+                                    Err(error) => {
+                                        tracing::warn!(
+                                            tool_call_id = %execution_call_id,
+                                            error = %error,
+                                            "failed to terminalize cancelled background tool"
+                                        );
+                                        false
+                                    }
+                                };
+                            if let Some(Err(error)) = project_background_completion_if_owned(
+                                won_terminal_compare,
                                 crate::background_completion::append_background_tool_completion(
                                     node.as_ref(),
                                     &execution_session_id,
@@ -209,22 +228,29 @@ impl DefraSessionHook {
                                     "cancelled",
                                     "",
                                     Some("explicit_cancel"),
-                                )
-                                .await
+                                ),
+                            )
+                            .await
                             {
                                 tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
                             }
                         }
                         None => {
                             let notification_result = output.clone();
-                            if let Err(error) = lifecycle.bridge_complete(output).await {
-                                tracing::warn!(
-                                    tool_call_id = %execution_call_id,
-                                    error = %error,
-                                    "failed to complete background tool"
-                                );
-                            }
-                            if let Err(error) =
+                            let won_terminal_compare = match lifecycle.bridge_complete(output).await
+                            {
+                                Ok(updated) => updated,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        tool_call_id = %execution_call_id,
+                                        error = %error,
+                                        "failed to complete background tool"
+                                    );
+                                    false
+                                }
+                            };
+                            if let Some(Err(error)) = project_background_completion_if_owned(
+                                won_terminal_compare,
                                 crate::background_completion::append_background_tool_completion(
                                     node.as_ref(),
                                     &execution_session_id,
@@ -234,8 +260,9 @@ impl DefraSessionHook {
                                     "completed",
                                     &notification_result,
                                     None,
-                                )
-                                .await
+                                ),
+                            )
+                            .await
                             {
                                 tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
                             }
@@ -244,20 +271,25 @@ impl DefraSessionHook {
                     Err(error) => {
                         let reason = format!("{error:#}");
                         let failure_class = classify_runtime_error(&reason);
-                        if let Err(error) = lifecycle
+                        let won_terminal_compare = match lifecycle
                             .bridge_failure(ChildTerminal::Failed {
                                 reason: reason.clone(),
                                 failure_class,
                             })
                             .await
                         {
-                            tracing::warn!(
-                                tool_call_id = %execution_call_id,
-                                error = %error,
-                                "failed to fail background tool"
-                            );
-                        }
-                        if let Err(error) =
+                            Ok(updated) => updated,
+                            Err(error) => {
+                                tracing::warn!(
+                                    tool_call_id = %execution_call_id,
+                                    error = %error,
+                                    "failed to fail background tool"
+                                );
+                                false
+                            }
+                        };
+                        if let Some(Err(error)) = project_background_completion_if_owned(
+                            won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
                                 node.as_ref(),
                                 &execution_session_id,
@@ -267,8 +299,9 @@ impl DefraSessionHook {
                                 "failed",
                                 &reason,
                                 Some("tool_failed"),
-                            )
-                            .await
+                            ),
+                        )
+                        .await
                         {
                             tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append failed background tool notification");
                         }
@@ -277,20 +310,28 @@ impl DefraSessionHook {
                 Err(panic) => {
                     let panic = panic_payload_message(panic.as_ref());
                     let reason = format!("background tool panicked: {panic}");
-                    if let Err(error) = lifecycle
-                        .bridge_failure(ChildTerminal::Failed {
-                            reason: reason.clone(),
-                            failure_class: FailureClass::External,
-                        })
+                    let won_terminal_compare = match lifecycle
+                        .bridge_failure_with_completion_reason(
+                            ChildTerminal::Failed {
+                                reason: reason.clone(),
+                                failure_class: FailureClass::External,
+                            },
+                            "tool_panicked",
+                        )
                         .await
                     {
-                        tracing::warn!(
-                            tool_call_id = %execution_call_id,
-                            error = %error,
-                            "failed to terminalize panicking background tool"
-                        );
-                    }
-                    if let Err(error) =
+                        Ok(updated) => updated,
+                        Err(error) => {
+                            tracing::warn!(
+                                tool_call_id = %execution_call_id,
+                                error = %error,
+                                "failed to terminalize panicking background tool"
+                            );
+                            false
+                        }
+                    };
+                    if let Some(Err(error)) = project_background_completion_if_owned(
+                        won_terminal_compare,
                         crate::background_completion::append_background_tool_completion(
                             node.as_ref(),
                             &execution_session_id,
@@ -300,8 +341,9 @@ impl DefraSessionHook {
                             "failed",
                             &reason,
                             Some("tool_panicked"),
-                        )
-                        .await
+                        ),
+                    )
+                    .await
                     {
                         tracing::warn!(
                             tool_call_id = %execution_call_id,
@@ -315,6 +357,7 @@ impl DefraSessionHook {
             executions.remove(&execution_call_id).await;
             live_outputs.remove(&execution_call_id).await;
         });
+        execution_reservation.disarm();
 
         Ok(self.skip_tool_result(
             SPAWN_PROCESS_TOOL_NAME,
@@ -611,13 +654,24 @@ impl DefraSessionHook {
 
         let notification_tool_name = lifecycle.tool_name().to_string();
         let notification_request_id = lifecycle.request_id().to_string();
-        self.cancel_background_tool_lifecycle(lifecycle, CancelCause::UserCancelled)
-            .await?;
         let notification_reason = parsed
             .reason
             .as_deref()
             .map(str::trim)
             .unwrap_or("explicit_cancel");
+        let (lifecycle, won_terminal_compare) = self
+            .cancel_background_tool_lifecycle(
+                lifecycle,
+                CancelCause::UserCancelled,
+                notification_reason,
+            )
+            .await?;
+        if !won_terminal_compare {
+            let result = self
+                .background_tool_envelope(lifecycle, "terminal_compare_lost")
+                .await?;
+            return Ok(self.skip_tool_result(CANCEL_PROCESS_TOOL_NAME, result));
+        }
         if let Err(error) = crate::background_completion::append_background_tool_completion(
             self.node.as_ref(),
             &session_id,
@@ -654,5 +708,44 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
         message.clone()
     } else {
         "non-string panic payload".to_string()
+    }
+}
+
+#[cfg(test)]
+mod ownership_projection_tests {
+    use super::project_background_completion_if_owned;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn terminal_compare_loser_does_not_project_completion() {
+        let projected = Arc::new(AtomicBool::new(false));
+        let observed = projected.clone();
+
+        let output = project_background_completion_if_owned(false, async move {
+            observed.store(true, Ordering::SeqCst);
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        assert!(output.is_none());
+        assert!(!projected.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn terminal_compare_winner_projects_completion_once() {
+        let projected = Arc::new(AtomicBool::new(false));
+        let observed = projected.clone();
+
+        let output = project_background_completion_if_owned(true, async move {
+            assert!(!observed.swap(true, Ordering::SeqCst));
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        assert!(matches!(output, Some(Ok(()))));
+        assert!(projected.load(Ordering::SeqCst));
     }
 }

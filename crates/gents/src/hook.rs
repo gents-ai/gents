@@ -107,6 +107,19 @@ impl BackgroundLiveOutputState {
         self.registry.remove(tool_call_id).await;
         self.flushed_seq.lock().await.remove(tool_call_id);
     }
+
+    async fn record_flushed_seq_if_live(&self, tool_call_id: &str, seq: i64) {
+        self.flushed_seq
+            .lock()
+            .await
+            .insert(tool_call_id.to_string(), seq);
+        // Close the mutation/worker-cleanup race: if cleanup removed the live
+        // buffer while the durable write was in flight, do not resurrect its
+        // sequence marker after cleanup has already run.
+        if self.registry.snapshot(tool_call_id).await.is_none() {
+            self.flushed_seq.lock().await.remove(tool_call_id);
+        }
+    }
 }
 
 /// Process-wide volatile state for ordinary background tool calls.
@@ -115,32 +128,74 @@ impl BackgroundLiveOutputState {
 /// and live output buffers reachable until each process becomes terminal.
 #[derive(Clone, Default)]
 pub struct BackgroundExecutionRegistry {
-    inner: Arc<Mutex<HashMap<String, BackgroundExecution>>>,
+    inner: Arc<std::sync::Mutex<HashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
 }
 
 impl BackgroundExecutionRegistry {
     pub async fn cancel(&self, tool_call_id: &str) -> bool {
-        let Some(execution) = self.inner.lock().await.get(tool_call_id).cloned() else {
+        let Some(execution) = self.lock_executions().get(tool_call_id).cloned() else {
             return false;
         };
         execution.cancellation_token.cancel();
         true
     }
 
-    pub(crate) async fn insert(&self, tool_call_id: String, cancellation_token: CancellationToken) {
-        self.inner
-            .lock()
-            .await
-            .insert(tool_call_id, BackgroundExecution { cancellation_token });
+    pub(crate) fn reserve(
+        &self,
+        tool_call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> BackgroundExecutionReservation {
+        self.lock_executions().insert(
+            tool_call_id.clone(),
+            BackgroundExecution { cancellation_token },
+        );
+        BackgroundExecutionReservation {
+            registry: self.clone(),
+            tool_call_id,
+            armed: true,
+        }
     }
 
     pub(crate) async fn remove(&self, tool_call_id: &str) {
-        self.inner.lock().await.remove(tool_call_id);
+        self.remove_now(tool_call_id);
     }
 
     pub(crate) async fn contains(&self, tool_call_id: &str) -> bool {
-        self.inner.lock().await.contains_key(tool_call_id)
+        self.lock_executions().contains_key(tool_call_id)
+    }
+
+    fn remove_now(&self, tool_call_id: &str) {
+        self.lock_executions().remove(tool_call_id);
+    }
+
+    fn lock_executions(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackgroundExecution>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Cancellation-safe ownership reservation for the durable-running handoff.
+/// Dropping the caller future before `tokio::spawn` transfers ownership removes
+/// the volatile entry synchronously, so periodic recovery can see the orphan.
+pub(crate) struct BackgroundExecutionReservation {
+    registry: BackgroundExecutionRegistry,
+    tool_call_id: String,
+    armed: bool,
+}
+
+impl BackgroundExecutionReservation {
+    pub(crate) fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BackgroundExecutionReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.registry.remove_now(&self.tool_call_id);
+        }
     }
 }
 
@@ -637,12 +692,16 @@ impl DefraSessionHook {
             if seq == 0 {
                 continue;
             }
+            if self
+                .background_live_outputs
+                .flushed_seq
+                .lock()
+                .await
+                .get(&tool_call_id)
+                .copied()
+                == Some(seq)
             {
-                let mut flushed = self.background_live_outputs.flushed_seq.lock().await;
-                if flushed.get(&tool_call_id).copied() == Some(seq) {
-                    continue;
-                }
-                flushed.insert(tool_call_id.clone(), seq);
+                continue;
             }
             let bytes = &snapshot.combined.bytes;
             let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
@@ -748,9 +807,10 @@ impl DefraSessionHook {
                     errors = ?response.errors,
                     "live output tail flush failed; will retry next tick"
                 );
-                let mut flushed = self.background_live_outputs.flushed_seq.lock().await;
-                flushed.remove(&tool_call_id);
             } else {
+                self.background_live_outputs
+                    .record_flushed_seq_if_live(&tool_call_id, seq)
+                    .await;
                 count += 1;
             }
         }

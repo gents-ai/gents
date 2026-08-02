@@ -11,8 +11,8 @@ use defra_node::EmbeddedNode;
 use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
 use crate::llm::tool::BoxFuture;
 use crate::tool_call_lifecycle::{
-    OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
-    ToolCallLifecycle,
+    BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, SubagentLivenessReport,
+    TerminalParentToolReport, ToolCallLifecycle,
 };
 
 const SUBAGENT_LIVENESS_SWEEP_IDS: &[&str] = &[
@@ -24,6 +24,8 @@ const TERMINAL_PARENT_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_terminal_parent_owned_tools"];
 const ORPHANED_BACKGROUND_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_orphaned_background_tools"];
+const BACKGROUND_COMPLETION_SIDE_EFFECT_SWEEP_IDS: &[&str] =
+    &["tool_call_lifecycle_reconcile_background_completion_side_effects"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
@@ -38,6 +40,7 @@ pub enum PeriodicRecoverySweepOutcome {
     SubagentLiveness(SubagentLivenessReport),
     TerminalParentTools(TerminalParentToolReport),
     OrphanedBackgroundTools(OrphanedBackgroundToolReport),
+    BackgroundCompletionSideEffects(BackgroundCompletionSideEffectReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
@@ -47,6 +50,7 @@ impl PeriodicRecoverySweepOutcome {
             Self::SubagentLiveness(report) => report.is_noop(),
             Self::TerminalParentTools(report) => report.is_noop(),
             Self::OrphanedBackgroundTools(report) => report.is_noop(),
+            Self::BackgroundCompletionSideEffects(report) => report.is_noop(),
         }
     }
 }
@@ -91,6 +95,10 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
         sweep_ids: ORPHANED_BACKGROUND_TOOL_SWEEP_IDS,
         rust_function: "ToolCallLifecycle::reconcile_orphaned_background_tools",
     },
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: BACKGROUND_COMPLETION_SIDE_EFFECT_SWEEP_IDS,
+        rust_function: "ToolCallLifecycle::reconcile_background_completion_side_effects",
+    },
 ];
 
 const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
@@ -109,6 +117,10 @@ const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
     PeriodicRecoverySweepExecutor {
         metadata_index: 3,
         run: reconcile_orphaned_background_tools,
+    },
+    PeriodicRecoverySweepExecutor {
+        metadata_index: 4,
+        run: reconcile_background_completion_side_effects,
     },
 ];
 
@@ -176,6 +188,18 @@ fn reconcile_orphaned_background_tools<'a>(
         )
         .await
         .map(PeriodicRecoverySweepOutcome::OrphanedBackgroundTools)
+    })
+}
+
+fn reconcile_background_completion_side_effects<'a>(
+    node: &'a EmbeddedNode,
+    agent_did: &'a str,
+    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
+    Box::pin(async move {
+        ToolCallLifecycle::reconcile_background_completion_side_effects(node, agent_did)
+            .await
+            .map(PeriodicRecoverySweepOutcome::BackgroundCompletionSideEffects)
     })
 }
 
