@@ -44,7 +44,9 @@ use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
 };
 
-use crate::llm::tool::{ToolDyn, ToolError, UnparseableArgsKind};
+use crate::llm::tool::{
+    ToolDyn, ToolError, UnparseableArgsKind, JSON_ERROR_PREFIX, TOOL_CALL_ERROR_PREFIX,
+};
 use crate::llm::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -931,7 +933,7 @@ async fn dispatch_tool(
     }
 }
 
-fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
+pub(crate) fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> String {
     match outcome {
         Ok(result) => result,
         Err(ToolError::UnparseableArgs { kind, reason }) => {
@@ -955,7 +957,18 @@ fn tool_outcome_to_result(name: &str, outcome: Result<String, ToolError>) -> Str
                 "tool '{name}' arguments could not be parsed: {guidance}."
             ))
         }
-        Err(error) => error.to_string(),
+        // Stamp the prefixes `classify_runtime_failure` matches on. Without
+        // them the persistence path cannot tell a failed call from a successful
+        // one and terminalizes it `completed` (#400/D6 regression).
+        //
+        // The INNER error is rendered, not the `ToolError` wrapper: a command
+        // policy denial arrives as a `ToolCallError` whose payload is the denial
+        // JSON, and `parse_command_policy_denial` strips this prefix and parses
+        // the remainder. Rendering the wrapper's own "tool call error: " text
+        // here would leave non-JSON in front of the payload and silently
+        // downgrade every denial to an unstructured failure.
+        Err(ToolError::JsonError(error)) => format!("{JSON_ERROR_PREFIX} {error}"),
+        Err(ToolError::ToolCallError(error)) => format!("{TOOL_CALL_ERROR_PREFIX} {error}"),
     }
 }
 

@@ -5,6 +5,19 @@ use serde::{Deserialize, Serialize};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Prefixes the tool dispatcher stamps onto a failed tool call's rendered
+/// result string, and the persistence classifier matches on to terminalize the
+/// call as `failed(class)` rather than `completed`.
+///
+/// The rendered result is the only channel between dispatch
+/// (`agent::loop_stream::tool_outcome_to_result`) and classification
+/// (`hook::persistence::helpers::classify_runtime_failure`), so these live here
+/// next to [`ToolError`] and are shared by both sides: when the owned loop
+/// (#400/D6) took over dispatch from rig's toolset the two ends silently
+/// disagreed about the prefix and every `Err` outcome persisted as a success.
+pub(crate) const TOOL_CALL_ERROR_PREFIX: &str = "ToolCallError:";
+pub(crate) const JSON_ERROR_PREFIX: &str = "JsonError:";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
