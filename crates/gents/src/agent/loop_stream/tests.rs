@@ -2459,3 +2459,257 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
         histories[2]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Generated PromptAssembly contract consumers.
+//
+// These live in the crate rather than in `tests/conformance/prompt_assembly.rs`
+// because they drive `pub(crate)` production entry points: `assemble_new_messages`
+// and `repair_provider_input`. The sanitize family, whose entry point is public,
+// is fenced from the integration test.
+// ---------------------------------------------------------------------------
+
+/// Text of a single-item user text message, for slot classification.
+fn sole_user_text(message: &Message) -> String {
+    match message {
+        Message::User { content } => match content.as_slice() {
+            [UserContent::Text(text)] => text.text.clone(),
+            other => panic!("layer fence built an unexpected user message: {other:?}"),
+        },
+        other => panic!("layer fence built an unexpected message: {other:?}"),
+    }
+}
+
+/// Name the `PromptAssembly.Slot` a message occupies.
+fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usize) -> String {
+    if super::is_request_context_message(message) {
+        return "contextPreamble".to_string();
+    }
+    if is_last {
+        return "prompt".to_string();
+    }
+    let text = sole_user_text(message);
+    if let Some(body) = text.strip_prefix("<system-reminder>\n") {
+        if body.starts_with("Previous conversation summary") {
+            return "summaryReminder".to_string();
+        }
+        if let Some(rest) = body.strip_prefix("skill-") {
+            let digits = rest
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            return format!("skillReminder:{digits}");
+        }
+    }
+    let slot = format!("conversation:{conversation_index}");
+    *conversation_index += 1;
+    slot
+}
+
+/// Fences the fixed layer order of the assembled request against Lean
+/// `PromptAssembly.Template.assembleWithContext`, whose `assembleWithContext_tail`
+/// theorem pins the tail as `[contextPreamble, prompt]`.
+///
+/// The summary/conversation layers come from the production
+/// `LayeredPromptBuilder::build`, and the tail from the production
+/// `assemble_new_messages`. The skill-reminder prepend is *mirrored* from
+/// `agent/daemon/request.rs` rather than driven, because it happens inline in
+/// that function's async request flow; the reminders themselves are built by the
+/// production `LayeredPromptBuilder::system_reminder`.
+#[tokio::test]
+async fn generated_layer_cases_pin_the_assembled_request_order() {
+    use crate::lean_vocab_test::lean_prompt_assembly_layer_cases;
+    use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
+
+    let cases = lean_prompt_assembly_layer_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no PromptAssembly layer cases"
+    );
+
+    for case in cases {
+        let builder = LayeredPromptBuilder::for_behavior(
+            "system prompt",
+            "fence",
+            &["bash"],
+            false,
+            100_000,
+            8_192,
+            &[],
+        );
+
+        let conversation = (0..case.conversation_len)
+            .map(|index| Message::user(format!("conversation-{index}")))
+            .collect::<Vec<_>>();
+        let summaries = (0..case.summary_count)
+            .map(|index| format!("summary-{index}"))
+            .collect::<Vec<_>>();
+        let skill_reminders = (0..case.skill_count)
+            .map(|index| LayeredPromptBuilder::system_reminder(&format!("skill-{index}")))
+            .collect::<Vec<_>>();
+
+        let built = builder
+            .build(&conversation, &summaries)
+            .await
+            .expect("build layered prompt");
+
+        let mut assembled = skill_reminders;
+        assembled.extend(built.messages);
+        assembled.extend(super::assemble_new_messages(
+            Some(Message::user("<context>\nnow: t\n</context>")),
+            Message::user("prompt"),
+        ));
+
+        // The preamble is a field on the completion request, not a message.
+        assert!(
+            !builder.preamble().is_empty(),
+            "the preamble slot must be carried by the system-prompt field"
+        );
+        let mut slots = vec!["preamble".to_string()];
+        let mut conversation_index = 0usize;
+        let assembled_len = assembled.len();
+        for (position, message) in assembled.iter().enumerate() {
+            slots.push(classify_slot(
+                message,
+                position + 1 == assembled_len,
+                &mut conversation_index,
+            ));
+        }
+
+        assert_eq!(
+            slots, case.slots,
+            "assembled layer order drifted from the Lean model on case {:?}",
+            case.name
+        );
+    }
+}
+
+/// Concrete tool-call arguments denoting each abstract `PromptAssembly.ToolArgs`
+/// shape the contract emits.
+fn repair_vector(name: &str) -> serde_json::Value {
+    match name {
+        // A `raw` payload is one whose string leaves still carry literal
+        // newlines — exactly what the leaf sanitizer rewrites.
+        "object:raw" => serde_json::json!({"k": "line\nbreak"}),
+        "object:empty" => serde_json::json!({}),
+        "object:sanitized" => serde_json::json!({"k": "no break"}),
+        "str:object:raw" => serde_json::Value::String("{\"k\": \"line\\nbreak\"}".to_string()),
+        "str:unparsed" => serde_json::Value::String("not json at all".to_string()),
+        "array" => serde_json::json!([1, 2]),
+        "scalar" => serde_json::json!(123),
+        "null" => serde_json::Value::Null,
+        other => panic!("generated repair case names an unmodeled shape: {other}"),
+    }
+}
+
+/// Project repaired arguments back onto the abstract shape, mirroring the
+/// `Payload` abstraction in the contract: `empty` is `{}`, `raw` still carries a
+/// literal newline in some string leaf, `sanitized` does not.
+fn repair_shape(value: &serde_json::Value) -> String {
+    let serde_json::Value::Object(map) = value else {
+        panic!("repair must always yield an object, got {value:?}");
+    };
+    if map.is_empty() {
+        return "object:empty".to_string();
+    }
+    if has_raw_leaf(value) {
+        "object:raw".to_string()
+    } else {
+        "object:sanitized".to_string()
+    }
+}
+
+fn has_raw_leaf(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains('\n'),
+        serde_json::Value::Array(values) => values.iter().any(has_raw_leaf),
+        serde_json::Value::Object(map) => map.values().any(has_raw_leaf),
+        _ => false,
+    }
+}
+
+fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
+    // `repair_provider_input` re-sanitizes after rewriting arguments, so the
+    // call must be paired or the whole turn is (correctly) dropped.
+    let mut history = vec![
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                function: crate::llm::message::ToolFunction {
+                    name: "echo".to_string(),
+                    arguments,
+                },
+                signature: None,
+                additional_params: None,
+            })],
+        },
+        Message::User {
+            content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                content: vec![ToolResultContent::Text(crate::llm::message::Text {
+                    text: "call-1-result".to_string(),
+                })],
+            })],
+        },
+    ];
+    let mut new_messages = Vec::new();
+    super::repair_provider_input(&mut history, &mut new_messages);
+    let [Message::Assistant { content, .. }, Message::User { .. }] = history.as_slice() else {
+        panic!("repair must rewrite payloads only, never rows: {history:?}");
+    };
+    let [AssistantContent::ToolCall(tool_call)] = content.as_slice() else {
+        panic!("repair dropped the tool call: {content:?}");
+    };
+    tool_call.function.arguments.clone()
+}
+
+/// Fences Lean `PromptAssembly.repairArgs` — `repair_is_payload_only` (repair
+/// rewrites argument payloads only, never rows, roles, call ids, or ordering)
+/// and `repair_idempotent` (a second pass is a no-op).
+#[test]
+fn generated_repair_cases_drive_tool_argument_repair() {
+    use crate::lean_vocab_test::lean_prompt_assembly_repair_cases;
+
+    let cases = lean_prompt_assembly_repair_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no PromptAssembly repair cases"
+    );
+
+    for case in cases {
+        let input = repair_vector(&case.input);
+        let once = repaired_arguments(input.clone());
+        assert_eq!(
+            repair_shape(&once),
+            case.expected,
+            "repair disagrees with the Lean model on case {:?}",
+            case.name
+        );
+
+        let twice = repaired_arguments(once.clone());
+        assert_eq!(
+            repair_shape(&twice),
+            case.expected_twice,
+            "repair is not idempotent on case {:?}",
+            case.name
+        );
+        assert_eq!(
+            twice, once,
+            "repair_idempotent: a second pass must not change the payload ({:?})",
+            case.name
+        );
+
+        // `repair_is_payload_only`: object inputs keep their shape, and repair
+        // never rewrites anything outside the payload.
+        if case.payload_only {
+            assert!(
+                input.is_object(),
+                "the contract marks {:?} payload-only, so its input must be an object",
+                case.name
+            );
+        }
+    }
+}

@@ -57,27 +57,63 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
     (stripped_messages, file_activity)
 }
 
-pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
-    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for message in &messages {
-        if let Message::User { content } = message {
-            for item in content.iter() {
-                if let UserContent::ToolResult(tool_result) = item {
-                    resolved.insert(tool_result_key(tool_result));
+/// Which tool results close each assistant turn.
+///
+/// Resolution is scoped to the *active turn*, mirroring the `pending_calls`
+/// reset in [`drop_orphaned_tool_results`]. A single global set of resolved keys
+/// is wrong: when a call id is reused by a later turn, the earlier turn's result
+/// would "resolve" it and a dangling call would survive into provider input.
+fn resolved_keys_per_turn(messages: &[Message]) -> Vec<std::collections::HashSet<String>> {
+    let mut per_turn = vec![std::collections::HashSet::new(); messages.len()];
+    let mut active_turn: Option<usize> = None;
+    for (index, message) in messages.iter().enumerate() {
+        match message {
+            Message::Assistant { .. } => active_turn = Some(index),
+            Message::User { content } => {
+                let mut has_plain_content = false;
+                for item in content.iter() {
+                    match item {
+                        UserContent::ToolResult(tool_result) => {
+                            if let Some(turn) = active_turn {
+                                per_turn[turn].insert(tool_result_key(tool_result));
+                            }
+                        }
+                        _ => has_plain_content = true,
+                    }
+                }
+                // Plain content ends the turn *after* the results it rides with,
+                // matching `drop_orphaned_tool_results`.
+                if has_plain_content {
+                    active_turn = None;
                 }
             }
+            _ => active_turn = None,
         }
     }
+    per_turn
+}
+
+pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
+    let resolved_per_turn = resolved_keys_per_turn(&messages);
 
     let mut kept_messages = Vec::with_capacity(messages.len());
-    for message in messages {
+    for (index, message) in messages.into_iter().enumerate() {
         match message {
             Message::Assistant { id, content } => {
+                let resolved = &resolved_per_turn[index];
+                // Duplicate call keys *within one turn* are malformed:
+                // `drop_orphaned_tool_results` pairs through a set, so it closes
+                // such a turn with a single result while every duplicate call
+                // would survive here — again leaving a dangling call. Keep the
+                // first occurrence of each key and drop the rest.
+                let mut announced: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 let kept: Vec<AssistantContent> = content
                     .into_iter()
                     .filter(|item| match item {
                         AssistantContent::ToolCall(tool_call) => {
-                            resolved.contains(&tool_call_key(tool_call))
+                            let key = tool_call_key(tool_call);
+                            resolved.contains(&key) && announced.insert(key)
                         }
                         _ => true,
                     })

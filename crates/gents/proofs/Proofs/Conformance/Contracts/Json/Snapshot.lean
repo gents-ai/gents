@@ -11,6 +11,7 @@ import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workflow
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
+import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
@@ -203,6 +204,14 @@ def snapshotJson : String :=
     ++ "\"streaming_response_interrupt_flow_cases\":"
       ++ jsonArray
         (StreamingResponse.responseInterruptFlowCases.map responseInterruptFlowCaseJson) ++ ","
+    ++ "\"prompt_assembly_sanitize_cases\":"
+      ++ promptAssemblySanitizeCasesJson ++ ","
+    ++ "\"prompt_assembly_layer_cases\":"
+      ++ promptAssemblyLayerCasesJson ++ ","
+    ++ "\"prompt_assembly_repair_cases\":"
+      ++ promptAssemblyRepairCasesJson ++ ","
+    ++ "\"prompt_assembly_budget_cases\":"
+      ++ promptAssemblyBudgetCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

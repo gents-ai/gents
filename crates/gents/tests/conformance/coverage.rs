@@ -761,6 +761,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CompactionReducerCases".to_string(),
         ));
     }
+    if !snapshot.prompt_assembly_sanitize_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblySanitizeCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_layer_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyLayerCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_repair_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyRepairCases".to_string(),
+        ));
+    }
+    if !snapshot.prompt_assembly_budget_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyBudgetCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_delivery_transition_case_count,
         snapshot.event_delivery_transition_cases.len(),
@@ -998,6 +1022,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "bridge_step_cases",
         "transcript_cases",
         "compaction_reducer_cases",
+        "prompt_assembly_cases",
         "streaming_response_cases",
         "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",

@@ -187,6 +187,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "prompt-assembly"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "streaming-response"
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
@@ -874,6 +878,26 @@ def caseCoverage : List CoverageEntry :=
       "CompactionReducerCases"
       "conformance::generated_compaction_reducer_cases_pin_contract")
       "compaction" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblySanitizeCases"
+      "conformance::prompt_assembly::generated_sanitize_cases_drive_the_production_sanitizer")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyLayerCases"
+      "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyRepairCases"
+      "agent::loop_stream::tests::generated_repair_cases_drive_tool_argument_repair")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyBudgetCases"
+      "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_output_reserved_compaction_trigger")
+      "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"

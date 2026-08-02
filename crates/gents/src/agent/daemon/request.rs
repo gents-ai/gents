@@ -113,6 +113,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     built.estimated_tokens,
                     &request.content,
                     self.behavior.context_window,
+                    self.behavior.max_output_tokens,
                     self.behavior.compaction_threshold,
                 );
                 // Runtime counterpart of Lean `PromptView.safeToReduce`,
@@ -169,6 +170,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             self.behavior.context_window,
                             &CompactionOptions {
                                 strategy: self.behavior.compaction_strategy.clone(),
+                                // This branch is driven by the complete assembled
+                                // provider input, including preamble, incoming
+                                // request, and reserved output. Rechecking only
+                                // history against 75% can incorrectly no-op.
+                                force_summarize: true,
                                 ..self.compaction_options.clone()
                             },
                         ),
@@ -445,8 +451,73 @@ fn prompt_exceeds_compaction_threshold(
     prompt_tokens: usize,
     request_text: &str,
     context_window: usize,
+    max_output_tokens: usize,
     threshold: f64,
 ) -> bool {
-    let budget = (context_window as f64 * threshold) as usize;
-    prompt_tokens + compaction::estimate_tokens(request_text) > budget
+    let configured_threshold_budget = compaction::threshold_budget(context_window, threshold);
+    let provider_input_budget = context_window.saturating_sub(max_output_tokens);
+    let effective_input_budget = configured_threshold_budget.min(provider_input_budget);
+    prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)) > effective_input_budget
+}
+
+#[cfg(test)]
+mod budget_contract_tests {
+    use super::prompt_exceeds_compaction_threshold;
+    use crate::lean_vocab_test::lean_prompt_assembly_budget_cases;
+
+    /// Drives the production compaction trigger from Lean-generated boundaries.
+    /// The D4F case is the observed provider rejection:
+    /// 118,785 input + 393,216 output = 512,001 > 512,000.
+    #[test]
+    fn generated_budget_cases_drive_output_reserved_compaction_trigger() {
+        let cases = lean_prompt_assembly_budget_cases();
+        assert!(
+            !cases.is_empty(),
+            "Lean emitted no PromptAssembly budget cases"
+        );
+
+        for case in cases {
+            // Round-trip through the float the configuration surface actually
+            // carries, so the basis-point conversion is exercised rather than
+            // bypassed.
+            let threshold = case.threshold_basis_points as f64 / 10_000.0;
+            let request_text = "x".repeat(case.request_tokens.saturating_mul(4));
+            // Drive the production helper, not a formula duplicated here.
+            let configured = crate::compaction::threshold_budget(case.context_window, threshold);
+            let effective =
+                configured.min(case.context_window.saturating_sub(case.max_output_tokens));
+
+            assert_eq!(
+                configured, case.configured_threshold_budget,
+                "{}: configured threshold budget drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                effective, case.effective_input_budget,
+                "{}: effective input budget drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                case.prompt_tokens
+                    .saturating_add(case.request_tokens)
+                    .saturating_add(case.max_output_tokens)
+                    <= case.context_window,
+                case.provider_safe,
+                "{}: provider-safety witness drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                prompt_exceeds_compaction_threshold(
+                    case.prompt_tokens,
+                    &request_text,
+                    case.context_window,
+                    case.max_output_tokens,
+                    threshold,
+                ),
+                case.should_compact,
+                "{}: production compaction trigger drifted from Lean",
+                case.name
+            );
+        }
+    }
 }
