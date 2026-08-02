@@ -437,6 +437,89 @@ async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifec
     force_persisted_pair(node, doc_id, status, lifecycle_state).await;
 }
 
+/// Queue metadata marking a request as coalescible under `key`, the shape
+/// `reconcile_coalesced_pending_request` matches on.
+fn coalesce_metadata(key: &str) -> String {
+    serde_json::json!({
+        "queue": {
+            "source": "user",
+            "policy": "coalesce",
+            "key": key,
+            "queued_after_request_id": null,
+        }
+    })
+    .to_string()
+}
+
+async fn set_request_metadata(node: &EmbeddedNode, doc_id: &str, metadata: &str) {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_metadata = escape_graphql_string(metadata);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                input: {{ metadata: "{escaped_metadata}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(!resp.has_errors(), "set metadata failed: {:?}", resp.errors);
+}
+
+async fn set_request_deadline(node: &EmbeddedNode, doc_id: &str, deadline: &str) {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let escaped_deadline = escape_graphql_string(deadline);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                input: {{ deadline: "{escaped_deadline}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(!resp.has_errors(), "set deadline failed: {:?}", resp.errors);
+}
+
+/// A running subagent bridge pointing at `child_request_id`, the row
+/// `reconcile_subagent_liveness` sweeps.
+async fn create_running_subagent_bridge(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    child_request_id: &str,
+) {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let escaped_child = escape_graphql_string(child_request_id);
+    let started_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{escaped_session_id}:{escaped_tool_call_id}",
+                session_id: "{escaped_session_id}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{escaped_tool_call_id}",
+                args: "{{}}",
+                result: "",
+                status: "running",
+                lifecycle_state: "running",
+                cancel_policy: "cascade",
+                await_mode: "background",
+                child_request_id: "{escaped_child}",
+                started_at: "{started_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create subagent bridge failed: {:?}",
+        resp.errors
+    );
+}
+
 async fn force_persisted_pair(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -483,13 +566,15 @@ async fn force_persisted_pair(
 /// only a writer's `lifecycle_state` from-set therefore stays undetectable here —
 /// correctly, since the `status` predicate still makes the edge unreachable.
 ///
-/// NOT driven, and so still outside this fence:
-/// - `advance`, which issues `update_AgentResponse` only.
-/// - `queue::reconcile_coalesced_pending_request` (pending -> superseded), whose
-///   CAS requires a second coalescing duplicate to act on.
-/// - `ToolCallLifecycle::reconcile_subagent_liveness` (-> dead), which needs a
-///   running-bridge plus expired-child fixture.
-///   Both remain tracked in #994.
+/// Coverage: every legal edge except `processing -> processing`, plus all three
+/// `recoveryReachable` edges. The two sweeps are driven against real auxiliary
+/// fixtures — `reconcile_coalesced_pending_request` against an older survivor
+/// under the same coalesce key, and `reconcile_subagent_liveness` against a
+/// running bridge whose child deadline has lapsed.
+///
+/// `advance` is the sole writer deliberately excluded: it issues
+/// `update_AgentResponse` and never touches `AgentRequest`, so asserting request
+/// edges across it would be tautological.
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
     const START_STATES: [&str; 9] = [
@@ -503,7 +588,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "dead",
         "interrupted",
     ];
-    const WRITERS: [&str; 7] = [
+    const WRITERS: [&str; 9] = [
         "claim",
         "claim_after_ttl_lapse",
         "begin_execution",
@@ -511,6 +596,8 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "fail",
         "interrupt",
         "repair_terminal_requests",
+        "coalesce_pending",
+        "subagent_liveness",
     ];
 
     let mut observed: std::collections::BTreeSet<(String, String)> = Default::default();
@@ -545,11 +632,58 @@ async fn production_request_writers_only_reach_contracted_edges() {
             //   interrupt                     -> no local guard
             //   repair_terminal_requests      -> associated fn, no local state
             match writer {
-                "claim" | "claim_after_ttl_lapse" | "repair_terminal_requests" => {}
+                "claim"
+                | "claim_after_ttl_lapse"
+                | "repair_terminal_requests"
+                | "coalesce_pending"
+                | "subagent_liveness" => {}
                 _ => {
                     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
                     lifecycle.prepare_session_with_identity().await.unwrap();
                 }
+            }
+
+            // Auxiliary rows the sweep writers act on. Built before the start
+            // state is pinned, so the sweep sees the state under test.
+            match writer {
+                "coalesce_pending" => {
+                    // An older survivor in the same session under the same
+                    // coalesce key; the request under test is the duplicate.
+                    let survivor_id = uuid::Uuid::new_v4().to_string();
+                    let survivor_created_at =
+                        (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                    let survivor_doc_id = create_request(
+                        &db.node,
+                        &survivor_id,
+                        &session_id,
+                        "pending",
+                        &survivor_created_at,
+                    )
+                    .await;
+                    set_request_metadata(
+                        &db.node,
+                        &survivor_doc_id,
+                        &coalesce_metadata("conformance-key"),
+                    )
+                    .await;
+                    set_request_metadata(&db.node, &doc_id, &coalesce_metadata("conformance-key"))
+                        .await;
+                }
+                "subagent_liveness" => {
+                    // An expired child of a running bridge: a live executor
+                    // enforces its own deadline, so a lapsed non-terminal row
+                    // means the executor is gone.
+                    let past = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                    set_request_deadline(&db.node, &doc_id, &past).await;
+                    create_running_subagent_bridge(
+                        &db.node,
+                        &session_id,
+                        &format!("bridge-{request_id}"),
+                        &request_id,
+                    )
+                    .await;
+                }
+                _ => {}
             }
 
             // Then pin the persisted row to the start state under test,
@@ -601,6 +735,20 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 "repair_terminal_requests" => {
                     let _ = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID).await;
                 }
+                "coalesce_pending" => {
+                    let _ = gents::__test_internals::reconcile_coalesced_pending_request(
+                        &db.node,
+                        &session_id,
+                        AGENT_DID,
+                        gents::__test_internals::QueueSource::User,
+                        "conformance-key",
+                    )
+                    .await;
+                }
+                "subagent_liveness" => {
+                    let _ =
+                        ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID).await;
+                }
                 other => panic!("unhandled writer {other}"),
             }
 
@@ -619,11 +767,14 @@ async fn production_request_writers_only_reach_contracted_edges() {
         ("pending", "claimed"),
         ("pending", "dead"),
         ("pending", "interrupted"),
+        ("pending", "superseded"),
         ("claimed", "processing"),
         ("claimed", "completed"),
+        ("claimed", "dead"),
         ("claimed", "failed"),
         ("claimed", "interrupted"),
         ("processing", "completed"),
+        ("processing", "dead"),
         ("processing", "failed"),
         ("processing", "interrupted"),
     ]
