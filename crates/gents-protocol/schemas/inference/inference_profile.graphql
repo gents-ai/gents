@@ -14,6 +14,8 @@ type InferenceProfile {
     frequency_penalty: Float
     presence_penalty: Float
     repetition_penalty: Float
+    # Provider-specific thinking effort, normalized by the runtime adapter.
+    reasoning_effort: String
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
     deadline_duration_secs: Int

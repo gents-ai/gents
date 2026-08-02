@@ -213,6 +213,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "frequency_penalty",
                         "presence_penalty",
                         "repetition_penalty",
+                        "reasoning_effort",
                         "stream_batch_ms",
                         "stream_liveness_timeout_secs",
                         "deadline_duration_secs",

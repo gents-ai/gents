@@ -301,6 +301,16 @@ pub async fn save_inference_profile_config(
     {
         anyhow::bail!("stream_liveness_timeout_secs must be positive");
     }
+    if request.reasoning_effort.as_deref().is_some_and(|value| {
+        !matches!(
+            value,
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        )
+    }) {
+        anyhow::bail!(
+            "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+        );
+    }
 
     let store = core.store().snapshot();
     let mut row = store
@@ -329,12 +339,14 @@ pub async fn save_inference_profile_config(
             frequency_penalty: None,
             presence_penalty: None,
             repetition_penalty: None,
+            reasoning_effort: None,
         });
     row.display_name = Some(display_name);
     row.context_window = request.context_window;
     row.max_output_tokens = request.max_output_tokens;
     row.max_turns = request.max_turns;
     row.temperature = request.temperature;
+    row.reasoning_effort = request.reasoning_effort;
     row.stream_batch_ms = request.stream_batch_ms;
     row.stream_liveness_timeout_secs = request.stream_liveness_timeout_secs;
     row.deadline_duration_secs = request.deadline_duration_secs;

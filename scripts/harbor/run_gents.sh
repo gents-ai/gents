@@ -9,15 +9,16 @@ set -eu
 : "${GENTS_TOOL_ROOT:=/app}"
 : "${GENTS_API_KEY:=no-key}"
 : "${GENTS_TEMPERATURE:=1.0}"
-: "${GENTS_TOP_P:=1.0}"
+: "${GENTS_TOP_P:=0.95}"
 : "${GENTS_TOP_K:=}"
-: "${GENTS_MAX_TOKENS:=32768}"
-: "${GENTS_CONTEXT_WINDOW:=65536}"
+: "${GENTS_REASONING_EFFORT:=max}"
+: "${GENTS_MAX_OUTPUT:=393216}"
+: "${GENTS_CONTEXT_WINDOW:=510976}"
 : "${GENTS_MAX_TURNS:=250}"
 : "${GENTS_RETRY_MAX_TRANSPORT:=3}"
-: "${GENTS_REQUEST_TIMEOUT_SECS:=1800}"
-: "${GENTS_COMMAND_TIMEOUT_SECS:=900}"
-: "${GENTS_SERVER_STARTUP_TIMEOUT_SECS:=120}"
+: "${GENTS_REQUEST_TIMEOUT_SECS:=86400}"
+: "${GENTS_COMMAND_TIMEOUT_SECS:=86400}"
+: "${GENTS_SERVER_STARTUP_TIMEOUT_SECS:=300}"
 
 logs_dir=/logs/agent
 server_log="${logs_dir}/gents-server.log"
@@ -38,6 +39,14 @@ test -d "${GENTS_TOOL_ROOT}"
 case "${GENTS_MODEL}" in
   *[!A-Za-z0-9._:/-]*)
     echo "GENTS_MODEL contains unsupported characters" >&2
+    exit 2
+    ;;
+esac
+
+case "${GENTS_REASONING_EFFORT}" in
+  low|high|max) ;;
+  *)
+    echo "GENTS_REASONING_EFFORT must be one of: low, high, max" >&2
     exit 2
     ;;
 esac
@@ -94,6 +103,46 @@ wait_for_server_ready() {
 }
 
 : >"${server_log}"
+profile_id=$(sed -n 's/^[[:space:]]*"inference_profile_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+if [ -z "${profile_id}" ]; then
+  echo "Gents init output did not contain inference_profile_id" >&2
+  exit 1
+fi
+
+configure_profile() {
+  profile_configured=0
+  profile_attempt=0
+  profile_attempt_limit=$((GENTS_SERVER_STARTUP_TIMEOUT_SECS * 10))
+  while [ "${profile_attempt}" -lt "${profile_attempt_limit}" ]; do
+    if "${GENTS_BINARY}" config profile set \
+      --graphql http://127.0.0.1:9191/api/v0/graphql \
+      --profile-id "${profile_id}" \
+      --context-window "${GENTS_CONTEXT_WINDOW}" \
+      --max-output-tokens "${GENTS_MAX_OUTPUT}" \
+      --max-turns "${GENTS_MAX_TURNS}" \
+      --reasoning-effort "${GENTS_REASONING_EFFORT}" \
+      --stream-liveness-timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
+      --deadline-duration-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
+      --retry-max-transport "${GENTS_RETRY_MAX_TRANSPORT}" \
+      >"${profile_log}" 2>/dev/null; then
+      profile_configured=1
+      break
+    fi
+    if ! kill -0 "${server_pid}" >/dev/null 2>&1; then
+      echo "Gents server exited before its inference profile could be configured" >&2
+      tail -200 "${server_log}" >&2 || true
+      exit 1
+    fi
+    sleep 0.1
+    profile_attempt=$((profile_attempt + 1))
+  done
+  if [ "${profile_configured}" != "1" ]; then
+    echo "Gents GraphQL did not accept the inference profile within ${GENTS_SERVER_STARTUP_TIMEOUT_SECS}s" >&2
+    tail -200 "${server_log}" >&2 || true
+    exit 1
+  fi
+}
+
 start_server
 
 cleanup() {
@@ -116,26 +165,13 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-wait_for_server_ready
+configure_profile
 
-profile_id=$(sed -n 's/^[[:space:]]*"inference_profile_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-if [ -z "${profile_id}" ]; then
-  echo "Gents init output did not contain inference_profile_id" >&2
-  exit 1
-fi
-"${GENTS_BINARY}" config profile set \
-  --graphql http://127.0.0.1:9191/api/v0/graphql \
-  --profile-id "${profile_id}" \
-  --context-window "${GENTS_CONTEXT_WINDOW}" \
-  --max-turns "${GENTS_MAX_TURNS}" \
-  --stream-liveness-timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
-  --deadline-duration-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
-  --retry-max-transport "${GENTS_RETRY_MAX_TRANSPORT}" \
-  >"${profile_log}"
-
-# Profile mutations reconcile asynchronously. Restarting makes the persisted
-# profile part of the startup snapshot before any benchmark request can exist.
-kill "${server_pid}"
+# Configure through GraphQL before requiring behavior readiness. This also
+# bootstraps binaries whose schema materializes an omitted nullable string as
+# an empty value. Restarting makes the persisted profile part of the startup
+# snapshot before any benchmark request can exist.
+kill "${server_pid}" >/dev/null 2>&1 || true
 wait "${server_pid}" || true
 start_server
 wait_for_server_ready
@@ -148,7 +184,7 @@ set -- "$@" \
   --content-file "${GENTS_INSTRUCTION_FILE}" \
   --temperature "${GENTS_TEMPERATURE}" \
   --top-p "${GENTS_TOP_P}" \
-  --max-tokens "${GENTS_MAX_TOKENS}" \
+  --max-tokens "${GENTS_MAX_OUTPUT}" \
   --metadata "${metadata}" \
   --valid-until none \
   --no-wait \
@@ -180,4 +216,24 @@ fi
   --output-file "${trajectory_path}"
 
 test -s "${trajectory_path}"
+
+# `response wait` exits successfully after any terminal response, including a
+# provider/runtime failure. Do not let Harbor run the verifier against an
+# untouched task filesystem and record that infrastructure failure as a model
+# zero. Preserve the response and trajectory above, then make the trial an
+# agent exception so it can be retried or recovered separately.
+response_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_log}" | head -1)
+case "${response_status}" in
+  complete|completed) ;;
+  error)
+    echo "Gents request ${request_id} terminated with an error response" >&2
+    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    exit 1
+    ;;
+  *)
+    echo "Gents request ${request_id} returned unexpected response status: ${response_status:-missing}" >&2
+    exit 1
+    ;;
+esac
+
 printf 'gents request %s completed; trajectory=%s\n' "${request_id}" "${trajectory_path}"

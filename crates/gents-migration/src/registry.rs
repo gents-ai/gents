@@ -227,8 +227,43 @@ macro_rules! baseline_entry {
     };
 }
 
-/// Baseline SDL set: every schema in `gents_protocol::schemas::{RUNTIME_ALL, ALL}`,
-/// feature-invariant (includes AgentMemory).
+// Frozen at the migration cutover. New fields belong in DEFAULT_STEPS so
+// existing stores retain a known lineage instead of silently changing roots.
+const INFERENCE_PROFILE_BASELINE_SDL: &str = r#"
+type InferenceProfile {
+    profile_id: String @index(unique: true)
+    display_name: String
+    context_window: Int
+    max_output_tokens: Int
+    max_turns: Int
+    temperature: Float
+    top_p: Float
+    top_k: Int
+    min_p: Float
+    frequency_penalty: Float
+    presence_penalty: Float
+    repetition_penalty: Float
+    stream_batch_ms: Int
+    stream_liveness_timeout_secs: Int
+    deadline_duration_secs: Int
+    retry_max_transport: Int
+    retry_backoff_ms: [Int]
+    retry_max_resample: Int
+    retry_allow_repair: Boolean
+    retry_interactive_max: Int
+    updated_at: DateTime @index(direction: DESC)
+}
+"#;
+
+const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
+  {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"reasoning_effort","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+/// Frozen baseline SDL set, ordered like
+/// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
+/// AgentMemory). Collections with post-cutover changes use frozen local SDL
+/// constants here and advance through [`DEFAULT_STEPS`].
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -277,7 +312,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        gents_protocol::schemas::INFERENCE_PROFILE,
+        INFERENCE_PROFILE_BASELINE_SDL,
         "bafyreibhnljm6hqgbiyct7fq53vpfagmn2q2pe2apykujttk6tghwtqb5e"
     ),
     baseline_entry!(
@@ -427,10 +462,19 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-/// Empty post-baseline chain at cutover. Real steps land when schema changes.
-pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
+/// Ordered post-baseline schema evolution chain.
+pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[MigrationStep::PatchVersioned {
+    id: "inference-profile-add-reasoning-effort",
+    collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
+    patch: INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH,
+    lens: None,
+    // Authored by applying the inactive patch to the frozen baseline.
+    expected_version: Some("bafyreigiimbcequesxdifamoiiqio2loqn7uco7kt4slp2ws3no4prl25e"),
+    expected_transform: None,
+    expected_state: CollectionExpectation::fields(&["reasoning_effort"]),
+}];
 
-/// Production registry: full baseline, zero steps.
+/// Production registry: frozen baseline plus the ordered migration chain.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,

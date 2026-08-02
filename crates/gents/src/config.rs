@@ -58,6 +58,49 @@ pub struct AgentBehavior {
     pub skills: Vec<crate::skills::Skill>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+    Ultra,
+}
+
+impl ReasoningEffort {
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "minimal" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::XHigh),
+            "max" => Ok(Self::Max),
+            "ultra" => Ok(Self::Ultra),
+            _ => anyhow::bail!(
+                "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+            ),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SamplingConfig {
     pub temperature: Option<f64>,
@@ -71,6 +114,7 @@ pub struct SamplingConfig {
     pub presence_penalty: Option<f64>,
     pub repetition_penalty: Option<f64>,
     pub max_tokens: Option<u64>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl SamplingConfig {
@@ -83,12 +127,14 @@ impl SamplingConfig {
             && self.presence_penalty.is_none()
             && self.repetition_penalty.is_none()
             && self.max_tokens.is_none()
+            && self.reasoning_effort.is_none()
     }
 
     /// The sampling knobs that must travel as provider body params.
     ///
-    /// `temperature` and `max_tokens` are modeled fields on rig's request;
-    /// everything else has no rig field, so it is emitted here and deep-merged
+    /// `temperature` and `max_tokens` are modeled fields on rig's request, and
+    /// `reasoning_effort` needs a provider-specific wire shape in
+    /// `completion_factory`; everything else is emitted here and deep-merged
     /// into `additional_params` at the request boundary. A `None` knob emits
     /// nothing at all — the served model's own default stands, which is the
     /// pre-#649 behavior for every profile that does not pin a value.
@@ -282,6 +328,17 @@ mod tests {
     #[test]
     fn default_max_turns_supports_long_running_agents() {
         assert_eq!(DEFAULT_MAX_TURNS, 250);
+    }
+
+    #[test]
+    fn reasoning_effort_accepts_provider_vocabulary() {
+        for value in [
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ] {
+            let effort = ReasoningEffort::parse(value).expect("known effort must parse");
+            assert_eq!(effort.as_str(), value);
+        }
+        assert!(ReasoningEffort::parse("extreme").is_err());
     }
 
     /// TA-1 (#566 review): `openai_wire_api` must appear in the manual `Debug`

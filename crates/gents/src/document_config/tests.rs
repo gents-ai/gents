@@ -639,6 +639,7 @@ async fn inference_profile_completion_retry_fields_round_trip() {
         max_output_tokens: None,
         max_turns: None,
         temperature: None,
+        reasoning_effort: Some("max".to_string()),
         stream_batch_ms: None,
         stream_liveness_timeout_secs: None,
         deadline_duration_secs: None,
@@ -659,6 +660,7 @@ async fn inference_profile_completion_retry_fields_round_trip() {
         .expect("load should succeed")
         .expect("profile should exist");
     assert_eq!(loaded.retry_max_transport, Some(4));
+    assert_eq!(loaded.reasoning_effort.as_deref(), Some("max"));
     assert_eq!(loaded.retry_backoff_ms, Some(vec![1_000, 5_000, 30_000]));
     assert_eq!(loaded.retry_max_resample, Some(2));
     assert_eq!(loaded.retry_allow_repair, Some(false));

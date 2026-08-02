@@ -928,6 +928,42 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn reasoning_only_completion_retracts_and_resamples() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ReasoningDelta {
+                id: None,
+                reasoning: "still thinking".to_string(),
+            },
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("finished answer".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("solve this"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.retractions, vec![(0, 0)]);
+    assert_eq!(collected.final_text.as_deref(), Some("finished answer"));
+    assert_eq!(collected.error, None);
+    assert_eq!(
+        model.seen_histories().await.len(),
+        2,
+        "the reasoning-only turn must be resampled as the same provider turn"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn mid_stream_failure_after_tool_ran_closes_turn_and_continues() {
     let calls = Arc::new(AtomicUsize::new(0));
     let model = ScriptedModel::new_calls(vec![

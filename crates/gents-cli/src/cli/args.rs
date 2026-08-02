@@ -1835,6 +1835,11 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) presence_penalty: Option<f64>,
     #[arg(long)]
     pub(crate) repetition_penalty: Option<f64>,
+    #[arg(
+        long,
+        value_parser = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    )]
+    pub(crate) reasoning_effort: Option<String>,
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]

@@ -20,6 +20,16 @@ pub async fn upsert_inference_profile(
     {
         anyhow::bail!("stream_liveness_timeout_secs must be positive");
     }
+    if row.reasoning_effort.as_deref().is_some_and(|value| {
+        !matches!(
+            value,
+            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+        )
+    }) {
+        anyhow::bail!(
+            "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+        );
+    }
 
     let add_fields = [
         Some(format!(
@@ -54,6 +64,10 @@ pub async fn upsert_inference_profile(
         Some(graphql_optional_float_field(
             "repetition_penalty",
             row.repetition_penalty,
+        )),
+        Some(graphql_string_field(
+            "reasoning_effort",
+            row.reasoning_effort.as_deref(),
         )),
         Some(graphql_optional_int_field(
             "stream_batch_ms",
@@ -117,6 +131,10 @@ pub async fn upsert_inference_profile(
         Some(graphql_optional_float_field(
             "repetition_penalty",
             row.repetition_penalty,
+        )),
+        Some(graphql_string_field(
+            "reasoning_effort",
+            row.reasoning_effort.as_deref(),
         )),
         Some(graphql_optional_int_field(
             "stream_batch_ms",

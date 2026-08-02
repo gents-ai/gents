@@ -602,6 +602,51 @@ where
                 }
             }
 
+            if pending_results.is_empty() && turn_text.trim().is_empty() {
+                // A provider can finish a turn after emitting only reasoning.
+                // Known DeepSeek V4 Flash failure shapes include stopping
+                // without closing the reasoning block and exhausting the
+                // output-token allowance. Rig does not currently retain the
+                // provider finish reason, so classify only the invariant we
+                // can observe here: this is not a usable terminal answer, and
+                // no tool effect has run. Model it as the existing no-effect
+                // mid-stream failure: retract the streamed reasoning and
+                // resample the same provider request, bounded by the configured
+                // transport retry ladder. This is exactly
+                // CompletionRetry.retract, so no durable side effect is replayed.
+                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                    MidStreamDirective::RetractAndResample { delay } => {
+                        yield LoopStreamItem::TurnRetracted {
+                            turn: turn_index,
+                            attempt,
+                            backoff: delay,
+                        };
+                        tracing::warn!(
+                            turn = turn_index,
+                            attempt,
+                            delay_ms = delay.as_millis() as u64,
+                            "retracting completion turn with no visible output"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue 'attempts;
+                    }
+                    MidStreamDirective::CloseAndContinue { .. } => {
+                        unreachable!(
+                            "no-output completion without tool effects cannot close and continue"
+                        );
+                    }
+                    MidStreamDirective::Fail { reason } => {
+                        Err(StreamingError::Completion(
+                            CompletionError::ProviderError(format!(
+                                "completion produced no visible output: {reason}"
+                            )),
+                        ))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                }
+            }
+
             if pending_results.is_empty() {
                 yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
                 break 'turns;

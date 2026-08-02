@@ -312,6 +312,16 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
             ));
         }
+        if profile.reasoning_effort.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+            )
+        }) {
+            errors.push(format!(
+                "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+            ));
+        }
     }
 
     for service in &manifest.tool_service_registries {

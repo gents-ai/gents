@@ -3,6 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use gents_protocol::transcript::{
+    normalize_markdown_text, present_persisted_message, PresentedMessageRole,
+};
+
 use crate::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineResponseEvent,
     TimelineToolCallEvent,
@@ -152,18 +156,23 @@ pub(super) fn build_atif_trajectory(
     for event in &timeline.events {
         match event {
             RunTimelineEvent::Message(message) if root_message(timeline, message) => {
-                if message.role.eq_ignore_ascii_case("tool") {
+                let Some((source, content, reasoning)) = projected_message(message) else {
                     continue;
-                }
+                };
                 if emitted_request_input
-                    && message.role.eq_ignore_ascii_case("user")
-                    && timeline.request.content.as_deref() == Some(message.content.as_str())
+                    && source == AtifStepSource::User
+                    && timeline
+                        .request
+                        .content
+                        .as_deref()
+                        .is_some_and(|request_content| {
+                            normalize_markdown_text(request_content) == content
+                        })
                 {
                     emitted_request_input = false;
                     continue;
                 }
 
-                let source = atif_source(&message.role);
                 let paired_tools = if source == AtifStepSource::Agent {
                     paired_tools_for_message(timeline, message)
                 } else {
@@ -174,11 +183,19 @@ pub(super) fn build_atif_trajectory(
                         .iter()
                         .map(|tool| tool.tool_call_id.as_str().to_string()),
                 );
-                steps.push(step_for_message(message, paired_tools, context));
+                steps.push(step_for_message(
+                    message,
+                    source,
+                    &content,
+                    reasoning.as_deref(),
+                    paired_tools,
+                    context,
+                ));
             }
             RunTimelineEvent::ToolCall(tool)
                 if root_tool(timeline, tool)
-                    && !consumed_tool_call_ids.contains(&tool.tool_call_id) =>
+                    && !consumed_tool_call_ids.contains(&tool.tool_call_id)
+                    && !tool_has_paired_message(timeline, tool) =>
             {
                 consumed_tool_call_ids.insert(tool.tool_call_id.clone());
                 steps.push(step_for_unpaired_tool(tool, context));
@@ -479,6 +496,9 @@ pub(super) fn atif_projection_schema() -> Value {
 
 fn step_for_message(
     message: &TimelineMessageEvent,
+    source: AtifStepSource,
+    content: &str,
+    reasoning: Option<&str>,
     paired_tools: Vec<&TimelineToolCallEvent>,
     context: &ProjectionContext,
 ) -> AtifStep {
@@ -486,9 +506,9 @@ fn step_for_message(
     AtifStep {
         step_id: 0,
         timestamp: valid_timestamp(message.timestamp.as_deref()),
-        source: atif_source(&message.role),
-        message: redact_str(&message.content, context),
-        reasoning_content: None,
+        source,
+        message: redact_str(content, context),
+        reasoning_content: redact_option(reasoning, context),
         tool_calls,
         observation,
         llm_call_count: None,
@@ -694,6 +714,45 @@ fn paired_tools_for_message<'a>(
         .collect()
 }
 
+fn tool_has_paired_message(timeline: &RunTimeline, tool: &TimelineToolCallEvent) -> bool {
+    timeline.events.iter().any(|event| match event {
+        RunTimelineEvent::Message(message)
+            if root_message(timeline, message)
+                && message.session_id == tool.session_id
+                && Some(message.sequence) == tool.message_sequence =>
+        {
+            projected_message(message).is_some_and(|(source, _, _)| source == AtifStepSource::Agent)
+        }
+        _ => false,
+    })
+}
+
+fn projected_message(
+    message: &TimelineMessageEvent,
+) -> Option<(AtifStepSource, String, Option<String>)> {
+    if message.role.eq_ignore_ascii_case("tool") {
+        return None;
+    }
+
+    let decode_role = if message.role.eq_ignore_ascii_case("agent") {
+        "assistant"
+    } else {
+        message.role.as_str()
+    };
+    let presented = present_persisted_message(decode_role, &message.content);
+    let source = match presented.role {
+        PresentedMessageRole::Tool => return None,
+        _ if message.role.eq_ignore_ascii_case("system") => AtifStepSource::System,
+        PresentedMessageRole::User => AtifStepSource::User,
+        PresentedMessageRole::Assistant => AtifStepSource::Agent,
+    };
+    Some((
+        source,
+        presented.body_markdown,
+        presented.reasoning_markdown,
+    ))
+}
+
 fn root_message(timeline: &RunTimeline, message: &TimelineMessageEvent) -> bool {
     event_belongs_to_root(
         timeline,
@@ -713,16 +772,6 @@ fn event_belongs_to_root(
 ) -> bool {
     request_id == Some(timeline.request_id.as_str())
         || (request_id.is_none() && session_id == timeline.session_id.as_deref())
-}
-
-fn atif_source(role: &str) -> AtifStepSource {
-    if role.eq_ignore_ascii_case("user") {
-        AtifStepSource::User
-    } else if role.eq_ignore_ascii_case("assistant") || role.eq_ignore_ascii_case("agent") {
-        AtifStepSource::Agent
-    } else {
-        AtifStepSource::System
-    }
 }
 
 fn atif_arguments(raw: &str, context: &ProjectionContext) -> BTreeMap<String, Value> {
@@ -809,6 +858,10 @@ mod tests {
     use crate::run_timeline::{
         build_run_timeline, RunTimelineRows, TimelineMessageRow, TimelineRequestRow,
         TimelineResponseRow, TimelineToolCallRow,
+    };
+    use gents_protocol::message::{
+        AssistantContent, Message, Reasoning, ToolCall, ToolFunction, ToolResultContent,
+        UserContent,
     };
 
     fn tool_timeline() -> RunTimeline {
@@ -918,5 +971,115 @@ mod tests {
                 .and_then(Value::as_str),
             Some("[redacted]")
         );
+    }
+
+    #[test]
+    fn decodes_persisted_messages_without_duplicate_prompt_tool_or_synthetic_steps() {
+        let assistant = Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("Inspect before changing it.")),
+                AssistantContent::text("I will inspect it."),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call-1".to_string(),
+                    ToolFunction::new("bash".to_string(), json!({"command": "cargo test"})),
+                )),
+            ],
+        };
+        let tool_result = Message::User {
+            content: vec![UserContent::tool_result(
+                "call-1",
+                vec![ToolResultContent::text("ok")],
+            )],
+        };
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-decoded".to_string(),
+                session_id: Some("session-decoded".to_string()),
+                content: Some("Fix the project.".to_string()),
+                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
+                created_at: Some("2026-07-31T20:00:00Z".to_string()),
+                ..TimelineRequestRow::default()
+            },
+            messages: vec![
+                TimelineMessageRow {
+                    session_id: "session-decoded".to_string(),
+                    request_id: Some("req-decoded".to_string()),
+                    sequence: 0,
+                    role: "user".to_string(),
+                    content: serde_json::to_string(&Message::user("Fix the project.")).unwrap(),
+                    timestamp: Some("2026-07-31T20:00:01Z".to_string()),
+                    ..TimelineMessageRow::default()
+                },
+                TimelineMessageRow {
+                    session_id: "session-decoded".to_string(),
+                    request_id: Some("req-decoded".to_string()),
+                    sequence: 1,
+                    role: "assistant".to_string(),
+                    content: serde_json::to_string(&assistant).unwrap(),
+                    // Persisted message timestamps can trail tool start time. The
+                    // projection must still pair the call instead of emitting a
+                    // synthetic tool step first.
+                    timestamp: Some("2026-07-31T20:00:04Z".to_string()),
+                    ..TimelineMessageRow::default()
+                },
+                TimelineMessageRow {
+                    session_id: "session-decoded".to_string(),
+                    request_id: Some("req-decoded".to_string()),
+                    sequence: 2,
+                    role: "user".to_string(),
+                    content: serde_json::to_string(&tool_result).unwrap(),
+                    timestamp: Some("2026-07-31T20:00:05Z".to_string()),
+                    ..TimelineMessageRow::default()
+                },
+            ],
+            tool_calls: vec![TimelineToolCallRow {
+                request_id: Some("req-decoded".to_string()),
+                session_id: "session-decoded".to_string(),
+                message_sequence: Some(1),
+                tool_name: "bash".to_string(),
+                tool_call_id: "call-1".to_string(),
+                args: r#"{"command":"cargo test"}"#.to_string(),
+                result: "ok".to_string(),
+                status: "completed".to_string(),
+                started_at: Some("2026-07-31T20:00:02Z".to_string()),
+                completed_at: Some("2026-07-31T20:00:03Z".to_string()),
+                ..TimelineToolCallRow::default()
+            }],
+            responses: vec![TimelineResponseRow {
+                request_id: "req-decoded".to_string(),
+                session_id: Some("session-decoded".to_string()),
+                content: Some("Done.".to_string()),
+                status: Some("completed".to_string()),
+                completed_at: Some("2026-07-31T20:00:06Z".to_string()),
+                ..TimelineResponseRow::default()
+            }],
+            ..RunTimelineRows::default()
+        });
+
+        let trajectory = build_atif_trajectory(&timeline, &ProjectionContext::default());
+
+        assert_eq!(trajectory.steps.len(), 3);
+        assert_eq!(trajectory.steps[0].message, "Fix the project.");
+        assert_eq!(trajectory.steps[1].message, "I will inspect it.");
+        assert_eq!(
+            trajectory.steps[1].reasoning_content.as_deref(),
+            Some("Inspect before changing it.")
+        );
+        assert_eq!(
+            trajectory.steps[1]
+                .tool_calls
+                .as_deref()
+                .map(|calls| calls.len()),
+            Some(1)
+        );
+        assert_eq!(trajectory.steps[2].message, "Done.");
+        assert!(trajectory.steps.iter().all(|step| {
+            step.extra
+                .as_ref()
+                .and_then(|extra| extra.get("synthetic_tool_step"))
+                .is_none()
+        }));
     }
 }

@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 /absolute/path/to/gents-glibc-bullseye-x86_64.tar.gz" >&2
+  echo "usage: $0 /absolute/path/to/gents-glibc-bullseye-aarch64.tar.gz" >&2
   exit 2
 fi
 
@@ -25,7 +25,7 @@ case "${output_name}" in
 esac
 
 mkdir -p "${output_dir}"
-docker run --rm --platform linux/amd64 \
+docker run --rm --platform linux/arm64 \
   -e GENTS_BUNDLE_OUTPUT_NAME="${output_name}" \
   -v "${output_dir}:/out" \
   debian:bullseye-slim \
@@ -36,20 +36,20 @@ docker run --rm --platform linux/amd64 \
       liblzma5 libssl1.1 libstdc++6 >/dev/null
     mkdir -p /tmp/gents-glibc
     cp -L \
-      /lib64/ld-linux-x86-64.so.2 \
-      /lib/x86_64-linux-gnu/libc.so.6 \
-      /lib/x86_64-linux-gnu/libdl.so.2 \
-      /lib/x86_64-linux-gnu/libgcc_s.so.1 \
-      /lib/x86_64-linux-gnu/libm.so.6 \
-      /lib/x86_64-linux-gnu/libnss_dns.so.2 \
-      /lib/x86_64-linux-gnu/libnss_files.so.2 \
-      /lib/x86_64-linux-gnu/libpthread.so.0 \
-      /lib/x86_64-linux-gnu/libresolv.so.2 \
-      /lib/x86_64-linux-gnu/libutil.so.1 \
-      /lib/x86_64-linux-gnu/liblzma.so.5 \
-      /usr/lib/x86_64-linux-gnu/libcrypto.so.1.1 \
-      /usr/lib/x86_64-linux-gnu/libssl.so.1.1 \
-      /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+      /lib/ld-linux-aarch64.so.1 \
+      /lib/aarch64-linux-gnu/libc.so.6 \
+      /lib/aarch64-linux-gnu/libdl.so.2 \
+      /lib/aarch64-linux-gnu/libgcc_s.so.1 \
+      /lib/aarch64-linux-gnu/libm.so.6 \
+      /lib/aarch64-linux-gnu/libnss_dns.so.2 \
+      /lib/aarch64-linux-gnu/libnss_files.so.2 \
+      /lib/aarch64-linux-gnu/libpthread.so.0 \
+      /lib/aarch64-linux-gnu/libresolv.so.2 \
+      /lib/aarch64-linux-gnu/libutil.so.1 \
+      /lib/aarch64-linux-gnu/liblzma.so.5 \
+      /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 \
+      /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+      /usr/lib/aarch64-linux-gnu/libstdc++.so.6 \
       /tmp/gents-glibc/
     tar -C /tmp/gents-glibc -czf "/out/${GENTS_BUNDLE_OUTPUT_NAME}" .
   '

@@ -1,0 +1,11 @@
+FROM rust:1.96-bullseye
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        cmake \
+        libclang-dev \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown

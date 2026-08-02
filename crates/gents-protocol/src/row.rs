@@ -777,6 +777,8 @@ pub struct InferenceProfileRow {
     #[serde(default)]
     pub repetition_penalty: Option<f64>,
     #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
     pub stream_batch_ms: Option<i64>,
     #[serde(default)]
     pub stream_liveness_timeout_secs: Option<i64>,

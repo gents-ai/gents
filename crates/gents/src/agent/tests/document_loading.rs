@@ -111,6 +111,10 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     assert_eq!(behavior.sampling.frequency_penalty, Some(0.5));
     assert_eq!(behavior.sampling.presence_penalty, Some(-0.25));
     assert_eq!(behavior.sampling.repetition_penalty, Some(1.1));
+    assert_eq!(
+        behavior.sampling.reasoning_effort,
+        Some(crate::config::ReasoningEffort::Max)
+    );
 
     // ...and from the behavior they must reach the provider request body.
     let params = behavior

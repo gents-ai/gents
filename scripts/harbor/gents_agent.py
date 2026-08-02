@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,11 @@ class GentsAgent(BaseAgent):
 
     SUPPORTS_ATIF = True
     _REMOTE_BINARY = "/usr/local/bin/gents"
-    _REMOTE_REAL_BINARY = "/usr/local/libexec/gents-harbor"
+    # Keep the conventional basename for diagnostics and direct execution. The
+    # explicit-loader case uses the filesystem-runner shim installed in setup.
+    _REMOTE_REAL_BINARY = "/usr/local/libexec/gents"
     _REMOTE_BINARY_UPLOAD = "/tmp/gents-harbor-upload"
+    _REMOTE_FS_RUNNER = "/usr/local/bin/gents-fs-runner"
     _REMOTE_RUNNER = "/usr/local/bin/run-gents-harbor"
     _REMOTE_RUNNER_UPLOAD = "/tmp/run-gents-harbor-upload"
     _REMOTE_CA_BUNDLE = "/tmp/gents-harbor-ca-bundle.pem"
@@ -100,10 +104,35 @@ class GentsAgent(BaseAgent):
             raise ValueError(f"GENTS_BINARY_PATH is not a file: {binary_path}")
         upload_path = self._REMOTE_BINARY_UPLOAD
         await environment.upload_file(binary_path, upload_path)
+        bundle_path = self._env("GENTS_GLIBC_BUNDLE_PATH")
+        if bundle_path:
+            local_bundle = Path(bundle_path)
+            if not local_bundle.is_file():
+                raise ValueError(
+                    f"GENTS_GLIBC_BUNDLE_PATH is not a file: {local_bundle}"
+                )
+            await environment.upload_file(local_bundle, self._REMOTE_GLIBC_BUNDLE)
+            command = f"""
+set -eu
+install -d -m 0755 {shlex.quote(self._REMOTE_GLIBC_DIR)} /usr/local/libexec
+tar -xzf {shlex.quote(self._REMOTE_GLIBC_BUNDLE)} -C {shlex.quote(self._REMOTE_GLIBC_DIR)}
+install -m 0755 {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_REAL_BINARY)}
+loader=$(find {shlex.quote(self._REMOTE_GLIBC_DIR)} -maxdepth 1 -name 'ld-linux-*.so.*' -print -quit)
+test -n "$loader"
+printf '%s\\n' '#!/bin/sh' 'loader=$(find {self._REMOTE_GLIBC_DIR} -maxdepth 1 -name "ld-linux-*.so.*" -print -quit)' 'exec "$loader" --library-path {self._REMOTE_GLIBC_DIR} {self._REMOTE_REAL_BINARY} "$@"' > {shlex.quote(self._REMOTE_BINARY)}
+chmod 0755 {shlex.quote(self._REMOTE_BINARY)}
+rm -f {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_GLIBC_BUNDLE)}
+""".strip()
+            result = await environment.exec(command=command, user="root")
+            self._require_success("install Gents with glibc compatibility bundle", result)
+            return
+
         loader_check = await environment.exec(
             command=(
                 "test -x /lib64/ld-linux-x86-64.so.2 || "
-                "test -x /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+                "test -x /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 || "
+                "test -x /lib/ld-linux-aarch64.so.1 || "
+                "test -x /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
             )
         )
         if loader_check.return_code == 0:
@@ -116,29 +145,10 @@ class GentsAgent(BaseAgent):
             self._require_success(command, result)
             return
 
-        bundle_path = self._env("GENTS_GLIBC_BUNDLE_PATH")
-        if not bundle_path:
-            raise RuntimeError(
-                "The task image has no glibc loader. Set GENTS_GLIBC_BUNDLE_PATH "
-                "to the Bullseye x86_64 compatibility bundle."
-            )
-        local_bundle = Path(bundle_path)
-        if not local_bundle.is_file():
-            raise ValueError(
-                f"GENTS_GLIBC_BUNDLE_PATH is not a file: {local_bundle}"
-            )
-        await environment.upload_file(local_bundle, self._REMOTE_GLIBC_BUNDLE)
-        command = f"""
-set -eu
-install -d -m 0755 {shlex.quote(self._REMOTE_GLIBC_DIR)} /usr/local/libexec
-tar -xzf {shlex.quote(self._REMOTE_GLIBC_BUNDLE)} -C {shlex.quote(self._REMOTE_GLIBC_DIR)}
-install -m 0755 {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_REAL_BINARY)}
-printf '%s\\n' '#!/bin/sh' 'exec {self._REMOTE_GLIBC_DIR}/ld-linux-x86-64.so.2 --library-path {self._REMOTE_GLIBC_DIR} {self._REMOTE_REAL_BINARY} "$@"' > {shlex.quote(self._REMOTE_BINARY)}
-chmod 0755 {shlex.quote(self._REMOTE_BINARY)}
-rm -f {shlex.quote(upload_path)} {shlex.quote(self._REMOTE_GLIBC_BUNDLE)}
-""".strip()
-        result = await environment.exec(command=command, user="root")
-        self._require_success("install Gents with glibc compatibility bundle", result)
+        raise RuntimeError(
+            "The task image has no glibc loader. Set GENTS_GLIBC_BUNDLE_PATH "
+            "to the matching Bullseye compatibility bundle."
+        )
 
     async def _install_release_binary(
         self, environment: BaseEnvironment, release_url: str
@@ -182,6 +192,17 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "GENTS_RELEASE_URL to a gents Linux release tarball"
             )
 
+        # An explicit glibc loader becomes /proc/self/exe, so Gents cannot use
+        # its executable basename to discover the embedded filesystem runner.
+        # Install a stable external command and point the runtime at it.
+        install_fs_runner = (
+            f"printf '%s\\n' '#!/bin/sh' "
+            f"'exec {self._REMOTE_BINARY} __native-fs-runner \"$@\"' "
+            f"> {self._REMOTE_FS_RUNNER} && chmod 0755 {self._REMOTE_FS_RUNNER}"
+        )
+        result = await environment.exec(command=install_fs_runner, user="root")
+        self._require_success("install Gents native filesystem runner", result)
+
         if not self._RUNNER_SOURCE.is_file():
             raise FileNotFoundError(f"Harbor runner is missing: {self._RUNNER_SOURCE}")
         runner_upload = self._REMOTE_RUNNER_UPLOAD
@@ -211,6 +232,11 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "build this branch or use a release containing PR #988"
             )
 
+        fs_runner_result = await environment.exec(
+            command=f"{self._REMOTE_FS_RUNNER} --self-test"
+        )
+        self._require_success("gents native filesystem runner self-test", fs_runner_result)
+
     async def run(
         self,
         instruction: str,
@@ -231,7 +257,11 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             )
 
         session_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.session_id or "trial")
-        instruction_path = f"/tmp/gents-harbor-{session_slug}.instruction.md"
+        # Harbor retries retain the trial/session identity. A per-run suffix
+        # guarantees that a cancelled attempt can never leave the next attempt
+        # contending on the same RocksDB LOCK file.
+        run_slug = f"{session_slug}-{uuid.uuid4().hex[:12]}"
+        instruction_path = f"/tmp/gents-harbor-{run_slug}.instruction.md"
         with tempfile.TemporaryDirectory(prefix="gents-harbor-instruction-") as temp_dir:
             local_instruction = Path(temp_dir) / "instruction.md"
             local_instruction.write_text(instruction)
@@ -242,7 +272,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         )
         self._require_success("prepare Gents instruction", chmod_result)
 
-        request_timeout = int(self._env("GENTS_REQUEST_TIMEOUT_SECS", "1800") or 1800)
+        request_timeout = int(self._env("GENTS_REQUEST_TIMEOUT_SECS", "86400") or 86400)
         tool_root = self._env("GENTS_TOOL_ROOT", "/app") or "/app"
         prepare_tool_root = f"install -d -m 0755 {shlex.quote(tool_root)}"
         prepare_result = await environment.exec(
@@ -253,16 +283,27 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         self._require_success("prepare Gents tool root", prepare_result)
         run_env = {
             "GENTS_BINARY": self._REMOTE_BINARY,
-            "GENTS_HOME": f"/tmp/gents-harbor-{session_slug}",
+            "GENTS_FS_RUNNER": self._REMOTE_FS_RUNNER,
+            "GENTS_HOME": f"/tmp/gents-harbor-{run_slug}",
             "GENTS_INSTRUCTION_FILE": instruction_path,
             "GENTS_INFERENCE_URL": inference_url.rstrip("/"),
             "GENTS_MODEL": model_name,
             "GENTS_TEMPERATURE": self._env("GENTS_TEMPERATURE", "1.0") or "1.0",
-            "GENTS_TOP_P": self._env("GENTS_TOP_P", "1.0") or "1.0",
+            "GENTS_TOP_P": self._env("GENTS_TOP_P", "0.95") or "0.95",
             "GENTS_TOP_K": self._env("GENTS_TOP_K", "") or "",
-            "GENTS_MAX_TOKENS": self._env("GENTS_MAX_TOKENS", "32768") or "32768",
-            "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "65536")
-            or "65536",
+            "GENTS_REASONING_EFFORT": self._env(
+                "GENTS_REASONING_EFFORT", "max"
+            )
+            or "max",
+            # Avoid `TOKEN` in this environment key. Harbor treats matching
+            # agent-env names as secrets and blindly replaces their values in
+            # downloaded text artifacts, which can corrupt numeric JSON fields.
+            "GENTS_MAX_OUTPUT": self._env("GENTS_MAX_OUTPUT", "393216") or "393216",
+            # Leave a small provider-tokenization margin below D4F's 512K
+            # server limit. Gents' estimate can otherwise admit a prompt one
+            # token beyond the provider's exact accounting after compaction.
+            "GENTS_CONTEXT_WINDOW": self._env("GENTS_CONTEXT_WINDOW", "510976")
+            or "510976",
             "GENTS_MAX_TURNS": self._env("GENTS_MAX_TURNS", "250") or "250",
             "GENTS_RETRY_MAX_TRANSPORT": self._env(
                 "GENTS_RETRY_MAX_TRANSPORT", "3"
@@ -270,13 +311,13 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             or "3",
             "GENTS_REQUEST_TIMEOUT_SECS": str(request_timeout),
             "GENTS_COMMAND_TIMEOUT_SECS": self._env(
-                "GENTS_COMMAND_TIMEOUT_SECS", "900"
+                "GENTS_COMMAND_TIMEOUT_SECS", "86400"
             )
-            or "900",
+            or "86400",
             "GENTS_SERVER_STARTUP_TIMEOUT_SECS": self._env(
-                "GENTS_SERVER_STARTUP_TIMEOUT_SECS", "120"
+                "GENTS_SERVER_STARTUP_TIMEOUT_SECS", "300"
             )
-            or "120",
+            or "300",
             "GENTS_TOOL_ROOT": tool_root,
             "GENTS_API_KEY": self._env("GENTS_API_KEY", "no-key") or "no-key",
             "SSL_CERT_FILE": self._REMOTE_CA_BUNDLE,
@@ -291,6 +332,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             self._REMOTE_BINARY,
             self._REMOTE_REAL_BINARY,
             self._REMOTE_BINARY_UPLOAD,
+            self._REMOTE_FS_RUNNER,
             self._REMOTE_RUNNER,
             self._REMOTE_RUNNER_UPLOAD,
             self._REMOTE_CA_BUNDLE,
@@ -323,7 +365,11 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "inference_url": inference_url,
                 "temperature": float(run_env["GENTS_TEMPERATURE"]),
                 "top_p": float(run_env["GENTS_TOP_P"]),
+                "reasoning_effort": run_env["GENTS_REASONING_EFFORT"],
+                "context_window": int(run_env["GENTS_CONTEXT_WINDOW"]),
+                "max_output_tokens": int(run_env["GENTS_MAX_OUTPUT"]),
                 "max_turns": int(run_env["GENTS_MAX_TURNS"]),
+                "request_timeout_secs": request_timeout,
                 "retry_max_transport": int(run_env["GENTS_RETRY_MAX_TRANSPORT"]),
             },
         }
