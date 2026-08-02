@@ -18,6 +18,9 @@ pub struct CompactionOptions {
     pub tool_result_max_chars: usize,
     pub keep_recent_tokens: usize,
     pub strategy: CompactionStrategy,
+    /// The caller has already established that the complete provider input is
+    /// over budget. Skip the history-only threshold recheck and summarize.
+    pub force_summarize: bool,
 }
 
 impl Default for CompactionOptions {
@@ -27,6 +30,7 @@ impl Default for CompactionOptions {
             tool_result_max_chars: 2000,
             keep_recent_tokens: 20000,
             strategy: CompactionStrategy::StripThenSummarize,
+            force_summarize: false,
         }
     }
 }
@@ -129,9 +133,14 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         }
 
         let stripped_token_estimate = estimate_message_tokens(&stripped_messages);
+        // `normalization_removed_rows` stays the outermost refusal: it means any
+        // count taken here would be measured in a shifted space, which
+        // `force_summarize` must not override — the caller established that the
+        // input is over budget, not that the row indices are trustworthy.
         if normalization_removed_rows
             || matches!(options.strategy, CompactionStrategy::StripToolResults)
-            || !needs_compaction(&stripped_messages, context_window, options.threshold)
+            || (!options.force_summarize
+                && !needs_compaction(&stripped_messages, context_window, options.threshold))
         {
             return Ok(CompactionResult {
                 messages: stripped_messages,

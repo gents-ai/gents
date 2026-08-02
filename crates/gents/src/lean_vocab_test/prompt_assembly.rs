@@ -55,3 +55,18 @@ pub(crate) struct LeanPromptAssemblyRepairCase {
     pub(crate) expected_twice: String,
     pub(crate) payload_only: bool,
 }
+
+/// A provider-input budget witness computed by `PromptAssembly.Budget`.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanPromptAssemblyBudgetCase {
+    pub(crate) name: String,
+    pub(crate) context_window: usize,
+    pub(crate) max_output_tokens: usize,
+    pub(crate) threshold_percent: usize,
+    pub(crate) configured_threshold_budget: usize,
+    pub(crate) prompt_tokens: usize,
+    pub(crate) request_tokens: usize,
+    pub(crate) effective_input_budget: usize,
+    pub(crate) should_compact: bool,
+    pub(crate) provider_safe: bool,
+}

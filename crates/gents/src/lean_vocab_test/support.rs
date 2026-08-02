@@ -143,6 +143,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     #[serde(default)]
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
+    #[serde(default)]
+    pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -854,6 +856,10 @@ pub(crate) fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssembly
 
 pub(crate) fn lean_prompt_assembly_repair_cases() -> &'static [LeanPromptAssemblyRepairCase] {
     &lean_contract_snapshot().prompt_assembly_repair_cases
+}
+
+pub(crate) fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssemblyBudgetCase] {
+    &lean_contract_snapshot().prompt_assembly_budget_cases
 }
 
 pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {

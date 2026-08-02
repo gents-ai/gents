@@ -486,6 +486,69 @@ impl CompletionModel for MockSummaryModel {
     }
 }
 
+#[tokio::test]
+async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
+    let model = MockSummaryModel::new(
+        &serde_json::json!({
+            "summary": "Older turns were compacted to honor the provider input budget.",
+            "files_read": [],
+            "files_modified": [],
+            "key_decisions": [],
+            "pending_questions": []
+        })
+        .to_string(),
+    );
+    let config = crate::agent::loop_stream::LoopConfig {
+        preamble: None,
+        context_message: None,
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        on_rendered_request: None,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
+        deadline: None,
+        max_turns: 0,
+    };
+    let compactor = DefraCompactor::new(Arc::new(model), config);
+    let messages = (0..8)
+        .flat_map(|turn| {
+            [
+                text_msg("user", &format!("request {turn}: {}", "x".repeat(400))),
+                text_msg(
+                    "assistant",
+                    &format!("response {turn}: {}", "y".repeat(400)),
+                ),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !needs_compaction(&messages, 100_000, 0.75),
+        "the history-only guard must be below threshold for this regression"
+    );
+    let result = compactor
+        .compact(
+            messages,
+            100_000,
+            &CompactionOptions {
+                threshold: 0.75,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                force_summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        result.summary.is_some(),
+        "a complete-input budget trigger must not silently no-op in the compactor"
+    );
+    assert!(result.messages_compacted > 0);
+}
+
 /// Counts provider calls and always fails transiently — to prove compaction
 /// does not retry. `Clone` shares the counter (the loop clones the model).
 #[derive(Clone)]

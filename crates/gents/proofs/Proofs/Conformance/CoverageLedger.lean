@@ -894,6 +894,11 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_repair_cases_drive_tool_argument_repair")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyBudgetCases"
+      "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_output_reserved_compaction_trigger")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
       "conformance::event_delivery_transition_cases_match_contract")

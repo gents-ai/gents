@@ -68,6 +68,19 @@ structure PromptAssemblyRepairCase where
   payloadOnly : Bool
   deriving Repr
 
+structure PromptAssemblyBudgetCase where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdPercent : Nat
+  configuredThresholdBudget : Nat
+  promptTokens : Nat
+  requestTokens : Nat
+  effectiveInputBudget : Nat
+  shouldCompact : Bool
+  providerSafe : Bool
+  deriving Repr
+
 /-! ## Building witness rows -/
 
 private def itemCase : Item → PromptAssemblyItemCase
@@ -349,5 +362,70 @@ def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
     , expected := argsName once
     , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
     , payloadOnly := isPayloadOnly vector.2 }
+
+/-! ## Provider input budget
+
+The old daemon trigger used only `contextWindow × threshold`, allowing input to
+consume space already promised to the model's output. These cases are computed
+from `PromptAssembly.Budget`; the D4F witness is the observed 118,785 + 393,216
+= 512,001 rejection, not a synthetic approximation.
+-/
+
+private structure BudgetWitness where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdPercent : Nat
+  promptTokens : Nat
+  requestTokens : Nat
+
+private def budgetWitnesses : List BudgetWitness :=
+  [ { name := "configured-threshold-boundary"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdPercent := 75
+    , promptTokens := 7500, requestTokens := 0 }
+  , { name := "configured-threshold-one-over"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdPercent := 75
+    , promptTokens := 7501, requestTokens := 0 }
+  , { name := "d4f-profile-safe-boundary"
+    , contextWindow := 510976, maxOutputTokens := 393216, thresholdPercent := 75
+    , promptTokens := 117760, requestTokens := 0 }
+  , { name := "d4f-profile-one-over"
+    , contextWindow := 510976, maxOutputTokens := 393216, thresholdPercent := 75
+    , promptTokens := 117761, requestTokens := 0 }
+  , { name := "d4f-observed-provider-rejection"
+    , contextWindow := 512000, maxOutputTokens := 393216, thresholdPercent := 75
+    , promptTokens := 118785, requestTokens := 0 }
+  , { name := "incoming-request-crosses-boundary"
+    , contextWindow := 10000, maxOutputTokens := 4000, thresholdPercent := 75
+    , promptTokens := 5993, requestTokens := 8 }
+  , { name := "output-reserves-entire-context-empty-input"
+    , contextWindow := 1000, maxOutputTokens := 1000, thresholdPercent := 75
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "output-reserves-entire-context-one-token"
+    , contextWindow := 1000, maxOutputTokens := 1000, thresholdPercent := 75
+    , promptTokens := 1, requestTokens := 0 }
+  ]
+
+private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
+  let configured := witness.contextWindow * witness.thresholdPercent / 100
+  let effective := PromptAssembly.Budget.effectiveInputBudget configured
+    witness.contextWindow witness.maxOutputTokens
+  { name := witness.name
+  , contextWindow := witness.contextWindow
+  , maxOutputTokens := witness.maxOutputTokens
+  , thresholdPercent := witness.thresholdPercent
+  , configuredThresholdBudget := configured
+  , promptTokens := witness.promptTokens
+  , requestTokens := witness.requestTokens
+  , effectiveInputBudget := effective
+  , shouldCompact := decide (PromptAssembly.Budget.ExceedsInputBudget
+      witness.promptTokens witness.requestTokens configured witness.contextWindow
+      witness.maxOutputTokens)
+  , providerSafe := decide
+      (witness.promptTokens + witness.requestTokens + witness.maxOutputTokens ≤
+        witness.contextWindow) }
+
+def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
+  budgetWitnesses.map budgetCase
 
 end Conformance.ContractCases

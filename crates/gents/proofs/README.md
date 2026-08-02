@@ -27,7 +27,9 @@ The proofs are strongest where the runtime is a state machine:
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
-  entry chokepoint), and the fixed layer order of the assembled request.
+  entry chokepoint), the fixed layer order of the assembled request, and the
+  output-reserved provider-input budget that triggers compaction before the
+  provider context is overcommitted (`PromptAssembly/Budget.lean`).
   `Provider.sanitizeForProvider` models the full three-stage composition
   production runs (`normalize_assistant_content_order ∘
   drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser

@@ -67,4 +67,22 @@ def promptAssemblyRepairCaseJson (witness : PromptAssemblyRepairCase) : String :
 def promptAssemblyRepairCasesJson : String :=
   jsonArray (promptAssemblyRepairCases.map promptAssemblyRepairCaseJson)
 
+def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
+    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
+    ++ "\"threshold_percent\":" ++ toString witness.thresholdPercent ++ ","
+    ++ "\"configured_threshold_budget\":"
+      ++ toString witness.configuredThresholdBudget ++ ","
+    ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","
+    ++ "\"request_tokens\":" ++ toString witness.requestTokens ++ ","
+    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
+    ++ "\"provider_safe\":" ++ boolString witness.providerSafe
+    ++ "}"
+
+def promptAssemblyBudgetCasesJson : String :=
+  jsonArray (promptAssemblyBudgetCases.map promptAssemblyBudgetCaseJson)
+
 end Conformance.Contracts
