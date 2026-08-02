@@ -62,7 +62,7 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) name: String,
     pub(crate) context_window: usize,
     pub(crate) max_output_tokens: usize,
-    pub(crate) threshold_percent: usize,
+    pub(crate) threshold_basis_points: usize,
     pub(crate) configured_threshold_budget: usize,
     pub(crate) prompt_tokens: usize,
     pub(crate) request_tokens: usize,

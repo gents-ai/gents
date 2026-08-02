@@ -19,6 +19,18 @@ Natural subtraction deliberately matches Rust's `saturating_sub`. -/
 def providerInputBudget (contextWindow maxOutputTokens : Nat) : Nat :=
   contextWindow - maxOutputTokens
 
+/-- The operator's configured share of the context window, in exact integer
+arithmetic over basis points.
+
+The configuration surface carries the threshold as a float, but the budget is
+*computed* from basis points on both sides (`compaction::threshold_budget`), so
+this model is exact for every threshold rather than only for those exactly
+representable in binary. Computing it as `contextWindow × threshold` in floating
+point and truncating disagrees with this for e.g. 57% of 10,000 — 5,699 rather
+than 5,700 (#1008). -/
+def configuredThresholdBudget (contextWindow basisPoints : Nat) : Nat :=
+  contextWindow * basisPoints / 10000
+
 /-- The input limit that triggers compaction. Neither the operator's configured
 threshold nor the provider's output reservation may be exceeded. -/
 def effectiveInputBudget

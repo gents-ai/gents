@@ -454,7 +454,7 @@ fn prompt_exceeds_compaction_threshold(
     max_output_tokens: usize,
     threshold: f64,
 ) -> bool {
-    let configured_threshold_budget = (context_window as f64 * threshold) as usize;
+    let configured_threshold_budget = compaction::threshold_budget(context_window, threshold);
     let provider_input_budget = context_window.saturating_sub(max_output_tokens);
     let effective_input_budget = configured_threshold_budget.min(provider_input_budget);
     prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)) > effective_input_budget
@@ -477,9 +477,13 @@ mod budget_contract_tests {
         );
 
         for case in cases {
-            let threshold = case.threshold_percent as f64 / 100.0;
+            // Round-trip through the float the configuration surface actually
+            // carries, so the basis-point conversion is exercised rather than
+            // bypassed.
+            let threshold = case.threshold_basis_points as f64 / 10_000.0;
             let request_text = "x".repeat(case.request_tokens.saturating_mul(4));
-            let configured = (case.context_window as f64 * threshold) as usize;
+            // Drive the production helper, not a formula duplicated here.
+            let configured = crate::compaction::threshold_budget(case.context_window, threshold);
             let effective =
                 configured.min(case.context_window.saturating_sub(case.max_output_tokens));
 

@@ -72,7 +72,7 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
     ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
-    ++ "\"threshold_percent\":" ++ toString witness.thresholdPercent ++ ","
+    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
     ++ "\"configured_threshold_budget\":"
       ++ toString witness.configuredThresholdBudget ++ ","
     ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","

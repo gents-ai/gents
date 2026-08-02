@@ -72,7 +72,7 @@ structure PromptAssemblyBudgetCase where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
-  thresholdPercent : Nat
+  thresholdBasisPoints : Nat
   configuredThresholdBudget : Nat
   promptTokens : Nat
   requestTokens : Nat
@@ -375,45 +375,62 @@ private structure BudgetWitness where
   name : String
   contextWindow : Nat
   maxOutputTokens : Nat
-  thresholdPercent : Nat
+  thresholdBasisPoints : Nat
   promptTokens : Nat
   requestTokens : Nat
 
 private def budgetWitnesses : List BudgetWitness :=
   [ { name := "configured-threshold-boundary"
-    , contextWindow := 10000, maxOutputTokens := 1000, thresholdPercent := 75
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 7500, requestTokens := 0 }
   , { name := "configured-threshold-one-over"
-    , contextWindow := 10000, maxOutputTokens := 1000, thresholdPercent := 75
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 7501, requestTokens := 0 }
   , { name := "d4f-profile-safe-boundary"
-    , contextWindow := 510976, maxOutputTokens := 393216, thresholdPercent := 75
+    , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 117760, requestTokens := 0 }
   , { name := "d4f-profile-one-over"
-    , contextWindow := 510976, maxOutputTokens := 393216, thresholdPercent := 75
+    , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 117761, requestTokens := 0 }
   , { name := "d4f-observed-provider-rejection"
-    , contextWindow := 512000, maxOutputTokens := 393216, thresholdPercent := 75
+    , contextWindow := 512000, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 118785, requestTokens := 0 }
   , { name := "incoming-request-crosses-boundary"
-    , contextWindow := 10000, maxOutputTokens := 4000, thresholdPercent := 75
+    , contextWindow := 10000, maxOutputTokens := 4000, thresholdBasisPoints := 7500
     , promptTokens := 5993, requestTokens := 8 }
   , { name := "output-reserves-entire-context-empty-input"
-    , contextWindow := 1000, maxOutputTokens := 1000, thresholdPercent := 75
+    , contextWindow := 1000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 0, requestTokens := 0 }
   , { name := "output-reserves-entire-context-one-token"
-    , contextWindow := 1000, maxOutputTokens := 1000, thresholdPercent := 75
+    , contextWindow := 1000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 1, requestTokens := 0 }
+    -- Thresholds that are *not* exactly representable in binary. Computing the
+    -- budget as `contextWindow × threshold` in floating point and truncating
+    -- lands one token low on each of these, so before #1008 they would have
+    -- failed the contract. Both sides now divide basis points as integers.
+  , { name := "non-dyadic-threshold-57pct-boundary"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 5700
+    , promptTokens := 5700, requestTokens := 0 }
+  , { name := "non-dyadic-threshold-57pct-one-over"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 5700
+    , promptTokens := 5701, requestTokens := 0 }
+  , { name := "non-dyadic-threshold-69pct-boundary"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 6900
+    , promptTokens := 6900, requestTokens := 0 }
+  , { name := "non-dyadic-threshold-29pct-large-window"
+    , contextWindow := 200000, maxOutputTokens := 1000, thresholdBasisPoints := 2900
+    , promptTokens := 58000, requestTokens := 0 }
   ]
 
 private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
-  let configured := witness.contextWindow * witness.thresholdPercent / 100
+  let configured := PromptAssembly.Budget.configuredThresholdBudget
+    witness.contextWindow witness.thresholdBasisPoints
   let effective := PromptAssembly.Budget.effectiveInputBudget configured
     witness.contextWindow witness.maxOutputTokens
   { name := witness.name
   , contextWindow := witness.contextWindow
   , maxOutputTokens := witness.maxOutputTokens
-  , thresholdPercent := witness.thresholdPercent
+  , thresholdBasisPoints := witness.thresholdBasisPoints
   , configuredThresholdBudget := configured
   , promptTokens := witness.promptTokens
   , requestTokens := witness.requestTokens

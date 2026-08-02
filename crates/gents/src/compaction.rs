@@ -402,8 +402,32 @@ pub fn bounded_summary(summary: String) -> String {
     bounded
 }
 
+/// A fractional threshold as integer basis points.
+///
+/// The configuration surface carries the threshold as `f64` (CLI, desired
+/// state, schema), but the *budget* must not be computed in floating point:
+/// `(context_window as f64 * threshold) as usize` truncates, and disagrees with
+/// exact integer division for thresholds that are not exactly representable in
+/// binary. 57% of 10,000 yields 5,699 that way rather than 5,700 (#1008).
+///
+/// Rounding recovers the intended basis points — `0.57 * 10_000` is
+/// `5699.999999999999`, which rounds back to `5700` — so this is exact for any
+/// threshold that originated as a percentage or basis-point value.
+pub fn threshold_basis_points(threshold: f64) -> u64 {
+    if !threshold.is_finite() || threshold <= 0.0 {
+        return 0;
+    }
+    (threshold * 10_000.0).round().min(10_000.0) as u64
+}
+
+/// Tokens a fractional threshold allows within a context window, in exact
+/// integer arithmetic. Mirrors Lean `PromptAssembly.Budget.configuredThresholdBudget`.
+pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
+    let basis_points = u128::from(threshold_basis_points(threshold));
+    ((context_window as u128 * basis_points) / 10_000) as usize
+}
+
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {
     let tokens = estimate_message_tokens(messages);
-    let budget = (context_window as f64 * threshold) as usize;
-    tokens > budget
+    tokens > threshold_budget(context_window, threshold)
 }
