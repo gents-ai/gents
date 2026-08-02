@@ -137,6 +137,12 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) streaming_response_interrupt_flow_cases: Vec<LeanResponseInterruptFlowCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
+    #[serde(default)]
+    pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
+    #[serde(default)]
+    pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
+    #[serde(default)]
+    pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -353,6 +359,8 @@ mod command_identity_queue;
 mod composed_invariants;
 #[path = "event_delivery.rs"]
 mod event_delivery;
+#[path = "prompt_assembly.rs"]
+mod prompt_assembly;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
@@ -368,6 +376,7 @@ pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
+pub(crate) use prompt_assembly::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
@@ -833,6 +842,18 @@ pub(crate) fn lean_response_interrupt_flow_case(
 
 pub(crate) fn lean_compaction_reducer_cases() -> &'static [LeanCompactionReducerCase] {
     &lean_contract_snapshot().compaction_reducer_cases
+}
+
+pub(crate) fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssemblySanitizeCase] {
+    &lean_contract_snapshot().prompt_assembly_sanitize_cases
+}
+
+pub(crate) fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
+    &lean_contract_snapshot().prompt_assembly_layer_cases
+}
+
+pub(crate) fn lean_prompt_assembly_repair_cases() -> &'static [LeanPromptAssemblyRepairCase] {
+    &lean_contract_snapshot().prompt_assembly_repair_cases
 }
 
 pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {

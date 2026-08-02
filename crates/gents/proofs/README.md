@@ -25,9 +25,19 @@ The proofs are strongest where the runtime is a state machine:
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
-  #448): `sanitize` soundness/fixpoint/idempotence/split-stability over the
+  #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
-  entry chokepoint), and the fixed layer order of the assembled request
+  entry chokepoint), and the fixed layer order of the assembled request.
+  `Provider.sanitizeForProvider` models the full three-stage composition
+  production runs (`normalize_assistant_content_order ∘
+  drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser
+  row-only `sanitize` is related to it by a *conditional* refinement,
+  `project_sanitizeForProvider_eq_sanitize`, which holds on assistant rows
+  whose content is nothing but tool calls. The two genuinely differ outside
+  that fragment: on an assistant message carrying text alongside a tool call
+  that never resolved, production keeps the message and its text while
+  `sanitize` drops the row. The model follows production there — see the
+  `Proofs/PromptAssembly/Provider.lean` module docstring.
 
 They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool

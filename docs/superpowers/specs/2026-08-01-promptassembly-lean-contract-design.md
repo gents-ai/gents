@@ -1,7 +1,9 @@
 # PromptAssembly: a mechanical Lean→Rust contract
 
 **Date:** 2026-08-01
-**Status:** Design approved; implementation in progress
+**Status:** Implemented. Lean layers land with zero `sorry`s; the contract emits
+  10 sanitize, 5 layer, and 7 repair witnesses; the coverage ledger reports
+  `consumer` strength on both required surfaces.
 **Issue:** #992
 **Branch:** `promptassembly-lean-contract`
 
@@ -86,6 +88,18 @@ nobody noticed. The divergence is unrepresentable in it.
 **Resolution: the model moves to Rust.** Rust's behavior is correct — dropping
 the row would silently delete assistant prose from the provider-bound history.
 Lean is the thing that is wrong here, and the enriched model adopts Rust's rule.
+
+Measured on the same three-row input (user prose, assistant prose + unresolved
+call, user prose):
+
+| model | output rows |
+| --- | --- |
+| `sanitize` (row-only) | 2 — the assistant row is dropped whole |
+| `sanitizeForProvider` (enriched) | 3 — the row survives, demoted to `.ordinary` |
+| production Rust | 3 — message kept, carrying its text |
+
+The emitted witness `assistant-prose-survives-its-unpaired-call` pins exactly
+this.
 
 ## Design
 
