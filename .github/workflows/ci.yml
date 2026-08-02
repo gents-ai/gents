@@ -22,7 +22,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
+  # cores free for the OS and other host services.
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -71,11 +73,16 @@ jobs:
         run: scripts/rename-to-gents.sh guard all
 
   rust-and-cli:
+    name: rust-and-cli (${{ matrix.suite }})
     needs: [rename-guard, lean-proofs]
     if: ${{ always() }}
     runs-on: [self-hosted, macOS, ARM64, studio]
-    # A cold self-hosted checkout must compile and link every Rust test target;
-    # repository/path changes invalidate the disk-backed build cache.
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [runtime, cli, desktop, support]
+    # A cold self-hosted checkout must compile and link every Rust target;
+    # sccache persists compiler output, while target artifacts are job-local.
     timeout-minutes: 180
     steps:
       - name: Require rename guard
@@ -94,18 +101,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+      - name: Rewrite public Git SSH dependencies to HTTPS
         run: |
           set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+          echo "GIT_CONFIG_GLOBAL=${RUNNER_TEMP}/gents-gitconfig" >> "${GITHUB_ENV}"
+          export GIT_CONFIG_GLOBAL="${RUNNER_TEMP}/gents-gitconfig"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -152,68 +153,89 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Check formatting
+        if: matrix.suite == 'support'
         run: cargo fmt --all --check
 
       - name: Assert native-e2e excluded from production capabilities
+        if: matrix.suite == 'support'
         run: ./scripts/check-native-e2e-capabilities.sh
 
-      # Compile the FULL target surface — examples, every test target, and the
-      # desktop crates — which the test steps below do not cover. A PR that adds
-      # a required field to a widely-constructed struct breaks literal
-      # construction sites in these uncovered targets; this fails fast on them
-      # instead of letting the breakage slip to main and land on the next PR
-      # (#646). It also warms the build cache for the test steps that follow.
-      - name: Compile all targets
-        run: cargo check --workspace --all-targets
+      # Together these four jobs compile and link the FULL workspace target
+      # surface — examples, benches, every test target, and the desktop crates.
+      # This preserves the #646 construction-site fence without doing a
+      # metadata-only cargo check pass before the test-profile build.
+      - name: Compile and link runtime targets
+        if: matrix.suite == 'runtime'
+        run: cargo test -p gents --all-targets --no-run
+
+      - name: Compile and link CLI targets
+        if: matrix.suite == 'cli'
+        run: cargo test -p gents-cli --all-targets --no-run
+
+      - name: Compile and link desktop targets
+        if: matrix.suite == 'desktop'
+        run: |
+          cargo test \
+            -p gents-desktop-core \
+            -p gents-desktop \
+            -p gents-desktop-bridge \
+            -p fixture-domain-plugin \
+            -p gents-fixture-host \
+            --all-targets --no-run
+          cargo test -p gents-desktop-tauri --all-targets --no-run
+
+      - name: Compile and link support targets
+        if: matrix.suite == 'support'
+        run: |
+          cargo test \
+            -p gents-lean-contract \
+            -p gents-migration \
+            -p gents-lens-fixture-add-label \
+            -p gents-fs-runner \
+            -p gents-protocol \
+            -p gents-schemas \
+            --all-targets --no-run
 
       - name: Build the WASM lens target
+        if: matrix.suite == 'support'
         run: cargo build -p gents-lens-fixture-add-label --target wasm32-unknown-unknown
 
       - name: Run migration package tests
+        if: matrix.suite == 'support'
         run: |
-          cargo test -p gents-migration
-          cargo test -p gents-lens-fixture-add-label
+          cargo test -p gents-migration -p gents-lens-fixture-add-label
 
-      - name: Run PR smoke tests
-        if: github.event_name == 'pull_request'
+      - name: Run PR runtime smoke tests
+        if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
         run: |
           cargo test -p gents --lib runtime_status::tests::
           cargo test -p gents --lib toolset::tests::read_only_bash
+
+      - name: Run PR CLI smoke tests
+        if: matrix.suite == 'cli' && github.event_name == 'pull_request'
+        run: |
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
-          cargo test -p gents-desktop-core
-          cargo test -p gents-desktop
-          cargo test -p gents-desktop-bridge
-          cargo test -p gents-desktop-tauri --lib
-          cargo test -p fixture-domain-plugin --lib
-          cargo test -p gents-fixture-host
 
       - name: Run full library and integration tests
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         run: cargo test -p gents --lib --tests
 
       - name: Run desktop Rust package tests
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'desktop'
         run: |
-          cargo test -p gents-desktop-core
-          cargo test -p gents-desktop
-          cargo test -p gents-desktop-bridge
+          cargo test \
+            -p gents-desktop-core \
+            -p gents-desktop \
+            -p gents-desktop-bridge \
+            -p fixture-domain-plugin \
+            -p gents-fixture-host
           cargo test -p gents-desktop-tauri --lib
-          cargo test -p fixture-domain-plugin --lib
-          cargo test -p gents-fixture-host
 
       - name: Run full CLI test suite
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
         run: cargo test -p gents-cli -- --nocapture --test-threads=1
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
 
       - name: Show Rust build cache stats
         if: always()
@@ -227,18 +249,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
+      - name: Rewrite public Git SSH dependencies to HTTPS
         run: |
           set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+          echo "GIT_CONFIG_GLOBAL=${RUNNER_TEMP}/gents-gitconfig" >> "${GITHUB_ENV}"
+          export GIT_CONFIG_GLOBAL="${RUNNER_TEMP}/gents-gitconfig"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -295,14 +311,6 @@ jobs:
 
       - name: Run proof conformance tests
         run: cargo test -p gents --test conformance
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
 
       - name: Show Rust build cache stats
         if: always()
