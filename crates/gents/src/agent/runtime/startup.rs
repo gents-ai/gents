@@ -357,12 +357,14 @@ pub(in crate::agent) async fn run_agent(
 
     let completion_node = agent.node.clone();
     let completion_agent_did = agent.agent_did().to_string();
+    let completion_background_executions = agent.background_execution_registry.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SubagentCompletion(
             crate::background_completion::run_background_completion_observer(
                 completion_node,
                 completion_agent_did,
+                completion_background_executions,
                 completion_cancel,
             )
             .await,

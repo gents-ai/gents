@@ -140,6 +140,8 @@ permissions = [
   "allow-desktop-probe-inference-endpoint",
   "allow-desktop-codex-login",
   "allow-desktop-codex-login-cancel",
+  "allow-desktop-grok-login",
+  "allow-desktop-grok-login-cancel",
 ]
 
 [[set]]

@@ -281,6 +281,22 @@ export function createDesktopShellConfigActions({
     } catch {}
   }
 
+  async function onGrokLogin(agentDid: string) {
+    setError(null);
+    try {
+      return await api.grokLogin(agentDid);
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    }
+  }
+
+  async function onCancelGrokLogin(): Promise<void> {
+    try {
+      await api.cancelGrokLogin();
+    } catch {}
+  }
+
   async function onSaveInferenceProfileConfig(request: InferenceProfileSaveRequest) {
     setSavingConfig(true);
     setError(null);
@@ -355,6 +371,8 @@ export function createDesktopShellConfigActions({
     onProbeInferenceEndpoint,
     onCodexLogin,
     onCancelCodexLogin,
+    onGrokLogin,
+    onCancelGrokLogin,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
     onSaveToolSelectionConfig,

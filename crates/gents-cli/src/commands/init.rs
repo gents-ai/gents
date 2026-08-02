@@ -188,6 +188,8 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
 
     let codex_login =
         maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
+    let grok_login =
+        maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
 
     let output = json!({
         "status": "initialized",
@@ -220,7 +222,14 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         "codex_login": codex_login
             .outcome()
             .map(crate::commands::codex_login::codex_login_result_json),
-        "next_steps": init_next_steps(&summary, codex_login.is_authenticated()),
+        "grok_login": grok_login
+            .outcome()
+            .map(crate::commands::grok_login::grok_login_result_json),
+        "next_steps": init_next_steps(
+            &summary,
+            codex_login.is_authenticated(),
+            grok_login.is_authenticated(),
+        ),
         "init": summary,
     });
     print_json(&output)?;
@@ -243,6 +252,65 @@ impl InlineCodexLoginState {
         match self {
             Self::Completed(outcome) => Some(outcome),
             Self::Unauthenticated | Self::ExistingCredential => None,
+        }
+    }
+}
+
+enum InlineGrokLoginState {
+    Unauthenticated,
+    ExistingCredential,
+    Completed(crate::commands::grok_login::GrokLoginOutcome),
+}
+
+impl InlineGrokLoginState {
+    fn is_authenticated(&self) -> bool {
+        matches!(self, Self::ExistingCredential | Self::Completed(_))
+    }
+
+    fn outcome(&self) -> Option<&crate::commands::grok_login::GrokLoginOutcome> {
+        match self {
+            Self::Completed(outcome) => Some(outcome),
+            Self::Unauthenticated | Self::ExistingCredential => None,
+        }
+    }
+}
+
+async fn maybe_inline_grok_login(
+    access: &ConfigAccess,
+    agent_did: &str,
+    summary: &InitSummary,
+) -> InlineGrokLoginState {
+    if summary.provider_kind != gents::BackendProviderKind::XaiGrokOAuth {
+        return InlineGrokLoginState::Unauthenticated;
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return InlineGrokLoginState::Unauthenticated;
+    }
+    let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
+    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
+        .await
+    {
+        Ok(Some(_)) => return InlineGrokLoginState::ExistingCredential,
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Could not check for an existing Grok credential: {error:#}");
+        }
+    }
+    if !crate::interactive_backend::confirm("Log in to Grok / xAI now to finish setup?", true).await
+    {
+        return InlineGrokLoginState::Unauthenticated;
+    }
+    match crate::commands::grok_login::run_grok_login(
+        access,
+        agent_did,
+        &crate::commands::grok_login::GrokLoginOptions { provider },
+    )
+    .await
+    {
+        Ok(outcome) => InlineGrokLoginState::Completed(outcome),
+        Err(error) => {
+            eprintln!("Grok login failed: {error:#}");
+            InlineGrokLoginState::Unauthenticated
         }
     }
 }
@@ -871,10 +939,17 @@ fn standard_system_prompt(tool_package: ToolPackageArg) -> &'static str {
     }
 }
 
-fn init_next_steps(summary: &InitSummary, codex_logged_in: bool) -> Vec<String> {
+fn init_next_steps(
+    summary: &InitSummary,
+    codex_logged_in: bool,
+    grok_logged_in: bool,
+) -> Vec<String> {
     let mut steps = Vec::new();
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
         steps.push("gents codex-login".to_string());
+    }
+    if summary.provider_kind == gents::BackendProviderKind::XaiGrokOAuth && !grok_logged_in {
+        steps.push("gents grok-login".to_string());
     }
     if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
@@ -983,6 +1058,7 @@ mod tests {
                 "https://chatgpt.com/backend-api/codex",
             ),
             false,
+            false,
         );
         assert_eq!(steps.first().map(String::as_str), Some("gents codex-login"));
     }
@@ -995,6 +1071,7 @@ mod tests {
                 "https://chatgpt.com/backend-api/codex",
             ),
             true,
+            false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));
     }
@@ -1011,6 +1088,7 @@ mod tests {
                 "https://chatgpt.com/backend-api/codex",
             ),
             state.is_authenticated(),
+            false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));
     }
@@ -1023,8 +1101,23 @@ mod tests {
                 "http://127.0.0.1:8080/v1",
             ),
             false,
+            false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));
+        assert!(!steps.iter().any(|step| step == "gents grok-login"));
+    }
+
+    #[test]
+    fn grok_oauth_next_steps_lead_with_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::XaiGrokOAuth,
+                "https://cli-chat-proxy.grok.com/v1",
+            ),
+            false,
+            false,
+        );
+        assert_eq!(steps.first().map(String::as_str), Some("gents grok-login"));
     }
 
     fn init_args() -> InitArgs {

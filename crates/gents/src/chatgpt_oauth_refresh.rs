@@ -3,20 +3,9 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::chatgpt_codex::ChatGptAuthProblem;
+use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
 
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefreshedTokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub id_token: Option<String>,
-    pub account_id: Option<String>,
-    pub is_fedramp: bool,
-    pub plan_type: Option<String>,
-    pub access_token_expires_at: DateTime<Utc>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdTokenClaims {
@@ -46,7 +35,7 @@ struct RefreshResponse {
 pub async fn refresh_chatgpt_token(
     refresh_token: &str,
     http: &reqwest::Client,
-) -> Result<RefreshedTokens, ChatGptAuthProblem> {
+) -> Result<RefreshedTokens, OAuthAuthProblem> {
     let endpoint = std::env::var(codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -63,26 +52,26 @@ pub async fn refresh_chatgpt_token(
         .send()
         .await
         .map_err(|error| {
-            ChatGptAuthProblem::Other(format!("ChatGPT token refresh request failed: {error}"))
+            OAuthAuthProblem::Other(format!("ChatGPT token refresh request failed: {error}"))
         })?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(ChatGptAuthProblem::Expired);
+            return Err(OAuthAuthProblem::Expired);
         }
-        return Err(ChatGptAuthProblem::Other(format!(
+        return Err(OAuthAuthProblem::Other(format!(
             "ChatGPT token refresh failed with HTTP {status}: {}",
             parse_error_message(&body)
         )));
     }
 
     let refreshed = response.json::<RefreshResponse>().await.map_err(|error| {
-        ChatGptAuthProblem::Other(format!("decoding ChatGPT token refresh response: {error}"))
+        OAuthAuthProblem::Other(format!("decoding ChatGPT token refresh response: {error}"))
     })?;
     let access_token = refreshed.access_token.ok_or_else(|| {
-        ChatGptAuthProblem::Other("ChatGPT token refresh response omitted access_token".to_string())
+        OAuthAuthProblem::Other("ChatGPT token refresh response omitted access_token".to_string())
     })?;
     let id_claims = refreshed
         .id_token

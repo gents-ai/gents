@@ -268,6 +268,14 @@ structure RecoverySweepCase where
   measureBefore : Nat
   measureAfter : Nat
   deadlineAuditRef : String
+  deadlineExpired : Option Bool := none
+  unclaimedExpired : Option Bool := none
+  parentLive : Option Bool := none
+  parentInterrupted : Option Bool := none
+  parentTerminal : Option Bool := none
+  executionRegistered : Option Bool := none
+  recoveryCause : Option String := none
+  notificationReason : Option String := none
   deriving DecidableEq, Repr
 
 structure RecoveryOutcomeCase where
@@ -305,7 +313,7 @@ structure RecoveryEquivalenceCase where
 /-- Startup restart-disposition witness (#937): one running `AgentToolCall`
     row shape and what `ToolCallLifecycle::recover_all` must do with it —
     terminalize with a pinned cause/terminal state, or leave it running.
-    `disposition`, `cause`, `terminalState`, and the notification field
+    `disposition`, `cause`, `terminalState`, and the notification/wake fields
     are computed from `Recovery.restartDisposition`, never hand-written. -/
 structure RestartDispositionCase where
   name : String
@@ -320,6 +328,8 @@ structure RestartDispositionCase where
   cause : Option String
   terminalState : Option String
   notificationReason : Option String
+  queueSource : Option String
+  queueKeyPrefix : Option String
   theoremName : String
   deriving DecidableEq, Repr
 

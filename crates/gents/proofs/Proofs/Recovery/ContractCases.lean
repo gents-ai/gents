@@ -23,6 +23,55 @@ def recoveryCase
   , deadlineAuditRef := deadlineAuditRef
   }
 
+def orphanedBackgroundRecoveryCase
+    (name : String)
+    (deadlineExpired unclaimedExpired parentLive parentInterrupted
+      parentTerminal executionRegistered : Bool) : RecoverySweepCase :=
+  let row : OrphanedBackgroundToolRow :=
+    { call := r6NativeToolFixture
+    , deadlineExpired := deadlineExpired
+    , unclaimedExpired := unclaimedExpired
+    , parentLive := parentLive
+    , parentInterrupted := parentInterrupted
+    , parentTerminal := parentTerminal
+    , executionRegistered := executionRegistered
+    }
+  let recovered := orphanedBackgroundToolRecover row
+  let cause := orphanedBackgroundToolCause row
+  let notificationReason :=
+    if row.parentLive || row.parentInterrupted || row.parentTerminal then
+      cause.map fun recoveryCause =>
+        match recoveryCause with
+        | .deadlineExceeded => "deadline_exceeded"
+        | .parentInterrupted => "parent_interrupted"
+        | .parentTerminal => "parent_terminal"
+        | .terminalizeBackgroundedAsInterrupted => "interrupted_on_restart"
+        | .childCompleted => "child_completed"
+        | .childFailed => "child_failed"
+        | .childDead => "child_dead"
+        | .childInterrupted => "child_interrupted"
+        | .childSuperseded => "child_superseded"
+        | .unclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout"
+    else
+      none
+  { (recoveryCase
+      orphanedBackgroundToolSweep
+      name
+      row.call.state.toDefraDB
+      recovered.call.state.toDefraDB
+      "r6-cross-turn-background-process-durability"
+      (orphanedBackgroundToolMeasure row)
+      (orphanedBackgroundToolMeasure recovered)) with
+    deadlineExpired := some row.deadlineExpired
+    unclaimedExpired := some row.unclaimedExpired
+    parentLive := some row.parentLive
+    parentInterrupted := some row.parentInterrupted
+    parentTerminal := some row.parentTerminal
+    executionRegistered := some row.executionRegistered
+    recoveryCause := cause.map ToolRecoveryCause.toContract
+    notificationReason := notificationReason
+  }
+
 def recoverySweepCases : List RecoverySweepCase :=
   [ recoveryCase
       requestRecoverySweep
@@ -97,6 +146,27 @@ def recoverySweepCases : List RecoverySweepCase :=
       "running"
       "cancelled"
       "r6-TerminalizeBackgroundedAsInterrupted"
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_without_execution_to_cancelled"
+      false false true false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_expired_missing_parent_to_timed_out"
+      true false false false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_expired_terminal_parent_to_timed_out"
+      true false false false true false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_unclaimed_to_failed"
+      false true true false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_terminal_parent_to_failed"
+      false false false false true false
+  , recoveryCase
+      backgroundCompletionSideEffectSweep
+      "terminal_background_tool_missing_completion_side_effects_to_converged"
+      "failed"
+      "failed"
+      "r6-cross-turn-background-process-durability"
   , recoveryCase
       toolCallRecoverySweep
       "tool_running_unclaimed_cross_deployment_spawn_to_failed"
@@ -275,6 +345,10 @@ def recoveryEquivalenceTheorem (sweepId : String) : String :=
     "Recovery.responseRecover_matches_uninterrupted"
   else if sweepId = toolCallRecoverySweep.sweepId then
     "Recovery.toolCallRecover_matches_uninterrupted"
+  else if sweepId = orphanedBackgroundToolSweep.sweepId then
+    "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
+  else if sweepId = backgroundCompletionSideEffectSweep.sweepId then
+    "Recovery.backgroundCompletionSideEffectRecover_matches_uninterrupted"
   else if sweepId = terminalParentOwnedToolSweep.sweepId then
     "Recovery.terminalParentToolRecover_matches_uninterrupted"
   else if sweepId = detachedBridgeRecoverySweep.sweepId then
@@ -353,7 +427,11 @@ def restartDispositionCase
   , cause := disposition.causeContract
   , terminalState := disposition.terminalStateContract
   , notificationReason :=
-      disposition.notification.map RestartNotificationObligation.notificationReason
+      row.notification.map RestartNotificationObligation.notificationReason
+  , queueSource :=
+      row.notification.map RestartNotificationObligation.queueSource
+  , queueKeyPrefix :=
+      row.notification.map RestartNotificationObligation.queueKeyPrefix
   , theoremName := theoremName
   }
 
@@ -382,11 +460,11 @@ def restartDispositionCases : List RestartDispositionCase :=
   , restartDispositionCase
       "restart_native_background_interrupted_parent_cancelled"
       .background .cascade false .interrupted
-      "Recovery.restart_interrupt_iff_native_background_live_parent"
+      "Recovery.notification_iff_terminalized_native_background"
   , restartDispositionCase
       "restart_native_background_terminal_parent_failed"
       .background .cascade false .otherTerminal
-      "Recovery.restart_interrupt_iff_native_background_live_parent"
+      "Recovery.notification_iff_terminalized_native_background"
   , restartDispositionCase
       "restart_foreground_live_parent_left_running"
       .foreground .cascade false .live
@@ -415,14 +493,33 @@ theorem restartDispositionCases_cover_both_dispositions :
         (fun witness => witness.disposition = "terminalize")).length = 5 := by
   native_decide
 
-/-- Exactly one row owes the restart notification, and it is the native
-    background live-parent interrupt with the pinned reason. -/
-theorem restartDispositionCases_notification_unique :
+/-- Every terminal native background witness with a resolvable parent owes a
+    completion notification and coalesced wake. -/
+theorem restartDispositionCases_notifications_pinned :
     (restartDispositionCases.filter
         (fun witness => witness.notificationReason.isSome)).map
-        (fun witness => (witness.name, witness.notificationReason)) =
+        (fun witness =>
+          (witness.name, witness.notificationReason, witness.queueSource,
+            witness.queueKeyPrefix)) =
       [ ("restart_native_background_live_parent_interrupted"
         , some "interrupted_on_restart"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_deadline_expired_times_out"
+        , some "deadline_exceeded"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_interrupted_parent_cancelled"
+        , some "parent_interrupted"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_terminal_parent_failed"
+        , some "parent_terminal"
+        , some "background_completion"
+        , some "background_completion:"
         ) ] := by
   native_decide
 

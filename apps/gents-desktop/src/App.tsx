@@ -146,6 +146,8 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
           onCodexLogin={shell.onCodexLogin}
           onCancelCodexLogin={shell.onCancelCodexLogin}
+          onGrokLogin={shell.onGrokLogin}
+          onCancelGrokLogin={shell.onCancelGrokLogin}
         />
       ) : workspaceView === "chat" || workspaceView === "code" ? (
         <section

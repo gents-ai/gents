@@ -18,10 +18,16 @@ pub(crate) struct LiveToolOutputRegistry {
 }
 
 impl LiveToolOutputRegistry {
-    pub(crate) fn writer_for(&self, tool_call_id: impl Into<String>) -> LiveToolOutputWriter {
+    pub(crate) async fn writer_for(&self, tool_call_id: impl Into<String>) -> LiveToolOutputWriter {
+        let tool_call_id = tool_call_id.into();
+        self.inner
+            .lock()
+            .await
+            .entry(tool_call_id.clone())
+            .or_default();
         LiveToolOutputWriter {
             registry: self.clone(),
-            tool_call_id: tool_call_id.into(),
+            tool_call_id,
         }
     }
 
@@ -124,6 +130,24 @@ impl LiveToolOutputBuffer {
 struct RingBuffer {
     bytes: Vec<u8>,
     total_bytes_seen: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn writer_registration_is_visible_before_first_output_byte() {
+        let registry = LiveToolOutputRegistry::default();
+        let _writer = registry.writer_for("tool-1").await;
+
+        let snapshot = registry
+            .snapshot("tool-1")
+            .await
+            .expect("writer_for must eagerly register an empty live buffer");
+        assert_eq!(snapshot.combined.total_bytes_seen, 0);
+        assert!(snapshot.combined.bytes.is_empty());
+    }
 }
 
 impl RingBuffer {

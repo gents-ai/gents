@@ -59,9 +59,10 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         .timeout(Duration::from_secs(5))
         .build()
         .context("building backend discovery client")?;
-    let is_chatgpt_codex = target.provider_kind == BackendProviderKind::ChatGptCodex;
-    let (chatgpt_credential, codex_agent_did) = if is_chatgpt_codex {
-        let (credential, agent_did) = load_chatgpt_credential_for_discovery(&args).await?;
+    let is_oauth = target.provider_kind.is_agent_scoped_oauth();
+    let (oauth_credential, oauth_agent_did) = if is_oauth {
+        let (credential, agent_did) =
+            load_oauth_credential_for_discovery(&args, target.provider_kind).await?;
         (credential, Some(agent_did))
     } else {
         (None, None)
@@ -71,16 +72,30 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         target.provider_kind,
         &target.endpoint,
         target.api_key.as_deref(),
-        chatgpt_credential.as_ref(),
+        oauth_credential.as_ref(),
     )
     .await
     {
         Ok(models) => models,
-        Err(error) if is_chatgpt_codex && discovery_error_is_auth(&error) => {
+        Err(error)
+            if target.provider_kind == BackendProviderKind::ChatGptCodex
+                && discovery_error_is_auth(&error) =>
+        {
             let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
-                codex_agent_did.as_deref().unwrap_or(""),
+                oauth_agent_did.as_deref().unwrap_or(""),
                 gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
                 &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
+            );
+            anyhow::bail!("{error:#}\n{guidance}");
+        }
+        Err(error)
+            if target.provider_kind == BackendProviderKind::XaiGrokOAuth
+                && discovery_error_is_auth(&error) =>
+        {
+            let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
+                oauth_agent_did.as_deref().unwrap_or(""),
+                gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+                &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
             anyhow::bail!("{error:#}\n{guidance}");
         }
@@ -100,23 +115,32 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     Ok(())
 }
 
-async fn load_chatgpt_credential_for_discovery(
+async fn load_oauth_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
-) -> Result<(Option<gents::chatgpt_codex::OAuthCredential>, String)> {
+    provider_kind: BackendProviderKind,
+) -> Result<(Option<gents::oauth_credential::OAuthCredential>, String)> {
+    let (provider, login) = match provider_kind {
+        BackendProviderKind::ChatGptCodex => (
+            gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            "gents codex-login",
+        ),
+        BackendProviderKind::XaiGrokOAuth => (
+            gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            "gents grok-login",
+        ),
+        _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
+    };
     let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
         anyhow::bail!(
-            "--graphql is required to discover models for a ChatGptCodex backend: its OAuth \
-             credential is a DefraDB document. Run `gents codex-login` first if needed."
+            "--graphql is required to discover models for a {provider_kind} backend: its OAuth \
+             credential is a DefraDB document. Run `{login}` first if needed."
         );
     };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let access = ConfigAccess::Graphql(graphql);
-    let credential = crate::commands::codex_auth_probe::load_oauth_credential(
-        &access,
-        &agent_did,
-        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-    )
-    .await?;
+    let credential =
+        crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
+            .await?;
     Ok((credential, agent_did))
 }
 

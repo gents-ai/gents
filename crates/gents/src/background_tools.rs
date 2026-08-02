@@ -49,6 +49,35 @@ use self::transcript_render::{
 /// the Lean witness `r4c.list_subagents.unmaterialized_child_visible`.
 pub const AWAITING_CHILD_MATERIALIZATION: &str = "awaiting_child_materialization";
 
+/// Immutable identity boundary used by `list_processes`, `read_process`,
+/// `wait_process`, and `cancel_process`. A handle is usable on a later request
+/// in the same session when the agent and requester principals still match.
+/// Two absent requester identities are the same anonymous principal scope.
+/// Exact originating-request ownership remains sufficient when only a legacy
+/// owner row predates persisted requester lineage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessControlScope {
+    pub(crate) request_id: String,
+    pub(crate) session_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) requester_did: Option<String>,
+}
+
+impl ProcessControlScope {
+    pub(crate) fn authorizes(
+        &self,
+        owner_request_id: &str,
+        owner_session_id: &str,
+        owner_agent_did: &str,
+        owner_requester_did: Option<&str>,
+    ) -> bool {
+        self.session_id == owner_session_id
+            && self.agent_did == owner_agent_did
+            && (self.request_id == owner_request_id
+                || self.requester_did.as_deref() == owner_requester_did)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SpawnSubagentArgs {
     /// Friendly, model-facing name of an allowed subagent target. The runtime
@@ -80,9 +109,28 @@ pub(crate) struct BackgroundToolArgs {
     pub args: serde_json::Value,
 }
 
+// Bounded-wait defaults for wait_process, aligned with other agent
+// frameworks (codex wait_agent defaults to 30s; grok-build caps blocking
+// waits at 10 minutes). A wait that times out reports the process as still
+// running without cancelling it (#985).
+pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
+pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct WaitToolArgs {
     pub tool_call_id: String,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+impl WaitToolArgs {
+    pub(crate) fn validated_wait_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.timeout_secs
+                .unwrap_or(DEFAULT_WAIT_PROCESS_TIMEOUT_SECS)
+                .clamp(1, MAX_WAIT_PROCESS_TIMEOUT_SECS),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,6 +353,10 @@ struct ListSubagentChildRow {
 struct ListBackgroundToolRow {
     tool_call_id: String,
     tool_name: String,
+    request_id: String,
+    session_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
@@ -334,6 +386,9 @@ struct ReadToolOutputRow {
     tool_call_id: String,
     tool_name: String,
     request_id: Option<String>,
+    session_id: Option<String>,
+    agent_did: Option<String>,
+    requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
@@ -576,24 +631,28 @@ pub async fn handle_list_subagents(
 
 pub(crate) async fn handle_list_background_tools(
     node: &EmbeddedNode,
-    caller_request_id: &str,
+    caller: &ProcessControlScope,
     local_deployment_id: &str,
     live_outputs: &LiveToolOutputRegistry,
     args: ListBackgroundToolsArgs,
 ) -> Result<ListBackgroundToolsResponse> {
     let limit = args.validated_limit() as usize;
-    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_session = escape_graphql_string(&caller.session_id);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
+                    session_id: {{ _eq: "{escaped_session}" }},
                     await_mode: {{ _eq: "background" }}
                 }},
                 order: {{ started_at: ASC }}
             ) {{
                 tool_call_id
                 tool_name
+                request_id
+                session_id
+                agent_did
+                requester_did
                 await_mode
                 lifecycle_state
                 child_request_id
@@ -607,10 +666,19 @@ pub(crate) async fn handle_list_background_tools(
     if response.has_errors() {
         anyhow::bail!("list_background_tools query failed: {:?}", response.errors);
     }
-    let rows: Vec<ListBackgroundToolRow> = rows(response.data.as_ref(), "AgentToolCall")?;
+    let rows: Vec<ListBackgroundToolRow> =
+        rows_skipping_malformed(response.data.as_ref(), "AgentToolCall")?;
 
     let mut entries = Vec::new();
     for row in rows {
+        if !caller.authorizes(
+            &row.request_id,
+            &row.session_id,
+            &row.agent_did,
+            row.requester_did.as_deref(),
+        ) {
+            continue;
+        }
         if non_empty_string(row.child_request_id.as_deref()).is_some() {
             continue;
         }
@@ -628,8 +696,14 @@ pub(crate) async fn handle_list_background_tools(
         if !list_status_matches(args.status, status) {
             continue;
         }
-        let created_at = parse_rfc3339(row.started_at.as_deref())
-            .ok_or_else(|| anyhow!("background tool call {tool_call_id} has invalid started_at"))?;
+        let Some(created_at) = parse_rfc3339(row.started_at.as_deref()) else {
+            tracing::warn!(
+                tool_call_id,
+                started_at = ?row.started_at,
+                "skipping malformed background tool call with invalid started_at"
+            );
+            continue;
+        };
         let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
         let (stdout_bytes, stderr_bytes) = if status == "running" {
             live_outputs
@@ -950,7 +1024,7 @@ fn tool_result_identities(message: &Message) -> Vec<String> {
 
 pub(crate) async fn handle_read_tool_output(
     node: &EmbeddedNode,
-    caller_request_id: &str,
+    caller: &ProcessControlScope,
     live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
 ) -> Result<ReadToolOutputOutcome> {
@@ -960,12 +1034,12 @@ pub(crate) async fn handle_read_tool_output(
     }
 
     let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let escaped_caller = escape_graphql_string(caller_request_id);
+    let escaped_session = escape_graphql_string(&caller.session_id);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    request_id: {{ _eq: "{escaped_caller}" }},
+                    session_id: {{ _eq: "{escaped_session}" }},
                     tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
                 }},
                 limit: 1
@@ -973,6 +1047,9 @@ pub(crate) async fn handle_read_tool_output(
                 tool_call_id
                 tool_name
                 request_id
+                session_id
+                agent_did
+                requester_did
                 await_mode
                 lifecycle_state
                 child_request_id
@@ -987,7 +1064,12 @@ pub(crate) async fn handle_read_tool_output(
     let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
-    if row.request_id.as_deref() != Some(caller_request_id) {
+    if !caller.authorizes(
+        row.request_id.as_deref().unwrap_or_default(),
+        row.session_id.as_deref().unwrap_or_default(),
+        row.agent_did.as_deref().unwrap_or_default(),
+        row.requester_did.as_deref(),
+    ) {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     }
     if row.await_mode.as_deref() != Some("background")
@@ -2540,6 +2622,34 @@ where
     serde_json::from_value(value.clone()).map_err(|error| anyhow!("parse {collection}: {error}"))
 }
 
+fn rows_skipping_malformed<T>(data: Option<&serde_json::Value>, collection: &str) -> Result<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let Some(value) = data.and_then(|data| data.get(collection)) else {
+        anyhow::bail!("{collection} field missing from query response");
+    };
+    let Some(values) = value.as_array() else {
+        anyhow::bail!("parse {collection}: expected an array");
+    };
+
+    let mut parsed = Vec::with_capacity(values.len());
+    for (row_index, value) in values.iter().enumerate() {
+        match serde_json::from_value(value.clone()) {
+            Ok(row) => parsed.push(row),
+            Err(error) => {
+                tracing::warn!(
+                    collection,
+                    row_index,
+                    error = %error,
+                    "skipping malformed control-plane row"
+                );
+            }
+        }
+    }
+    Ok(parsed)
+}
+
 fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {
     let mut deduped = Vec::with_capacity(values.len());
     for value in values {
@@ -2562,6 +2672,61 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::llm::message::{AssistantContent, Text};
+
+    #[test]
+    fn process_control_requester_absence_is_exact_not_empty_string() {
+        let owner = ProcessControlScope {
+            request_id: "request-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_did: "did:agent".to_string(),
+            requester_did: None,
+        };
+        let absent_next_turn = ProcessControlScope {
+            request_id: "request-2".to_string(),
+            ..owner.clone()
+        };
+        assert!(absent_next_turn.authorizes(
+            &owner.request_id,
+            &owner.session_id,
+            &owner.agent_did,
+            owner.requester_did.as_deref(),
+        ));
+
+        let empty_next_turn = ProcessControlScope {
+            requester_did: Some(String::new()),
+            ..absent_next_turn
+        };
+        assert!(!empty_next_turn.authorizes(
+            &owner.request_id,
+            &owner.session_id,
+            &owner.agent_did,
+            owner.requester_did.as_deref(),
+        ));
+    }
+
+    #[test]
+    fn wait_process_timeout_defaults_and_clamps() {
+        let args = |timeout_secs| WaitToolArgs {
+            tool_call_id: "call".to_string(),
+            timeout_secs,
+        };
+        assert_eq!(
+            args(None).validated_wait_timeout(),
+            std::time::Duration::from_secs(DEFAULT_WAIT_PROCESS_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            args(Some(0)).validated_wait_timeout(),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            args(Some(5)).validated_wait_timeout(),
+            std::time::Duration::from_secs(5)
+        );
+        assert_eq!(
+            args(Some(999_999)).validated_wait_timeout(),
+            std::time::Duration::from_secs(MAX_WAIT_PROCESS_TIMEOUT_SECS)
+        );
+    }
 
     #[test]
     fn project_child_terminal_maps_child_states() {

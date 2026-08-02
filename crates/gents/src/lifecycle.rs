@@ -28,9 +28,9 @@ pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
     queue::is_automated_wakeup(metadata)
 }
 
-/// Legacy runtimes persisted background-completion wakeups as scheduled
-/// requests. They remain durable audit rows, but are never authoritative user
-/// turns and must be ignored by readers.
+/// Legacy runtimes persisted unversioned background-completion wakeups as
+/// scheduled requests. They remain durable audit rows but must be ignored;
+/// current versioned completion wakes are authoritative continuation turns.
 pub fn is_deprecated_background_completion_request(
     execution_origin: Option<&str>,
     metadata: Option<&str>,

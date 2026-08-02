@@ -87,5 +87,8 @@ export type { TaskRunResult } from "../generated/TaskRunResult.js";
 export type { ToolServiceTestResult } from "../generated/ToolServiceTestResult.js";
 export type { ToolServiceToolView } from "../generated/ToolServiceToolView.js";
 export type { CodexLoginResult } from "../generated/CodexLoginResult.js";
+export type { GrokLoginResult } from "../generated/GrokLoginResult.js";
+export type { GrokLoginRequest } from "../generated/GrokLoginRequest.js";
+export type { GrokLoginUrl } from "../generated/GrokLoginUrl.js";
 export type { CodexLoginUrl } from "../generated/CodexLoginUrl.js";
 export type { InferenceProbeResult } from "../generated/InferenceProbeResult.js";

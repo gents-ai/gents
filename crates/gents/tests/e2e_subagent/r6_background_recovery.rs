@@ -131,8 +131,9 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         .contains("<reason>interrupted_on_restart</reason>"));
 
     let wakes = load_wakes(db.node.as_ref(), "r6-recovery-session").await;
-    assert!(
-        wakes.is_empty(),
-        "recovery notification must not start an agent turn"
+    assert_eq!(
+        wakes.len(),
+        1,
+        "recovery notification should enqueue one resumable agent turn"
     );
 }

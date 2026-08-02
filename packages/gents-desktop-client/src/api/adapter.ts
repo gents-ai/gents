@@ -206,6 +206,14 @@ export function createDesktopApiAdapter(
         request: { agentDid, provider: provider ?? null },
       }),
     cancelCodexLogin: () => invokeDesktop<void>("desktop_codex_login_cancel"),
+    grokLogin: (agentDid, provider) =>
+      invokeDesktop<import("../generated/GrokLoginResult.js").GrokLoginResult>(
+        "desktop_grok_login",
+        {
+          request: { agentDid, provider: provider ?? null },
+        },
+      ),
+    cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

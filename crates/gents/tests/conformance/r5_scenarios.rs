@@ -97,12 +97,10 @@ async fn r5_a_crash_mid_wait() {
         2,
         "each completed background child projects one notification"
     );
-    // Completion delivery is durable transcript context only. Even across
-    // restart recovery, the runtime must not manufacture follow-up turns.
     assert_eq!(
         last.background_wakeup_keys.len(),
-        0,
-        "background completion recovery must not create agent requests"
+        2,
+        "restart recovery must enqueue one coalesced wake key per parent session"
     );
 }
 
@@ -112,8 +110,8 @@ async fn r5_partition_during_cancel() {
 }
 
 #[tokio::test]
-async fn r5_multi_completion_delivery_creates_no_agent_request() {
-    let history = run_scenario("multi_completion_delivery.json").await;
+async fn r5_multi_completion_coalesces_wake() {
+    let history = run_scenario("multi_completion_coalesce.json").await;
     let last = history.last().expect("non-empty history");
     assert_eq!(
         last.subagent_notifications.len(),
@@ -122,7 +120,7 @@ async fn r5_multi_completion_delivery_creates_no_agent_request() {
     );
     assert_eq!(
         last.background_wakeup_keys.len(),
-        0,
-        "multi-completion delivery must not create a background wake request"
+        1,
+        "multi-completion delivery must coalesce wakes under one queue key"
     );
 }

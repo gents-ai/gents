@@ -2392,3 +2392,34 @@ async fn held_tool_call_times_out_when_unanswered() {
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+#[tokio::test]
+async fn background_execution_reservation_drop_releases_ownership() {
+    let registry = BackgroundExecutionRegistry::default();
+    {
+        let _reservation = registry.reserve("tool-reserved".to_string(), CancellationToken::new());
+        assert!(registry.contains("tool-reserved").await);
+    }
+    assert!(!registry.contains("tool-reserved").await);
+
+    let reservation = registry.reserve("tool-transferred".to_string(), CancellationToken::new());
+    reservation.disarm();
+    assert!(registry.contains("tool-transferred").await);
+    registry.remove("tool-transferred").await;
+}
+
+#[tokio::test]
+async fn flushed_sequence_commit_cannot_resurrect_removed_live_output() {
+    let state = BackgroundLiveOutputState::default();
+    state.record_flushed_seq_if_live("removed-tool", 7).await;
+    assert!(!state.flushed_seq.lock().await.contains_key("removed-tool"));
+
+    let _writer = state.writer_for("live-tool").await;
+    state.record_flushed_seq_if_live("live-tool", 9).await;
+    assert_eq!(
+        state.flushed_seq.lock().await.get("live-tool").copied(),
+        Some(9)
+    );
+    state.remove("live-tool").await;
+    assert!(!state.flushed_seq.lock().await.contains_key("live-tool"));
+}

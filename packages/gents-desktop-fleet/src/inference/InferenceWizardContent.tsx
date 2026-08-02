@@ -2,6 +2,7 @@ import {
   ChooseStep,
   CodexStep,
   CustomStep,
+  GrokStep,
   LocalStep,
   OpenAiStep,
 } from "./steps.js";
@@ -68,6 +69,11 @@ function DoneState({ setup }: { setup: InferenceSetupController }) {
             : ""}
         </p>
       ) : null}
+      {setup.grokResult ? (
+        <p className="muted">
+          Signed in with Grok · credential {setup.grokResult.credentialId}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -109,6 +115,16 @@ function ActiveStep({ setup }: { setup: InferenceSetupController }) {
           onModelChange={setup.setCustomModel}
           onSubmit={() => void setup.submitCustom()}
           onUrlChange={setup.setCustomUrl}
+        />
+      );
+    case "grok":
+      return (
+        <GrokStep
+          authUrl={setup.grokAuthUrl}
+          signingIn={setup.signingIn}
+          submitting={setup.submitting}
+          onCancel={setup.cancelAndClose}
+          onSubmit={() => void setup.signInWithGrok()}
         />
       );
     case "codex":

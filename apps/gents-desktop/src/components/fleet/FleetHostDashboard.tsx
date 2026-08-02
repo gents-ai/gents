@@ -12,6 +12,8 @@ import type {
   BehaviorSaveRequest,
   CodexLoginResult,
   CodexLoginUrl,
+  GrokLoginResult,
+  GrokLoginUrl,
   InferenceProbeResult,
 } from "@source-inc/gents-desktop-client";
 
@@ -28,6 +30,8 @@ export type FleetHostDashboardProps = Omit<
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
   onCodexLogin: (agentDid: string) => Promise<CodexLoginResult>;
   onCancelCodexLogin: () => Promise<unknown>;
+  onGrokLogin: (agentDid: string) => Promise<GrokLoginResult>;
+  onCancelGrokLogin: () => Promise<unknown>;
 };
 
 export function FleetHostDashboard({
@@ -37,6 +41,8 @@ export function FleetHostDashboard({
   onProbeInferenceEndpoint,
   onCodexLogin,
   onCancelCodexLogin,
+  onGrokLogin,
+  onCancelGrokLogin,
   ...fleetProps
 }: FleetHostDashboardProps) {
   return (
@@ -72,6 +78,13 @@ export function FleetHostDashboard({
           onCancelCodexLogin={onCancelCodexLogin}
           onCodexLoginUrl={async (onUrl) =>
             listen<CodexLoginUrl>("desktop://codex-login-url", (event) =>
+              onUrl(event.payload?.url ?? null),
+            )
+          }
+          onGrokLogin={onGrokLogin}
+          onCancelGrokLogin={onCancelGrokLogin}
+          onGrokLoginUrl={async (onUrl) =>
+            listen<GrokLoginUrl>("desktop://grok-login-url", (event) =>
               onUrl(event.payload?.url ?? null),
             )
           }

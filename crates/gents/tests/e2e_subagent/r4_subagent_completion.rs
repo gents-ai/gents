@@ -560,7 +560,7 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<ser
 }
 
 #[tokio::test]
-async fn background_completion_projects_bridge_and_appends_notification_without_agent_request() {
+async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_project").await;
     let (child_request_id, child_session_id) = create_child_and_bridge(
         &db.node,
@@ -604,7 +604,7 @@ async fn background_completion_projects_bridge_and_appends_notification_without_
         .contains("child final answer &lt;ok&gt;"));
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
-    assert!(wakes.is_empty());
+    assert_eq!(wakes.len(), 1);
 
     let again =
         project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
@@ -621,7 +621,7 @@ async fn background_completion_projects_bridge_and_appends_notification_without_
         fetch_scheduled_wakes(db.node.as_ref(), &session_id)
             .await
             .len(),
-        0
+        1
     );
 }
 
@@ -677,7 +677,7 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         fetch_scheduled_wakes(db.node.as_ref(), &session_id)
             .await
             .len(),
-        0
+        1
     );
 
     let again =
@@ -695,7 +695,7 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         fetch_scheduled_wakes(db.node.as_ref(), &session_id)
             .await
             .len(),
-        0
+        1
     );
 }
 
@@ -829,7 +829,7 @@ async fn background_completion_compacts_multibyte_summary_without_panicking() {
 }
 
 #[tokio::test]
-async fn multiple_background_completions_append_notifications_without_agent_requests() {
+async fn multiple_background_completions_append_notifications_and_coalesce_wake() {
     let (db, session_id, parent_request_id) = setup_fixture("background_completion_coalesce").await;
     let (child_a, session_a) = create_child_and_bridge(
         &db.node,
@@ -874,7 +874,7 @@ async fn multiple_background_completions_append_notifications_without_agent_requ
         fetch_scheduled_wakes(db.node.as_ref(), &session_id)
             .await
             .len(),
-        0
+        1
     );
 }
 
@@ -926,7 +926,7 @@ async fn background_completion_does_not_interrupt_active_foreground_parent() {
     );
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
-    assert!(wakes.is_empty());
+    assert_eq!(wakes.len(), 1);
 }
 
 #[tokio::test]
@@ -1033,7 +1033,7 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
     assert!(messages[0].content.contains(&child_request_id));
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
-    assert!(wakes.is_empty());
+    assert_eq!(wakes.len(), 1);
 }
 
 #[tokio::test]

@@ -92,33 +92,6 @@ pub(crate) async fn save_message_with_requester_did(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn save_message_with_key_and_requester_did(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    sequence: u32,
-    role: &str,
-    content: &str,
-    reasoning: Option<&str>,
-    message_key: &str,
-) -> Result<()> {
-    let escaped_message_key = escape_graphql_string(message_key);
-    save_message_inner(
-        node,
-        session_id,
-        agent_did,
-        requester_did,
-        sequence,
-        role,
-        content,
-        reasoning,
-        &escaped_message_key,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn save_message_inner(
     node: &EmbeddedNode,
     session_id: &str,

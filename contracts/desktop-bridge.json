@@ -217,6 +217,14 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_grok_login",
+      "permissionSet": "config-write"
+    },
+    {
+      "name": "desktop_grok_login_cancel",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_task_save",
       "permissionSet": "tasks"
     },
@@ -268,7 +276,8 @@
   ],
   "events": [
     "desktop://client-updated",
-    "desktop://codex-login-url"
+    "desktop://codex-login-url",
+    "desktop://grok-login-url"
   ],
   "packageVersion": "0.10.1",
   "permissionSets": [

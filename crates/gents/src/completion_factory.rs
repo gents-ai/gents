@@ -165,7 +165,9 @@ fn thinking_default_params(
         (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
             "reasoning": { "effort": "medium" }
         })),
-        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
+        // Grok: do not force reasoning.effort — several grok models 400 on it.
+        (BackendProviderKind::XaiGrokOAuth, _)
+        | (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
         | (BackendProviderKind::OpenRouter, _) => None,
     }
 }
@@ -178,7 +180,7 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
                 .require_parameters(true)
                 .to_json(),
         ),
-        BackendProviderKind::ChatGptCodex => None,
+        BackendProviderKind::ChatGptCodex | BackendProviderKind::XaiGrokOAuth => None,
     }
 }
 
@@ -188,8 +190,9 @@ fn request_additional_params(
 ) -> Option<serde_json::Value> {
     match behavior.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
-        BackendProviderKind::OpenRouter => None,
-        BackendProviderKind::ChatGptCodex => None,
+        BackendProviderKind::OpenRouter
+        | BackendProviderKind::ChatGptCodex
+        | BackendProviderKind::XaiGrokOAuth => None,
     }
 }
 

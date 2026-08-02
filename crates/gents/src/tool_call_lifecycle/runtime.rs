@@ -41,6 +41,10 @@ struct ToolRuntimeScope {
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
     live_output: Option<LiveToolOutputWriter>,
+    // True only for executions spawned through the R6 background bridge;
+    // tools with per-call budgets (bash) use the background lifetime budget
+    // instead of their foreground ceiling when set (#985).
+    background: bool,
 }
 
 #[derive(Clone)]
@@ -49,6 +53,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
+    pub(crate) background: bool,
 }
 
 tokio::task_local! {
@@ -110,6 +115,34 @@ where
                 cancellation_token,
                 workspace_cwd,
                 live_output,
+                background: false,
+            },
+            future,
+        )
+        .await
+}
+
+/// Scope for executions spawned through the R6 background bridge: identical
+/// to the foreground scope except tools can observe `background` and apply
+/// the background lifetime budget instead of their foreground ceiling.
+pub(crate) async fn scope_background_tool_execution<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    TOOL_RUNTIME_SCOPE
+        .scope(
+            ToolRuntimeScope {
+                deadline_at,
+                cancellation_token,
+                workspace_cwd,
+                live_output,
+                background: true,
             },
             future,
         )
@@ -129,6 +162,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
             live_output: scope.live_output,
+            background: scope.background,
         })
 }
 

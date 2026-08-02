@@ -76,7 +76,9 @@ impl ToolCeiling {
             file_tools: FileToolMode::Off,
             bash: BashMode::Off,
             cli_tools: Vec::new(),
-            command_timeout: std::time::Duration::from_secs(10),
+            command_timeout: std::time::Duration::from_secs(
+                crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
+            ),
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off),
         }
@@ -87,7 +89,9 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadOnly,
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
-            command_timeout: std::time::Duration::from_secs(10),
+            command_timeout: std::time::Duration::from_secs(
+                crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
+            ),
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -101,7 +105,9 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadOnly,
             bash: BashMode::ReadOnly,
             cli_tools: Vec::new(),
-            command_timeout: std::time::Duration::from_secs(10),
+            command_timeout: std::time::Duration::from_secs(
+                crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
+            ),
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -115,7 +121,9 @@ impl ToolCeiling {
             file_tools: FileToolMode::ReadWrite,
             bash: BashMode::Unrestricted,
             cli_tools: Vec::new(),
-            command_timeout: std::time::Duration::from_secs(10),
+            command_timeout: std::time::Duration::from_secs(
+                crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
+            ),
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadWrite,

@@ -9,6 +9,8 @@ pub(crate) mod demo;
 pub(crate) mod diagnose;
 pub(crate) mod fleet;
 pub(crate) mod goal;
+pub(crate) mod grok_auth_probe;
+pub(crate) mod grok_login;
 pub(crate) mod init;
 pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;

@@ -98,6 +98,17 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         bash_def.parameters["properties"]["timeout_secs"]["maximum"],
         DEFAULT_COMMAND_TIMEOUT_SECS
     );
+    assert_eq!(
+        bash_def.parameters["properties"]["timeout_secs"]["default"],
+        DEFAULT_COMMAND_TIMEOUT_SECS
+    );
+    let timeout_description = bash_def.parameters["properties"]["timeout_secs"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        timeout_description.contains(&BACKGROUND_COMMAND_TIMEOUT_SECS.to_string()),
+        "schema must state the background lifetime budget: {timeout_description}"
+    );
 }
 
 #[test]
@@ -1569,7 +1580,7 @@ async fn unrestricted_bash_runs_shell_command_strings() {
             command: "printf OK && printf ERR >&2".to_string(),
             args: Vec::new(),
             cwd: None,
-            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
     )
@@ -1604,7 +1615,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
             command: "printf".to_string(),
             args: vec!["ok".to_string()],
             cwd: None,
-            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
     )
@@ -1633,7 +1644,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
             command: "printf".to_string(),
             args: vec!["json".to_string()],
             cwd: None,
-            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: true,
         },
     )
@@ -1662,7 +1673,7 @@ async fn bash_timeout_reports_metadata_instead_of_error() {
             command: "sleep".to_string(),
             args: vec!["2".to_string()],
             cwd: None,
-            timeout_secs: 1,
+            timeout_secs: Some(1),
             raw_json: false,
         },
     )
@@ -1696,7 +1707,7 @@ async fn bash_request_deadline_returns_lifecycle_timeout_marker() {
                 command: "sleep".to_string(),
                 args: vec!["2".to_string()],
                 cwd: None,
-                timeout_secs: 5,
+                timeout_secs: Some(5),
                 raw_json: false,
             },
         ),
@@ -1729,7 +1740,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
             command: command.to_string(),
             args: Vec::new(),
             cwd: None,
-            timeout_secs: 1,
+            timeout_secs: Some(1),
             raw_json: false,
         },
     );
@@ -1803,7 +1814,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
             command: shell,
             args: Vec::new(),
             cwd: None,
-            timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
     )
@@ -2160,4 +2171,97 @@ fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
         std::sync::Arc::ptr_eq(&via_alias, &via_real),
         "alias and real spellings of a new file must share one lock"
     );
+}
+
+// #985: the timeout applied when the model omits timeout_secs must equal the
+// schema-advertised default, and backgrounded runs get their own lifetime
+// budget instead of the foreground ceiling.
+#[test]
+fn command_timeout_resolution_matches_advertised_schema() {
+    use super::shared::resolve_command_timeout;
+
+    let foreground_default = Duration::from_secs(120);
+    assert_eq!(
+        resolve_command_timeout(None, foreground_default, false),
+        foreground_default,
+        "omission must apply the advertised default"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(600), foreground_default, false),
+        foreground_default,
+        "explicit foreground requests are capped at the ceiling"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(5), foreground_default, false),
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(0), foreground_default, false),
+        Duration::from_secs(1)
+    );
+
+    let budget = Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS);
+    assert_eq!(
+        resolve_command_timeout(None, foreground_default, true),
+        budget,
+        "background omission uses the background lifetime budget"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(7_200), foreground_default, true),
+        Duration::from_secs(7_200),
+        "background requests are exempt from the foreground ceiling"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(999_999), foreground_default, true),
+        budget,
+        "background requests are still capped at the background budget"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(0), foreground_default, true),
+        Duration::from_secs(1)
+    );
+}
+
+#[test]
+fn bash_args_omitted_timeout_deserializes_to_none() {
+    let args: BashArgs = serde_json::from_str(r#"{"command":"true"}"#).unwrap();
+    assert_eq!(args.timeout_secs, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
+    let root = temp_root("gents-bash-bg-ceiling");
+    let tool = ReadOnlyBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
+        vec!["sleep".to_string()],
+    );
+
+    let deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
+    let output = crate::tool_call_lifecycle::runtime::scope_background_tool_execution(
+        Some(deadline),
+        tokio_util::sync::CancellationToken::new(),
+        None,
+        None,
+        crate::llm::tool::Tool::call(
+            &tool,
+            BashArgs {
+                command: "sleep".to_string(),
+                args: vec!["2".to_string()],
+                cwd: None,
+                timeout_secs: None,
+                raw_json: false,
+            },
+        ),
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(
+        meta["ok"], true,
+        "a backgrounded command must not be killed by the 1s foreground ceiling: {output}"
+    );
+    assert_eq!(meta["timed_out"], false);
 }

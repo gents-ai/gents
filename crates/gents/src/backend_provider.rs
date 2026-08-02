@@ -40,6 +40,15 @@ pub enum BackendProviderKind {
         alias = "codex"
     )]
     ChatGptCodex,
+    #[serde(
+        rename = "XaiGrokOAuth",
+        alias = "xai-oauth",
+        alias = "grok-oauth",
+        alias = "xai-grok-oauth",
+        alias = "xai_oauth",
+        alias = "grok_oauth"
+    )]
+    XaiGrokOAuth,
 }
 
 impl BackendProviderKind {
@@ -58,6 +67,12 @@ impl BackendProviderKind {
             | Some("chatgpt_codex")
             | Some("codex-chatgpt")
             | Some("codex") => Ok(Self::ChatGptCodex),
+            Some("XaiGrokOAuth")
+            | Some("xai-oauth")
+            | Some("grok-oauth")
+            | Some("xai-grok-oauth")
+            | Some("xai_oauth")
+            | Some("grok_oauth") => Ok(Self::XaiGrokOAuth),
             Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
         }
     }
@@ -67,7 +82,14 @@ impl BackendProviderKind {
             Self::OpenAiCompatible => "OpenAiCompatible",
             Self::OpenRouter => "OpenRouter",
             Self::ChatGptCodex => "ChatGptCodex",
+            Self::XaiGrokOAuth => "XaiGrokOAuth",
         }
+    }
+
+    /// Backends that authenticate with agent-scoped `OAuthCredential` documents
+    /// rather than a fleet-global API key. These must not be fleet-probed.
+    pub fn is_agent_scoped_oauth(self) -> bool {
+        matches!(self, Self::ChatGptCodex | Self::XaiGrokOAuth)
     }
 }
 
@@ -82,10 +104,13 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
         BackendProviderKind::OpenAiCompatible => "OpenAI-compatible",
         BackendProviderKind::OpenRouter => "OpenRouter",
         BackendProviderKind::ChatGptCodex => "ChatGPT Codex",
+        BackendProviderKind::XaiGrokOAuth => "Grok / xAI OAuth",
     }
 }
 
 const MODEL_DISCOVERY_PATH: &str = "/models";
+/// The Grok CLI proxy publishes its catalog at `/models-v2` (official client path).
+const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 
 #[derive(Deserialize)]
 struct OpenAiModelsResponse {
@@ -97,7 +122,26 @@ struct OpenAiModelsResponse {
 
 #[derive(Deserialize)]
 struct OpenAiModelRecord {
-    id: String,
+    id: Option<String>,
+    model: Option<String>,
+    #[serde(rename = "modelId")]
+    model_id: Option<String>,
+}
+
+impl OpenAiModelRecord {
+    /// OpenAI-style catalogs identify models by `id`; the Grok `/models-v2`
+    /// catalog identifies them by `model` / `modelId` (`id` is a row id there).
+    fn identifier(self, kind: BackendProviderKind) -> Option<String> {
+        let ordered = if kind == BackendProviderKind::XaiGrokOAuth {
+            [self.model, self.model_id, self.id]
+        } else {
+            [self.id, self.model, self.model_id]
+        };
+        ordered
+            .into_iter()
+            .flatten()
+            .find(|value| !value.trim().is_empty())
+    }
 }
 
 #[derive(Deserialize)]
@@ -122,19 +166,24 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
-    chatgpt_credential: Option<&crate::chatgpt_codex::OAuthCredential>,
+    oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
 ) -> Result<Vec<String>> {
-    let endpoint = if kind == BackendProviderKind::ChatGptCodex {
-        crate::chatgpt_codex::normalize_endpoint(endpoint)
-    } else {
-        endpoint.trim_end_matches('/').to_string()
+    let endpoint = match kind {
+        BackendProviderKind::ChatGptCodex => crate::chatgpt_codex::normalize_endpoint(endpoint),
+        BackendProviderKind::XaiGrokOAuth => crate::xai_grok_oauth::normalize_endpoint(endpoint),
+        _ => endpoint.trim_end_matches('/').to_string(),
     };
-    let models_url = format!("{}{}", endpoint, MODEL_DISCOVERY_PATH);
+    let discovery_path = if kind == BackendProviderKind::XaiGrokOAuth {
+        XAI_GROK_MODEL_DISCOVERY_PATH
+    } else {
+        MODEL_DISCOVERY_PATH
+    };
+    let models_url = format!("{endpoint}{discovery_path}");
     let provider_name = provider_display_name(kind);
     async {
         let mut request = client.get(&models_url);
         if kind == BackendProviderKind::ChatGptCodex {
-            let Some(credential) = chatgpt_credential else {
+            let Some(credential) = oauth_credential else {
                 tracing::Span::current().record("failure_class", "auth");
                 anyhow::bail!(
                     "ChatGPT Codex model discovery requires an OAuthCredential document; run `gents codex-login` for the agent DID first"
@@ -160,6 +209,26 @@ pub async fn discover_models(
                 "client_version",
                 crate::chatgpt_codex::chatgpt_codex_client_version(),
             )]);
+        } else if kind == BackendProviderKind::XaiGrokOAuth {
+            let Some(credential) = oauth_credential else {
+                tracing::Span::current().record("failure_class", "auth");
+                anyhow::bail!(
+                    "Grok OAuth model discovery requires an OAuthCredential document; run `gents grok-login` for the agent DID first"
+                );
+            };
+            request = request.bearer_auth(&credential.access_token);
+            let headers = match crate::xai_grok_oauth::build_xai_grok_oauth_headers() {
+                Ok(headers) => headers,
+                Err(error) => {
+                    tracing::Span::current().record("failure_class", "auth");
+                    return Err(error);
+                }
+            };
+            for (name, value) in headers {
+                if let Some(name) = name {
+                    request = request.header(name, value);
+                }
+            }
         } else if let Some(api_key) = api_key {
             request = request.bearer_auth(api_key);
         }
@@ -213,7 +282,10 @@ pub async fn discover_models(
             }
         };
 
-        let openai_models = models.data.into_iter().map(|model| model.id);
+        let openai_models = models
+            .data
+            .into_iter()
+            .filter_map(|model| model.identifier(kind));
         let chatgpt_codex_models = models
             .models
             .into_iter()
@@ -341,6 +413,50 @@ mod tests {
         .expect("model discovery should accept common non-Codex models fields");
 
         assert_eq!(models, vec!["from-id", "from-name", "from-model"]);
+    }
+
+    #[tokio::test]
+    async fn discover_models_reads_grok_models_v2_shape() {
+        // Official Grok CLI catalog shape: `/models-v2` returns `{"data":[...]}`
+        // where the model identifier is `model` / `modelId`, not `id` (which is
+        // a catalog row id when present).
+        let (endpoint, requests) = spawn_model_discovery_server(
+            r#"{"data":[{"id":"row-1","model":"grok-4.5","name":"Grok 4.5","contextWindow":256000,"apiBackend":"responses"},{"id":"row-2","modelId":"grok-build-0.1","name":"Grok Build"}]}"#,
+        )
+        .await;
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: "xai-oauth:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: crate::xai_grok_oauth::XAI_OAUTH_PROVIDER.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+        };
+
+        let models = discover_models(
+            &Client::new(),
+            BackendProviderKind::XaiGrokOAuth,
+            &endpoint,
+            None,
+            Some(&credential),
+        )
+        .await
+        .expect("Grok OAuth model discovery should accept the /models-v2 shape");
+
+        assert_eq!(models, vec!["grok-4.5", "grok-build-0.1"]);
+        let requests = requests.lock().expect("requests lock");
+        assert!(
+            requests[0].starts_with("GET /models-v2"),
+            "Grok discovery must query the official /models-v2 catalog: {}",
+            requests[0]
+        );
     }
 
     #[tokio::test]

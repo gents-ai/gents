@@ -42,6 +42,12 @@ export function ChooseStep({
         meta="Sign in with your ChatGPT plan"
         onPick={() => onPick("codex")}
       />
+      <OptionCard
+        testid="inference-option-grok"
+        title="Grok subscription (SuperGrok / X Premium+)"
+        meta="Sign in with your Grok / xAI account"
+        onPick={() => onPick("grok")}
+      />
     </ul>
   );
 }
@@ -287,6 +293,57 @@ export function CodexStep({
           type="button"
         >
           {submitting ? "Waiting for sign-in…" : "Sign in with ChatGPT"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function GrokStep({
+  authUrl,
+  signingIn,
+  submitting,
+  onCancel,
+  onSubmit,
+}: {
+  authUrl: string | null;
+  signingIn: boolean;
+  submitting: boolean;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="inference-wizard-form">
+      <p className="muted">
+        Use SuperGrok or an eligible X Premium+ subscription. Open the device
+        code URL, approve access, and the credential is stored on this agent
+        (refreshed automatically; no console.x.ai API key).
+      </p>
+      {submitting && authUrl ? (
+        <p className="muted small">
+          Open this URL to finish sign-in:{" "}
+          <span className="mono inference-wizard-authurl">{authUrl}</span>
+        </p>
+      ) : null}
+      <div className="inference-wizard-actions">
+        {signingIn ? (
+          <button
+            className="ghost-button"
+            data-testid="inference-grok-cancel"
+            onClick={onCancel}
+            type="button"
+          >
+            Cancel sign-in
+          </button>
+        ) : null}
+        <button
+          className="primary-button"
+          data-testid="inference-grok-signin"
+          disabled={submitting}
+          onClick={onSubmit}
+          type="button"
+        >
+          {submitting ? "Waiting for sign-in…" : "Sign in with Grok"}
         </button>
       </div>
     </div>

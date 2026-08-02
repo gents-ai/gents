@@ -34,6 +34,8 @@ struct BackgroundTheoremToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    lifecycle_state: Option<String>,
+    result: Option<String>,
     cancel_cause: Option<String>,
     cancel_cascade_intent_at: Option<String>,
 }
@@ -327,6 +329,8 @@ async fn fetch_background_theorem_tool_call(
                 await_mode
                 cancel_policy
                 child_request_id
+                lifecycle_state
+                result
                 cancel_cause
                 cancel_cascade_intent_at
             }}
@@ -510,9 +514,9 @@ async fn wait_for_background_theorem_child_lifecycle_state(
     }
 }
 
-pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract() {
+pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 22);
 
     let names = cases
         .iter()
@@ -525,10 +529,24 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
             "background_tool_budget_count_8_rejects_spawn",
             "tool_kind_background_mode_executes",
             "tool_kind_bridge_complete_persists_result",
-            "tool_kind_bridge_failure_cancelled_projects_parent_cancelled",
+            "tool_kind_explicit_cancel_projects_explicit_cancel",
             "background_recovery_running_live_parent_to_cancelled",
-            "background_completion_notification_creates_no_request",
+            "background_completion_source_writes_canonical_key",
+            "terminal_completion_message_precedes_claimed_continuation",
             "legacy_subagent_completion_source_aliases_canonical_key",
+            "list_processes_same_requester_next_turn_authorized",
+            "read_process_same_requester_next_turn_authorized",
+            "wait_process_same_requester_next_turn_authorized",
+            "cancel_process_same_requester_next_turn_authorized",
+            "originating_request_authorizes_legacy_row_without_requester",
+            "absent_requester_next_turn_authorized",
+            "empty_requester_does_not_alias_absent",
+            "process_control_cross_session_denied",
+            "process_control_cross_agent_denied",
+            "process_control_cross_requester_denied",
+            "wait_timeout_preserves_running_process",
+            "caller_interrupt_preserves_running_process",
+            "caller_deadline_preserves_running_process",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>()
@@ -560,12 +578,13 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
     assert_eq!(completed.result.as_deref(), Some("done"));
 
     let cancelled =
-        lean_r6_backgrounding_case("tool_kind_bridge_failure_cancelled_projects_parent_cancelled");
+        lean_r6_backgrounding_case("tool_kind_explicit_cancel_projects_explicit_cancel");
     assert_eq!(cancelled.terminal_state.as_str(), "cancelled");
-    assert_eq!(cancelled.reason.as_deref(), Some("parent_cancelled"));
+    assert_eq!(cancelled.reason.as_deref(), Some("explicit_cancel"));
 
     let backgrounded = lean_r6_backgrounding_case("tool_kind_background_mode_executes");
     assert!(backgrounded.legal);
+    assert_eq!(backgrounded.action.as_str(), "background");
     assert_eq!(backgrounded.terminal_state.as_str(), "running");
 
     let recovered =
@@ -576,24 +595,368 @@ pub(super) fn generated_r6_backgrounding_cases_pin_tool_backgrounding_contract()
     );
     assert_eq!(recovered.terminal_state.as_str(), "cancelled");
     assert_eq!(recovered.reason.as_deref(), Some("interrupted_on_restart"));
-
-    let completion =
-        lean_r6_backgrounding_case("background_completion_notification_creates_no_request");
-    assert_eq!(completion.group.as_str(), "completion_delivery");
     assert_eq!(
-        completion.action.as_str(),
-        "append_notification_without_request"
+        recovered.queue_source.as_deref(),
+        Some("background_completion")
     );
-    assert_eq!(completion.queue_source, None);
-    assert_eq!(completion.queue_key, None);
+    assert_eq!(
+        recovered.queue_key.as_deref(),
+        Some("background_completion:900")
+    );
+
+    let canonical = lean_r6_backgrounding_case("background_completion_source_writes_canonical_key");
+    assert_eq!(
+        canonical.queue_source.as_deref(),
+        Some("background_completion")
+    );
+    assert_eq!(
+        canonical.queue_key.as_deref(),
+        Some("background_completion:900")
+    );
 
     let legacy =
         lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
     assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
-    assert_eq!(
-        legacy.queue_key.as_deref(),
-        Some("background_completion:900")
+    assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+
+    for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
+        drive_r6_native_lifecycle_case(case).await;
+    }
+
+    let continuation =
+        lean_r6_backgrounding_case("terminal_completion_message_precedes_claimed_continuation");
+    drive_r6_completion_continuation_case(continuation).await;
+
+    for action in [
+        "list_processes",
+        "read_process",
+        "wait_process",
+        "cancel_process",
+    ] {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.group == "process_control_authorization"
+                    && case.action == action
+                    && case.reason.as_deref() == Some("same_requester_next_turn")
+            })
+            .unwrap_or_else(|| panic!("missing same-principal process control case for {action}"));
+        assert!(case.legal, "{} must remain authorized", case.name);
+    }
+
+    for scenario in ["cross_session", "cross_agent", "cross_requester"] {
+        let case = cases
+            .iter()
+            .find(|case| {
+                case.group == "process_control_authorization"
+                    && case.reason.as_deref() == Some(scenario)
+            })
+            .unwrap_or_else(|| panic!("missing denied process control case for {scenario}"));
+        assert!(!case.legal, "{} must be denied", case.name);
+    }
+
+    assert!(lean_r6_backgrounding_case("absent_requester_next_turn_authorized").legal);
+    assert!(!lean_r6_backgrounding_case("empty_requester_does_not_alias_absent").legal);
+
+    for reason in [
+        "wait_timeout",
+        "caller_interrupted",
+        "caller_deadline_exceeded",
+    ] {
+        let case = cases
+            .iter()
+            .find(|case| case.group == "wait_boundary" && case.reason.as_deref() == Some(reason))
+            .unwrap_or_else(|| panic!("missing wait boundary case for {reason}"));
+        assert!(case.legal, "{} must not request cancellation", case.name);
+        assert_eq!(case.terminal_state, "running", "{}", case.name);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CompletionWakeRow {
+    request_id: String,
+    lifecycle_state: Option<String>,
+    metadata: Option<String>,
+}
+
+async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<CompletionWakeRow> {
+    let session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }}
+                    execution_origin: {{ _eq: "scheduled" }}
+                }}
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                lifecycle_state
+                metadata
+            }}
+        }}"#
     );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch completion wakes failed: {:?}",
+        response.errors
+    );
+    let data = response.data.expect("completion wake query data");
+    serde_json::from_value(data["AgentRequest"].clone()).expect("parse completion wake rows")
+}
+
+async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
+    use gents::background_completion::{
+        project_background_subagent_completion, BackgroundCompletionOutcome,
+    };
+
+    assert!(case.legal, "composed Lean acceptance path must execute");
+    assert_eq!(case.action, "terminalize_append_notification_enqueue_claim");
+    assert_eq!(case.terminal_state, "completed");
+    assert_eq!(
+        case.result.as_deref(),
+        Some("assistant_wait_precedes_notification")
+    );
+    assert_eq!(case.reason.as_deref(), Some("continuation_claimed"));
+    assert_eq!(case.queue_source.as_deref(), Some("background_completion"));
+
+    let bridge_case = lean_bridge_step_cases()
+        .iter()
+        .find(|candidate| candidate.name == "bridge_step_complete_child_completed")
+        .expect("generated completed bridge case");
+    let (db, _lifecycle, _tool_call_id, child_request_id, parent_session_id) =
+        seed_bridge_step_fixture(bridge_case).await;
+    let parent_request_id = format!("{}-parent", bridge_case.name);
+    let child_session_id = fetch_child_session_id(db.node.as_ref(), &child_request_id).await;
+
+    // Materialize the model-visible wait call before the child terminalizes.
+    // This is the durable sequence reservation represented by the composed
+    // Lean witness.
+    let wait_message = serde_json::to_string(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "r6-wait-result".to_string(),
+            call_id: Some("r6-wait-call".to_string()),
+            function: ToolFunction {
+                name: "wait_subagent".to_string(),
+                arguments: json!({ "child_request_id": child_request_id }),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .expect("serialize wait assistant message");
+    let escaped_session_id = escape_graphql_string(&parent_session_id);
+    let escaped_request_id = escape_graphql_string(&parent_request_id);
+    let escaped_wait_message = escape_graphql_string(&wait_message);
+    let reserve = db
+        .node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{escaped_session_id}:1"
+                    session_id: "{escaped_session_id}"
+                    agent_did: "{AGENT_DID}"
+                    request_id: "{escaped_request_id}"
+                    sequence: 1
+                    role: "assistant"
+                    content: "{escaped_wait_message}"
+                    reasoning: ""
+                    timestamp: "2026-05-19T00:00:02Z"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !reserve.has_errors(),
+        "reserve assistant wait row failed: {:?}",
+        reserve.errors
+    );
+
+    persist_bridge_step_child_completion(db.node.as_ref(), &child_request_id, &child_session_id)
+        .await;
+
+    let outcome =
+        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+            .await
+            .expect("project terminal background completion");
+    assert!(
+        matches!(outcome, BackgroundCompletionOutcome::Projected { .. }),
+        "terminal bridge must project before continuation: {outcome:?}"
+    );
+
+    let messages_before_claim =
+        fetch_message_snapshots_for_session(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(
+        messages_before_claim.len(),
+        2,
+        "reserved assistant wait and terminal notification must both remain durable"
+    );
+    assert_eq!(messages_before_claim[0].role, "assistant");
+    assert!(
+        messages_before_claim[0]
+            .content
+            .contains("\"wait_subagent\""),
+        "model-visible wait envelope missing: {:?}",
+        messages_before_claim[0].content
+    );
+    assert_eq!(messages_before_claim[1].role, "user");
+    assert!(
+        messages_before_claim[1]
+            .content
+            .contains("<subagent-notification"),
+        "model-visible completion envelope missing: {:?}",
+        messages_before_claim[1].content
+    );
+    assert!(
+        messages_before_claim[0].sequence < messages_before_claim[1].sequence,
+        "assistant wait must precede its terminal notification: {messages_before_claim:#?}"
+    );
+
+    let wakes = fetch_completion_wakes(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(wakes.len(), 1, "one completion must enqueue one wake");
+    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
+    let metadata: Value =
+        serde_json::from_str(wakes[0].metadata.as_deref().expect("wake metadata"))
+            .expect("wake metadata JSON");
+    assert_eq!(metadata["queue"]["source"], "background_completion");
+    assert_eq!(metadata["queue"]["policy"], "coalesce");
+    assert_eq!(
+        metadata["queue"]["key"],
+        format!("background_completion:{parent_session_id}")
+    );
+    assert_eq!(
+        case.queue_key.as_deref(),
+        Some("background_completion:900"),
+        "Lean uses opaque session 900 as the canonical runtime-key representative"
+    );
+
+    // The foreground parent owns the session until terminal. Its completion
+    // releases the FIFO head, after which the normal watcher claims the
+    // generated wake as the next agent turn.
+    set_request_status_lifecycle_by_request_id(
+        db.node.as_ref(),
+        &parent_request_id,
+        "completed",
+        "completed",
+    )
+    .await;
+    let mut watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+        .await
+        .expect("completion wake should become claimable")
+        .expect("watcher should remain open")
+        .expect("completion wake should load");
+    assert_eq!(claimed.request_id, wakes[0].request_id);
+    assert_eq!(claimed.session_id, parent_session_id);
+
+    let messages_after_claim =
+        fetch_message_snapshots_for_session(db.node.as_ref(), &parent_session_id).await;
+    assert_eq!(
+        messages_after_claim, messages_before_claim,
+        "claiming the continuation must retain the notification provider history"
+    );
+}
+
+async fn drive_r6_native_lifecycle_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
+    let db = test_db(&format!("r6-native-lifecycle-{}", case.name)).await;
+    let request_id = format!("{}-request", case.name);
+    let session_id = format!("{}-session", case.name);
+    let tool_call_id = format!("{}-tool", case.name);
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    let mut lifecycle = if case.action == "background" {
+        ToolCallLifecycle::new(
+            db.node.clone(),
+            request_id,
+            session_id.clone(),
+            AGENT_DID.to_string(),
+            tool_call_id.clone(),
+            1,
+            "bash_unrestricted".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    } else {
+        ToolCallLifecycle::new_background_tool(
+            db.node.clone(),
+            request_id,
+            session_id.clone(),
+            AGENT_DID.to_string(),
+            tool_call_id.clone(),
+            1,
+            "bash_unrestricted".to_string(),
+            "{}".to_string(),
+            deadline,
+        )
+    };
+    lifecycle
+        .start_running()
+        .await
+        .unwrap_or_else(|error| panic!("{} start_running failed: {error:#}", case.name));
+
+    match case.action.as_str() {
+        "background" => lifecycle.background().await.unwrap(),
+        "bridge_complete" => {
+            assert!(
+                lifecycle
+                    .bridge_complete(case.result.clone().unwrap_or_default())
+                    .await
+                    .unwrap(),
+                "{} must win the running-state compare",
+                case.name
+            );
+        }
+        "bridge_failure" => {
+            assert!(
+                lifecycle
+                    .bridge_failure(gents::tool_call_lifecycle::ChildTerminal::Interrupted)
+                    .await
+                    .unwrap(),
+                "{} must win the running-state compare",
+                case.name
+            );
+        }
+        other => panic!("unhandled native lifecycle action {other}"),
+    }
+
+    let row =
+        fetch_background_theorem_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    assert_eq!(
+        row.await_mode.as_deref(),
+        Some(case.await_mode.as_str()),
+        "{} await mode drifted",
+        case.name
+    );
+    assert_eq!(
+        row.cancel_policy.as_deref(),
+        Some(case.cancel_policy.as_str()),
+        "{} cancel policy drifted",
+        case.name
+    );
+    assert_eq!(
+        row.child_request_id.as_deref(),
+        case.child_request_id.as_deref(),
+        "{} child-link kind drifted",
+        case.name
+    );
+    assert_eq!(
+        row.lifecycle_state.as_deref(),
+        Some(case.terminal_state.as_str()),
+        "{} lifecycle projection drifted",
+        case.name
+    );
+    if let Some(expected) = case.result.as_deref() {
+        assert_eq!(row.result.as_deref(), Some(expected), "{}", case.name);
+    }
+    if case.action == "bridge_failure" {
+        assert_eq!(
+            row.cancel_cause.as_deref(),
+            Some("interrupted"),
+            "{} cancellation cause drifted",
+            case.name
+        );
+    }
 }
 
 pub(super) async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
@@ -1150,11 +1513,11 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
 
 /// Drives the Lean `r4c.read_tool_output.dispatch_by_state` witness (#937)
 /// through the real hook: a running native background tool serves its live
-/// ring-buffer tail; a second hook on the same session — the restart shape,
-/// since `LiveToolOutputRegistry` is volatile per-process state — serves
-/// empty output for the same running row; after completion both hooks serve
-/// the persisted result. Payloads and paging numbers are the Lean-computed
-/// witness values.
+/// ring-buffer tail; a later-request hook sharing the process registry serves
+/// the same live output; an explicitly unshared hook models daemon restart and
+/// serves empty output for the still-running row. After completion every hook
+/// serves the persisted result. Payloads and paging numbers are the
+/// Lean-computed witness values.
 pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     let LeanR4cBackgroundWorkCase::ReadToolOutputDispatchesByState {
         running_payload,
@@ -1181,6 +1544,8 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         background_tool_registry(tools, &["bash_unrestricted"]),
     )
     .await;
+    let shared_processes = gents::BackgroundExecutionRegistry::default();
+    let hook = hook.with_background_execution_registry(shared_processes.clone());
 
     let spawn = skip_reason_json(
         hook.on_tool_call(
@@ -1231,6 +1596,68 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     assert_eq!(running["total_bytes"].as_u64(), Some(*running_total_bytes));
     assert_eq!(running["has_more"].as_bool(), Some(*running_has_more));
     assert_eq!(running["exited"].as_bool(), Some(false));
+
+    // A new request gets a new hook, but the daemon-owned process registry
+    // carries the live ring buffer across that request boundary.
+    let next_request_id = format!("{request_id}-next");
+    support::create_request(
+        db.node.as_ref(),
+        &next_request_id,
+        &session_id,
+        "processing",
+        "2026-05-19T00:00:01Z",
+    )
+    .await;
+    let next_turn_hook = DefraSessionHook::resume_or_create_with_identity_policy(
+        db.node.clone(),
+        &session_id,
+        "r6-background-theorem",
+        AGENT_DID,
+        FailurePolicy::default(),
+    )
+    .await
+    .expect("resume next-turn hook")
+    .with_background_execution_registry(shared_processes);
+    next_turn_hook
+        .set_active_request_id(Some(next_request_id))
+        .await;
+    next_turn_hook
+        .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    let next_turn_read = skip_reason_json(
+        next_turn_hook
+            .on_tool_call(
+                "read_process",
+                None,
+                "read-dispatch-next-turn",
+                &json!({ "tool_call_id": tool_call_id }).to_string(),
+            )
+            .await,
+    );
+    assert_eq!(next_turn_read["status"].as_str(), Some("running"));
+    assert_eq!(
+        next_turn_read["output"].as_str(),
+        Some(running_payload.as_str()),
+        "a later request must observe the originating request's live output"
+    );
+    assert_eq!(
+        next_turn_read["total_bytes"].as_u64(),
+        Some(*running_total_bytes)
+    );
+
+    let next_turn_list = skip_reason_json(
+        next_turn_hook
+            .on_tool_call("list_processes", None, "list-dispatch-next-turn", "{}")
+            .await,
+    );
+    let listed = next_turn_list["entries"]
+        .as_array()
+        .expect("list_processes entries")
+        .iter()
+        .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id.as_str()))
+        .expect("running process listed on later request");
+    assert_eq!(listed["stdout_bytes"].as_u64(), Some(*running_total_bytes));
 
     // Running + NO snapshot: a second hook on the same session has a fresh
     // (empty) live-output registry — exactly what a restarted daemon would
@@ -1284,7 +1711,11 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         .await,
     );
     assert_eq!(waited["status"].as_str(), Some("completed"));
-    for (label, reader) in [("live", &hook), ("restarted", &restarted_hook)] {
+    for (label, reader) in [
+        ("live", &hook),
+        ("next-turn", &next_turn_hook),
+        ("restarted", &restarted_hook),
+    ] {
         let terminal = skip_reason_json(
             reader
                 .on_tool_call(

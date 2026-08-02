@@ -270,7 +270,10 @@ pub(crate) mod runtime;
 pub mod subagent_request;
 mod transition;
 
-pub use recovery::{SubagentLivenessReport, TerminalParentToolReport, ToolCallRecoveryReport};
+pub use recovery::{
+    BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, SubagentLivenessReport,
+    TerminalParentToolReport, ToolCallRecoveryReport,
+};
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,
@@ -464,6 +467,16 @@ impl ToolCallLifecycle {
         self.is_subagent_bridge() || self.is_background_tool_bridge()
     }
 
+    pub(crate) fn terminal_persistence_status(&self, completion_reason: Option<&str>) -> String {
+        if self.is_background_tool_bridge() {
+            completion_reason
+                .map(|reason| format!("completionPending:{reason}"))
+                .unwrap_or_else(|| "completionPending".to_string())
+        } else {
+            "completed".to_string()
+        }
+    }
+
     pub(crate) fn await_mode(&self) -> AwaitMode {
         self.await_mode
     }
@@ -474,6 +487,18 @@ impl ToolCallLifecycle {
 
     pub(crate) fn request_id(&self) -> &str {
         &self.request_id
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn agent_did(&self) -> &str {
+        &self.agent_did
+    }
+
+    pub(crate) fn requester_did(&self) -> Option<&str> {
+        self.requester_did.as_deref()
     }
 
     pub(crate) fn tool_name(&self) -> &str {

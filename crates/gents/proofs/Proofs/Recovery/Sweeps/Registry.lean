@@ -11,6 +11,8 @@ def registeredRecoverySweeps : List RecoverySweep :=
   [ requestRecoverySweep
   , responseRecoverySweep
   , toolCallRecoverySweep
+  , orphanedBackgroundToolSweep
+  , backgroundCompletionSideEffectSweep
   , terminalParentOwnedToolSweep
   , detachedBridgeRecoverySweep
   , inferenceCallRecoverySweep

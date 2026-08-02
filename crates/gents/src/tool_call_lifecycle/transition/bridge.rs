@@ -34,6 +34,7 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let terminal_status = self.terminal_persistence_status(None);
 
         let mutation = format!(
             r#"mutation {{
@@ -44,7 +45,7 @@ impl ToolCallLifecycle {
                     }},
                     input: {{
                         result: "{escaped_result}",
-                        status: "completed",
+                        status: "{terminal_status}",
                         lifecycle_state: "completed",
                         started_at: "{started_at_str}",
                         deadline_at: "{deadline_at_str}",
@@ -85,6 +86,20 @@ impl ToolCallLifecycle {
     /// Returns BridgeFailureRequiresChildLink for native tools (no
     /// child_request_id).
     pub async fn bridge_failure(&mut self, child_terminal: super::ChildTerminal) -> Result<bool> {
+        let completion_reason = match &child_terminal {
+            super::ChildTerminal::Dead => "deadline_exceeded",
+            super::ChildTerminal::Interrupted => "explicit_cancel",
+            super::ChildTerminal::Failed { .. } | super::ChildTerminal::Superseded => "tool_failed",
+        };
+        self.bridge_failure_with_completion_reason(child_terminal, completion_reason)
+            .await
+    }
+
+    pub(crate) async fn bridge_failure_with_completion_reason(
+        &mut self,
+        child_terminal: super::ChildTerminal,
+        completion_reason: &str,
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
         if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
@@ -116,6 +131,7 @@ impl ToolCallLifecycle {
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let lifecycle_state_str = projected.as_str();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let terminal_status = self.terminal_persistence_status(Some(completion_reason));
         // If an upstream cascade already cancelled this bridge with a more
         // specific cause, this running-state compare fails and preserves that
         // earlier write. A successful cancelled projection here only observes
@@ -148,7 +164,7 @@ impl ToolCallLifecycle {
                     input: {{
                         {optional_fields}
                         {cancel_cause_field}
-                        status: "completed",
+                        status: "{terminal_status}",
                         lifecycle_state: "{lifecycle_state_str}",
                         started_at: "{started_at_str}",
                         deadline_at: "{deadline_at_str}",
@@ -263,7 +279,19 @@ impl ToolCallLifecycle {
     /// startup recovery for interrupted parent requests.
     ///
     pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<bool> {
-        self.cancel_during_run_inner(cause, None).await
+        self.cancel_during_run_inner(cause, None, None).await
+    }
+
+    /// Returns whether this caller won the durable running-state compare.
+    /// Background completion side effects must only be projected by that
+    /// winner; a loser adopts the already-terminal durable row.
+    pub(crate) async fn cancel_during_run_owned(
+        &mut self,
+        cause: CancelCause,
+        completion_reason: &str,
+    ) -> Result<bool> {
+        self.cancel_during_run_inner(cause, None, Some(completion_reason))
+            .await
     }
 
     /// Running -> Cancelled while dispatching a cascade cancel. For remote
@@ -281,11 +309,11 @@ impl ToolCallLifecycle {
         )?;
 
         let Some(child_request_id) = self.child_request_id.clone() else {
-            let _ = self.cancel_during_run_inner(cause, None).await?;
+            let _ = self.cancel_during_run_inner(cause, None, None).await?;
             return Ok(None);
         };
         if self.cancel_policy != CancelPolicy::Cascade {
-            let _ = self.cancel_during_run_inner(cause, None).await?;
+            let _ = self.cancel_during_run_inner(cause, None, None).await?;
             return Ok(None);
         }
 
@@ -294,14 +322,16 @@ impl ToolCallLifecycle {
             at: chrono::Utc::now(),
         };
         if child_request_is_locally_owned(&self.node, local_did, &intent.child_request_id).await? {
-            let won = self.cancel_during_run_inner(cause, None).await?;
+            let won = self.cancel_during_run_inner(cause, None, None).await?;
             if won {
                 return Ok(Some(CascadeDispatch::Local(intent)));
             }
             return Ok(None);
         }
 
-        let won = self.cancel_during_run_inner(cause, Some(intent.at)).await?;
+        let won = self
+            .cancel_during_run_inner(cause, Some(intent.at), None)
+            .await?;
         if won {
             Ok(Some(CascadeDispatch::RemoteIntentWritten))
         } else {
@@ -313,6 +343,7 @@ impl ToolCallLifecycle {
         &mut self,
         cause: CancelCause,
         remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
+        completion_reason_override: Option<&str>,
     ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
@@ -333,6 +364,13 @@ impl ToolCallLifecycle {
         let started_at_str = started_at.to_rfc3339();
         let deadline_at_str = self.deadline_at.to_rfc3339();
         let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
+        let completion_reason = completion_reason_override.unwrap_or(match cause {
+            CancelCause::Deadline => "deadline_exceeded",
+            CancelCause::Interrupted => "parent_interrupted",
+            CancelCause::UserCancelled => "explicit_cancel",
+        });
+        let terminal_status =
+            escape_graphql_string(&self.terminal_persistence_status(Some(completion_reason)));
         let remote_cancel_intent_fragment = remote_cancel_intent_at
             .map(|at| {
                 let at = escape_graphql_string(&at.to_rfc3339());
@@ -353,7 +391,7 @@ impl ToolCallLifecycle {
                     }},
                     input: {{
                         result: "{escaped_result}",
-                        status: "completed",
+                        status: "{terminal_status}",
                         lifecycle_state: "cancelled",
                         cancel_cause: "{cancel_cause}",
                         started_at: "{started_at_str}",
