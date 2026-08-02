@@ -72,6 +72,10 @@ def Coherent (pr : ProviderRow) : Prop :=
   | .ordinary => Content.callsOf pr.content = ∅
   | .toolResult _ _ => Content.callsOf pr.content = ∅
 
+instance (pr : ProviderRow) : Decidable (Coherent pr) := by
+  unfold Coherent
+  cases pr.row.kind <;> infer_instance
+
 abbrev AllCoherent (rows : List ProviderRow) : Prop :=
   ∀ pr ∈ rows, Coherent pr
 
