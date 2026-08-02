@@ -71,6 +71,12 @@ def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
 def boundaryPromptAssemblyProviderInputSanitizationId : String :=
   "boundary.prompt-assembly.provider-input-sanitization"
 
+def boundaryCompactionSafeToReduceSessionScopeId : String :=
+  "boundary.compaction.safe-to-reduce-session-scope"
+
+def boundaryCompactionUniqueCallIdsCheckedId : String :=
+  "boundary.compaction.unique-call-ids-checked"
+
 def boundaryModelNatTypedIdsTimeId : String :=
   "boundary.model.nat-typed-ids-time"
 
@@ -225,6 +231,26 @@ def boundaries : List Boundary :=
     , subject := "provider input sanitization"
     , statement :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
+    }
+  , { id := boundaryCompactionSafeToReduceSessionScopeId
+    , domain := "Compaction"
+    , subject := "safeToReduce resolver scope"
+    , statement :=
+        "PromptView.safeToReduce requires every retained tool-result row to carry a known terminal response status. Rust resolves this at session scope: compaction::safe_to_reduce is the modelled predicate and is what the conformance case drives, while agent/daemon/request.rs backs it with a single non-terminal-AgentResponse query rather than per-message request_id linkage. All-terminal at session scope implies terminal for every row, so the refinement can only err toward unsafe, whose cost is a skipped compaction retried on the next request."
+    , acceptedFailureMode :=
+        some "A row whose request has no AgentResponse row at all (a crashed run) reads unsafe in the model but safe under the session check. sanitize_history_for_provider already removes half-turns from crashed runs — an unpaired call or an orphaned result never reaches compaction's input — so what survives is a complete turn, which is safe to summarize."
+    , acceptedFollowUp :=
+        some "Per-message request_id linkage would close the gap exactly; it requires widening session::load_history's return shape and every caller."
+    }
+  , { id := boundaryCompactionUniqueCallIdsCheckedId
+    , domain := "Compaction"
+    , subject := "UniqueCallIds is checked, not structural"
+    , statement :=
+        "providerView_append and the compacted-prefix correspondence assume PromptAssembly.UniqueCallIds. That is a hypothesis, not a structural guarantee: tool-call ids come from the provider and no ingestion path enforces uniqueness across a session. dropUnpairedCalls credits an announcement from the globally resolved set, so a later turn reusing an id resurrects an earlier unpaired announcement and shifts the prefix under an already-stored count — Compaction.reused_call_id_breaks_prefix_stability exhibits it. agent/daemon/request.rs therefore verifies compaction::has_unique_call_ids over the provider view before compacting and skips reduction when it fails."
+    , acceptedFailureMode :=
+        some "A session whose provider reuses call ids stops compacting: the prompt grows until the request fails on context overflow rather than silently dropping rows that were never summarized. Counts already stored before a reuse appeared are still applied to a prefix that reuse may have shifted; the post-drop sanitize keeps the provider view valid, so the residual harm is bounded to context skew."
+    , acceptedFollowUp :=
+        some "Turn-scoped pair matching in dropUnpairedCalls — crediting an announcement only from the result block that immediately follows it — would make sanitize local and discharge UniqueCallIds entirely. That changes PromptAssembly.sanitize and its soundness/idempotence/fixpoint proofs (#448 territory), so it is tracked separately rather than folded into #993."
     }
   , { id := boundaryModelNatTypedIdsTimeId
     , domain := "CoreTypes"

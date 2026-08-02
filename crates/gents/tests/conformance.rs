@@ -99,6 +99,8 @@ mod client_runtime;
 mod codex_shim;
 #[path = "conformance/command_policy.rs"]
 mod command_policy;
+#[path = "conformance/compaction_gate.rs"]
+mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
@@ -313,6 +315,11 @@ async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract()
 #[test]
 fn generated_compaction_reducer_cases_pin_contract() {
     streaming_compaction::generated_compaction_reducer_cases_pin_contract();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compaction_gate_blocks_reduction_while_a_response_streams() {
+    compaction_gate::compaction_gate_blocks_reduction_while_a_response_streams().await;
 }
 
 #[tokio::test]

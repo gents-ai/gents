@@ -52,6 +52,48 @@ pub(super) async fn load_session_document_optional(
     Ok(rows.pop())
 }
 
+/// Whether any `AgentResponse` in this session is still streaming.
+///
+/// Backs the session-scope resolution of the modelled `safeToReduce` gate: a
+/// live response means a turn is still being written into this session's
+/// transcript, and compaction must not summarize a half-written turn. See
+/// `boundary.compaction.safe-to-reduce-session-scope`.
+pub(crate) async fn session_has_live_response(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<bool> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    status: {{ _eq: "streaming" }}
+                }},
+                limit: 1
+            ) {{
+                response_key
+            }}
+        }}"#
+    );
+
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading live responses for session_id={}: {:?}",
+            session_id,
+            resp.errors
+        );
+    }
+
+    Ok(resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|value| value.as_array())
+        .is_some_and(|rows| !rows.is_empty()))
+}
+
 pub(crate) async fn load_session_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,

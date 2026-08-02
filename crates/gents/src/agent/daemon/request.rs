@@ -46,8 +46,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         history_message_count = tracing::field::Empty,
                     ))
                     .await?;
-                let (stripped_history, file_activity) =
-                    compaction::strip_tool_results(full_history);
+                // One canonical reduction, shared with the compaction writer:
+                // `messages_compacted` is measured against this list, so the
+                // prefix drop below must index the same one (#993).
+                let (provider_history, file_activity) =
+                    compaction::provider_view(full_history);
                 if !file_activity.is_empty() {
                     tracing::debug!(
                         behavior_id = %self.behavior.behavior_id,
@@ -69,11 +72,24 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         compacted_message_count = tracing::field::Empty,
                     ))
                     .await?;
-                let history = drop_compacted_prefix(
-                    stripped_history,
+                // Drop in the space the count was measured in.
+                //
+                // Re-narrowing afterwards is provably free for counts this
+                // runtime wrote — their boundary is always `pair_safe_boundary`,
+                // so the drop lands on a turn boundary and the tail is already
+                // provider-valid (`Compaction.sanitize_drop_noop`). It is not
+                // free for counts written *before* the pair-safe splitter
+                // existed: those used an arbitrary budget index and carry no
+                // version marker, so an upgraded session can drop into the
+                // middle of a turn. Without this the orphan would reach
+                // `compact()`, which re-normalizes its input and would then
+                // record its count in a shifted space — reopening the very
+                // accounting defect this change closes, for exactly the sessions
+                // that predate it.
+                let mut history = compaction::sanitize_history_for_provider(drop_compacted_prefix(
+                    provider_history,
                     total_compacted_messages(&compaction_entries),
-                );
-                let mut history = compaction::sanitize_history_for_provider(history);
+                ));
                 let mut summaries = compaction_entries
                     .into_iter()
                     .map(|entry| compaction::bounded_summary(entry.summary))
@@ -93,12 +109,58 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     .await?;
                 built.estimated_tokens =
                     built.estimated_tokens.saturating_add(skill_reminder_tokens);
-                if prompt_exceeds_compaction_threshold(
+                let over_threshold = prompt_exceeds_compaction_threshold(
                     built.estimated_tokens,
                     &request.content,
                     self.behavior.context_window,
                     self.behavior.compaction_threshold,
-                ) {
+                );
+                // Runtime counterpart of Lean `PromptView.safeToReduce`,
+                // resolved at session scope: while any response in this session
+                // is still streaming, a turn is still being written into the
+                // transcript and must not be summarized away. All-terminal at
+                // session scope implies terminal for every row, so this can only
+                // err toward skipping a compaction the next request retries
+                // (`boundary.compaction.safe-to-reduce-session-scope`, #993).
+                let may_reduce = if over_threshold {
+                    let live_response =
+                        session::session_has_live_response(&self.node, &request.session_id).await?;
+                    let gate_open = if live_response {
+                        compaction::safe_to_reduce(&history, &compaction::NoneKnown)
+                    } else {
+                        compaction::safe_to_reduce(&history, &compaction::AllTerminal)
+                    };
+                    if !gate_open {
+                        tracing::info!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            behavior_id = %behavior_name,
+                            "compaction skipped: a response in this session is still streaming"
+                        );
+                    }
+                    // `Compaction.providerView_append` — the theorem that lets a
+                    // recorded count still name the same rows once the
+                    // transcript grows — assumes `UniqueCallIds`. Call ids come
+                    // from the provider and nothing enforces that, so it is
+                    // checked rather than assumed: a reused id resurrects an
+                    // earlier unpaired announcement and shifts the prefix under
+                    // the stored count
+                    // (`Compaction.reused_call_id_breaks_prefix_stability`).
+                    let unique_call_ids = compaction::has_unique_call_ids(&history);
+                    if gate_open && !unique_call_ids {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            session_id = %request.session_id,
+                            behavior_id = %behavior_name,
+                            "compaction skipped: a tool-call id is announced by more than one turn, \
+                             so a recorded compacted-prefix count would not stay valid"
+                        );
+                    }
+                    gate_open && unique_call_ids
+                } else {
+                    false
+                };
+                if may_reduce {
                     let result = admission::scope_call(
                         CallKind::Compaction,
                         1,

@@ -8,19 +8,28 @@ use super::summary::dedupe_paths;
 use super::{estimate_message_tokens, FileActivity};
 
 pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+    let file_activity = extract_file_activity(&messages);
     let mut stripped_messages = Vec::with_capacity(messages.len());
     let mut tool_calls = HashMap::new();
-    let mut file_activity = FileActivity::default();
 
     for message in messages {
         match message {
             Message::Assistant { id, content } => {
+                // Scope the lookup to the turn being opened. Call ids are
+                // provider-generated and can repeat across turns, so a stale
+                // entry could label a later stub with the wrong tool. Only an
+                // assistant message that actually announces calls opens a new
+                // turn — a text-only one must not orphan the pending lookups.
+                let opens_turn = content
+                    .iter()
+                    .any(|item| matches!(item, AssistantContent::ToolCall(_)));
+                if opens_turn {
+                    tool_calls.clear();
+                }
+
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
-                        let key = tool_call_key(tool_call);
-                        let info = ToolCallInfo::from(tool_call);
-                        push_file_activity(&mut file_activity, &info);
-                        tool_calls.insert(key, info);
+                        tool_calls.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
                     }
                 }
 
@@ -45,8 +54,6 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
         }
     }
 
-    dedupe_paths(&mut file_activity.files_read);
-    dedupe_paths(&mut file_activity.files_modified);
     (stripped_messages, file_activity)
 }
 
@@ -216,6 +223,23 @@ pub(super) fn split_messages_for_summary(
         break;
     }
 
+    // The token budget can land the boundary between an assistant message
+    // carrying a ToolCall and the user message carrying its ToolResult. Left
+    // alone, the call is summarized away while the result stays in the retained
+    // tail, and `sanitize_history_for_provider` then drops the orphaned result
+    // at loop entry — the tool's output is lost from the provider view entirely
+    // while the summary describes only the call.
+    //
+    // Retreat to the nearest turn boundary. Moving *earlier* over-retains by at
+    // most one turn and never loses context; moving later would summarize a turn
+    // the budget wanted kept. For provider-input assembly, over-retaining is the
+    // correct failure direction.
+    //
+    // Modelled as `Compaction.pairSafeBoundary`, with
+    // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index is
+    // unsound.
+    let split_index = pair_safe_boundary(&messages, split_index);
+
     if split_index == 0 {
         return (Vec::new(), messages);
     }
@@ -225,16 +249,96 @@ pub(super) fn split_messages_for_summary(
     (old_messages, recent_messages)
 }
 
-pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
-    let mut activity = FileActivity::default();
-    for message in messages {
-        if let Message::Assistant { content, .. } = message {
-            for item in content.iter() {
-                if let AssistantContent::ToolCall(tool_call) = item {
-                    let info = ToolCallInfo::from(tool_call);
-                    push_file_activity(&mut activity, &info);
+/// Greatest `j <= limit` at which no tool call is awaiting its result.
+///
+/// Mirrors `Compaction.pairSafeBoundary` and the pending-set discipline in
+/// [`drop_orphaned_tool_results`]: an assistant message replaces the pending set
+/// with its own call ids, a tool result erases one, and anything else clears it.
+pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
+    let limit = limit.min(messages.len());
+    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut boundary = 0usize;
+
+    for (index, message) in messages.iter().take(limit).enumerate() {
+        if pending.is_empty() {
+            boundary = index;
+        }
+        match message {
+            Message::Assistant { content, .. } => {
+                pending = content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::ToolCall(tool_call) => Some(tool_call_key(tool_call)),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            Message::User { content } => {
+                let has_plain_content = content
+                    .iter()
+                    .any(|item| !matches!(item, UserContent::ToolResult(_)));
+                for item in content.iter() {
+                    if let UserContent::ToolResult(tool_result) = item {
+                        pending.remove(&tool_result_key(tool_result));
+                    }
+                }
+                if has_plain_content {
+                    pending.clear();
                 }
             }
+            Message::System { .. } => pending.clear(),
+        }
+    }
+
+    if pending.is_empty() {
+        limit
+    } else {
+        boundary
+    }
+}
+
+/// File activity credited only to tool calls that actually produced a result.
+///
+/// Classifying from the call alone recorded writes that never happened: a call
+/// whose result never arrived because the turn was interrupted or the run
+/// crashed still counted as a modification. These lists are persisted on
+/// `AgentCompactionEntry` and rendered into later prompts, so a false "Files
+/// modified" entry injects state the run never produced. Dry runs are excluded
+/// at classification time — see [`ToolCallInfo::from`].
+///
+/// A failed call that *did* return an error result is still credited: tool
+/// results carry no error flag (`gents_protocol::message::ToolResult`), so
+/// there is nothing reliable to test. That is a known over-credit, narrower
+/// than the previous one.
+pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
+    let mut activity = FileActivity::default();
+    let mut pending: HashMap<String, ToolCallInfo> = HashMap::new();
+
+    for message in messages {
+        match message {
+            Message::Assistant { content, .. } => {
+                let opens_turn = content
+                    .iter()
+                    .any(|item| matches!(item, AssistantContent::ToolCall(_)));
+                if opens_turn {
+                    pending.clear();
+                }
+                for item in content.iter() {
+                    if let AssistantContent::ToolCall(tool_call) = item {
+                        pending.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
+                    }
+                }
+            }
+            Message::User { content } => {
+                for item in content.iter() {
+                    if let UserContent::ToolResult(tool_result) = item {
+                        if let Some(info) = pending.get(&tool_result_key(tool_result)) {
+                            push_file_activity(&mut activity, info);
+                        }
+                    }
+                }
+            }
+            Message::System { .. } => {}
         }
     }
 
@@ -246,10 +350,14 @@ pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
 fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) -> ToolResultContent {
     match content {
         ToolResultContent::Text(text) if text.text.len() > max_chars => {
+            // `max_chars` is a byte budget but tool output is arbitrary UTF-8,
+            // so slicing at that index panics whenever it lands inside a
+            // codepoint. Floor to the nearest boundary.
+            let cut = floor_char_boundary(&text.text, max_chars);
             let truncated = format!(
                 "{}… [pre-truncated {}/{} chars for compaction]",
-                &text.text[..max_chars],
-                max_chars,
+                &text.text[..cut],
+                cut,
                 text.text.len()
             );
             ToolResultContent::Text(Text { text: truncated })
@@ -258,27 +366,103 @@ fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) ->
     }
 }
 
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    if index >= text.len() {
+        return text.len();
+    }
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Head and tail of every stub this module writes.
+const STUB_HEAD: &str = "[tool: ";
+const STUB_TAIL: &str = "see DefraDB AgentToolCall for full output]";
+const STUB_JOIN: &str = " — ";
+const STUB_TRUNCATED: &str = ", truncated";
+
+/// Markers the truncation layer itself writes (`truncation::logic`,
+/// `truncation::spill`). Matching these exactly replaces a `contains("truncated")`
+/// sniff that fired on any tool output happening to mention the word.
+const TRUNCATION_MARKERS: [&str; 2] = ["[Full output: DefraDB doc ", "[Showing lines "];
+
+/// Facts a previously written stub carries, recovered so that re-stubbing
+/// reproduces it exactly.
+struct StubFacts {
+    byte_count: usize,
+    truncated: bool,
+}
+
+/// Recover the byte count and truncation flag from stub-shaped text.
+///
+/// Shape recognition is a *hint*, never a licence to skip the rewrite: tool
+/// output is arbitrary text and a command or MCP server can return something
+/// with this shape. Misreading such a result costs a wrong byte count in the
+/// stub; skipping the rewrite would let its entire payload survive every
+/// provider-view pass, which is the thing compaction exists to prevent.
+fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
+    let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
+        return None;
+    };
+    let body = text
+        .text
+        .strip_prefix(STUB_HEAD)?
+        .strip_suffix(STUB_TAIL)?
+        .strip_suffix(STUB_JOIN)?;
+    let (body, truncated) = match body.strip_suffix(STUB_TRUNCATED) {
+        Some(head) => (head, true),
+        None => (body, false),
+    };
+    let byte_count = body
+        .rsplit_once(", ")?
+        .1
+        .strip_suffix(" bytes")?
+        .parse()
+        .ok()?;
+    Some(StubFacts {
+        byte_count,
+        truncated,
+    })
+}
+
+/// Replace a tool result's payload with a pointer stub.
+///
+/// Always rewrites. When the input is already a stub the facts are recovered
+/// rather than re-measured, which makes the rewrite a fixed point — production's
+/// half of `Compaction.strip_idempotent`. The request path really does strip
+/// twice, once in `agent/daemon/request.rs` and again inside `compact()`, and
+/// before this the second pass re-measured the stub and reported *its* length
+/// instead of the tool's.
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    let call_id = tool_result_key(&tool_result);
-    let tool_name = tool_calls
-        .get(&call_id)
-        .map(|info| info.name.as_str())
-        .unwrap_or("unknown");
-    let byte_count = tool_result_byte_count(&tool_result);
-    let truncated = tool_result_was_truncated(&tool_result);
-    let stub = if truncated {
-        format!(
-            "[tool: {tool_name}, call_id: {call_id}, {byte_count} bytes, truncated — see DefraDB AgentToolCall for full output]"
-        )
-    } else {
-        format!(
-            "[tool: {tool_name}, call_id: {call_id}, {byte_count} bytes — see DefraDB AgentToolCall for full output]"
-        )
-    };
+    let existing = parse_stub(&tool_result);
+    let byte_count = existing
+        .as_ref()
+        .map_or_else(|| tool_result_byte_count(&tool_result), |it| it.byte_count);
+    let truncated = existing.as_ref().map_or_else(
+        || tool_result_was_truncated(&tool_result),
+        |it| it.truncated,
+    );
 
+    let call_id = tool_result_key(&tool_result);
+    let info = tool_calls.get(&call_id);
+    let tool_name = info.map_or("unknown", |info| info.name.as_str());
+    // The primary path argument is already extracted for `FileActivity`.
+    // Carrying it turns the stub from "a file was read" into "this file was
+    // read", which is most of what a pointer stub exists to do.
+    let argument = info
+        .and_then(|info| info.file_path.as_deref())
+        .map(|path| format!("({path})"))
+        .unwrap_or_default();
+    let truncated = if truncated { STUB_TRUNCATED } else { "" };
+
+    let stub = format!(
+        "{STUB_HEAD}{tool_name}{argument}, call_id: {call_id}, \
+         {byte_count} bytes{truncated}{STUB_JOIN}{STUB_TAIL}"
+    );
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result
 }
@@ -296,11 +480,9 @@ fn tool_result_byte_count(tool_result: &ToolResult) -> usize {
 
 fn tool_result_was_truncated(tool_result: &ToolResult) -> bool {
     tool_result.content.iter().any(|content| match content {
-        ToolResultContent::Text(text) => {
-            text.text.contains("[Full output: DefraDB doc")
-                || text.text.contains("Showing lines")
-                || text.text.contains("truncated")
-        }
+        ToolResultContent::Text(text) => TRUNCATION_MARKERS
+            .iter()
+            .any(|marker| text.text.contains(marker)),
         _ => false,
     })
 }
@@ -337,23 +519,49 @@ struct ToolCallInfo {
     is_write: bool,
 }
 
+/// Tools whose calls mean "this path was read".
+///
+/// The first group is the registered native file tools (`toolset/file_tools.rs`);
+/// the second is the generic names MCP servers commonly use. Keep this in sync
+/// with the tool registry — `every_registered_file_tool_is_classified` fails if
+/// a file tool is added without a classification, which would silently empty the
+/// compaction summary's file lists.
+pub(super) fn is_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "read_file" | "list_files" | "glob" | "grep" | "read" | "cat" | "search" | "find" | "query"
+    )
+}
+
+/// Tools whose calls mean "this path was modified".
+pub(super) fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file" | "edit_file" | "write" | "edit" | "replace" | "apply_patch"
+    )
+}
+
 impl From<&ToolCall> for ToolCallInfo {
     fn from(tool_call: &ToolCall) -> Self {
-        let file_path = tool_call
-            .function
-            .arguments
+        let arguments = &tool_call.function.arguments;
+        let file_path = arguments
             .get("file_path")
-            .or_else(|| tool_call.function.arguments.get("path"))
+            .or_else(|| arguments.get("path"))
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned);
         let name = tool_call.function.name.clone();
+        // `edit_file` previews a diff and writes nothing under `dry_run`, so it
+        // must not be reported as a modification — it did read the file, which
+        // is what it gets credited for instead.
+        let dry_run = arguments
+            .get("dry_run")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let writes = is_write_tool(&name);
 
         Self {
-            is_read: matches!(
-                name.as_str(),
-                "read" | "cat" | "grep" | "search" | "find" | "query"
-            ),
-            is_write: matches!(name.as_str(), "write" | "edit" | "replace" | "apply_patch"),
+            is_read: is_read_tool(&name) || (writes && dry_run),
+            is_write: writes && !dry_run,
             name,
             file_path,
         }

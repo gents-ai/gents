@@ -336,4 +336,7 @@ pub(crate) struct LeanCompactionReducerCase {
     pub(crate) gate_open: bool,
     pub(crate) safe_to_reduce: bool,
     pub(crate) reducer_is_identity: bool,
+    pub(crate) split_index: usize,
+    pub(crate) safe_boundary: usize,
+    pub(crate) retained_count: usize,
 }

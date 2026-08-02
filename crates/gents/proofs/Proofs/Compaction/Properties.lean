@@ -20,12 +20,8 @@ variable {r : TranscriptReducer} [IsValidReducer r]
 
 theorem reduction_preserves_view_coherent
     {v : PromptView} (h : PromptView.ViewCoherent v) :
-    PromptView.ViewCoherent (r v) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact IsValidReducer.preservesPairs (r := r) v h.pairs
-  · exact IsValidReducer.preservesOrder (r := r) v h.ordered
-  · exact uniqueSequences_of_strictlyIncreasing
-      (IsValidReducer.preservesOrder (r := r) v h.ordered)
+    PromptView.ViewCoherent (r v) :=
+  IsValidReducer.preservesCoherent (r := r) v h
 
 theorem reduction_preserves_session_id (v : PromptView) :
     (r v).sessionId = v.sessionId :=
@@ -44,19 +40,23 @@ theorem reduction_blocked_unless_safe
 theorem reapply_preserves_view_coherent
     {v : PromptView} (h : PromptView.ViewCoherent v) :
     PromptView.ViewCoherent (r (r v)) :=
-  IsValidReducer.reapplyPreservesCoh (r := r) v h
+  IsValidReducer.preservesCoherent (r := r) (r v)
+    (IsValidReducer.preservesCoherent (r := r) v h)
 
+/-- Pair closure over a reduced view.
+
+Unlike the pre-#993 version, this is not vacuous: it is the property the real
+`summarize` reducer earns by retreating its split to a turn boundary, and
+`raw_split_can_orphan` witnesses that an unadjusted split loses it. -/
 theorem no_orphaned_tool_results_after_reduction
-    {v : PromptView}
-    (h_pre : PromptView.PairsClosedInMessages v.messages) :
+    {v : PromptView} (h_pre : PromptView.ViewCoherent v) :
     ∀ row, row ∈ (r v).messages →
       ∀ callId key, row.kind = .toolResult callId key →
         ∃ caller, caller ∈ (r v).messages ∧
           caller.role = .assistant ∧
           (∃ callIds, caller.kind = .assistantToolCalls callIds ∧
-            callId ∈ callIds) := by
-  intro row h_mem callId key h_kind
-  exact IsValidReducer.preservesPairs (r := r) v h_pre row h_mem callId key h_kind
+            callId ∈ callIds) :=
+  (IsValidReducer.preservesCoherent (r := r) v h_pre).pairs
 
 theorem retained_window_is_ordered
     {v : PromptView}
@@ -88,10 +88,5 @@ namespace Compaction
 
 theorem identity_reducer_is_strictly_idempotent (v : PromptView) :
     identityReducer (identityReducer v) = identityReducer v := rfl
-
-theorem strip_tool_results_is_strictly_idempotent (v : PromptView) :
-    stripToolResultsReducer (stripToolResultsReducer v)
-      = stripToolResultsReducer v := by
-  rw [stripToolResultsReducer_id, stripToolResultsReducer_id]
 
 end Compaction
