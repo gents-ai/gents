@@ -68,6 +68,9 @@ def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
 def boundaryPromptAssemblyProviderInputSanitizationId : String :=
   "boundary.prompt-assembly.provider-input-sanitization"
 
+def boundaryCompactionSafeToReduceSessionScopeId : String :=
+  "boundary.compaction.safe-to-reduce-session-scope"
+
 def boundaryModelNatTypedIdsTimeId : String :=
   "boundary.model.nat-typed-ids-time"
 
@@ -214,6 +217,16 @@ def boundaries : List Boundary :=
     , subject := "provider input sanitization"
     , statement :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
+    }
+  , { id := boundaryCompactionSafeToReduceSessionScopeId
+    , domain := "Compaction"
+    , subject := "safeToReduce resolver scope"
+    , statement :=
+        "PromptView.safeToReduce requires every retained tool-result row to carry a known terminal response status. Rust resolves this at session scope: compaction::safe_to_reduce is the modelled predicate and is what the conformance case drives, while agent/daemon/request.rs backs it with a single non-terminal-AgentResponse query rather than per-message request_id linkage. All-terminal at session scope implies terminal for every row, so the refinement can only err toward unsafe, whose cost is a skipped compaction retried on the next request."
+    , acceptedFailureMode :=
+        some "A row whose request has no AgentResponse row at all (a crashed run) reads unsafe in the model but safe under the session check. sanitize_history_for_provider already removes half-turns from crashed runs — an unpaired call or an orphaned result never reaches compaction's input — so what survives is a complete turn, which is safe to summarize."
+    , acceptedFollowUp :=
+        some "Per-message request_id linkage would close the gap exactly; it requires widening session::load_history's return shape and every caller."
     }
   , { id := boundaryModelNatTypedIdsTimeId
     , domain := "CoreTypes"

@@ -952,6 +952,11 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.providerInput.sanitizeLoadedHistory"
       boundaryPromptAssemblyProviderInputSanitizationId)
       "compaction" [Surface.agentFacing]
+  , tagged (boundaryCoverage
+      "follow_up_hook"
+      "Compaction.safeToReduce.sessionScopeResolver"
+      boundaryCompactionSafeToReduceSessionScopeId)
+      "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "follow_up_hook"
       "PromptAssembly.Template.system_render_stable"

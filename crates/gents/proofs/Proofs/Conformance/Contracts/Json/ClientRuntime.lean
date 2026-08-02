@@ -98,7 +98,10 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"gate_open\":" ++ boolString witness.gateOpen ++ ","
     ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
     ++ "\"reducer_is_identity\":"
-      ++ boolString witness.reducerIsIdentity
+      ++ boolString witness.reducerIsIdentity ++ ","
+    ++ "\"split_index\":" ++ toString witness.splitIndex ++ ","
+    ++ "\"safe_boundary\":" ++ toString witness.safeBoundary ++ ","
+    ++ "\"retained_count\":" ++ toString witness.retainedCount
     ++ "}"
 
 def recoverySweepCaseJson (witness : RecoverySweepCase) : String :=

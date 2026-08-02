@@ -271,6 +271,7 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.inference-slots.running-row-derived",
         "boundary.fleet-slot-accounting.derived-view",
         "boundary.command-policy.host-execution-assumptions",
+        "boundary.compaction.safe-to-reduce-session-scope",
         "boundary.trigger.dispatch-source-delivery",
         "boundary.persistence.abstract-lifecycle",
         "boundary.storage.hook-failure-policy",
