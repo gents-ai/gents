@@ -8,9 +8,9 @@ use super::summary::dedupe_paths;
 use super::{estimate_message_tokens, FileActivity};
 
 pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+    let file_activity = extract_file_activity(&messages);
     let mut stripped_messages = Vec::with_capacity(messages.len());
     let mut tool_calls = HashMap::new();
-    let mut file_activity = FileActivity::default();
 
     for message in messages {
         match message {
@@ -29,10 +29,7 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
 
                 for item in content.iter() {
                     if let AssistantContent::ToolCall(tool_call) = item {
-                        let key = tool_call_key(tool_call);
-                        let info = ToolCallInfo::from(tool_call);
-                        push_file_activity(&mut file_activity, &info);
-                        tool_calls.insert(key, info);
+                        tool_calls.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
                     }
                 }
 
@@ -57,8 +54,6 @@ pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileA
         }
     }
 
-    dedupe_paths(&mut file_activity.files_read);
-    dedupe_paths(&mut file_activity.files_modified);
     (stripped_messages, file_activity)
 }
 
@@ -302,16 +297,48 @@ pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     }
 }
 
+/// File activity credited only to tool calls that actually produced a result.
+///
+/// Classifying from the call alone recorded writes that never happened: a call
+/// whose result never arrived because the turn was interrupted or the run
+/// crashed still counted as a modification. These lists are persisted on
+/// `AgentCompactionEntry` and rendered into later prompts, so a false "Files
+/// modified" entry injects state the run never produced. Dry runs are excluded
+/// at classification time — see [`ToolCallInfo::from`].
+///
+/// A failed call that *did* return an error result is still credited: tool
+/// results carry no error flag (`gents_protocol::message::ToolResult`), so
+/// there is nothing reliable to test. That is a known over-credit, narrower
+/// than the previous one.
 pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
     let mut activity = FileActivity::default();
+    let mut pending: HashMap<String, ToolCallInfo> = HashMap::new();
+
     for message in messages {
-        if let Message::Assistant { content, .. } = message {
-            for item in content.iter() {
-                if let AssistantContent::ToolCall(tool_call) = item {
-                    let info = ToolCallInfo::from(tool_call);
-                    push_file_activity(&mut activity, &info);
+        match message {
+            Message::Assistant { content, .. } => {
+                let opens_turn = content
+                    .iter()
+                    .any(|item| matches!(item, AssistantContent::ToolCall(_)));
+                if opens_turn {
+                    pending.clear();
+                }
+                for item in content.iter() {
+                    if let AssistantContent::ToolCall(tool_call) = item {
+                        pending.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
+                    }
                 }
             }
+            Message::User { content } => {
+                for item in content.iter() {
+                    if let UserContent::ToolResult(tool_result) = item {
+                        if let Some(info) = pending.get(&tool_result_key(tool_result)) {
+                            push_file_activity(&mut activity, info);
+                        }
+                    }
+                }
+            }
+            Message::System { .. } => {}
         }
     }
 
@@ -350,35 +377,75 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 }
 
 /// Head and tail of every stub this module writes.
-///
-/// Recognizing an existing stub is what makes `strip_tool_results` idempotent.
-/// Without it a second pass re-measures the stub and reports *its* length
-/// instead of the tool's — and the request path really does strip twice, once
-/// in `agent/daemon/request.rs` and again inside `compact()`, so after a
-/// compaction the model was being told the wrong byte count.
 const STUB_HEAD: &str = "[tool: ";
 const STUB_TAIL: &str = "see DefraDB AgentToolCall for full output]";
+const STUB_JOIN: &str = " — ";
+const STUB_TRUNCATED: &str = ", truncated";
 
 /// Markers the truncation layer itself writes (`truncation::logic`,
 /// `truncation::spill`). Matching these exactly replaces a `contains("truncated")`
 /// sniff that fired on any tool output happening to mention the word.
 const TRUNCATION_MARKERS: [&str; 2] = ["[Full output: DefraDB doc ", "[Showing lines "];
 
-fn tool_result_is_stub(tool_result: &ToolResult) -> bool {
-    matches!(
-        tool_result.content.as_slice(),
-        [ToolResultContent::Text(text)]
-            if text.text.starts_with(STUB_HEAD) && text.text.ends_with(STUB_TAIL)
-    )
+/// Facts a previously written stub carries, recovered so that re-stubbing
+/// reproduces it exactly.
+struct StubFacts {
+    byte_count: usize,
+    truncated: bool,
 }
 
+/// Recover the byte count and truncation flag from stub-shaped text.
+///
+/// Shape recognition is a *hint*, never a licence to skip the rewrite: tool
+/// output is arbitrary text and a command or MCP server can return something
+/// with this shape. Misreading such a result costs a wrong byte count in the
+/// stub; skipping the rewrite would let its entire payload survive every
+/// provider-view pass, which is the thing compaction exists to prevent.
+fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
+    let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
+        return None;
+    };
+    let body = text
+        .text
+        .strip_prefix(STUB_HEAD)?
+        .strip_suffix(STUB_TAIL)?
+        .strip_suffix(STUB_JOIN)?;
+    let (body, truncated) = match body.strip_suffix(STUB_TRUNCATED) {
+        Some(head) => (head, true),
+        None => (body, false),
+    };
+    let byte_count = body
+        .rsplit_once(", ")?
+        .1
+        .strip_suffix(" bytes")?
+        .parse()
+        .ok()?;
+    Some(StubFacts {
+        byte_count,
+        truncated,
+    })
+}
+
+/// Replace a tool result's payload with a pointer stub.
+///
+/// Always rewrites. When the input is already a stub the facts are recovered
+/// rather than re-measured, which makes the rewrite a fixed point — production's
+/// half of `Compaction.strip_idempotent`. The request path really does strip
+/// twice, once in `agent/daemon/request.rs` and again inside `compact()`, and
+/// before this the second pass re-measured the stub and reported *its* length
+/// instead of the tool's.
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &HashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    if tool_result_is_stub(&tool_result) {
-        return tool_result;
-    }
+    let existing = parse_stub(&tool_result);
+    let byte_count = existing
+        .as_ref()
+        .map_or_else(|| tool_result_byte_count(&tool_result), |it| it.byte_count);
+    let truncated = existing.as_ref().map_or_else(
+        || tool_result_was_truncated(&tool_result),
+        |it| it.truncated,
+    );
 
     let call_id = tool_result_key(&tool_result);
     let info = tool_calls.get(&call_id);
@@ -390,15 +457,11 @@ fn strip_tool_result(
         .and_then(|info| info.file_path.as_deref())
         .map(|path| format!("({path})"))
         .unwrap_or_default();
-    let byte_count = tool_result_byte_count(&tool_result);
-    let truncated = if tool_result_was_truncated(&tool_result) {
-        ", truncated"
-    } else {
-        ""
-    };
+    let truncated = if truncated { STUB_TRUNCATED } else { "" };
 
     let stub = format!(
-        "[tool: {tool_name}{argument}, call_id: {call_id}, {byte_count} bytes{truncated} — {STUB_TAIL}"
+        "{STUB_HEAD}{tool_name}{argument}, call_id: {call_id}, \
+         {byte_count} bytes{truncated}{STUB_JOIN}{STUB_TAIL}"
     );
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
     tool_result
@@ -466,15 +529,7 @@ struct ToolCallInfo {
 pub(super) fn is_read_tool(name: &str) -> bool {
     matches!(
         name,
-        "read_file"
-            | "list_files"
-            | "glob"
-            | "grep"
-            | "read"
-            | "cat"
-            | "search"
-            | "find"
-            | "query"
+        "read_file" | "list_files" | "glob" | "grep" | "read" | "cat" | "search" | "find" | "query"
     )
 }
 
@@ -488,18 +543,25 @@ pub(super) fn is_write_tool(name: &str) -> bool {
 
 impl From<&ToolCall> for ToolCallInfo {
     fn from(tool_call: &ToolCall) -> Self {
-        let file_path = tool_call
-            .function
-            .arguments
+        let arguments = &tool_call.function.arguments;
+        let file_path = arguments
             .get("file_path")
-            .or_else(|| tool_call.function.arguments.get("path"))
+            .or_else(|| arguments.get("path"))
             .and_then(|value| value.as_str())
             .map(ToOwned::to_owned);
         let name = tool_call.function.name.clone();
+        // `edit_file` previews a diff and writes nothing under `dry_run`, so it
+        // must not be reported as a modification — it did read the file, which
+        // is what it gets credited for instead.
+        let dry_run = arguments
+            .get("dry_run")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let writes = is_write_tool(&name);
 
         Self {
-            is_read: is_read_tool(&name),
-            is_write: is_write_tool(&name),
+            is_read: is_read_tool(&name) || (writes && dry_run),
+            is_write: writes && !dry_run,
             name,
             file_path,
         }

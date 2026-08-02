@@ -1178,7 +1178,10 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
     // input shapes" — not "the shapes are unchanged", which only held while the
     // modelled reducer was `id`.
     assert_eq!(
-        is_subsequence(&abstract_prompt_view(&reduced), &abstract_prompt_view(&input)),
+        is_subsequence(
+            &abstract_prompt_view(&reduced),
+            &abstract_prompt_view(&input)
+        ),
         case.preserves_order,
         "{}: preserves_order",
         case.name
