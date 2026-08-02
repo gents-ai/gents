@@ -19,27 +19,40 @@ if [[ -z "${SCCACHE_DIR:-}" ]]; then
   exit 1
 fi
 
+if [[ -z "${RUNNER_TEMP:-}" ]]; then
+  echo "::error::RUNNER_TEMP must be set for disposable Cargo target output."
+  exit 1
+fi
+
 mkdir -p "${SCCACHE_DIR}"
+cargo_target_dir="${RUNNER_TEMP}/gents-cargo-target"
+mkdir -p "${cargo_target_dir}"
+echo "CARGO_TARGET_DIR=${cargo_target_dir}" >> "${GITHUB_ENV}"
 
 echo "Using CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+echo "Using CARGO_TARGET_DIR=${cargo_target_dir}"
 echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 
 sccache --version
-# Studio runners share a long-lived sccache daemon across jobs. A prior job that
-# cleaned its workdir can leave the daemon with a dead cwd, which surfaces as
-# "Couldn't determine current working directory" / missing dep-info files mid
-# compile. Always recycle the server so each job starts from a live process.
-if sccache --stop-server >/dev/null 2>&1; then
-  echo "Stopped existing sccache server."
+# The host-local daemon is shared by every runner process on a Studio. Never
+# recycle it here: doing so can interrupt a sibling job. Start a missing daemon
+# from its durable cache directory so its cwd survives checkout cleanup. A
+# sibling may win the startup race, so tolerate start-server failing and poll
+# the daemon before treating startup as broken.
+if sccache --show-stats >/dev/null 2>&1; then
+  echo "Reusing the host sccache server."
 else
-  echo "No sccache server was running (or stop failed); starting fresh."
-fi
-# Brief settle so the old process releases the port / lock before we restart.
-sleep 1
-if ! sccache --start-server; then
-  echo "::error::Failed to start sccache server after recycle."
+  echo "No sccache server is running; starting it from ${SCCACHE_DIR}."
+  (cd "${SCCACHE_DIR}" && sccache --start-server) || true
+  for _ in 1 2 3 4 5; do
+    if sccache --show-stats >/dev/null 2>&1; then
+      echo "Host sccache server is ready."
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "::error::Host sccache server did not become ready."
   exit 1
 fi
-sccache --show-stats >/dev/null
