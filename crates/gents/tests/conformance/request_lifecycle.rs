@@ -193,31 +193,33 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
         "dedupLose" => {
-            let escaped_doc_id = escape_graphql_string(&doc_id);
-            let resp = db
-                .node
-                .execute(&format!(
-                    r#"mutation {{
-                        update_AgentRequest(
-                            filter: {{
-                                _docID: {{ _eq: "{escaped_doc_id}" }},
-                                status: {{ _eq: "pending" }},
-                                lifecycle_state: {{ _eq: "pending" }}
-                            }},
-                            input: {{
-                                status: "superseded",
-                                lifecycle_state: "superseded",
-                                superseded_by_request: "explicit-replacement-{request_id}"
-                            }}
-                        ) {{ _docID }}
-                    }}"#
-                ))
-                .await;
-            assert!(
-                !resp.has_errors(),
-                "explicit supersede writer failed: {:?}",
-                resp.errors
-            );
+            // Drive the PRODUCTION supersede writer. This arm used to issue its
+            // own raw mutation, which asserted only that DefraDB accepts a
+            // superseding write — not that any runtime code performs one.
+            let survivor_id = uuid::Uuid::new_v4().to_string();
+            let survivor_created_at =
+                (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+            let survivor_doc_id = create_request(
+                &db.node,
+                &survivor_id,
+                &session_id,
+                "pending",
+                &survivor_created_at,
+            )
+            .await;
+            let key = format!("dedup-{request_id}");
+            set_request_metadata(&db.node, &survivor_doc_id, &coalesce_metadata(&key)).await;
+            set_request_metadata(&db.node, &doc_id, &coalesce_metadata(&key)).await;
+
+            gents::__test_internals::reconcile_coalesced_pending_request(
+                &db.node,
+                &session_id,
+                AGENT_DID,
+                gents::__test_internals::QueueSource::User,
+                &key,
+            )
+            .await
+            .expect("coalesce reconcile must succeed");
         }
         "beginInference" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -787,11 +789,25 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "production writers stopped reaching edges this test is supposed to cover: {missing:?}"
     );
 
+    // Classify against the LEAN-EMITTED contract, not the Rust mirror table at
+    // the top of this file. That table is convenient for naming writers, but if
+    // the reachability fence consulted it, a failure could be "fixed" by editing
+    // a table in the test — the same tautology this test exists to replace.
+    // Going through the generated cases means an out-of-contract edge can only be
+    // legitimised by changing the Lean model, which drags the boundary and the
+    // coverage ledger along with it.
+    let contract = lean_request_transition_cases();
     for (from, to) in &observed {
-        let classification = rust_request_transition_classification(from, to);
+        let case = contract
+            .iter()
+            .find(|case| &case.from == from && &case.to == to)
+            .unwrap_or_else(|| {
+                panic!("production reached {from} -> {to}, absent from the Lean contract entirely")
+            });
         assert!(
-            matches!(classification, "legal" | "recoveryReachable"),
-            "production writers reached {from} -> {to}, which the contract classifies {classification}"
+            matches!(case.classification.as_str(), "legal" | "recoveryReachable"),
+            "production writers reached {from} -> {to}, which the Lean contract classifies {}",
+            case.classification
         );
     }
 }
