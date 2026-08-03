@@ -80,6 +80,13 @@ process has its own persistent target directory under
 only one job at a time, so this preserves linked test artifacts without letting
 sibling jobs write the same Cargo target tree.
 
+The Rust matrix also has physical-host affinity: runtime and support run on
+`studio-1`, while desktop and CLI run on `studio-2`. Keep that pairing stable.
+The sccache store is host-local, so allowing suites to bounce between Studios
+turns an otherwise identical rerun into a cold Rust compile even though all
+four runner registrations are healthy. Runner-instance reshuffling within one
+host remains safe and can reuse the shared compiler cache.
+
 The shared sccache server must be owned by launchd, not by a workflow job.
 GitHub runner cleanup kills daemons descended from a completed job; in a
 measured run that terminated sccache underneath a sibling compile and forced a
@@ -108,7 +115,8 @@ root through `SCCACHE_BASEDIRS`. Both are necessary for compiler results to hit
 across runner instances because Rust `--extern` arguments contain target paths.
 It runs sccache in its official foreground server mode, so launchd directly
 supervises and restarts the daemon if it exits. Never stop or restart it from a
-workflow job: that interrupts sibling compiles.
+workflow job: that interrupts sibling compiles. Studio workflows fail fast when
+the service is unavailable instead of spawning an expendable daemon.
 
 Check the cache without mutating it:
 

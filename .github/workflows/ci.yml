@@ -79,11 +79,23 @@ jobs:
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
     needs: rename-guard
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, studio, "${{ matrix.host }}"]
     strategy:
       fail-fast: false
       matrix:
-        suite: [runtime, cli, desktop, support]
+        include:
+          # Keep each suite on one physical host so the host-local sccache
+          # survives GitHub's runner-instance reshuffling. Pair a heavy suite
+          # with a lighter one to keep both Studios busy without overloading
+          # either host.
+          - suite: runtime
+            host: studio-1
+          - suite: support
+            host: studio-1
+          - suite: desktop
+            host: studio-2
+          - suite: cli
+            host: studio-2
     # A cold runner instance must compile and link every Rust target. Each
     # runner process owns a durable target directory; sccache is host-shared.
     timeout-minutes: 180

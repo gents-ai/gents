@@ -43,22 +43,15 @@ echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
 
 sccache --version
 # The host-local daemon is shared by every runner process on a Studio. Never
-# recycle it here: doing so can interrupt a sibling job. Start a missing daemon
-# from its durable cache directory so its cwd survives checkout cleanup. A
-# sibling may win the startup race, so tolerate start-server failing and poll
-# the daemon before treating startup as broken.
-if sccache --show-stats >/dev/null 2>&1; then
-  echo "Reusing the host sccache server."
-else
-  echo "No sccache server is running; starting it from ${SCCACHE_DIR}."
-  (cd "${SCCACHE_DIR}" && sccache --start-server) || true
-  for _ in 1 2 3 4 5; do
-    if sccache --show-stats >/dev/null 2>&1; then
-      echo "Host sccache server is ready."
-      exit 0
-    fi
-    sleep 1
-  done
-  echo "::error::Host sccache server did not become ready."
+# start or recycle it here: GitHub's runner cleanup can kill a workflow-owned
+# daemon underneath a sibling compile. The checked-in launchd service owns it.
+service_domain="gui/$(id -u)/com.source.gents.sccache"
+if ! launchctl print "${service_domain}" 2>/dev/null | grep -q 'state = running'; then
+  echo "::error::Host sccache launchd service is not running (${service_domain})."
   exit 1
 fi
+if ! sccache --show-stats >/dev/null 2>&1; then
+  echo "::error::Host sccache service is unavailable; repair the launchd service before running Studio builds."
+  exit 1
+fi
+echo "Reusing the host sccache server."
