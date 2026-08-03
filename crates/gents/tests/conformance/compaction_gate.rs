@@ -26,7 +26,7 @@ const GATE_BACKEND_ID: &str = "backend-compaction-gate";
 const GATE_MARKER: &str = "compaction-gate-request";
 /// A distinctive slice of `compaction::summary::compaction_prompt()`. It only
 /// ever appears in a body the compactor sent.
-const COMPACTION_MARKER: &str = "Return JSON only with keys";
+const COMPACTION_MARKER: &str = "Your only action is to return JSON with keys";
 
 /// Roughly 30k estimated tokens of history — above the 20k `keep_recent_tokens`
 /// default, so `split_messages_for_summary` yields a non-empty prefix to
