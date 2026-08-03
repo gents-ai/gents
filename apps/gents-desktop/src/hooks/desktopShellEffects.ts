@@ -391,7 +391,27 @@ export function useDesktopShellEffects({
   }, [localWorkflow, sending, setLocalWorkflow]);
 }
 
-export async function restoreManagedServer(
+const managedServerRestoreInFlight = new WeakMap<
+  DesktopApiAdapter,
+  Promise<boolean | null>
+>();
+
+export function restoreManagedServer(
+  api: DesktopApiAdapter,
+): Promise<boolean | null> {
+  const existing = managedServerRestoreInFlight.get(api);
+  if (existing) return existing;
+
+  const pending = restoreManagedServerOnce(api).finally(() => {
+    if (managedServerRestoreInFlight.get(api) === pending) {
+      managedServerRestoreInFlight.delete(api);
+    }
+  });
+  managedServerRestoreInFlight.set(api, pending);
+  return pending;
+}
+
+async function restoreManagedServerOnce(
   api: DesktopApiAdapter,
 ): Promise<boolean | null> {
   if (!api.managedServerStatus || !api.startManagedServer) return null;

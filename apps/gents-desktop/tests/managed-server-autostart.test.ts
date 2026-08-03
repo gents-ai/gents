@@ -47,6 +47,41 @@ describe("managed server launch restoration", () => {
     expect(api.startManagedServer).toHaveBeenCalledWith("Workshop Agent");
   });
 
+  it("coalesces concurrent restoration attempts", async () => {
+    let releaseStart: (() => void) | undefined;
+    const startPending = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const api = apiWithManagedServer({
+      state: "stopped",
+      autoStart: true,
+      agentName: "Workshop Agent",
+      agentDid: null,
+      graphql: null,
+      error: null,
+    });
+    vi.mocked(api.startManagedServer).mockImplementation(async () => {
+      await startPending;
+      return {
+        state: "running",
+        autoStart: true,
+        agentName: "Workshop Agent",
+        agentDid: null,
+        graphql: null,
+        error: null,
+      };
+    });
+
+    const first = restoreManagedServer(api);
+    const second = restoreManagedServer(api);
+    await vi.waitFor(() => expect(api.startManagedServer).toHaveBeenCalledOnce());
+    releaseStart?.();
+    await Promise.all([first, second]);
+
+    expect(api.managedServerStatus).toHaveBeenCalledOnce();
+    expect(api.startManagedServer).toHaveBeenCalledOnce();
+  });
+
   it("does not start the client for an uncommitted local peer", () => {
     expect(
       shouldAutoStartDesktopClient(
