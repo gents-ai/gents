@@ -13,7 +13,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>SCCACHE_CACHE_SIZE</key>
-    <string>60G</string>
+    <string>120G</string>
     <key>SCCACHE_DIR</key>
     <string>/Users/admin/.cache/sccache</string>
     <key>SCCACHE_ERROR_LOG</key>

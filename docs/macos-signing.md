@@ -87,7 +87,7 @@ The workflow also honors optional repository variables:
 
 ```text
 CARGO_BUILD_JOBS=4
-SCCACHE_CACHE_SIZE=60G
+SCCACHE_CACHE_SIZE=120G
 SCCACHE_DIR=/Users/admin/.cache/sccache
 MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/gents-signing.keychain-db
 MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled

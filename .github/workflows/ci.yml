@@ -33,7 +33,7 @@ env:
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
-  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
   # The host service and clients normalize every registered checkout root.
   SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
@@ -314,6 +314,44 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
 
+      - name: Upload desktop UI artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-ui-artifacts
+          if-no-files-found: ignore
+          path: |
+            apps/gents-desktop/test-results
+            apps/gents-desktop/playwright-report
+            apps/gents-desktop/playwright-screenshots-report
+
+  desktop-ui-bombadil:
+    # Bombadil's exact Linux failure trace passes on macOS. Keep this small
+    # platform-specific smoke on a Studio while the portable UI suite runs on
+    # hosted Linux; it normally releases the slot before Rust becomes ready.
+    runs-on: [self-hosted, macOS, ARM64, studio]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      - name: Install Playwright browser
+        working-directory: apps/gents-desktop
+        run: npx playwright install chromium
+
       - name: Run desktop Bombadil smoke
         working-directory: apps/gents-desktop
         run: npm run test:ui:fuzz -- --time-limit 30s
@@ -329,14 +367,3 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
           path: apps/gents-desktop/test-results/bombadil
-
-      - name: Upload desktop UI artifacts
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-ui-artifacts
-          if-no-files-found: ignore
-          path: |
-            apps/gents-desktop/test-results
-            apps/gents-desktop/playwright-report
-            apps/gents-desktop/playwright-screenshots-report

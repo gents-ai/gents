@@ -103,8 +103,9 @@ ssh studio-1 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchct
 ssh studio-2 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchctl bootout gui/$(id -u)/com.source.gents.sccache 2>/dev/null || true; SCCACHE_DIR=/Users/admin/.cache/sccache /opt/homebrew/bin/sccache --stop-server 2>/dev/null || true; launchctl bootstrap gui/$(id -u) /Users/admin/Library/LaunchAgents/com.source.gents.sccache.plist'
 ```
 
-The service also normalizes both runner checkout roots through
-`SCCACHE_BASEDIRS`, allowing compiler results to hit across runner instances.
+The service also normalizes every runner checkout and persistent Cargo target
+root through `SCCACHE_BASEDIRS`. Both are necessary for compiler results to hit
+across runner instances because Rust `--extern` arguments contain target paths.
 It runs sccache in its official foreground server mode, so launchd directly
 supervises and restarts the daemon if it exits. Never stop or restart it from a
 workflow job: that interrupts sibling compiles.
