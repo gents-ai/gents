@@ -11,9 +11,9 @@ The intended Gents capacity is two runner processes per host:
 
 | Host | Runner | Rust suite label | Root |
 | --- | --- | --- | --- |
-| `studio-1` | `studio-1` | `ci-runtime` | `/Users/admin/.ghrunner/defra-agent` |
+| `studio-1` | `studio-1` | `ci-runtime` | `/Users/admin/.ghrunner/<primary-root>` |
 | `studio-1` | `studio-1-2` | `ci-support` | `/Users/admin/.ghrunner/gents-2` |
-| `studio-2` | `studio-2` | `ci-cli` | `/Users/admin/.ghrunner/defra-agent` |
+| `studio-2` | `studio-2` | `ci-cli` | `/Users/admin/.ghrunner/<primary-root>` |
 | `studio-2` | `studio-2-2` | `ci-desktop` | `/Users/admin/.ghrunner/gents-2` |
 
 All four registrations must have the common
