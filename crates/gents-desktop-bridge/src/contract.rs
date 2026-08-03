@@ -53,6 +53,7 @@ pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 
 /// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
+pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
 
 /// One-shot auth URL emission during the guided Grok login flow.
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
@@ -75,6 +76,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_set_selected_agent", "client-lifecycle"),
         // runtime-admin
         ("desktop_init_local_standard", "runtime-admin"),
+        ("desktop_managed_server_status", "runtime-admin"),
+        ("desktop_managed_server_start", "runtime-admin"),
+        ("desktop_managed_server_stop", "runtime-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         // trace-read
@@ -221,6 +225,7 @@ pub fn current_contract() -> BridgeContract {
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
             GROK_LOGIN_URL_EVENT.to_string(),
+            MANAGED_SERVER_UPDATED_EVENT.to_string(),
         ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),
@@ -495,6 +500,9 @@ mod tests {
             ("desktop_client_shutdown", "mutate"),
             ("desktop_set_selected_agent", "mutate"),
             ("desktop_init_local_standard", "mutate"),
+            ("desktop_managed_server_status", "mutate"),
+            ("desktop_managed_server_start", "mutate"),
+            ("desktop_managed_server_stop", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),

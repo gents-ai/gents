@@ -176,6 +176,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
 
     export_types!(
         DesktopInitRequest,
+        ManagedServerStartRequest,
         PeerAddRequest,
         PeerStatusFetchRequest,
         PeerProbeRequest,
@@ -220,6 +221,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         BridgeErrorCode,
         BridgeError,
         DesktopClientSnapshot,
+        ManagedServerStatus,
         PeerRemoveResponse,
         BearerPairingResponse,
         NetworkStatusView,

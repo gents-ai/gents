@@ -86,6 +86,7 @@ impl PeerDirectory {
     pub async fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         let peers = match tokio::fs::read(&path).await {
+            Ok(bytes) if bytes.is_empty() => Vec::new(),
             Ok(bytes) => {
                 serde_json::from_slice::<StoredPeerDirectory>(&bytes)
                     .with_context(|| format!("parsing peer directory {}", path.display()))?
@@ -347,6 +348,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_file_loads_as_empty_directory() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        tokio::fs::write(&path, []).await.unwrap();
+
+        let directory = PeerDirectory::load(&path).await.unwrap();
+
+        assert!(directory.is_empty());
+    }
+
+    #[tokio::test]
     async fn add_update_remove_round_trip_persists() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("peers.json");
@@ -435,6 +447,7 @@ mod tests {
 
         assert_eq!(first.peer_id, second.peer_id);
         assert_eq!(directory.records().len(), 1);
+        assert_eq!(directory.records()[0].addr, "iroh://second");
         assert_eq!(directory.records()[0].label, "Workshop Bay Updated");
     }
 
@@ -517,6 +530,8 @@ mod tests {
         );
 
         let reloaded = PeerDirectory::load(&path).await.unwrap();
+        assert_eq!(reloaded.records()[0].peer_id, first.peer_id);
+        assert_eq!(reloaded.records()[0].addr, "iroh://second");
         assert_eq!(
             reloaded.records()[0].graphql.as_deref(),
             Some("http://127.0.0.1:9192/api/v0/graphql")

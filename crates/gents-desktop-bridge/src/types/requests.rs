@@ -13,6 +13,12 @@ pub struct DesktopInitRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ManagedServerStartRequest {
+    pub agent_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct PeerAddRequest {
     pub label: String,
     pub agent_did: String,

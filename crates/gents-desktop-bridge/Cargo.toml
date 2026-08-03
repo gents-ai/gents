@@ -20,6 +20,7 @@ blake3 = "1"
 chrono.workspace = true
 codex-login.workspace = true
 gents = { path = "../gents" }
+gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 hostname.workspace = true

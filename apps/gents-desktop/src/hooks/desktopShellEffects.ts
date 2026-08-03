@@ -26,6 +26,7 @@ type DesktopShellEffectsArgs = {
   lastObservedP2PHealth: MutableRefObject<P2PHealth | null>;
   lastP2PAutoRestartAt: MutableRefObject<number | null>;
   localWorkflow: ChatWorkflowState;
+  localServerAvailable: MutableRefObject<boolean | null>;
   listenToUpdates: DesktopClientUpdatedListenerFactory;
   newConversationAgentRef: MutableRefObject<string | null>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
@@ -58,6 +59,7 @@ export function useDesktopShellEffects({
   lastObservedP2PHealth,
   lastP2PAutoRestartAt,
   localWorkflow,
+  localServerAvailable,
   listenToUpdates,
   newConversationAgentRef,
   refreshSession,
@@ -88,7 +90,20 @@ export function useDesktopShellEffects({
   }, [selectedSessionId, selectedSessionIdRef]);
 
   useEffect(() => {
-    void refreshSnapshot();
+    let cancelled = false;
+    void restoreManagedServer(api)
+      .then((available) => {
+        localServerAvailable.current = available;
+      })
+      .catch((error) => {
+        if (!cancelled) setError(String(error));
+      })
+      .finally(() => {
+        if (!cancelled) void refreshSnapshot();
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -96,7 +111,7 @@ export function useDesktopShellEffects({
       return;
     }
 
-    if (!snapshot.bootstrap.savedPeers.length) {
+    if (!shouldAutoStartDesktopClient(snapshot, localServerAvailable.current)) {
       return;
     }
 
@@ -106,7 +121,14 @@ export function useDesktopShellEffects({
 
     autostartAttempted.current = true;
     void onStartClient();
-  }, [autostartAttempted, onStartClient, sending, snapshot, starting]);
+  }, [
+    autostartAttempted,
+    localServerAvailable,
+    onStartClient,
+    sending,
+    snapshot,
+    starting,
+  ]);
 
   useEffect(() => {
     const previousHealth = lastObservedP2PHealth.current;
@@ -367,4 +389,30 @@ export function useDesktopShellEffects({
       setLocalWorkflow({ kind: "ready" });
     }
   }, [localWorkflow, sending, setLocalWorkflow]);
+}
+
+export async function restoreManagedServer(
+  api: DesktopApiAdapter,
+): Promise<boolean | null> {
+  if (!api.managedServerStatus || !api.startManagedServer) return null;
+
+  const status = await api.managedServerStatus();
+  if (status.state === "running" || status.state === "external") {
+    return true;
+  }
+  if (!status.autoStart) {
+    return false;
+  }
+
+  await api.startManagedServer(status.agentName?.trim() || "Local Agent");
+  return true;
+}
+
+export function shouldAutoStartDesktopClient(
+  snapshot: DesktopClientSnapshot,
+  localServerAvailable: boolean | null,
+): boolean {
+  return snapshot.bootstrap.savedPeers.some(
+    (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+  );
 }

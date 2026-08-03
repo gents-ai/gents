@@ -19,7 +19,8 @@ pub use manage::{
     delete_tool_service_registry_from_graphql, fire_schedule_now, fire_task_now,
     upsert_agent_behavior, upsert_agent_behavior_to_graphql, upsert_agent_principal,
     upsert_agent_principal_to_graphql, upsert_event_trigger, upsert_inference_backend,
-    upsert_inference_profile, upsert_schedule, upsert_skill, upsert_task, upsert_tool_selection,
-    upsert_tool_selection_to_graphql, upsert_tool_service_registry,
+    upsert_inference_backend_to_graphql, upsert_inference_profile, upsert_schedule, upsert_skill,
+    upsert_task, upsert_tool_selection, upsert_tool_selection_to_graphql,
+    upsert_tool_service_registry,
 };
 pub use setup::PeerMutationResult;

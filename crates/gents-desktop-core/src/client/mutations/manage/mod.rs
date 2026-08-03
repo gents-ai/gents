@@ -12,6 +12,7 @@ pub use behavior::{
 };
 pub use inference::{
     delete_inference_backend, delete_inference_backend_from_graphql, upsert_inference_backend,
+    upsert_inference_backend_to_graphql,
 };
 pub use principal::{upsert_agent_principal, upsert_agent_principal_to_graphql};
 pub use profile::{

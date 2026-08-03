@@ -25,6 +25,7 @@ export type FleetHostDashboardProps = Omit<
   "brand" | "headerLeadingActions" | "localRuntimeSetup" | "renderInferenceSetup"
 > & {
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
+  onStartManagedServer?: (agentName: string) => Promise<unknown>;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
@@ -36,6 +37,7 @@ export type FleetHostDashboardProps = Omit<
 
 export function FleetHostDashboard({
   onInitLocalRuntime,
+  onStartManagedServer,
   onSaveBackendConfig,
   onSaveBehaviorConfig,
   onProbeInferenceEndpoint,
@@ -62,9 +64,11 @@ export function FleetHostDashboard({
       localRuntimeSetup={
         <LocalRuntimeConnect
           bootstrap={fleetProps.bootstrap}
-          busy={fleetProps.addingPeer || fleetProps.starting || fleetProps.loading}
+          busy={fleetProps.addingPeer || fleetProps.starting}
+          loading={fleetProps.loading}
           copy={fleetProps.copy}
           onConnect={onInitLocalRuntime}
+          onStartServer={onStartManagedServer}
         />
       }
       renderInferenceSetup={(deployment, onClose) => (

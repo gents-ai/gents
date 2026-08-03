@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-managed-server-start"
+description = "Enables the desktop_managed_server_start command without any pre-configured scope."
+commands.allow = ["desktop_managed_server_start"]
+
+[[permission]]
+identifier = "deny-desktop-managed-server-start"
+description = "Denies the desktop_managed_server_start command without any pre-configured scope."
+commands.deny = ["desktop_managed_server_start"]

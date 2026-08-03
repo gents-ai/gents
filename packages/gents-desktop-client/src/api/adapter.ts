@@ -28,7 +28,7 @@ import type {
   ResolveHoldResult,
 } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
-import type { DesktopApiAdapter } from "./types.js";
+import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 
 type InitSummaryWire = InitSummary & {
   status_endpoint?: string | null;
@@ -88,6 +88,16 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_client_start"),
     shutdownDesktopClient: () =>
       invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown"),
+    managedServerStatus: () =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_status"),
+    startManagedServer: (agentName) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
+        request: { agentName },
+      }),
+    stopManagedServer: (disableAutoStart) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
+        disableAutoStart,
+      }),
     setSelectedAgent: (agentDid) =>
       invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
     addPeer: (request) =>

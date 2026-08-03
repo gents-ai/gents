@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   BearerPairingRequest,
@@ -16,6 +16,9 @@ import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
 
+const SEEDED_LOCAL_ENDPOINT = "http://127.0.0.1:8080/v1";
+const SEEDED_LOCAL_MODEL = "google/gemma-4-12B-it-qat-q4_0-gguf";
+
 function needsInferenceSetup(deployment: DeploymentView): boolean {
   const behavior =
     deployment.behaviors.find((entry) => entry.isDefault) ??
@@ -26,7 +29,13 @@ function needsInferenceSetup(deployment: DeploymentView): boolean {
     ) ?? deployment.inferenceBackends[0];
   if (!backend) return true;
   if (backend.enabled === false) return true;
-  return backend.models.length === 0;
+  if (backend.models.length === 0) return true;
+  return (
+    deployment.source === "local-standard" &&
+    backend.endpoint === SEEDED_LOCAL_ENDPOINT &&
+    backend.models.length === 1 &&
+    backend.models[0] === SEEDED_LOCAL_MODEL
+  );
 }
 
 export type FleetDashboardProps = {
@@ -96,6 +105,7 @@ export function FleetDashboard({
   const [wizardDeployment, setWizardDeployment] =
     useState<DeploymentView | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+  const autoPromptedInference = useRef(new Set<string>());
   const hasDeployments = deployments.length > 0;
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
@@ -111,6 +121,19 @@ export function FleetDashboard({
     (p2pHealth
       ? p2pHealth.consecutiveFailures > 0 || Boolean(p2pHealth.lastError)
       : false);
+
+  useEffect(() => {
+    if (
+      !renderInferenceSetup ||
+      !deploymentNeedingInference ||
+      deploymentNeedingInference.source !== "local-standard" ||
+      autoPromptedInference.current.has(deploymentNeedingInference.peerId)
+    ) {
+      return;
+    }
+    autoPromptedInference.current.add(deploymentNeedingInference.peerId);
+    setWizardDeployment(deploymentNeedingInference);
+  }, [deploymentNeedingInference, renderInferenceSetup]);
 
   async function submitPeer(request: PeerAddRequest) {
     setPeerFormError(null);
@@ -142,22 +165,21 @@ export function FleetDashboard({
         <div className="fleet-empty-card panel">
           {brand}
           <div className="fleet-empty-copy">
-            <h2>Connect your agent</h2>
+            <h2>{localRuntimeSetup ? "Set up Gents" : "Connect your agent"}</h2>
             <p className="muted">
               {localRuntimeSetup
-                ? "Start with the agent on this machine — one click, no configuration."
+                ? "Optionally create an agent on this machine, or skip local setup and connect a remote agent."
                 : "Pair with a remote agent using its signed connection details."}
             </p>
           </div>
           {localRuntimeSetup}
-          { }
           <details
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
           >
             <summary aria-label="Connect a remote agent">
               {localRuntimeSetup
-                ? "Connect a remote agent instead…"
+                ? "Skip local setup and connect a remote agent…"
                 : "Connect agent"}
             </summary>
             <AddPeerForm
@@ -219,8 +241,8 @@ export function FleetDashboard({
               Finish setting up {deploymentNeedingInference.label}
             </strong>
             <span className="muted">
-              This agent has no model backend yet. Connect OpenAI, a local
-              server, a custom endpoint, or your ChatGPT subscription.
+              This agent still needs a working model backend. Connect OpenAI, a
+              local server, a custom endpoint, or your ChatGPT subscription.
             </span>
           </div>
           <button

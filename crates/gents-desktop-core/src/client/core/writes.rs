@@ -1931,9 +1931,31 @@ impl ClientCore {
     }
 
     pub async fn save_backend(&self, row: &InferenceBackendRow) -> Result<()> {
-        match mutations::upsert_inference_backend(self.node.as_ref(), row).await {
+        let snapshot = self.store.snapshot();
+        let owner_agent_did = snapshot
+            .behaviors
+            .iter()
+            .find(|behavior| behavior.backend_id.as_deref() == Some(row.backend_id.as_str()))
+            .and_then(|behavior| behavior.agent_did.clone());
+        let remote_graphql = match owner_agent_did.as_deref() {
+            Some(agent_did) => self.graphql_for_agent(agent_did).await,
+            None => None,
+        };
+        let result = match remote_graphql.as_deref() {
+            Some(graphql) => mutations::upsert_inference_backend_to_graphql(graphql, row).await,
+            None => mutations::upsert_inference_backend(self.node.as_ref(), row).await,
+        };
+        match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                if let Some(agent_did) = owner_agent_did.as_deref() {
+                    if remote_graphql.is_some() {
+                        self.refresh_remote_agent(agent_did).await?;
+                    } else {
+                        self.refresh_store().await?;
+                    }
+                } else {
+                    self.refresh_store().await?;
+                }
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",

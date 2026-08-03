@@ -33,6 +33,18 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_managed_server_status",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_managed_server_start",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_managed_server_stop",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -277,7 +289,8 @@
   "events": [
     "desktop://client-updated",
     "desktop://codex-login-url",
-    "desktop://grok-login-url"
+    "desktop://grok-login-url",
+    "desktop://managed-server-updated"
   ],
   "packageVersion": "0.10.1",
   "permissionSets": [

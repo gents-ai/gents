@@ -7,6 +7,13 @@ It is intentionally a local-first client. The app pairs with a running
 `gents-desktop-core`, and renders conversation, configuration, runtime,
 and fleet views from that local store.
 
+From the initial Fleet screen the desktop app can also provision and host the
+standard `~/.gents` runtime in-process. This is opt-in; remote pairing remains
+available. Once enabled, the app starts that runtime on later launches and
+keeps it alive in the system tray when the main window closes. The CLI and
+desktop host share the `gents_server::server_host` implementation, so no CLI
+binary or sidecar is bundled.
+
 The design for extracting this app's Tauri bridge and chat/fleet/operations
 workflows into reusable packages (#877) lives in
 [docs/reusable-desktop-packages.md](../../docs/reusable-desktop-packages.md).

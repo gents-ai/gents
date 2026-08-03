@@ -29,3 +29,14 @@ pub struct DesktopBootstrapSummary {
     pub peer_directory_exists: bool,
     pub saved_peers: Vec<SavedPeerView>,
 }
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerStatus {
+    pub state: String,
+    pub auto_start: bool,
+    pub agent_name: Option<String>,
+    pub agent_did: Option<String>,
+    pub graphql: Option<String>,
+    pub error: Option<String>,
+}

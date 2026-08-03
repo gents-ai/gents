@@ -7,7 +7,9 @@ use tauri::async_runtime::{spawn, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
-use crate::config::{AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy};
+use crate::config::{
+    AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
+};
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
 
@@ -18,6 +20,7 @@ pub struct ResolvedBridgePolicy {
     pub bootstrap: BootstrapPolicy,
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
+    pub managed_server: ManagedServerPolicy,
 }
 
 /// Outcome of a single-flight `desktop_client_start`.
@@ -39,6 +42,14 @@ pub struct DesktopAppState {
     /// lock while RocksDB is still opening on a background thread.
     pub client_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
+    pub managed_server: tokio::sync::Mutex<ManagedServerState>,
+}
+
+#[derive(Default)]
+pub struct ManagedServerState {
+    pub server: Option<gents_server::server_host::RunningServer>,
+    pub starting: bool,
+    pub last_error: Option<String>,
 }
 
 pub struct DesktopBridge {
@@ -67,6 +78,7 @@ impl DesktopAppState {
             }),
             client_lifecycle: tokio::sync::Mutex::new(()),
             policy,
+            managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
         }
     }
 }
@@ -137,6 +149,7 @@ pub fn resolve_policy(
         bootstrap: config.bootstrap.clone(),
         app_meta: config.app_meta.clone(),
         snapshot_grants: config.snapshot_grants,
+        managed_server: config.managed_server,
     })
 }
 

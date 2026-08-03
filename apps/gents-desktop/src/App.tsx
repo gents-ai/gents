@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
+import { listen } from "@tauri-apps/api/event";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { CodeContextHeader } from "./components/code/CodeContextHeader";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
@@ -48,6 +49,16 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   useEffect(() => {
     void startNativeSimulatorE2e();
   }, []);
+  useEffect(() => {
+    if (!bridge.api.stopManagedServer || !("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void listen("desktop://managed-server-tray-stop", () => {
+      void bridge.api.stopManagedServer?.(true);
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+    return () => unlisten?.();
+  }, [bridge.api]);
   const [workspaceView, setWorkspaceView] = useState<
     "fleet" | "chat" | "config" | "code"
   >("fleet");
@@ -135,6 +146,11 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           onPairBearer={shell.onPairBearer}
           onProbePeerAddress={shell.onProbePeerAddress}
           onInitLocalRuntime={shell.onInitLocalRuntime}
+          onStartManagedServer={
+            bridge.api.startManagedServer
+              ? (agentName) => bridge.api.startManagedServer!(agentName)
+              : undefined
+          }
           onOpenChat={openChat}
           onOpenCode={openCode}
           onOpenConfig={openConfig}
