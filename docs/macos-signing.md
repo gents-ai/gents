@@ -65,17 +65,12 @@ when present, because non-interactive runner shells may not include
 Set these repository or environment secrets before running the release workflow:
 
 ```text
-PRIVATE_REPO_PAT
 MACOS_CODESIGN_IDENTITY
 MACOS_CODESIGN_KEYCHAIN_PASSWORD
 MACOS_NOTARY_API_KEY
 MACOS_NOTARY_ISSUER_ID
 MACOS_NOTARY_KEY_ID
 ```
-
-`PRIVATE_REPO_PAT` is the same private dependency fetch token used by CI. The
-workflow disables checkout's persisted `GITHUB_TOKEN` credentials and uses this
-PAT for Source Network git dependencies, matching the Backbone CI pattern.
 
 `MACOS_CODESIGN_IDENTITY` can be the identity name shown by
 `security find-identity -v -p codesigning`, or the certificate SHA-1 hash from

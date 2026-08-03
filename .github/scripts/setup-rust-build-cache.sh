@@ -19,13 +19,19 @@ if [[ -z "${SCCACHE_DIR:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${RUNNER_TEMP:-}" ]]; then
-  echo "::error::RUNNER_TEMP must be set for disposable Cargo target output."
+if [[ -z "${CARGO_TARGET_ROOT:-}" ]]; then
+  echo "::error::CARGO_TARGET_ROOT must be set for persistent Cargo target output."
+  exit 1
+fi
+
+if [[ -z "${RUNNER_NAME:-}" ]]; then
+  echo "::error::RUNNER_NAME must be set to isolate Cargo target output per runner process."
   exit 1
 fi
 
 mkdir -p "${SCCACHE_DIR}"
-cargo_target_dir="${RUNNER_TEMP}/gents-cargo-target"
+runner_cache_key="$(printf '%s' "${RUNNER_NAME}" | tr -c 'A-Za-z0-9._-' '_')"
+cargo_target_dir="${CARGO_TARGET_ROOT}/${runner_cache_key}"
 mkdir -p "${cargo_target_dir}"
 echo "CARGO_TARGET_DIR=${cargo_target_dir}" >> "${GITHUB_ENV}"
 

@@ -27,11 +27,15 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  # The host service and clients normalize every registered checkout root.
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
 
 jobs:
@@ -39,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -80,20 +84,13 @@ jobs:
       fail-fast: false
       matrix:
         suite: [runtime, cli, desktop, support]
-    # A cold self-hosted checkout must compile and link every Rust target;
-    # sccache persists compiler output, while target artifacts are job-local.
+    # A cold runner instance must compile and link every Rust target. Each
+    # runner process owns a durable target directory; sccache is host-shared.
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Rewrite public Git SSH dependencies to HTTPS
-        run: |
-          set -euo pipefail
-          echo "GIT_CONFIG_GLOBAL=${RUNNER_TEMP}/gents-gitconfig" >> "${GITHUB_ENV}"
-          export GIT_CONFIG_GLOBAL="${RUNNER_TEMP}/gents-gitconfig"
-          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -113,34 +110,22 @@ jobs:
           "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
+
+      # Runtime conformance tests load the generated Lean contract. Mathlib
+      # publishes matching precompiled artifacts; without this step Lake
+      # recompiles the dependency graph from source in every clean checkout.
+      - name: Prepare persistent Lean build cache
+        if: matrix.suite == 'runtime'
+        run: .github/scripts/setup-lean-build-cache.sh
+
+      - name: Download precompiled Mathlib artifacts
+        if: matrix.suite == 'runtime'
+        working-directory: crates/gents/proofs
+        run: lake exe cache get
 
       - name: Check formatting
         if: matrix.suite == 'support'
@@ -235,16 +220,9 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Rewrite public Git SSH dependencies to HTTPS
-        run: |
-          set -euo pipefail
-          echo "GIT_CONFIG_GLOBAL=${RUNNER_TEMP}/gents-gitconfig" >> "${GITHUB_ENV}"
-          export GIT_CONFIG_GLOBAL="${RUNNER_TEMP}/gents-gitconfig"
-          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -258,34 +236,17 @@ jobs:
           "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
+
+      - name: Prepare persistent Lean build cache
+        run: .github/scripts/setup-lean-build-cache.sh
+
+      - name: Download precompiled Mathlib artifacts
+        working-directory: crates/gents/proofs
+        run: lake exe cache get
 
       - name: Reject Lean sorry placeholders
         working-directory: crates/gents/proofs
@@ -310,11 +271,11 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

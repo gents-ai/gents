@@ -77,13 +77,12 @@ jobs:
         shell: bash
 
     env:
-      GIT_CONFIG_GLOBAL: /tmp/gents-release-${{ github.run_id }}-${{ matrix.target }}.gitconfig
       TARGET_TRIPLE: ${{ matrix.target }}
       CARGO_PROFILE_RELEASE_LTO: ${{ matrix.release_lto }}
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -124,19 +123,6 @@ jobs:
           fi
 
           echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
-
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -213,9 +199,11 @@ jobs:
 
           tarball="${dist_dir}/${artifact_basename}.tar.gz"
           checksum_file="${tarball}.sha256"
-          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
-          echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
-          echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tarball=${tarball}"
+            echo "checksum_file=${checksum_file}"
+            echo "artifact_basename=${artifact_basename}"
+          } >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
 
       - name: Verify packaged artifact
@@ -272,15 +260,6 @@ jobs:
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.checksum_file }}
           if-no-files-found: error
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          rm -f "${GIT_CONFIG_GLOBAL}"
 
   # Runs on the host (not in the build container) because it needs the gh CLI,
   # which the rust:1-bookworm build container does not ship.

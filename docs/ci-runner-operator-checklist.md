@@ -67,15 +67,45 @@ this without a workflow edit:
 gh variable set CARGO_BUILD_JOBS --repo source-inc/gents --body 12
 ```
 
-Watch CPU pressure and job duration before increasing it. The next sensible
-experiment is three runners at eight compiler jobs each, not three runners at
-12 jobs each.
+Watch CPU pressure and job duration before increasing it. Lean can spawn work
+outside Cargo's job budget: a measured Rust/Lean overlap drove `studio-1` above
+a load average of 100. Do not add a third runner process without first adding a
+host-wide CPU admission mechanism or moving Lean to isolated capacity.
 
 ## Rust cache safety
 
-Runner processes on a host share `/Users/admin/.cache/sccache`, but each job
-must use a disposable Cargo target beneath `runner.temp`. Never stop or restart
-the shared sccache daemon from a job: that interrupts sibling compiles.
+Runner processes on a host share `/Users/admin/.cache/sccache`. Each runner
+process has its own persistent target directory under
+`/Users/admin/.cache/gents-cargo-target/<runner-name>`. A runner process accepts
+only one job at a time, so this preserves linked test artifacts without letting
+sibling jobs write the same Cargo target tree.
+
+The shared sccache server must be owned by launchd, not by a workflow job.
+GitHub runner cleanup kills daemons descended from a completed job; in a
+measured run that terminated sccache underneath a sibling compile and forced a
+16-minute local CLI link. Install the checked-in LaunchAgent on both hosts:
+
+```bash
+scp .github/runner/com.source.gents.sccache.plist \
+  studio-1:/Users/admin/Library/LaunchAgents/
+scp .github/runner/start-gents-sccache.sh \
+  studio-1:/Users/admin/.ghrunner/
+scp .github/runner/com.source.gents.sccache.plist \
+  studio-2:/Users/admin/Library/LaunchAgents/
+scp .github/runner/start-gents-sccache.sh \
+  studio-2:/Users/admin/.ghrunner/
+```
+
+Only while all Studio runners are idle, replace any workflow-owned daemon:
+
+```bash
+ssh studio-1 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchctl bootout gui/$(id -u)/com.source.gents.sccache 2>/dev/null || true; SCCACHE_DIR=/Users/admin/.cache/sccache /opt/homebrew/bin/sccache --stop-server 2>/dev/null || true; launchctl bootstrap gui/$(id -u) /Users/admin/Library/LaunchAgents/com.source.gents.sccache.plist'
+ssh studio-2 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchctl bootout gui/$(id -u)/com.source.gents.sccache 2>/dev/null || true; SCCACHE_DIR=/Users/admin/.cache/sccache /opt/homebrew/bin/sccache --stop-server 2>/dev/null || true; launchctl bootstrap gui/$(id -u) /Users/admin/Library/LaunchAgents/com.source.gents.sccache.plist'
+```
+
+The service also normalizes both runner checkout roots through
+`SCCACHE_BASEDIRS`, allowing compiler results to hit across runner instances.
+Never stop or restart it from a workflow job: that interrupts sibling compiles.
 
 Check the cache without mutating it:
 
@@ -87,13 +117,29 @@ ssh studio-2 'SCCACHE_DIR=/Users/admin/.cache/sccache sccache --show-stats'
 If the daemon must be restarted for maintenance, first confirm that every
 runner on that host is idle in the GitHub API.
 
+Mathlib is a separate cache surface. Each runner process owns a persistent Lake
+directory under `/Users/admin/.cache/gents-lean/<runner-name>`, linked into its
+clean checkout before proof or runtime conformance work. The workflow also runs
+`lake exe cache get` so a new runner downloads the official precompiled Mathlib
+artifacts instead of rebuilding the full dependency graph.
+
+## Public-repository security boundary
+
+`source-inc/gents` is public. Pull-request jobs execute repository code on
+persistent self-hosted machines, so contributor approval is not an isolation
+boundary: an approved fork can modify code run by Cargo, build scripts, tests,
+and shell steps. Treat moving pull-request execution into ephemeral macOS VMs
+as urgent runner work. Until then, keep credentials and access to sensitive
+services off the Studios and do not assume cache or checkout cleanup repairs a
+compromised host.
+
 ## macOS filesystem checks
 
 Exclude disposable worktrees and the durable compiler cache from Time Machine:
 
 ```bash
-ssh -t studio-1 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache'
-ssh -t studio-2 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache'
+ssh -t studio-1 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache /Users/admin/.cache/gents-cargo-target /Users/admin/.cache/gents-lean'
+ssh -t studio-2 'sudo tmutil addexclusion -p /Users/admin/.ghrunner /Users/admin/.cache/sccache /Users/admin/.cache/gents-cargo-target /Users/admin/.cache/gents-lean'
 ```
 
 Confirm the exclusions with `tmutil isexcluded <path>`. For Spotlight, first

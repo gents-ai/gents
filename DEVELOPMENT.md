@@ -33,9 +33,8 @@ additionally needs:
   - Fedora: `sudo dnf install pkg-config openssl-devel perl`
   - macOS: `brew install openssl pkg-config` (Xcode Command Line Tools supply
     the C toolchain)
-- **Git + SSH access to the private DefraDB repos** — the workspace pins
-  `defradb.rs` (and `backbone`) over `ssh://git@github.com/...`, so a GitHub SSH
-  key with access to `sourcenetwork/defradb.rs` is needed to fetch dependencies.
+- **Git + HTTPS access to GitHub** — the workspace pins public `defradb.rs` and
+  `backbone` revisions. No GitHub SSH key or private-repository token is needed.
 - **Lean toolchain** (proofs only) — [`elan`](https://github.com/leanprover/elan)
   provides `lake`/`lean` for `crates/gents/proofs`.
 - **Desktop app** (`apps/gents-desktop`, optional) — Node.js with `npm`, and
