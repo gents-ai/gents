@@ -125,7 +125,10 @@ jobs:
       - name: Download precompiled Mathlib artifacts
         if: matrix.suite == 'runtime'
         working-directory: crates/gents/proofs
-        run: lake exe cache get
+        # Lean 4.18's LLVM 15 linker emits a native cache executable that
+        # macOS 26 rejects. Running the same checked-in entry point through the
+        # interpreter avoids that dyld incompatibility without changing tools.
+        run: lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
 
       - name: Check formatting
         if: matrix.suite == 'support'
@@ -246,7 +249,7 @@ jobs:
 
       - name: Download precompiled Mathlib artifacts
         working-directory: crates/gents/proofs
-        run: lake exe cache get
+        run: lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
 
       - name: Reject Lean sorry placeholders
         working-directory: crates/gents/proofs

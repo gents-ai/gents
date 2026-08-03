@@ -120,8 +120,11 @@ runner on that host is idle in the GitHub API.
 Mathlib is a separate cache surface. Each runner process owns a persistent Lake
 directory under `/Users/admin/.cache/gents-lean/<runner-name>`, linked into its
 clean checkout before proof or runtime conformance work. The workflow also runs
-`lake exe cache get` so a new runner downloads the official precompiled Mathlib
-artifacts instead of rebuilding the full dependency graph.
+Mathlib's cache entry point through the Lean interpreter so a new runner
+downloads the official precompiled artifacts instead of rebuilding the full
+dependency graph. Do not replace that invocation with `lake exe cache get`
+while the repository is pinned to Lean 4.18: its LLVM 15-linked executable is
+rejected by macOS 26 dyld ([Lean issue #7917](https://github.com/leanprover/lean4/issues/7917)).
 
 ## Public-repository security boundary
 
