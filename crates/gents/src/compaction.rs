@@ -10,7 +10,10 @@ mod summary;
 mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
-use summary::{compaction_prompt, dedupe_paths, format_summary, parse_summary_response};
+use summary::{
+    compaction_prompt, compaction_request_prompt, dedupe_paths, format_summary,
+    parse_summary_response,
+};
 
 #[derive(Debug, Clone)]
 pub struct CompactionOptions {
@@ -172,13 +175,24 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
+        // The transcript is untrusted source material. Put the summarization
+        // contract in the system layer so an unfinished user/tool workflow in
+        // `prepared_history` cannot outrank it and turn the internal completion
+        // into a continuation of the old task. The final user message is
+        // deliberately neutral; it carries no executable transcript content.
+        let mut summary_config = self.config.clone();
+        summary_config.preamble = Some(compaction_prompt().to_string());
+        summary_config.context_message = None;
+        summary_config.tool_choice = None;
+        summary_config.turn_compactor = None;
+        summary_config.max_turns = 0;
         let raw_summary = crate::agent::loop_stream::run_loop_to_text(
             (*self.model).clone(),
             None,
-            crate::llm::message::Message::user(compaction_prompt()),
+            crate::llm::message::Message::user(compaction_request_prompt()),
             prepared_history.clone(),
             std::sync::Arc::new(Vec::new()),
-            self.config.clone(),
+            summary_config,
         )
         .await
         .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
