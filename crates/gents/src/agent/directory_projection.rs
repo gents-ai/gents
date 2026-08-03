@@ -20,6 +20,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::persona_presets::{builtin_preset_names, preset_name, PresetFields};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,8 +38,56 @@ pub struct DirectoryEntry {
     /// so clients can badge threads bound to a NON-default behavior; empty
     /// when the principal has none.
     pub default_behavior_id: String,
+    /// Per-behavior persona dimensions, index-aligned with `behavior_ids`.
+    /// `"backend_id|model_name"`; `""` when both are blank.
+    pub behavior_models: Vec<String>,
+    /// Per-behavior file tool root (`""` when the behavior's `ToolSelection`
+    /// is missing or unset), index-aligned with `behavior_ids`.
+    pub behavior_roots: Vec<String>,
+    /// Per-behavior built-in preset name, or `""` for a custom selection (or
+    /// a missing one), index-aligned with `behavior_ids`.
+    pub behavior_presets: Vec<String>,
+    /// Per-behavior inference profile id (`""` = unset), index-aligned with
+    /// `behavior_ids`.
+    pub behavior_profiles: Vec<String>,
+    /// Home-level pickable options for the persona composer; identical on
+    /// every entry derived from the same source. Flattened into the four
+    /// `available_models`/`allowed_roots`/`permission_presets`/
+    /// `available_profiles` columns at upsert/list time.
+    pub options: CatalogOptions,
     pub runtime_state: String,
     pub last_seen: String,
+}
+
+/// Per-behavior persona dimensions, as loaded from `AgentBehavior`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BehaviorInfo {
+    pub behavior_id: String,
+    pub display_name: String,
+    pub backend_id: String,
+    pub model_name: String,
+    pub tool_selection_id: String,
+    pub inference_profile_id: String,
+}
+
+/// A `ToolSelection`'s directory-relevant fields, keyed by `selection_id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectionInfo {
+    pub file_tool_root: String,
+    pub preset: PresetFields,
+}
+
+/// Home-level, source-wide pickable options for the persona composer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CatalogOptions {
+    /// `"backend_id|model_name"`, sorted, deduped.
+    pub available_models: Vec<String>,
+    /// Enabled `WorkspaceRoot` paths, sorted.
+    pub allowed_roots: Vec<String>,
+    /// `builtin_preset_names()`.
+    pub permission_presets: Vec<String>,
+    /// `"profile_id|display_name"`, sorted.
+    pub available_profiles: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -54,10 +103,14 @@ pub trait DirectoryStore: Send + Sync {
     /// default_behavior_id)`. `default_behavior_id` is empty when the
     /// principal has none.
     async fn load_principals(&self) -> Result<Vec<(String, String, String)>>;
-    /// Per principal, the enabled behaviors as `(behavior_id, display_name)`
-    /// pairs (display name falls back to the id when blank).
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>>;
+    /// Per principal, the enabled behaviors as `BehaviorInfo` (display name
+    /// falls back to the id when blank).
+    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<BehaviorInfo>>>;
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
+    /// `ToolSelection` rows keyed by `selection_id`.
+    async fn load_tool_selections(&self) -> Result<BTreeMap<String, SelectionInfo>>;
+    /// Home-level composer options (backends, roots, presets, profiles).
+    async fn load_catalog_options(&self) -> Result<CatalogOptions>;
     async fn list_directory_entries(
         &self,
         source_did: &str,
@@ -121,8 +174,10 @@ fn canonicalize_last_seen(updated_at: &str) -> String {
 pub fn derive_directory_entries(
     source_did: &str,
     principals: &[(String, String, String)],
-    behaviors: &BTreeMap<String, Vec<(String, String)>>,
+    behaviors: &BTreeMap<String, Vec<BehaviorInfo>>,
     runtimes: &BTreeMap<String, (String, String)>,
+    selections: &BTreeMap<String, SelectionInfo>,
+    options: &CatalogOptions,
 ) -> BTreeMap<String, DirectoryEntry> {
     principals
         .iter()
@@ -131,11 +186,50 @@ pub fn derive_directory_entries(
             // Sort by (name, id) for a stable picker order, then dedup by id
             // (a behavior's id determines its identity; same id implies same
             // name, so duplicates land adjacent after the sort).
-            let mut pairs = behaviors.get(did).cloned().unwrap_or_default();
-            pairs.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-            pairs.dedup_by(|a, b| a.0 == b.0);
-            let names = pairs.iter().map(|(_, name)| name.clone()).collect();
-            let ids = pairs.into_iter().map(|(id, _)| id).collect();
+            let mut infos = behaviors.get(did).cloned().unwrap_or_default();
+            infos.sort_by(|a, b| {
+                a.display_name
+                    .cmp(&b.display_name)
+                    .then_with(|| a.behavior_id.cmp(&b.behavior_id))
+            });
+            infos.dedup_by(|a, b| a.behavior_id == b.behavior_id);
+
+            let names = infos.iter().map(|info| info.display_name.clone()).collect();
+            let ids: Vec<String> = infos.iter().map(|info| info.behavior_id.clone()).collect();
+            let behavior_models = infos
+                .iter()
+                .map(|info| {
+                    if info.backend_id.is_empty() && info.model_name.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}|{}", info.backend_id, info.model_name)
+                    }
+                })
+                .collect();
+            let behavior_roots = infos
+                .iter()
+                .map(|info| {
+                    selections
+                        .get(&info.tool_selection_id)
+                        .map(|selection| selection.file_tool_root.clone())
+                        .unwrap_or_default()
+                })
+                .collect();
+            let behavior_presets = infos
+                .iter()
+                .map(|info| {
+                    selections
+                        .get(&info.tool_selection_id)
+                        .and_then(|selection| preset_name(&selection.preset))
+                        .map(str::to_string)
+                        .unwrap_or_default()
+                })
+                .collect();
+            let behavior_profiles = infos
+                .iter()
+                .map(|info| info.inference_profile_id.clone())
+                .collect();
+
             let (runtime_state, updated_at) = runtimes.get(did).cloned().unwrap_or_default();
             (
                 did.clone(),
@@ -147,6 +241,11 @@ pub fn derive_directory_entries(
                     behaviors: names,
                     behavior_ids: ids,
                     default_behavior_id: default_behavior_id.clone(),
+                    behavior_models,
+                    behavior_roots,
+                    behavior_presets,
+                    behavior_profiles,
+                    options: options.clone(),
                     runtime_state,
                     last_seen: canonicalize_last_seen(&updated_at),
                 },
@@ -174,7 +273,22 @@ pub async fn reconcile_directory_tick(
         .load_runtime_states()
         .await
         .context("load runtime states")?;
-    let desired = derive_directory_entries(source_did, &principals, &behaviors, &runtimes);
+    let selections = store
+        .load_tool_selections()
+        .await
+        .context("load tool selections")?;
+    let options = store
+        .load_catalog_options()
+        .await
+        .context("load catalog options")?;
+    let desired = derive_directory_entries(
+        source_did,
+        &principals,
+        &behaviors,
+        &runtimes,
+        &selections,
+        &options,
+    );
     let existing = store
         .list_directory_entries(source_did)
         .await
@@ -341,18 +455,22 @@ impl DirectoryStore for GraphqlDirectoryStore {
             .collect())
     }
 
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>> {
+    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<BehaviorInfo>>> {
         let query = r#"{
             AgentBehavior {
                 agent_did
                 display_name
                 behavior_id
+                backend_id
+                model_name
+                tool_selection_id
+                inference_profile_id
                 enabled
             }
         }"#;
         let response = self.node.execute(query).await;
         ensure_no_errors(&response, "query AgentBehavior")?;
-        let mut grouped: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        let mut grouped: BTreeMap<String, Vec<BehaviorInfo>> = BTreeMap::new();
         for row in rows::<BehaviorRow>(&response, "AgentBehavior")? {
             if !row.enabled.unwrap_or(true) {
                 continue;
@@ -372,16 +490,182 @@ impl DirectoryStore for GraphqlDirectoryStore {
             else {
                 continue;
             };
-            let name = row
+            let display_name = row
                 .display_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| behavior_id.clone());
-            grouped.entry(did).or_default().push((behavior_id, name));
+            let backend_id = row
+                .backend_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let model_name = row
+                .model_name
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let tool_selection_id = row
+                .tool_selection_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let inference_profile_id = row
+                .inference_profile_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            grouped.entry(did).or_default().push(BehaviorInfo {
+                behavior_id,
+                display_name,
+                backend_id,
+                model_name,
+                tool_selection_id,
+                inference_profile_id,
+            });
         }
         Ok(grouped)
+    }
+
+    async fn load_tool_selections(&self) -> Result<BTreeMap<String, SelectionInfo>> {
+        let query = r#"{
+            ToolSelection {
+                selection_id
+                file_tool_root
+                enable_file_tools
+                file_tools_mode
+                enable_bash
+                bash_mode
+                command_allowed_argv_prefixes
+                command_forbidden_argv_prefixes
+                read_only_command_allowlist
+                enable_self_config
+                write_tools
+            }
+        }"#;
+        let response = self.node.execute(query).await;
+        ensure_no_errors(&response, "query ToolSelection")?;
+        let mut grouped: BTreeMap<String, SelectionInfo> = BTreeMap::new();
+        for row in rows::<ToolSelectionRow>(&response, "ToolSelection")? {
+            let Some(selection_id) = row
+                .selection_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
+            let file_tool_root = row
+                .file_tool_root
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let preset = PresetFields {
+                enable_file_tools: row.enable_file_tools.unwrap_or_default(),
+                file_tools_mode: row.file_tools_mode.unwrap_or_default(),
+                enable_bash: row.enable_bash.unwrap_or_default(),
+                bash_mode: row.bash_mode.unwrap_or_default(),
+                command_allowed_argv_prefixes: row
+                    .command_allowed_argv_prefixes
+                    .unwrap_or_default(),
+                command_forbidden_argv_prefixes: row
+                    .command_forbidden_argv_prefixes
+                    .unwrap_or_default(),
+                read_only_command_allowlist: row.read_only_command_allowlist.unwrap_or_default(),
+                enable_self_config: row.enable_self_config.unwrap_or_default(),
+                write_tools: row.write_tools.unwrap_or_default(),
+            };
+            grouped.insert(
+                selection_id,
+                SelectionInfo {
+                    file_tool_root,
+                    preset,
+                },
+            );
+        }
+        Ok(grouped)
+    }
+
+    async fn load_catalog_options(&self) -> Result<CatalogOptions> {
+        let backends_query = r#"{
+            InferenceBackend {
+                backend_id
+                models
+                enabled
+            }
+        }"#;
+        let response = self.node.execute(backends_query).await;
+        ensure_no_errors(&response, "query InferenceBackend")?;
+        let mut available_models: Vec<String> =
+            rows::<InferenceBackendRow>(&response, "InferenceBackend")?
+                .into_iter()
+                .filter(|row| row.enabled.unwrap_or(false))
+                .flat_map(|row| {
+                    let backend_id = row.backend_id.unwrap_or_default();
+                    row.models
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(move |model| format!("{backend_id}|{model}"))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        available_models.sort();
+        available_models.dedup();
+
+        let roots_query = r#"{
+            WorkspaceRoot {
+                root_path
+                enabled
+            }
+        }"#;
+        let response = self.node.execute(roots_query).await;
+        ensure_no_errors(&response, "query WorkspaceRoot")?;
+        let mut allowed_roots: Vec<String> = rows::<WorkspaceRootRow>(&response, "WorkspaceRoot")?
+            .into_iter()
+            .filter(|row| row.enabled.unwrap_or(false))
+            .filter_map(|row| row.root_path)
+            .collect();
+        allowed_roots.sort();
+
+        let profiles_query = r#"{
+            InferenceProfile {
+                profile_id
+                display_name
+            }
+        }"#;
+        let response = self.node.execute(profiles_query).await;
+        ensure_no_errors(&response, "query InferenceProfile")?;
+        let mut available_profiles: Vec<String> =
+            rows::<InferenceProfileRow>(&response, "InferenceProfile")?
+                .into_iter()
+                .filter_map(|row| {
+                    let profile_id = row.profile_id?;
+                    let display_name = row
+                        .display_name
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| profile_id.clone());
+                    Some(format!("{profile_id}|{display_name}"))
+                })
+                .collect();
+        available_profiles.sort();
+
+        Ok(CatalogOptions {
+            available_models,
+            allowed_roots,
+            permission_presets: builtin_preset_names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect(),
+            available_profiles,
+        })
     }
 
     async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
@@ -433,6 +717,14 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 behaviors
                 behavior_ids
                 default_behavior_id
+                behavior_models
+                behavior_roots
+                behavior_presets
+                behavior_profiles
+                available_models
+                allowed_roots
+                permission_presets
+                available_profiles
                 runtime_state
                 last_seen
             }}
@@ -459,6 +751,16 @@ impl DirectoryStore for GraphqlDirectoryStore {
                     behaviors: row.behaviors.unwrap_or_default(),
                     behavior_ids: row.behavior_ids.unwrap_or_default(),
                     default_behavior_id: row.default_behavior_id.unwrap_or_default(),
+                    behavior_models: row.behavior_models.unwrap_or_default(),
+                    behavior_roots: row.behavior_roots.unwrap_or_default(),
+                    behavior_presets: row.behavior_presets.unwrap_or_default(),
+                    behavior_profiles: row.behavior_profiles.unwrap_or_default(),
+                    options: CatalogOptions {
+                        available_models: row.available_models.unwrap_or_default(),
+                        allowed_roots: row.allowed_roots.unwrap_or_default(),
+                        permission_presets: row.permission_presets.unwrap_or_default(),
+                        available_profiles: row.available_profiles.unwrap_or_default(),
+                    },
                     runtime_state: row.runtime_state.unwrap_or_default(),
                     last_seen: row.last_seen.unwrap_or_default(),
                 };
@@ -493,6 +795,22 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
     // columns.
     let behavior_ids = graphql_string_list_literal(entry.behavior_ids.iter().map(String::as_str));
     let default_behavior_id = escape_graphql_string(&entry.default_behavior_id);
+    let behavior_models =
+        graphql_string_list_literal(entry.behavior_models.iter().map(String::as_str));
+    let behavior_roots =
+        graphql_string_list_literal(entry.behavior_roots.iter().map(String::as_str));
+    let behavior_presets =
+        graphql_string_list_literal(entry.behavior_presets.iter().map(String::as_str));
+    let behavior_profiles =
+        graphql_string_list_literal(entry.behavior_profiles.iter().map(String::as_str));
+    let available_models =
+        graphql_string_list_literal(entry.options.available_models.iter().map(String::as_str));
+    let allowed_roots =
+        graphql_string_list_literal(entry.options.allowed_roots.iter().map(String::as_str));
+    let permission_presets =
+        graphql_string_list_literal(entry.options.permission_presets.iter().map(String::as_str));
+    let available_profiles =
+        graphql_string_list_literal(entry.options.available_profiles.iter().map(String::as_str));
     let runtime_state = escape_graphql_string(&entry.runtime_state);
     let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
@@ -508,6 +826,14 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     behaviors: {behaviors},
                     behavior_ids: {behavior_ids},
                     default_behavior_id: "{default_behavior_id}",
+                    behavior_models: {behavior_models},
+                    behavior_roots: {behavior_roots},
+                    behavior_presets: {behavior_presets},
+                    behavior_profiles: {behavior_profiles},
+                    available_models: {available_models},
+                    allowed_roots: {allowed_roots},
+                    permission_presets: {permission_presets},
+                    available_profiles: {available_profiles},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -517,6 +843,14 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     behaviors: {behaviors},
                     behavior_ids: {behavior_ids},
                     default_behavior_id: "{default_behavior_id}",
+                    behavior_models: {behavior_models},
+                    behavior_roots: {behavior_roots},
+                    behavior_presets: {behavior_presets},
+                    behavior_profiles: {behavior_profiles},
+                    available_models: {available_models},
+                    allowed_roots: {allowed_roots},
+                    permission_presets: {permission_presets},
+                    available_profiles: {available_profiles},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -597,7 +931,67 @@ struct BehaviorRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
+    backend_id: Option<String>,
+    #[serde(default)]
+    model_name: Option<String>,
+    #[serde(default)]
+    tool_selection_id: Option<String>,
+    #[serde(default)]
+    inference_profile_id: Option<String>,
+    #[serde(default)]
     enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ToolSelectionRow {
+    #[serde(default)]
+    selection_id: Option<String>,
+    #[serde(default)]
+    file_tool_root: Option<String>,
+    #[serde(default)]
+    enable_file_tools: Option<bool>,
+    #[serde(default)]
+    file_tools_mode: Option<String>,
+    #[serde(default)]
+    enable_bash: Option<bool>,
+    #[serde(default)]
+    bash_mode: Option<String>,
+    #[serde(default)]
+    command_allowed_argv_prefixes: Option<Vec<String>>,
+    #[serde(default)]
+    command_forbidden_argv_prefixes: Option<Vec<String>>,
+    #[serde(default)]
+    read_only_command_allowlist: Option<Vec<String>>,
+    #[serde(default)]
+    enable_self_config: Option<bool>,
+    #[serde(default)]
+    write_tools: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct InferenceBackendRow {
+    #[serde(default)]
+    backend_id: Option<String>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceRootRow {
+    #[serde(default)]
+    root_path: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct InferenceProfileRow {
+    #[serde(default)]
+    profile_id: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -625,6 +1019,22 @@ struct DirectoryRow {
     #[serde(default)]
     default_behavior_id: Option<String>,
     #[serde(default)]
+    behavior_models: Option<Vec<String>>,
+    #[serde(default)]
+    behavior_roots: Option<Vec<String>>,
+    #[serde(default)]
+    behavior_presets: Option<Vec<String>>,
+    #[serde(default)]
+    behavior_profiles: Option<Vec<String>>,
+    #[serde(default)]
+    available_models: Option<Vec<String>>,
+    #[serde(default)]
+    allowed_roots: Option<Vec<String>>,
+    #[serde(default)]
+    permission_presets: Option<Vec<String>>,
+    #[serde(default)]
+    available_profiles: Option<Vec<String>>,
+    #[serde(default)]
     runtime_state: Option<String>,
     #[serde(default)]
     last_seen: Option<String>,
@@ -643,6 +1053,11 @@ mod tests {
             behaviors: Vec::new(),
             behavior_ids: Vec::new(),
             default_behavior_id: String::new(),
+            behavior_models: Vec::new(),
+            behavior_roots: Vec::new(),
+            behavior_presets: Vec::new(),
+            behavior_profiles: Vec::new(),
+            options: CatalogOptions::default(),
             runtime_state: "running".to_string(),
             last_seen: last_seen.to_string(),
         }
@@ -723,6 +1138,61 @@ mod tests {
         let mutation = upsert_directory_entry_mutation(&with_behaviors, "2026-07-23T00:00:00Z");
         assert!(mutation.contains(r#"behaviors: ["Artist", "Coder"]"#));
         assert!(mutation.contains(r#"behavior_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
+    }
+
+    /// The eight new dimension/option columns follow the same null-never-[]
+    /// discipline as `behaviors`/`behavior_ids`, in BOTH the add and update
+    /// payloads — an empty list literal types as `JsonArray` and corrupts
+    /// nillable array columns.
+    #[test]
+    fn upsert_mutation_renders_null_for_all_eight_new_columns_when_empty() {
+        let mutation = upsert_directory_entry_mutation(
+            &entry("did:key:no-dimensions", "2026-07-20T00:00:00Z"),
+            "2026-07-23T00:00:00Z",
+        );
+        for column in [
+            "behavior_models",
+            "behavior_roots",
+            "behavior_presets",
+            "behavior_profiles",
+            "available_models",
+            "allowed_roots",
+            "permission_presets",
+            "available_profiles",
+        ] {
+            let needle = format!("{column}: null");
+            assert!(
+                mutation.contains(&needle),
+                "empty {column} must render as null, never []: {mutation}"
+            );
+        }
+    }
+
+    /// Populated dimension/option lists render as aligned array literals in
+    /// both the add and update payloads.
+    #[test]
+    fn upsert_mutation_renders_populated_dimension_and_option_lists() {
+        let mut with_dimensions = entry("did:key:with-dimensions", "2026-07-20T00:00:00Z");
+        with_dimensions.behavior_ids = vec!["did:key:a:coder".to_string()];
+        with_dimensions.behavior_models = vec!["openai|gpt-5".to_string()];
+        with_dimensions.behavior_roots = vec!["/repo/a".to_string()];
+        with_dimensions.behavior_presets = vec!["readonly".to_string()];
+        with_dimensions.behavior_profiles = vec!["fast-profile".to_string()];
+        with_dimensions.options = CatalogOptions {
+            available_models: vec!["openai|gpt-5".to_string()],
+            allowed_roots: vec!["/repo/a".to_string()],
+            permission_presets: vec!["readonly".to_string(), "write".to_string()],
+            available_profiles: vec!["fast-profile|Fast".to_string()],
+        };
+        let mutation = upsert_directory_entry_mutation(&with_dimensions, "2026-07-23T00:00:00Z");
+        assert!(mutation.contains(r#"behavior_models: ["openai|gpt-5"]"#));
+        assert!(mutation.contains(r#"behavior_roots: ["/repo/a"]"#));
+        assert!(mutation.contains(r#"behavior_presets: ["readonly"]"#));
+        assert!(mutation.contains(r#"behavior_profiles: ["fast-profile"]"#));
+        assert!(mutation.contains(r#"available_models: ["openai|gpt-5"]"#));
+        assert!(mutation.contains(r#"allowed_roots: ["/repo/a"]"#));
+        assert!(mutation.contains(r#"permission_presets: ["readonly", "write"]"#));
+        assert!(mutation.contains(r#"available_profiles: ["fast-profile|Fast"]"#));
     }
 
     /// `default_behavior_id` is a plain string field (unlike the nullable
@@ -863,6 +1333,14 @@ mod tests {
     /// runtime-less principal's directory row must exist with `last_seen`
     /// round-tripping to `""` rather than aborting the sweep. Deleting a
     /// principal then retracts exactly its row.
+    ///
+    /// Also covers persona-catalog round-trip (issue #714 PR 3): one behavior
+    /// wired to a readonly-matching `ToolSelection` (with root), backend,
+    /// model, and profile; the other behavior wired to none of those, so its
+    /// four dimension entries must derive `""`. A disabled `WorkspaceRoot`
+    /// must be excluded from `allowed_roots`. The second tick over the same
+    /// settled state must still be write-free — the eight new columns must
+    /// not break the storm-regression invariant.
     #[tokio::test]
     async fn graphql_tick_converges_runtime_less_principal_and_retracts_on_removal() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -898,6 +1376,10 @@ mod tests {
                 behavior_id: "enabled-behavior",
                 agent_did: "did:key:with-runtime",
                 display_name: "Enabled Behavior",
+                backend_id: "openai",
+                model_name: "gpt-5",
+                tool_selection_id: "readonly-selection",
+                inference_profile_id: "fast-profile",
                 enabled: true
             }) { _docID }
             create_AgentBehavior(input: {
@@ -916,6 +1398,36 @@ mod tests {
                 agent_did: "did:key:with-runtime",
                 process_state: "running",
                 updated_at: "2026-07-23T12:34:56.845794+00:00"
+            }) { _docID }
+            create_ToolSelection(input: {
+                selection_id: "readonly-selection",
+                agent_did: "did:key:with-runtime",
+                file_tool_root: "/repo/with-runtime",
+                enable_file_tools: true,
+                file_tools_mode: "ReadOnly",
+                enable_bash: true,
+                bash_mode: "ReadOnly",
+                enable_self_config: false
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "openai",
+                name: "OpenAI",
+                enabled: true,
+                models: ["gpt-5", "gpt-5-mini"]
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "fast-profile",
+                display_name: "Fast Profile"
+            }) { _docID }
+            create_WorkspaceRoot(input: {
+                root_path: "/repo/enabled",
+                display_name: "Enabled Root",
+                enabled: true
+            }) { _docID }
+            create_WorkspaceRoot(input: {
+                root_path: "/repo/disabled",
+                display_name: "Disabled Root",
+                enabled: false
             }) { _docID }
         }"#;
         let response = node.execute(seed).await;
@@ -956,6 +1468,52 @@ mod tests {
             with_runtime.default_behavior_id, "enabled-behavior",
             "default_behavior_id must round-trip from AgentPrincipal through a real node"
         );
+        // Persona dimensions, index-aligned with the sorted behavior_ids
+        // above (artist-behavior first, enabled-behavior second): the
+        // artist behavior has no backend/model/selection/profile wired up
+        // and must derive "" on all four; the enabled behavior has all four
+        // wired and must round-trip through a real node.
+        assert_eq!(
+            with_runtime.behavior_models,
+            vec![String::new(), "openai|gpt-5".to_string()],
+            "behavior_models must round-trip backend_id|model_name, aligned"
+        );
+        assert_eq!(
+            with_runtime.behavior_roots,
+            vec![String::new(), "/repo/with-runtime".to_string()],
+            "behavior_roots must round-trip the wired selection's file_tool_root, aligned"
+        );
+        assert_eq!(
+            with_runtime.behavior_presets,
+            vec![String::new(), "readonly".to_string()],
+            "behavior_presets must classify the readonly-matching selection, aligned"
+        );
+        assert_eq!(
+            with_runtime.behavior_profiles,
+            vec![String::new(), "fast-profile".to_string()],
+            "behavior_profiles must round-trip inference_profile_id, aligned"
+        );
+        assert_eq!(
+            with_runtime.options.available_models,
+            vec!["openai|gpt-5".to_string(), "openai|gpt-5-mini".to_string()],
+            "available_models must list every model of every enabled backend, sorted"
+        );
+        assert_eq!(
+            with_runtime.options.allowed_roots,
+            vec!["/repo/enabled".to_string()],
+            "the disabled WorkspaceRoot must be excluded from allowed_roots"
+        );
+        assert_eq!(
+            with_runtime.options.permission_presets,
+            crate::agent::persona_presets::builtin_preset_names()
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            with_runtime.options.available_profiles,
+            vec!["fast-profile|Fast Profile".to_string()]
+        );
         assert!(
             !entries.contains_key("did:key:disabled"),
             "disabled principals must not be advertised"
@@ -976,9 +1534,13 @@ mod tests {
             no_runtime.default_behavior_id, "",
             "a principal with no default_behavior_id must stay empty, not null-coerced garbage"
         );
+        // Options are home-level, so a principal with no behaviors at all
+        // still carries the same catalog on its row.
+        assert_eq!(no_runtime.options, with_runtime.options);
 
         // Settled state is a write-free fixpoint: the runtime-less principal
-        // must not keep re-triggering writes forever.
+        // must not keep re-triggering writes forever, and the eight new
+        // dimension/option columns must not break settled-comparison either.
         let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(second, DirectoryTickOutcome::default());
 
