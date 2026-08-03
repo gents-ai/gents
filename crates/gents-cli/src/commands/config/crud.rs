@@ -14,7 +14,7 @@ use crate::{
     graphql_rows, print_json, resolve_config_access, CONFIG_EXPORT_FORMAT,
     EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
     EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
-    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS, EXPORT_WORKSPACE_ROOT_FIELDS,
 };
 
 #[derive(Clone, Copy)]
@@ -64,6 +64,16 @@ pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "mcp",
     collection: Collection::ToolServiceRegistry,
     fields: EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+};
+
+// list/show only: WorkspaceRoot is local-only config with no agent_did and
+// no incoming/outgoing references (see workspace_root.rs), so it does not
+// route through config_rm's desired-state reference-safety check — rm is
+// implemented directly in commands/config/workspace_root.rs instead.
+pub(super) const WORKSPACE_ROOT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "workspace root",
+    collection: Collection::WorkspaceRoot,
+    fields: EXPORT_WORKSPACE_ROOT_FIELDS,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {

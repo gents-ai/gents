@@ -379,6 +379,7 @@ pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did dis
 pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools allowed_mcp_service_ids delegate_to backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled orchestration_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools enable_self_config self_config_categories self_config_no_lockout self_config_dry_run";
 pub(crate) const EXPORT_SKILL_FIELDS: &str =
     "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
+pub(crate) const EXPORT_WORKSPACE_ROOT_FIELDS: &str = "root_path display_name enabled updated_at";
 pub(crate) const EXPORT_INFERENCE_BACKEND_FIELDS: &str =
     "backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
 pub(crate) const EXPORT_INFERENCE_PROFILE_FIELDS: &str =
