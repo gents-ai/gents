@@ -8645,6 +8645,7 @@ dependencies = [
  "gents",
  "gents-desktop-bridge",
  "gents-desktop-core",
+ "gents-fs-runner",
  "gents-protocol",
  "reqwest 0.12.28",
  "serde",

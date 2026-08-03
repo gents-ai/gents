@@ -216,8 +216,8 @@ pub use tool_surface::{
     ToolPolicyVersion, ToolRuntimeContext, ToolSelection, ToolSurface, TOOL_POLICY_V1,
 };
 pub use toolset::{
-    build_native_tools, CliToolConfig, CommandExecutionMode, CommandExecutionPolicy,
-    CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
+    build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::goal_source::GoalSource;

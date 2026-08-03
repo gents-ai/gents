@@ -19,6 +19,7 @@ anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
 gents = { path = "../../../crates/gents" }
+gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
 gents-protocol = { path = "../../../crates/gents-protocol" }
