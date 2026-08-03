@@ -1,11 +1,19 @@
 //! Built-in permission preset templates and exact-match classifier
 //! (directory persona catalog, PR 2 / Task 2).
 //!
-//! A "preset" is a named bundle of the *discriminating* permission fields of
-//! a `ToolSelectionDocument` — the subset of fields that actually vary
-//! across the CLI's built-in `--tool-package` profiles. Root (a filesystem
-//! dimension, not a permission), `display_name`, and subagent/memory/meta
-//! knobs are deliberately excluded: they aren't preset-determined.
+//! A "preset" is a named bundle of the permission fields the persona layer
+//! CLASSIFIES on — enough to distinguish `readonly` from `write` from
+//! hand-tuned ("custom") selections, not enough to fully MINT one. Root (a
+//! filesystem dimension, not a permission) and `display_name` are excluded
+//! on principle. Also deliberately excluded, though they DO vary across
+//! init's packages: `command_execution_policy`, `backgroundable_tool_names`,
+//! `enable_meta_tools`, and `enable_defra_query`. A materializer that mints
+//! a `ToolSelectionDocument` from a preset name must source those
+//! init-parity extras from `init.rs`'s package profiles separately —
+//! `PresetFields` alone under-provisions a `write` selection (missing exec
+//! policy + backgroundable bash). Conversely, a hand-tuned change to one of
+//! the excluded fields keeps its preset badge: the classifier is a
+//! permissions label, not a byte-identity check over the whole document.
 //!
 //! The template values here are copied **verbatim** from the authoritative
 //! source in `crates/gents-cli/src/commands/init.rs`:
