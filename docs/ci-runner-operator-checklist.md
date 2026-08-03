@@ -9,14 +9,16 @@ needs multiple registered runner processes to run multiple jobs concurrently.
 Both Studios are M3 Ultra hosts with 32 physical cores and 512 GiB of memory.
 The intended Gents capacity is two runner processes per host:
 
-| Host | Runner names | Root for the second runner |
-| --- | --- | --- |
-| `studio-1` | `studio-1`, `studio-1-2` | `/Users/admin/.ghrunner/gents-2` |
-| `studio-2` | `studio-2`, `studio-2-2` | `/Users/admin/.ghrunner/gents-2` |
+| Host | Runner | Rust suite label | Root |
+| --- | --- | --- | --- |
+| `studio-1` | `studio-1` | `ci-runtime` | `/Users/admin/.ghrunner/defra-agent` |
+| `studio-1` | `studio-1-2` | `ci-support` | `/Users/admin/.ghrunner/gents-2` |
+| `studio-2` | `studio-2` | `ci-cli` | `/Users/admin/.ghrunner/defra-agent` |
+| `studio-2` | `studio-2-2` | `ci-desktop` | `/Users/admin/.ghrunner/gents-2` |
 
-All four registrations must have
-`self-hosted,macOS,ARM64,studio,<host>` labels. Confirm the live pool through
-GitHub rather than relying on local process state:
+All four registrations must have the common
+`self-hosted,macOS,ARM64,studio,<host>` labels and the suite label shown above.
+Confirm the live pool through GitHub rather than relying on local process state:
 
 ```bash
 gh api repos/source-inc/gents/actions/runners --paginate \
@@ -80,12 +82,14 @@ process has its own persistent target directory under
 only one job at a time, so this preserves linked test artifacts without letting
 sibling jobs write the same Cargo target tree.
 
-The Rust matrix also has physical-host affinity: runtime and support run on
-`studio-1`, while desktop and CLI run on `studio-2`. Keep that pairing stable.
-The sccache store is host-local, so allowing suites to bounce between Studios
-turns an otherwise identical rerun into a cold Rust compile even though all
-four runner registrations are healthy. Runner-instance reshuffling within one
-host remains safe and can reuse the shared compiler cache.
+The Rust matrix also has runner affinity: runtime and support run on
+`studio-1`, while desktop and CLI run on `studio-2`, with one suite pinned to
+each runner process. Keep that mapping stable. The sccache store is host-local,
+and linked binaries plus procedural macros are not cacheable, so allowing a
+suite to bounce between Studios or runner target directories turns an otherwise
+identical rerun into a substantial rebuild. The tradeoff is deliberate: if one
+registration is offline, its suite queues until an operator restores the runner
+or temporarily moves its `ci-*` label to the healthy sibling.
 
 The shared sccache server must be owned by launchd, not by a workflow job.
 GitHub runner cleanup kills daemons descended from a completed job; in a
