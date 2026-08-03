@@ -21,16 +21,32 @@ fi
 
 mkdir -p "${SCCACHE_DIR}"
 
+# Multiple self-hosted runner workers share this machine and cache directory.
+# A single default sccache port makes their setup steps race: one job stops the
+# daemon while another is compiling, then either job can seize the port during
+# restart. Give every Actions job/attempt its own stable port while continuing
+# to share the disk-backed cache. Persist it through GITHUB_ENV so later build
+# and stats steps address the same daemon.
+if [[ -z "${SCCACHE_SERVER_PORT:-}" ]]; then
+  port_seed="${RUNNER_NAME:-studio}:${GITHUB_RUN_ID:-local}:${GITHUB_JOB:-job}:${GITHUB_RUN_ATTEMPT:-0}"
+  port_checksum="$(printf '%s' "${port_seed}" | cksum)"
+  port_checksum="${port_checksum%% *}"
+  export SCCACHE_SERVER_PORT="$((30000 + port_checksum % 20000))"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'SCCACHE_SERVER_PORT=%s\n' "${SCCACHE_SERVER_PORT}" >> "${GITHUB_ENV}"
+  fi
+fi
+
 echo "Using CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
 echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 echo "Using SCCACHE_DIR=${SCCACHE_DIR}"
 echo "Using SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE:-sccache default}"
+echo "Using SCCACHE_SERVER_PORT=${SCCACHE_SERVER_PORT}"
 
 sccache --version
-# Studio runners share a long-lived sccache daemon across jobs. A prior job that
-# cleaned its workdir can leave the daemon with a dead cwd, which surfaces as
-# "Couldn't determine current working directory" / missing dep-info files mid
-# compile. Always recycle the server so each job starts from a live process.
+# Recycle only this job's daemon. A prior attempt that cleaned its workdir can
+# leave its daemon with a dead cwd, which surfaces as "Couldn't determine
+# current working directory" / missing dep-info files mid compile.
 if sccache --stop-server >/dev/null 2>&1; then
   echo "Stopped existing sccache server."
 else
