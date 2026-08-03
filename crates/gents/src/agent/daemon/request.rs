@@ -454,10 +454,12 @@ fn prompt_exceeds_compaction_threshold(
     max_output_tokens: usize,
     threshold: f64,
 ) -> bool {
-    let configured_threshold_budget = compaction::threshold_budget(context_window, threshold);
-    let provider_input_budget = context_window.saturating_sub(max_output_tokens);
-    let effective_input_budget = configured_threshold_budget.min(provider_input_budget);
-    prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)) > effective_input_budget
+    compaction::input_exceeds_budget(
+        prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)),
+        context_window,
+        max_output_tokens,
+        threshold,
+    )
 }
 
 #[cfg(test)]

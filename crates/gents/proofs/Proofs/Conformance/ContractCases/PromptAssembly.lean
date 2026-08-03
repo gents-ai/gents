@@ -81,6 +81,17 @@ structure PromptAssemblyBudgetCase where
   providerSafe : Bool
   deriving Repr
 
+structure PromptAssemblyTurnBudgetCase where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  configuredThresholdBudget : Nat
+  effectiveInputBudget : Nat
+  turnInputTokens : List Nat
+  turnShouldCompact : List Bool
+  deriving Repr
+
 /-! ## Building witness rows -/
 
 private def itemCase : Item → PromptAssemblyItemCase
@@ -444,5 +455,49 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
 
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
+
+/-! The owned loop must apply the same gate to every provider completion, not
+only to the entry turn. These traces cross the boundary after one or more safe
+turns so a first-turn-only implementation cannot satisfy the generated fence. -/
+
+private structure TurnBudgetWitness where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  turnInputTokens : List Nat
+
+private def turnBudgetWitnesses : List TurnBudgetWitness :=
+  [ { name := "owned-loop-later-turn-crosses-budget"
+    , contextWindow := 458752
+    , maxOutputTokens := 393216
+    , thresholdBasisPoints := 7500
+    , turnInputTokens := [48000, 65536, 65537, 22000] }
+  , { name := "owned-loop-every-turn-safe"
+    , contextWindow := 10000
+    , maxOutputTokens := 2000
+    , thresholdBasisPoints := 7500
+    , turnInputTokens := [1000, 4000, 7500] }
+  ]
+
+private def turnBudgetCase
+    (witness : TurnBudgetWitness) : PromptAssemblyTurnBudgetCase :=
+  let configured := PromptAssembly.Budget.configuredThresholdBudget
+    witness.contextWindow witness.thresholdBasisPoints
+  let effective := PromptAssembly.Budget.effectiveInputBudget configured
+    witness.contextWindow witness.maxOutputTokens
+  { name := witness.name
+  , contextWindow := witness.contextWindow
+  , maxOutputTokens := witness.maxOutputTokens
+  , thresholdBasisPoints := witness.thresholdBasisPoints
+  , configuredThresholdBudget := configured
+  , effectiveInputBudget := effective
+  , turnInputTokens := witness.turnInputTokens
+  , turnShouldCompact := witness.turnInputTokens.map fun inputTokens =>
+      decide (PromptAssembly.Budget.ExceedsInputBudget inputTokens 0 configured
+        witness.contextWindow witness.maxOutputTokens) }
+
+def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
+  turnBudgetWitnesses.map turnBudgetCase
 
 end Conformance.ContractCases

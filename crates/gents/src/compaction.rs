@@ -427,6 +427,30 @@ pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
     ((context_window as u128 * basis_points) / 10_000) as usize
 }
 
+/// Provider input available after both the configured compaction threshold and
+/// the requested output reservation are applied. Mirrors Lean
+/// `PromptAssembly.Budget.effectiveInputBudget`.
+pub fn effective_input_budget(
+    context_window: usize,
+    max_output_tokens: usize,
+    threshold: f64,
+) -> usize {
+    threshold_budget(context_window, threshold)
+        .min(context_window.saturating_sub(max_output_tokens))
+}
+
+/// The shared provider-dispatch gate. It is deliberately expressed over an
+/// already-assembled input estimate so callers at request entry and inside the
+/// owned completion loop apply exactly the same output-reserved rule.
+pub fn input_exceeds_budget(
+    input_tokens: usize,
+    context_window: usize,
+    max_output_tokens: usize,
+    threshold: f64,
+) -> bool {
+    input_tokens > effective_input_budget(context_window, max_output_tokens, threshold)
+}
+
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {
     let tokens = estimate_message_tokens(messages);
     tokens > threshold_budget(context_window, threshold)

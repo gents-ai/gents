@@ -94,4 +94,46 @@ theorem not_exceeds_is_provider_safe
     promptTokens + requestTokens + maxOutputTokens ≤ contextWindow := by
   exact within_effective_is_provider_safe houtput (Nat.le_of_not_gt hnot)
 
+/-! ## Owned-loop turn safety
+
+`run_loop_stream` can issue several provider completions for one durable
+request. Tool calls and their results grow the provider input between those
+completions, so checking the budget only when the durable request enters the
+daemon is insufficient. The dispatch guard is a per-turn obligation: every
+turn that reaches the provider must have passed the same output-reserved gate.
+-/
+
+/-- The input-token estimates observed at each completion turn. -/
+abbrev TurnInputs := List Nat
+
+/-- Every completion turn which the runtime elects to dispatch is provider
+safe. Membership makes the quantification explicitly range over the entire
+owned-loop trace rather than only its first input. -/
+def EveryDispatchedTurnSafe
+    (inputs : TurnInputs) (configuredThresholdBudget contextWindow
+      maxOutputTokens : Nat) : Prop :=
+  ∀ inputTokens ∈ inputs,
+    ¬ ExceedsInputBudget inputTokens 0 configuredThresholdBudget contextWindow
+      maxOutputTokens →
+    inputTokens + maxOutputTokens ≤ contextWindow
+
+/-- Applying the output-reserved guard before every completion dispatch makes
+the whole owned-loop trace safe, even when later turns grow beyond the entry
+turn's budget. -/
+theorem every_dispatched_turn_is_provider_safe
+    {inputs : TurnInputs} {configuredThresholdBudget contextWindow
+      maxOutputTokens : Nat}
+    (houtput : maxOutputTokens ≤ contextWindow) :
+    EveryDispatchedTurnSafe inputs configuredThresholdBudget contextWindow
+      maxOutputTokens := by
+  intro inputTokens _ hnot
+  simpa using
+    (not_exceeds_is_provider_safe
+      (promptTokens := inputTokens)
+      (requestTokens := 0)
+      (configuredThresholdBudget := configuredThresholdBudget)
+      (contextWindow := contextWindow)
+      (maxOutputTokens := maxOutputTokens)
+      houtput hnot)
+
 end PromptAssembly.Budget

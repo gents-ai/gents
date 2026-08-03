@@ -296,6 +296,9 @@ fn config(max_turns: usize) -> LoopConfig {
         additional_params: None,
         tool_choice: None,
         on_rendered_request: None,
+        turn_compactor: None,
+        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns,
@@ -553,6 +556,118 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     assert!(
         model.seen_histories().await.is_empty(),
         "provider stream must not start after capture failure"
+    );
+}
+
+#[test]
+fn generated_turn_budget_cases_drive_every_completion_dispatch() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_turn_budget_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no owned-loop turn budget cases"
+    );
+
+    for case in cases {
+        let threshold = case.threshold_basis_points as f64 / 10_000.0;
+        assert_eq!(
+            crate::compaction::threshold_budget(case.context_window, threshold),
+            case.configured_threshold_budget,
+            "{}: configured threshold drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::compaction::effective_input_budget(
+                case.context_window,
+                case.max_output_tokens,
+                threshold,
+            ),
+            case.effective_input_budget,
+            "{}: effective input budget drifted from Lean",
+            case.name
+        );
+        let actual = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| {
+                crate::compaction::input_exceeds_budget(
+                    *tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                    threshold,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual, case.turn_should_compact,
+            "{}: a later completion turn bypassed the Lean dispatch gate",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn later_completion_turn_is_compacted_before_provider_dispatch() {
+    let model = ScriptedModel::new_turns(vec![
+        echo_tool_turn(),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: "r".repeat(12_000),
+    })]);
+    let prompt = Message::user("p".repeat(20_000));
+    let mut loop_config = config(2);
+    loop_config.max_tokens = Some(100);
+    loop_config.compaction_threshold = 1.0;
+
+    let first_request = build_request(
+        &model,
+        prompt.clone(),
+        &[],
+        &[],
+        tools.as_slice(),
+        &loop_config,
+    )
+    .await
+    .expect("first request should build");
+    let first_tokens = completion_request_input_estimate(&first_request);
+    loop_config.context_window = first_tokens + 100 + 100;
+
+    let compactions = Arc::new(AtomicUsize::new(0));
+    let compactions_for_callback = compactions.clone();
+    loop_config.turn_compactor = Some(Arc::new(move |messages| {
+        let compactions = compactions_for_callback.clone();
+        Box::pin(async move {
+            compactions.fetch_add(1, Ordering::SeqCst);
+            let keep_from = messages.len().saturating_sub(2);
+            let mut compacted = vec![Message::user(
+                "<system-reminder>compacted earlier turn</system-reminder>",
+            )];
+            compacted.extend(messages.into_iter().skip(keep_from));
+            Ok(compacted)
+        })
+    }));
+
+    let stream = run_loop_stream(model.clone(), None, prompt, Vec::new(), tools, loop_config);
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    assert_eq!(
+        compactions.load(Ordering::SeqCst),
+        1,
+        "the safe entry turn must dispatch directly and the grown second turn must compact"
+    );
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert!(
+        histories[1].iter().any(|message| message
+            .rag_text()
+            .is_some_and(|text| { text.contains("compacted earlier turn") })),
+        "the second provider request must use the compacted provider view"
     );
 }
 

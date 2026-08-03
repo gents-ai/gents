@@ -69,6 +69,12 @@ pub(crate) type RenderedRequestSink = Arc<
         + Sync,
 >;
 
+pub(crate) type TurnCompactor = Arc<
+    dyn Fn(Vec<Message>) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Message>>> + Send>>
+        + Send
+        + Sync,
+>;
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum LoopStreamItem<R> {
@@ -100,6 +106,12 @@ pub(crate) struct LoopConfig {
     pub(crate) additional_params: Option<serde_json::Value>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
+    /// Ephemeral provider-view compaction used between completion turns. The
+    /// durable transcript remains permissive; this callback only narrows the
+    /// in-memory input immediately before provider dispatch.
+    pub(crate) turn_compactor: Option<TurnCompactor>,
+    pub(crate) context_window: usize,
+    pub(crate) compaction_threshold: f64,
     pub(crate) retry_policy: CompletionRetryPolicy,
     pub(crate) deadline: Option<DateTime<Utc>>,
     pub(crate) max_turns: usize,
@@ -191,6 +203,17 @@ where
             }
             current_turn += 1;
 
+            let turn_index = current_turn - 1;
+            let mut request = build_budgeted_request(
+                &model,
+                &mut history,
+                &mut new_messages,
+                tools.as_slice(),
+                &config,
+                turn_index,
+            )
+            .await?;
+
             let current_prompt = new_messages
                 .last()
                 .cloned()
@@ -219,9 +242,7 @@ where
                 }
             }
 
-            let turn_index = current_turn - 1;
             let mut attempt = 0_u32;
-            let mut request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
             'attempts: loop {
                 let mut stream = loop {
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
@@ -983,6 +1004,109 @@ pub(crate) async fn dispatch_tool(
         _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
         result = call => ToolOutcome::from_dispatch(name, result),
     }
+}
+
+fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    serde_json::to_string(value)
+        .map(|json| crate::compaction::estimate_tokens(&json))
+        .unwrap_or_default()
+}
+
+/// Estimate the complete provider input represented by Rig's rendered request,
+/// including static tool schemas. The production profile deliberately leaves
+/// tokenizer headroom because this estimator is approximate; its job here is
+/// to apply that conservative profile before *every* completion dispatch.
+fn completion_request_input_estimate(request: &CompletionRequest) -> usize {
+    serialized_token_estimate(&request.chat_history)
+        .saturating_add(serialized_token_estimate(&request.documents))
+        .saturating_add(serialized_token_estimate(&request.tools))
+        .saturating_add(serialized_token_estimate(&request.additional_params))
+        .saturating_add(serialized_token_estimate(&request.output_schema))
+}
+
+fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopConfig) -> bool {
+    let max_output_tokens = config
+        .max_tokens
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .unwrap_or_default();
+    crate::compaction::input_exceeds_budget(
+        completion_request_input_estimate(request),
+        config.context_window,
+        max_output_tokens,
+        config.compaction_threshold,
+    )
+}
+
+async fn build_budgeted_request<M: CompletionModel>(
+    model: &M,
+    history: &mut Vec<Message>,
+    new_messages: &mut Vec<Message>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    turn_index: usize,
+) -> Result<CompletionRequest, StreamingError> {
+    let current_prompt = new_messages
+        .last()
+        .cloned()
+        .expect("new_messages always retains at least the initial prompt");
+    let prior = &new_messages[..new_messages.len() - 1];
+    let request = build_request(model, current_prompt, history, prior, tools, config).await?;
+
+    let Some(compactor) = config.turn_compactor.as_ref() else {
+        return Ok(request);
+    };
+    if !completion_request_exceeds_budget(&request, config) {
+        return Ok(request);
+    }
+
+    let before_tokens = completion_request_input_estimate(&request);
+    let provider_messages = history
+        .iter()
+        .chain(new_messages.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut compacted = compactor(provider_messages).await.map_err(|error| {
+        StreamingError::Completion(CompletionError::ProviderError(format!(
+            "per-turn provider-input compaction failed: {error:#}"
+        )))
+    })?;
+    let compacted_prompt = compacted.pop().ok_or_else(|| {
+        StreamingError::Completion(CompletionError::ProviderError(
+            "per-turn provider-input compaction returned no prompt".to_string(),
+        ))
+    })?;
+    *history = compacted;
+    *new_messages = vec![compacted_prompt.clone()];
+
+    let rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    let after_tokens = completion_request_input_estimate(&rebuilt);
+    tracing::info!(
+        turn = turn_index,
+        before_tokens,
+        after_tokens,
+        context_window = config.context_window,
+        max_output_tokens = config.max_tokens.unwrap_or_default(),
+        "compacted provider input before completion dispatch"
+    );
+
+    if completion_request_exceeds_budget(&rebuilt, config) {
+        let effective_budget = crate::compaction::effective_input_budget(
+            config.context_window,
+            config
+                .max_tokens
+                .and_then(|tokens| usize::try_from(tokens).ok())
+                .unwrap_or_default(),
+            config.compaction_threshold,
+        );
+        return Err(StreamingError::Completion(CompletionError::ProviderError(
+            format!(
+                "per-turn provider input remains over budget after compaction: \
+                 estimated_input_tokens={after_tokens}, effective_input_budget={effective_budget}"
+            ),
+        )));
+    }
+
+    Ok(rebuilt)
 }
 
 async fn build_request<M: CompletionModel>(

@@ -899,6 +899,11 @@ def caseCoverage : List CoverageEntry :=
       "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_output_reserved_compaction_trigger")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyTurnBudgetCases"
+      "agent::loop_stream::tests::generated_turn_budget_cases_drive_every_completion_dispatch")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
       "conformance::event_delivery_transition_cases_match_contract")

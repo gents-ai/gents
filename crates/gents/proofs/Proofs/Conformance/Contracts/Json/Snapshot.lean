@@ -212,6 +212,8 @@ def snapshotJson : String :=
       ++ promptAssemblyRepairCasesJson ++ ","
     ++ "\"prompt_assembly_budget_cases\":"
       ++ promptAssemblyBudgetCasesJson ++ ","
+    ++ "\"prompt_assembly_turn_budget_cases\":"
+      ++ promptAssemblyTurnBudgetCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

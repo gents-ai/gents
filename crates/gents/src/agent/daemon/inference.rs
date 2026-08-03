@@ -9,6 +9,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
+use crate::compaction::{CompactionOptions, Compactor};
 use crate::config::AgentBehavior;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
@@ -195,6 +196,56 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.loop_tools.len(),
                 );
                 loop_config.deadline = request_deadline;
+                let turn_compactor = self.compactor.clone();
+                let turn_context_window = self.behavior.context_window;
+                let mut turn_compaction_options = self.compaction_options.clone();
+                turn_compaction_options.force_summarize = true;
+                let turn_node = self.node.clone();
+                let turn_session_id = request.session_id.clone();
+                let turn_request_id = request.request_id.clone();
+                loop_config.turn_compactor = Some(std::sync::Arc::new(move |messages| {
+                    let compactor = turn_compactor.clone();
+                    let options: CompactionOptions = turn_compaction_options.clone();
+                    let node = turn_node.clone();
+                    let session_id = turn_session_id.clone();
+                    let request_id = turn_request_id.clone();
+                    Box::pin(async move {
+                        if crate::session::session_has_other_live_response(
+                            node.as_ref(),
+                            &session_id,
+                            Some(&request_id),
+                        )
+                        .await?
+                        {
+                            anyhow::bail!(
+                                "per-turn compaction refused while another response in the \
+                                 session is streaming"
+                            );
+                        }
+                        if !crate::compaction::has_unique_call_ids(&messages) {
+                            anyhow::bail!(
+                                "per-turn compaction refused because tool-call ids are not unique"
+                            );
+                        }
+                        let result = admission::scope_call(
+                            CallKind::Compaction,
+                            1,
+                            compactor.compact(messages, turn_context_window, &options),
+                        )
+                        .await?;
+
+                        let mut provider_messages = result.messages;
+                        if let Some(summary) = result.summary {
+                            provider_messages.insert(
+                                0,
+                                crate::prompt::LayeredPromptBuilder::system_reminder(&format!(
+                                    "Previous conversation summary (compacted):\n\n{summary}"
+                                )),
+                            );
+                        }
+                        Ok(provider_messages)
+                    })
+                }));
                 if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
                     let context = crate::rendered_request::RenderedRequestContext::for_request(
                         request,

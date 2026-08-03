@@ -27,9 +27,12 @@ The proofs are strongest where the runtime is a state machine:
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
-  entry chokepoint), the fixed layer order of the assembled request, and the
-  output-reserved provider-input budget that triggers compaction before the
-  provider context is overcommitted (`PromptAssembly/Budget.lean`).
+  chokepoint), the fixed layer order of the assembled request, and the
+  output-reserved provider-input budget checked before every owned-loop
+  completion dispatch. Later tool turns can grow beyond a safe entry input,
+  so `PromptAssembly/Budget.lean` proves the per-turn guard over the whole
+  dispatch trace and drives a generated regression where only a later turn
+  crosses the budget.
   `Provider.sanitizeForProvider` models the full three-stage composition
   production runs (`normalize_assistant_content_order ∘
   drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser
