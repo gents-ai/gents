@@ -42,6 +42,8 @@ pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
+pub const WORKSPACE_ROOT_NAME: &str = "WorkspaceRoot";
+pub const WORKSPACE_ROOT: &str = include_str!("../schemas/agent/workspace_root.graphql");
 pub const TASK_NAME: &str = "Task";
 pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
 pub const SCHEDULE_NAME: &str = "Schedule";
@@ -90,6 +92,7 @@ pub const ALL: &[&str] = &[
     AGENT_MEMORY,
     TOOL_SELECTION,
     SKILL,
+    WORKSPACE_ROOT,
     AGENT_CONVERSATION,
     AGENT_REQUEST,
     AGENT_RESPONSE,
@@ -127,6 +130,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,
     SKILL_NAME,
+    WORKSPACE_ROOT_NAME,
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,

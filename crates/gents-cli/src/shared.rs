@@ -274,6 +274,12 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) agent_behaviors: Vec<Value>,
     #[serde(default)]
     pub(crate) skills: Vec<Value>,
+    // WorkspaceRoot is registered (schema layer, #714-adjacent persona
+    // catalog work) but not yet part of the desired-state CRUD surface
+    // (CONFIG_APPLY_ORDER/DesiredStateManifest); this stays empty until a
+    // follow-up task wires the real live-query + apply/prune flow.
+    #[serde(default)]
+    pub(crate) workspace_roots: Vec<Value>,
     #[serde(default)]
     pub(crate) tool_selections: Vec<Value>,
     #[serde(default)]
@@ -300,6 +306,7 @@ impl ConfigExportBundle {
             Collection::AgentPrincipal => None,
             Collection::AgentBehavior => Some(&self.agent_behaviors),
             Collection::Skill => Some(&self.skills),
+            Collection::WorkspaceRoot => Some(&self.workspace_roots),
             Collection::ToolSelection => Some(&self.tool_selections),
             Collection::InferenceBackend => Some(&self.inference_backends),
             Collection::InferenceProfile => Some(&self.inference_profiles),
@@ -318,6 +325,7 @@ pub(crate) struct ConfigApplyCounts {
     pub(crate) agent_principal: usize,
     pub(crate) agent_behaviors: usize,
     pub(crate) skills: usize,
+    pub(crate) workspace_roots: usize,
     pub(crate) tool_selections: usize,
     pub(crate) inference_backends: usize,
     pub(crate) inference_profiles: usize,
@@ -335,6 +343,7 @@ impl ConfigApplyCounts {
             Collection::AgentPrincipal => self.agent_principal,
             Collection::AgentBehavior => self.agent_behaviors,
             Collection::Skill => self.skills,
+            Collection::WorkspaceRoot => self.workspace_roots,
             Collection::ToolSelection => self.tool_selections,
             Collection::InferenceBackend => self.inference_backends,
             Collection::InferenceProfile => self.inference_profiles,
@@ -352,6 +361,7 @@ impl ConfigApplyCounts {
             Collection::AgentPrincipal => self.agent_principal = count,
             Collection::AgentBehavior => self.agent_behaviors = count,
             Collection::Skill => self.skills = count,
+            Collection::WorkspaceRoot => self.workspace_roots = count,
             Collection::ToolSelection => self.tool_selections = count,
             Collection::InferenceBackend => self.inference_backends = count,
             Collection::InferenceProfile => self.inference_profiles = count,
@@ -369,6 +379,7 @@ impl ConfigApplyCounts {
             Collection::AgentPrincipal => self.agent_principal += count,
             Collection::AgentBehavior => self.agent_behaviors += count,
             Collection::Skill => self.skills += count,
+            Collection::WorkspaceRoot => self.workspace_roots += count,
             Collection::ToolSelection => self.tool_selections += count,
             Collection::InferenceBackend => self.inference_backends += count,
             Collection::InferenceProfile => self.inference_profiles += count,

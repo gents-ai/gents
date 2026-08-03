@@ -35,6 +35,7 @@ fn every_apply_collection_schema_has_a_recreate_identity_field() {
             Collection::AgentPrincipal => schemas::AGENT_PRINCIPAL,
             Collection::AgentBehavior => schemas::AGENT_BEHAVIOR,
             Collection::Skill => schemas::SKILL,
+            Collection::WorkspaceRoot => schemas::WORKSPACE_ROOT,
             Collection::ToolSelection => schemas::TOOL_SELECTION,
             Collection::InferenceBackend => schemas::INFERENCE_BACKEND,
             Collection::InferenceProfile => schemas::INFERENCE_PROFILE,

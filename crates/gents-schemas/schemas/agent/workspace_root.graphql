@@ -1,0 +1,11 @@
+# Operator-defined workspace roots clients may pick as a persona's file tool
+# root (spec: personas). Local-only config (NOT @branchable): the directory
+# projection publishes the enabled paths via allowed_roots; the raw rows
+# never replicate. TRUST BASIS - operator-only local writes, like every
+# config collection.
+type WorkspaceRoot {
+    root_path: String @index(unique: true)
+    display_name: String
+    enabled: Boolean
+    updated_at: DateTime @index(direction: DESC)
+}

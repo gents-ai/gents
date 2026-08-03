@@ -249,6 +249,7 @@ fn empty_bundle(access_mode: &str, agent_did: &str) -> ConfigExportBundle {
         agent_principal: None,
         agent_behaviors: Vec::new(),
         skills: Vec::new(),
+        workspace_roots: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
@@ -274,6 +275,7 @@ fn push_doc(bundle: &mut ConfigExportBundle, collection: Collection, doc: Value)
     match collection {
         Collection::AgentBehavior => bundle.agent_behaviors.push(doc),
         Collection::Skill => bundle.skills.push(doc),
+        Collection::WorkspaceRoot => bundle.workspace_roots.push(doc),
         Collection::ToolSelection => bundle.tool_selections.push(doc),
         Collection::InferenceBackend => bundle.inference_backends.push(doc),
         Collection::InferenceProfile => bundle.inference_profiles.push(doc),
@@ -341,6 +343,10 @@ fn remove_target(
         Collection::Schedule => manifest.schedules.retain(|row| row.schedule_id != id),
         Collection::EventTrigger => manifest.event_triggers.retain(|row| row.trigger_id != id),
         Collection::AgentPrincipal => {}
+        // WorkspaceRoot has no desired-state manifest list yet (not part of
+        // Collection::ALL / CONFIG_APPLY_ORDER); nothing to retain against
+        // until a follow-up task wires the file-based CRUD surface.
+        Collection::WorkspaceRoot => {}
     }
 }
 

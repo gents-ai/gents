@@ -233,6 +233,8 @@ pub(crate) async fn build_config_export_bundle(
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
         skills: skill_rows,
+        // WorkspaceRoot has no live-query wiring yet; see shared::ConfigExportBundle::workspace_roots.
+        workspace_roots: Vec::new(),
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,
@@ -516,6 +518,8 @@ pub(crate) async fn build_desired_state_live_bundle(
         agent_principal: principal_rows.into_iter().next(),
         agent_behaviors: behavior_rows,
         skills: skill_rows,
+        // WorkspaceRoot has no live-query wiring yet; see shared::ConfigExportBundle::workspace_roots.
+        workspace_roots: Vec::new(),
         tool_selections: tool_selection_rows,
         inference_backends: backend_rows,
         inference_profiles: profile_rows,

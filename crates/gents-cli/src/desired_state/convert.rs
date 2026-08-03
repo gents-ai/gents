@@ -337,6 +337,9 @@ pub(crate) fn export_bundle_from_manifest(
             .iter()
             .map(serde_json::to_value)
             .collect::<serde_json::Result<Vec<_>>>()?,
+        // WorkspaceRoot isn't tracked in DesiredStateManifest yet; see
+        // shared::ConfigExportBundle::workspace_roots.
+        workspace_roots: Vec::new(),
         tool_selections: manifest
             .tool_selections
             .iter()
