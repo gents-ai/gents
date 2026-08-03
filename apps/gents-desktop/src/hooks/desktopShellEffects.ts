@@ -396,9 +396,7 @@ const managedServerRestoreInFlight = new WeakMap<
   Promise<boolean | null>
 >();
 
-export function restoreManagedServer(
-  api: DesktopApiAdapter,
-): Promise<boolean | null> {
+export function restoreManagedServer(api: DesktopApiAdapter): Promise<boolean | null> {
   const existing = managedServerRestoreInFlight.get(api);
   if (existing) return existing;
 
