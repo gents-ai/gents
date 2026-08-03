@@ -26,6 +26,8 @@
   <string>Background</string>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <true/>
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>WorkingDirectory</key>

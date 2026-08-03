@@ -148,6 +148,10 @@ jobs:
         if: matrix.suite == 'runtime'
         run: cargo test -p gents --all-targets --no-run
 
+      - name: Run proof conformance tests
+        if: matrix.suite == 'runtime'
+        run: cargo test -p gents --test conformance
+
       - name: Compile and link CLI targets
         if: matrix.suite == 'cli'
         run: cargo test -p gents-cli --all-targets --no-run
@@ -229,22 +233,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
-
       - name: Install elan
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          cargo_dir="$(dirname "$(rustup which cargo)")"
-          echo "${cargo_dir}" >> "$GITHUB_PATH"
-          "${cargo_dir}/cargo" --version
           "$HOME/.elan/bin/elan" --version
-
-      - name: Install protobuf compiler
-        run: .github/scripts/setup-protoc.sh
-
-      - name: Prepare disk-backed Rust build cache
-        run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Prepare persistent Lean build cache
         run: .github/scripts/setup-lean-build-cache.sh
@@ -267,15 +260,10 @@ jobs:
         working-directory: crates/gents/proofs
         run: lake build
 
-      - name: Run proof conformance tests
-        run: cargo test -p gents --test conformance
-
-      - name: Show Rust build cache stats
-        if: always()
-        run: .github/scripts/show-sccache-stats.sh
-
   desktop-ui:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # This job exercises browser-only code. Keep scarce macOS capacity for the
+    # Rust/Lean work that benefits from persistent host caches.
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
@@ -308,7 +296,7 @@ jobs:
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Check desktop formatting
         working-directory: apps/gents-desktop
@@ -335,7 +323,7 @@ jobs:
       # against a known-good trace (npm run test:ui:fuzz -- --reproduce <dir>).
       - name: Upload Bombadil trace
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-ui-bombadil-trace
           if-no-files-found: ignore
@@ -344,7 +332,7 @@ jobs:
 
       - name: Upload desktop UI artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-ui-artifacts
           if-no-files-found: ignore

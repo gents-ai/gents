@@ -14,5 +14,10 @@ if (( ${#base_dirs[@]} == 0 )); then
   exit 1
 fi
 
-export SCCACHE_BASEDIRS="$(IFS=:; echo "${base_dirs[*]}")"
-exec /opt/homebrew/bin/sccache --start-server
+SCCACHE_BASEDIRS="$(IFS=:; echo "${base_dirs[*]}")"
+export SCCACHE_BASEDIRS
+export SCCACHE_NO_DAEMON=1
+export SCCACHE_START_SERVER=1
+
+# Foreground mode lets launchd own and supervise the actual cache server.
+exec /opt/homebrew/bin/sccache

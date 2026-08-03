@@ -142,7 +142,7 @@ jobs:
 
       - name: Upload live desktop browser artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-live-browser-artifacts
           if-no-files-found: ignore

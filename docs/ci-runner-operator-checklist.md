@@ -105,7 +105,9 @@ ssh studio-2 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchct
 
 The service also normalizes both runner checkout roots through
 `SCCACHE_BASEDIRS`, allowing compiler results to hit across runner instances.
-Never stop or restart it from a workflow job: that interrupts sibling compiles.
+It runs sccache in its official foreground server mode, so launchd directly
+supervises and restarts the daemon if it exits. Never stop or restart it from a
+workflow job: that interrupts sibling compiles.
 
 Check the cache without mutating it:
 
