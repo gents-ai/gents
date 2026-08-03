@@ -638,10 +638,14 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
 
     let compactions = Arc::new(AtomicUsize::new(0));
     let compactions_for_callback = compactions.clone();
-    loop_config.turn_compactor = Some(Arc::new(move |messages| {
+    let keep_recent_target = Arc::new(AtomicUsize::new(usize::MAX));
+    let keep_recent_target_for_callback = keep_recent_target.clone();
+    loop_config.turn_compactor = Some(Arc::new(move |messages, target| {
         let compactions = compactions_for_callback.clone();
+        let keep_recent_target = keep_recent_target_for_callback.clone();
         Box::pin(async move {
             compactions.fetch_add(1, Ordering::SeqCst);
+            keep_recent_target.store(target, Ordering::SeqCst);
             let keep_from = messages.len().saturating_sub(2);
             let mut compacted = vec![Message::user(
                 "<system-reminder>compacted earlier turn</system-reminder>",
@@ -660,6 +664,10 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
         compactions.load(Ordering::SeqCst),
         1,
         "the safe entry turn must dispatch directly and the grown second turn must compact"
+    );
+    assert!(
+        keep_recent_target.load(Ordering::SeqCst) < 20_000,
+        "the per-turn target must reserve room for static request layers and the summary"
     );
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);

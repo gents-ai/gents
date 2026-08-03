@@ -203,9 +203,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let turn_node = self.node.clone();
                 let turn_session_id = request.session_id.clone();
                 let turn_request_id = request.request_id.clone();
-                loop_config.turn_compactor = Some(std::sync::Arc::new(move |messages| {
+                let turn_compactor_callback = move |
+                    messages: Vec<Message>,
+                    keep_recent_target: usize,
+                | -> std::pin::Pin<
+                    Box<
+                        dyn std::future::Future<Output = anyhow::Result<Vec<Message>>> + Send,
+                    >,
+                > {
                     let compactor = turn_compactor.clone();
-                    let options: CompactionOptions = turn_compaction_options.clone();
+                    let mut options: CompactionOptions = turn_compaction_options.clone();
+                    options.keep_recent_tokens =
+                        options.keep_recent_tokens.min(keep_recent_target);
                     let node = turn_node.clone();
                     let session_id = turn_session_id.clone();
                     let request_id = turn_request_id.clone();
@@ -245,7 +254,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         }
                         Ok(provider_messages)
                     })
-                }));
+                };
+                loop_config.turn_compactor =
+                    Some(std::sync::Arc::new(turn_compactor_callback));
                 if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
                     let context = crate::rendered_request::RenderedRequestContext::for_request(
                         request,

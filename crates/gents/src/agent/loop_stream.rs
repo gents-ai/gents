@@ -70,7 +70,10 @@ pub(crate) type RenderedRequestSink = Arc<
 >;
 
 pub(crate) type TurnCompactor = Arc<
-    dyn Fn(Vec<Message>) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Message>>> + Send>>
+    dyn Fn(
+            Vec<Message>,
+            usize,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Message>>> + Send>>
         + Send
         + Sync,
 >;
@@ -1024,6 +1027,42 @@ fn completion_request_input_estimate(request: &CompletionRequest) -> usize {
         .saturating_add(serialized_token_estimate(&request.output_schema))
 }
 
+fn compactable_message_estimate(messages: &[Message]) -> usize {
+    let rig_messages = messages
+        .iter()
+        .map(rig_compat::to_rig_message)
+        .collect::<Vec<_>>();
+    serialized_token_estimate(&rig_messages)
+}
+
+/// Keep enough room for both the non-compactable request layers (preamble,
+/// tool schemas, provider parameters) and the summary inserted by the
+/// compactor. The post-compaction dispatch guard remains authoritative if a
+/// pathological summary or a single oversized current prompt still does not
+/// fit.
+fn turn_keep_recent_target(
+    request: &CompletionRequest,
+    provider_messages: &[Message],
+    config: &LoopConfig,
+) -> usize {
+    let effective_budget = crate::compaction::effective_input_budget(
+        config.context_window,
+        config
+            .max_tokens
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .unwrap_or_default(),
+        config.compaction_threshold,
+    );
+    let total_input = completion_request_input_estimate(request);
+    let compactable_input = compactable_message_estimate(provider_messages);
+    let static_input = total_input.saturating_sub(compactable_input);
+    let message_budget = effective_budget.saturating_sub(static_input);
+
+    // Summaries vary with the model and history. Reserve one quarter of the
+    // compactable-message budget for the summary and serialization drift.
+    message_budget.saturating_mul(3) / 4
+}
+
 fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopConfig) -> bool {
     let max_output_tokens = config
         .max_tokens
@@ -1059,17 +1098,20 @@ async fn build_budgeted_request<M: CompletionModel>(
         return Ok(request);
     }
 
-    let before_tokens = completion_request_input_estimate(&request);
     let provider_messages = history
         .iter()
         .chain(new_messages.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let mut compacted = compactor(provider_messages).await.map_err(|error| {
-        StreamingError::Completion(CompletionError::ProviderError(format!(
-            "per-turn provider-input compaction failed: {error:#}"
-        )))
-    })?;
+    let before_tokens = completion_request_input_estimate(&request);
+    let keep_recent_target = turn_keep_recent_target(&request, &provider_messages, config);
+    let mut compacted = compactor(provider_messages, keep_recent_target)
+        .await
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "per-turn provider-input compaction failed: {error:#}"
+            )))
+        })?;
     let compacted_prompt = compacted.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::ProviderError(
             "per-turn provider-input compaction returned no prompt".to_string(),
@@ -1084,6 +1126,7 @@ async fn build_budgeted_request<M: CompletionModel>(
         turn = turn_index,
         before_tokens,
         after_tokens,
+        keep_recent_target,
         context_window = config.context_window,
         max_output_tokens = config.max_tokens.unwrap_or_default(),
         "compacted provider input before completion dispatch"

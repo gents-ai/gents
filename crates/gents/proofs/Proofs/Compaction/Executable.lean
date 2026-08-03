@@ -221,6 +221,24 @@ def compactionReducerCases : List CompactionReducerCase := [
   , splitIndex        := 1
   , safeBoundary      := pairSafeBoundary (caseFixture 3) 1
   , retainedCount     := 2 }
+  -- If the complete assistant-call/result tail is larger than the retention
+  -- budget, production advances to the boundary after the pair and summarizes
+  -- every row. The retained provider view is empty rather than oversized or
+  -- orphaned; the generated summary becomes the next prompt.
+, { name              := "summarize_oversized_complete_turn"
+  , group             := "summarize"
+  , reducer           := "summarize"
+  , legal             := true
+  , preMessageCount   := 3
+  , postMessageCount  := 0
+  , preservesPairs    := true
+  , preservesOrder    := true
+  , gateOpen          := true
+  , safeToReduce      := true
+  , reducerIsIdentity := false
+  , splitIndex        := 3
+  , safeBoundary      := pairSafeBoundary (caseFixture 3) 3
+  , retainedCount     := 0 }
   -- The gate is production's, not the test's: safe_to_reduce is the function
   -- under test, and a closed gate must leave the transcript untouched.
 , { name              := "summarize_blocked_when_response_streaming"
@@ -285,6 +303,6 @@ def compactionReducerCases : List CompactionReducerCase := [
 ]
 
 theorem compactionReducerCases_count :
-    compactionReducerCases.length = 16 := by decide
+    compactionReducerCases.length = 17 := by decide
 
 end Compaction

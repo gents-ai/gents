@@ -274,7 +274,27 @@ pub(super) fn split_messages_for_summary(
     // Modelled as `Compaction.pairSafeBoundary`, with
     // `Compaction.raw_split_can_orphan` witnessing that the unadjusted index is
     // unsound.
-    let split_index = pair_safe_boundary(&messages, split_index);
+    let raw_split_index = split_index;
+    let mut split_index = pair_safe_boundary(&messages, raw_split_index);
+
+    // The raw budget can land inside an assistant ToolCall / user ToolResult
+    // pair. Retreating keeps the pair valid, but an exceptionally large
+    // reasoning-bearing assistant turn can make that atomic tail exceed the
+    // retention budget by itself. In that case retaining it cannot satisfy the
+    // caller's dispatch budget. Summarize the complete tail too, advancing only
+    // to the next pair-safe boundary. The generated summary then becomes the
+    // caller's next prompt.
+    //
+    // Keep a sole message intact: there is no earlier conversation to compact,
+    // and silently replacing an oversized initial user prompt with a summary
+    // would change the request rather than compact its history.
+    let retained_tokens = estimate_message_tokens(&messages[split_index..]);
+    if split_index < raw_split_index
+        && retained_tokens > keep_recent_tokens
+        && pair_safe_boundary(&messages, messages.len()) == messages.len()
+    {
+        split_index = messages.len();
+    }
 
     if split_index == 0 {
         return (Vec::new(), messages);

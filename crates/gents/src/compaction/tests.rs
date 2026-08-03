@@ -903,9 +903,11 @@ fn every_registered_file_tool_is_classified() {
 }
 
 #[test]
-fn split_never_separates_a_tool_call_from_its_result() {
-    // A budget that retains roughly the last message would land the boundary
-    // between the assistant tool call and the user tool result.
+fn split_summarizes_an_oversized_complete_tool_turn() {
+    // A budget that retains roughly the last message lands between the
+    // assistant tool call and the user tool result. The complete pair is itself
+    // over budget, so retaining it atomically would still fail the provider
+    // dispatch gate. Summarize the entire complete transcript instead.
     let messages = vec![
         text_msg("user", &"a".repeat(4000)),
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
@@ -914,20 +916,24 @@ fn split_never_separates_a_tool_call_from_its_result() {
 
     let (old, recent) = super::history::split_messages_for_summary(messages, 40);
 
-    assert_eq!(
-        old.len(),
-        1,
-        "only the bulky user turn should be summarized"
-    );
-    assert_eq!(
-        recent.len(),
-        2,
-        "the assistant turn and its result stay together"
-    );
+    assert_eq!(old.len(), 3, "the oversized complete turn is summarized");
     assert!(
-        matches!(&recent[0], Message::Assistant { .. }),
-        "the retained tail must start at the assistant announcement"
+        recent.is_empty(),
+        "no oversized or orphaned tail is retained"
     );
+}
+
+#[test]
+fn split_keeps_a_sole_oversized_prompt() {
+    let messages = vec![text_msg("user", &"a".repeat(4000))];
+
+    let (old, recent) = super::history::split_messages_for_summary(messages.clone(), 40);
+
+    assert!(
+        old.is_empty(),
+        "an initial prompt is not history to summarize"
+    );
+    assert_eq!(recent, messages);
 }
 
 #[test]
