@@ -20,8 +20,6 @@ bs58 = "0.5"
 bytes.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
-codex-login.workspace = true
-codex-model-provider-info.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
@@ -72,6 +70,7 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 acp.workspace = true
 axum = "0.8"
+defra-node = { workspace = true, features = ["redb"] }
 proptest = "1"
 tar = "0.4"
 zstd = "0.13"

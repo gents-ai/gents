@@ -1,0 +1,14 @@
+[package]
+name = "gents-codex-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Minimal Codex app-server wire types used by the Gents compatibility shim"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_with = "3.17"
+strum_macros = "0.28.0"
+thiserror.workspace = true

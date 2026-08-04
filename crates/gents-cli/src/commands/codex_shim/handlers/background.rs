@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 
 use super::super::background::{cancel_projected_background_tool_key, clean_background_terminals};
 use super::super::protocol::{send_error, send_result};

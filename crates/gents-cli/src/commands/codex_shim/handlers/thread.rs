@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde_json::json;
 
 use super::super::bound_behavior::{

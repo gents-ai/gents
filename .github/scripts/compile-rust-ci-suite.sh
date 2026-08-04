@@ -16,7 +16,11 @@ case "${suite}" in
     packages=(gents)
     ;;
   cli)
-    packages=(gents-cli)
+    packages=(
+      gents-cli
+      gents-chatgpt-login
+      gents-codex-protocol
+    )
     ;;
   desktop)
     packages=(
