@@ -927,6 +927,43 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn expired_deadline_stops_compaction_recovery_at_one_provider_call() {
+    // #1016 review: the internal ladder is deadline-aware only if the request's
+    // claimed deadline actually reaches the compactor — the daemon-lifetime
+    // config it stores has `deadline: None`. `CompactionOptions.deadline` is
+    // the request-scoped carrier: with it already expired, an empty first
+    // attempt must fail on the deadline check instead of consuming the ladder.
+    let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::empty_turn()]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let error = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                deadline: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("an expired deadline must fail fast, not resample");
+
+    assert!(
+        error.to_string().contains("deadline"),
+        "the failure must name the deadline, not budget exhaustion: {error}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "no retry may be taken once the deadline has passed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn repeated_empty_compaction_completions_fail_after_the_internal_budget() {
     // #1016: recovery is bounded. A provider that never produces visible
     // output exhausts the fixed internal ladder deterministically — 1 initial

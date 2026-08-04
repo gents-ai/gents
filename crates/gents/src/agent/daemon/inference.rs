@@ -198,8 +198,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 loop_config.deadline = request_deadline;
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
-                let mut turn_compaction_options = self.compaction_options.clone();
-                turn_compaction_options.force_summarize = true;
+                let turn_compaction_options = self.compaction_options_for_request(request_deadline);
                 let turn_node = self.node.clone();
                 let turn_session_id = request.session_id.clone();
                 let turn_request_id = request.request_id.clone();

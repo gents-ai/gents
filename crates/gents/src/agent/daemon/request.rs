@@ -3,7 +3,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, AdmissionCallContext, CallKind};
-use crate::compaction::{self, CompactionOptions, Compactor};
+use crate::compaction::{self, Compactor};
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
@@ -168,15 +168,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         self.compactor.compact(
                             history,
                             self.behavior.context_window,
-                            &CompactionOptions {
-                                strategy: self.behavior.compaction_strategy.clone(),
-                                // This branch is driven by the complete assembled
-                                // provider input, including preamble, incoming
-                                // request, and reserved output. Rechecking only
-                                // history against 75% can incorrectly no-op.
-                                force_summarize: true,
-                                ..self.compaction_options.clone()
-                            },
+                            &self.compaction_options_for_request(lifecycle.claimed_deadline_at()),
                         ),
                     )
                     .await?;

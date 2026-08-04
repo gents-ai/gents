@@ -24,6 +24,12 @@ pub struct CompactionOptions {
     /// The caller has already established that the complete provider input is
     /// over budget. Skip the history-only threshold recheck and summarize.
     pub force_summarize: bool,
+    /// The claimed deadline of the request this compaction serves. The
+    /// compactor's stored config is daemon-lifetime and carries no deadline,
+    /// so this is the only path by which the internal retry ladder's
+    /// deadline fail-fast can engage (#1016); `None` leaves recovery bounded
+    /// only by the ladder itself.
+    pub deadline: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for CompactionOptions {
@@ -34,6 +40,7 @@ impl Default for CompactionOptions {
             keep_recent_tokens: 20000,
             strategy: CompactionStrategy::StripThenSummarize,
             force_summarize: false,
+            deadline: None,
         }
     }
 }
@@ -189,6 +196,12 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         summary_config.tool_choice = None;
         summary_config.turn_compactor = None;
         summary_config.max_turns = 0;
+        // Both deadlines are hard stops when present; recovery must respect
+        // the earlier one.
+        summary_config.deadline = match (options.deadline, summary_config.deadline) {
+            (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
+            (from_options, from_config) => from_options.or(from_config),
+        };
         let raw_summary = crate::agent::loop_stream::run_loop_to_text(
             (*self.model).clone(),
             None,
