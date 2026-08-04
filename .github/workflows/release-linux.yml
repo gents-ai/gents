@@ -124,7 +124,7 @@ jobs:
 
           echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
 

@@ -108,7 +108,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
 
       - name: Install support-suite Rust components
         if: matrix.suite == 'support'
@@ -276,11 +276,32 @@ jobs:
         working-directory: crates/gents/proofs
         run: lake build
 
-  desktop-ui:
-    # This job exercises browser-only code. Keep scarce macOS capacity for the
-    # Rust/Lean work that benefits from persistent host caches.
+      # The chat package consumes the generated ClientShell contract. Running
+      # this test after the proof build reuses the persistent Lake cache; on a
+      # cold hosted runner, the same collection step takes roughly 10 minutes.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Build desktop package dependencies
+        run: |
+          npm run build --workspace @source-inc/gents-desktop-client
+          npm run build --workspace @source-inc/gents-desktop-ui
+          npm run build --workspace @source-inc/gents-desktop-chat
+
+      - name: Run Lean-backed desktop chat conformance tests
+        run: npm test --workspace @source-inc/gents-desktop-chat
+
+  desktop-packages:
+    # Package boundary, publishability, and package-local tests are independent
+    # of the desktop application/browser gate and should not block it.
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -292,29 +313,67 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install elan
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Check desktop package boundaries
+        run: npm run check:package-boundaries
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      # The chat package's Lean-backed conformance test runs in lean-proofs so
+      # it can reuse that job's already-built, persistent proof cache.
+      - name: Run desktop package tests
         run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" --version
+          npm run test --workspace @source-inc/gents-desktop-client
+          npm run test --workspace @source-inc/gents-desktop-ui
+          npm run test --workspace @source-inc/gents-desktop-fleet
+          npm run test --workspace @source-inc/gents-desktop-operations
+
+      - name: Build desktop fixture host
+        run: npm run build --workspace @source-inc/fixture-host-ui
+
+      - name: Verify packed desktop packages
+        # Exercise the same relative output path used by the release workflow.
+        run: ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
+
+  desktop-ui:
+    # This job exercises browser-only code. Keep scarce macOS capacity for the
+    # Rust/Lean work that benefits from persistent host caches.
+    name: desktop-ui (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, browser]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install workspace frontend dependencies
         run: npm ci
 
-      - name: Build and test desktop packages
-        run: |
-          npm run check:package-boundaries
-          npm run build:packages
-          npm run test:packages
-          npm run build --workspace @source-inc/fixture-host-ui
-          # Exercise the same relative output path used by the release workflow.
-          ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
+      # The application imports the workspaces through their dist exports, so
+      # each isolated shard prepares those small build products locally.
+      - name: Build desktop packages
+        run: npm run build:packages
 
       - name: Install Playwright browser
+        if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
         run: npx playwright install --with-deps chromium
 
       - name: Check desktop formatting
+        if: matrix.suite == 'unit'
         working-directory: apps/gents-desktop
         run: npm run format:check
 
@@ -323,15 +382,17 @@ jobs:
         run: npm run build
 
       - name: Run desktop unit tests
+        if: matrix.suite == 'unit'
         working-directory: apps/gents-desktop
         run: npm test
 
       - name: Run desktop browser journeys
+        if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
 
       - name: Upload desktop UI artifacts
-        if: failure()
+        if: failure() && matrix.suite == 'browser'
         uses: actions/upload-artifact@v7
         with:
           name: desktop-ui-artifacts

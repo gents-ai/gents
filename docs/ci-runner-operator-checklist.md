@@ -32,8 +32,12 @@ registration tokens are short-lived secrets and must not be committed.
 
 ### Supervisor state
 
-The second runner should ultimately be a system LaunchDaemon named
-`com.github.actions.runner.gents-2`, matching the first runner's boot behavior.
+Both second runner registrations use the system LaunchDaemon
+`com.github.actions.runner.gents-2`, matching the primary runners' boot
+behavior. `studio-2-2` was promoted from its temporary user LaunchAgent on
+2026-08-04; the unloaded plist remains as
+`~/Library/LaunchAgents/com.github.actions.runner.gents-2.plist.disabled` for
+rollback.
 Inspect it with:
 
 ```bash
@@ -41,22 +45,8 @@ ssh studio-1 'sudo launchctl print system/com.github.actions.runner.gents-2'
 ssh studio-2 'sudo launchctl print system/com.github.actions.runner.gents-2'
 ```
 
-`studio-2-2` was initially bootstrapped as a per-user LaunchAgent so it could be
-brought online without an interactive administrator password. During the next
-operator session, promote the already-correct system plist and remove the
-temporary user service:
-
-```bash
-ssh -t studio-2 '
-  launchctl bootout gui/$(id -u)/com.github.actions.runner.gents-2
-  sudo launchctl bootstrap system /Library/LaunchDaemons/com.github.actions.runner.gents-2.plist
-  sudo launchctl enable system/com.github.actions.runner.gents-2
-  sudo launchctl kickstart system/com.github.actions.runner.gents-2
-'
-```
-
-Verify that the runner returns online in GitHub after promotion. Do this while
-it is idle; stopping a runner process cancels its active job.
+If a service needs to be restarted, first verify that its runner is idle in
+GitHub; stopping a runner process cancels its active job.
 
 ## CPU allocation
 
