@@ -89,8 +89,11 @@ impl<M: CompletionModel> DefraCompactor<M> {
         // Compaction is an internal, non-persisting sub-completion, not a user
         // execution origin; it must not inherit the parent's retry ladder (which
         // for scheduled origins is a deadline-less 5s/30s/120s backoff that would
-        // block inline compaction for minutes). Fail fast instead (#648).
-        config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+        // block inline compaction for minutes) (#648). But it has no caller-level
+        // retry either, so zero recovery made one empty provider turn abort the
+        // whole user request: use the bounded immediate internal budget (#1016).
+        config.retry_policy =
+            crate::agent::completion_retry::CompletionRetryPolicy::internal_immediate();
         Self { model, config }
     }
 }
