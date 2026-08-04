@@ -2,18 +2,32 @@
 //!
 //! A typed, self-documenting tool family through which an agent manages **its
 //! own** configuration documents: `get_my_config` plus one `configure_*` tool
-//! per category (behavior, tools, profile, backend, mcp_service, automation).
-//! Gated by `ToolSelection.enable_self_config` + `self_config_categories`;
-//! writes execute under the agent DID inside one transaction, so DefraDB ACP
-//! — not app-level checks — is the authorization boundary. The Lean
-//! `SelfConfig` model proves the patch semantics (identity immutability,
-//! field containment, transactional totality, no-lockout recoverability);
-//! `config_client::patch` is the fenced implementation.
+//! per category (behavior, tools, profile, backend, mcp_service, automation,
+//! persona). Gated by `ToolSelection.enable_self_config` +
+//! `self_config_categories`; writes execute under the agent DID inside one
+//! transaction, so DefraDB ACP — not app-level checks — is the authorization
+//! boundary. The Lean `SelfConfig` model proves the patch semantics (identity
+//! immutability, field containment, transactional totality, no-lockout
+//! recoverability); `config_client::patch` is the fenced implementation.
 //!
 //! The tools change *how* the agent behaves, never *who it is*: every patch
 //! surface excludes identity/unique keys, the owner DID, runtime-owned status
 //! fields, and secrets (`InferenceBackend.api_key` in particular is neither
 //! readable nor writable here).
+//!
+//! `configure_persona` (category `persona`) is the one exception to "self
+//! only": every other `configure_*` tool patches a document owned by THIS
+//! behavior/agent and rejects anything pointing elsewhere. Persona management
+//! is document-in-nature too, but its unit isn't a patch on the calling
+//! behavior — it's a `PersonaConfigRequest` row asking to create, clone,
+//! edit, or disable a SIBLING `AgentBehavior` of the same principal
+//! (`agent_did`). `behavior_id`/`clone_from` naming another of this agent's
+//! own personas is the whole point of the tool, not a boundary violation:
+//! the request is still scoped to `agent_did` (never another agent's
+//! principal), it just isn't scoped to `behavior_id` the way every other
+//! tool in this family is. See `crate::agent::persona_ops` for the shared
+//! admission/materialization core this tool, the P2P persona-request
+//! reconciler, and the `gents` CLI all drive.
 
 mod ops;
 mod read;
@@ -22,14 +36,17 @@ mod tests;
 
 pub use ops::{PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 
+use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::document_config::{Schedule, Task};
+use crate::graphql::escape_graphql_string;
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_surface::SelfConfigToolConfig;
 use defra_node::EmbeddedNode;
@@ -42,9 +59,10 @@ pub const CONFIGURE_PROFILE_TOOL_NAME: &str = "configure_profile";
 pub const CONFIGURE_BACKEND_TOOL_NAME: &str = "configure_backend";
 pub const CONFIGURE_MCP_SERVICE_TOOL_NAME: &str = "configure_mcp_service";
 pub const CONFIGURE_AUTOMATION_TOOL_NAME: &str = "configure_automation";
+pub const CONFIGURE_PERSONA_TOOL_NAME: &str = "configure_persona";
 
 /// Every tool name of the family, for reserved-name checks and surfacing.
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
+pub const SELF_CONFIG_TOOL_NAMES: [&str; 8] = [
     GET_MY_CONFIG_TOOL_NAME,
     CONFIGURE_BEHAVIOR_TOOL_NAME,
     CONFIGURE_TOOLS_TOOL_NAME,
@@ -52,6 +70,7 @@ pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
     CONFIGURE_BACKEND_TOOL_NAME,
     CONFIGURE_MCP_SERVICE_TOOL_NAME,
     CONFIGURE_AUTOMATION_TOOL_NAME,
+    CONFIGURE_PERSONA_TOOL_NAME,
 ];
 
 /// The `configure_*` tool advertised for a category, if any.
@@ -63,6 +82,7 @@ pub fn configure_tool_name_for_category(category: &str) -> Option<&'static str> 
         "backend" => Some(CONFIGURE_BACKEND_TOOL_NAME),
         "mcp_service" => Some(CONFIGURE_MCP_SERVICE_TOOL_NAME),
         "automation" => Some(CONFIGURE_AUTOMATION_TOOL_NAME),
+        "persona" => Some(CONFIGURE_PERSONA_TOOL_NAME),
         _ => None,
     }
 }
@@ -626,6 +646,13 @@ impl Tool for GetMyConfigTool {
                         })?;
                         automation_request(&self.core, automation_target(kind)?, id, patch)
                     }
+                    "persona" => {
+                        return Err(SelfConfigError(anyhow!(
+                            "persona actions are request-based; no patch preview is available \
+                             — call configure_persona directly (it authors and polls a \
+                             PersonaConfigRequest row, not a patch)"
+                        )));
+                    }
                     other => {
                         return Err(SelfConfigError(anyhow!("unknown category {other:?}")));
                     }
@@ -880,6 +907,383 @@ impl Tool for ConfigureAutomationTool {
     }
 }
 
+/// Manage SIBLING personas of this agent through the `PersonaConfigRequest`
+/// channel — see the module doc for why this tool, alone in the family, is
+/// not "self only" at the behavior level. Unlike the patch-based tools above,
+/// this one authors a request document and lets the existing persona
+/// reconciler (`crate::agent::p2p_reconcile::persona_requests`) admit and
+/// materialize it, so admission can never drift between this tool, the
+/// P2P-replicated path, and the `gents` CLI.
+pub struct ConfigurePersonaTool {
+    node: Arc<EmbeddedNode>,
+    agent_did: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ConfigurePersonaParams {
+    /// `list` | `create` | `edit` | `clone` | `disable`.
+    pub action: String,
+    #[serde(default)]
+    pub persona_name: Option<String>,
+    /// The target persona's `behavior_id` (required for `edit`/`disable`).
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    /// The sibling `behavior_id` to clone from (required for `clone`).
+    #[serde(default)]
+    pub clone_from: Option<String>,
+    /// `"backend_id|model_name"`, e.g. `"openai|gpt-5"`.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+}
+
+/// How long [`ConfigurePersonaTool`] polls a freshly-authored
+/// `PersonaConfigRequest` row before returning it still-`pending`: the
+/// in-process reconciler sweeps on every `Update` event, so a healthy node
+/// converges well inside this window.
+const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct PersonaCatalogSnapshot {
+    available_models: Vec<String>,
+    allowed_roots: Vec<String>,
+    available_profile_ids: Vec<String>,
+    behaviors: BTreeMap<String, PersonaBehaviorSnapshot>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct PersonaBehaviorSnapshot {
+    enabled: bool,
+    tool_selection_id: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct PersonaRequestRowOut {
+    #[serde(default)]
+    request_key: Option<String>,
+    #[serde(default)]
+    requester_did: Option<String>,
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    op: Option<String>,
+    #[serde(default)]
+    behavior_id: Option<String>,
+    #[serde(default)]
+    clone_from: Option<String>,
+    #[serde(default)]
+    persona_name: Option<String>,
+    #[serde(default)]
+    backend_model: Option<String>,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    profile_id: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    status_detail: Option<String>,
+    #[serde(default)]
+    applied_behavior_id: Option<String>,
+    #[serde(default)]
+    processed_at: Option<String>,
+}
+
+fn nullable_graphql_string(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
+        .unwrap_or_else(|| "null".to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_persona_request_mutation(
+    request_key: &str,
+    requester_did: &str,
+    agent_did: &str,
+    op: &str,
+    behavior_id: Option<&str>,
+    clone_from: Option<&str>,
+    persona_name: Option<&str>,
+    backend_model: Option<&str>,
+    root: Option<&str>,
+    preset: Option<&str>,
+    profile_id: Option<&str>,
+    now: &str,
+) -> String {
+    format!(
+        r#"mutation {{
+            create_PersonaConfigRequest(input: {{
+                request_key: "{request_key}",
+                requester_did: "{requester_did}",
+                agent_did: "{agent_did}",
+                op: "{op}",
+                behavior_id: {behavior_id},
+                clone_from: {clone_from},
+                persona_name: {persona_name},
+                backend_model: {backend_model},
+                root: {root},
+                preset: {preset},
+                profile_id: {profile_id},
+                created_at: "{now}",
+                status: "pending"
+            }}) {{ _docID }}
+        }}"#,
+        request_key = escape_graphql_string(request_key),
+        requester_did = escape_graphql_string(requester_did),
+        agent_did = escape_graphql_string(agent_did),
+        op = escape_graphql_string(op),
+        behavior_id = nullable_graphql_string(behavior_id),
+        clone_from = nullable_graphql_string(clone_from),
+        persona_name = nullable_graphql_string(persona_name),
+        backend_model = nullable_graphql_string(backend_model),
+        root = nullable_graphql_string(root),
+        preset = nullable_graphql_string(preset),
+        profile_id = nullable_graphql_string(profile_id),
+        now = escape_graphql_string(now),
+    )
+}
+
+async fn load_persona_request_row(
+    node: &Arc<EmbeddedNode>,
+    request_key: &str,
+) -> Result<Option<PersonaRequestRowOut>> {
+    let escaped = escape_graphql_string(request_key);
+    let query = format!(
+        r#"{{
+            PersonaConfigRequest(filter: {{ request_key: {{ _eq: "{escaped}" }} }}) {{
+                request_key
+                requester_did
+                agent_did
+                op
+                behavior_id
+                clone_from
+                persona_name
+                backend_model
+                root
+                preset
+                profile_id
+                created_at
+                status
+                status_detail
+                applied_behavior_id
+                processed_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        bail!("query PersonaConfigRequest failed: {:?}", response.errors);
+    }
+    let Some(value) = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PersonaConfigRequest"))
+    else {
+        return Ok(None);
+    };
+    let rows: Vec<PersonaRequestRowOut> =
+        serde_json::from_value(value.clone()).map_err(|error| anyhow!("decode row: {error}"))?;
+    Ok(rows.into_iter().next())
+}
+
+/// Poll a freshly-authored row until the reconciler (which sweeps on every
+/// `Update` event) drives it to a terminal status, or [`PERSONA_REQUEST_POLL_TIMEOUT`]
+/// elapses. A still-pending row is returned as-is rather than an error: the
+/// request is valid and will converge, the caller just needs to check again.
+async fn poll_persona_request(node: &Arc<EmbeddedNode>, request_key: &str) -> Result<String> {
+    let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
+    loop {
+        if let Some(row) = load_persona_request_row(node, request_key).await? {
+            if row.status.as_deref() != Some("pending") {
+                return serde_json::to_string_pretty(&row)
+                    .map_err(|error| anyhow!("serialize persona request outcome: {error}"));
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return serde_json::to_string_pretty(&json!({
+                "request_key": request_key,
+                "status": "pending",
+                "note": "still pending after 5s; the reconciler may need another moment — \
+                         retry, or call configure_persona with action \"list\" to see whether \
+                         this agent's behaviors already reflect the change",
+            }))
+            .map_err(|error| anyhow!("serialize pending outcome: {error}"));
+        }
+        tokio::time::sleep(PERSONA_REQUEST_POLL_INTERVAL).await;
+    }
+}
+
+async fn persona_list(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<String> {
+    let store = GraphqlPersonaRequestStore::new(node.clone());
+    let catalog = store.load_catalog_view(agent_did).await?;
+    let snapshot = PersonaCatalogSnapshot {
+        available_models: catalog.available_models.into_iter().collect(),
+        allowed_roots: catalog.allowed_roots.into_iter().collect(),
+        available_profile_ids: catalog.available_profile_ids.into_iter().collect(),
+        behaviors: catalog
+            .behaviors
+            .into_iter()
+            .map(|(behavior_id, reference)| {
+                (
+                    behavior_id,
+                    PersonaBehaviorSnapshot {
+                        enabled: reference.enabled,
+                        tool_selection_id: reference.tool_selection_id,
+                    },
+                )
+            })
+            .collect(),
+    };
+    serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
+}
+
+async fn persona_mutate(
+    node: &Arc<EmbeddedNode>,
+    agent_did: &str,
+    args: &ConfigurePersonaParams,
+) -> Result<String> {
+    let required_behavior_id = |action: &str| -> Result<()> {
+        if args
+            .behavior_id
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
+            bail!("{action} action requires behavior_id (the sibling persona to target)");
+        }
+        Ok(())
+    };
+    let (op, clone_from) = match args.action.as_str() {
+        "create" => ("create", None),
+        "clone" => {
+            let clone_from = args
+                .clone_from
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow!("clone action requires clone_from (the sibling behavior_id to clone)")
+                })?;
+            ("create", Some(clone_from))
+        }
+        "edit" => {
+            required_behavior_id("edit")?;
+            ("edit", None)
+        }
+        "disable" => {
+            required_behavior_id("disable")?;
+            ("disable", None)
+        }
+        other => bail!("unknown action {other:?}; use list|create|edit|clone|disable"),
+    };
+
+    let request_key = format!("pcr-{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation = create_persona_request_mutation(
+        &request_key,
+        agent_did,
+        agent_did,
+        op,
+        args.behavior_id.as_deref(),
+        clone_from,
+        args.persona_name.as_deref(),
+        args.model.as_deref(),
+        args.root.as_deref(),
+        args.preset.as_deref(),
+        args.profile_id.as_deref(),
+        &now,
+    );
+    let response = node.execute(&mutation).await;
+    if response.has_errors() {
+        bail!("create PersonaConfigRequest failed: {:?}", response.errors);
+    }
+
+    poll_persona_request(node, &request_key).await
+}
+
+impl Tool for ConfigurePersonaTool {
+    const NAME: &'static str = CONFIGURE_PERSONA_TOOL_NAME;
+    type Error = SelfConfigError;
+    type Args = ConfigurePersonaParams;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: CONFIGURE_PERSONA_TOOL_NAME.to_string(),
+            description: "Manage SIBLING personas of this agent (other AgentBehavior/ \
+                 ToolSelection pairs under the same agent_did) through the PersonaConfigRequest \
+                 channel. list reads this agent's current behaviors plus the published \
+                 models/roots/profiles they can be built from. create/clone/edit/disable author \
+                 a request row and poll it for up to 5s as the runtime reconciler admits and \
+                 materializes it; a still-pending result names the request_key so you can check \
+                 again. Unlike every other configure_* tool, behavior_id/clone_from here may \
+                 name ANY behavior of this same agent — that cross-behavior reach is this \
+                 tool's purpose, not an exception to self-config's self-only rule."
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "create", "edit", "clone", "disable"],
+                    },
+                    "persona_name": {
+                        "type": "string",
+                        "description": "Display name for the persona (create/edit).",
+                    },
+                    "behavior_id": {
+                        "type": "string",
+                        "description": "Target persona's behavior_id (required for edit/disable).",
+                    },
+                    "clone_from": {
+                        "type": "string",
+                        "description": "Sibling behavior_id to clone from (required for clone).",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "\"backend_id|model_name\", e.g. \"openai|gpt-5\".",
+                    },
+                    "root": {
+                        "type": "string",
+                        "description": "Workspace root to scope the persona to, if any.",
+                    },
+                    "preset": {
+                        "type": "string",
+                        "description": "Built-in permission preset (create/edit without clone_from).",
+                    },
+                    "profile_id": { "type": "string" },
+                },
+                "required": ["action"],
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        match args.action.as_str() {
+            "list" => Ok(persona_list(&self.node, &self.agent_did).await?),
+            "create" | "edit" | "clone" | "disable" => {
+                Ok(persona_mutate(&self.node, &self.agent_did, &args).await?)
+            }
+            other => Err(SelfConfigError(anyhow!(
+                "unknown action {other:?}; use list|create|edit|clone|disable"
+            ))),
+        }
+    }
+}
+
 /// Build the gated self-config tool family for one behavior. Fails closed:
 /// with an empty agent DID (bare oneshot contexts) no tools are registered.
 pub fn build_self_config_tools(
@@ -890,17 +1294,18 @@ pub fn build_self_config_tools(
     if !config.enabled {
         return Vec::new();
     }
-    let core = match SelfConfigCore::new(node, agent_did, config.behavior_id.clone()) {
-        Ok(core) => core.with_no_lockout(config.no_lockout),
-        Err(error) => {
-            tracing::warn!(
-                behavior_id = %config.behavior_id,
-                %error,
-                "self-config tools requested but not registrable; failing closed"
-            );
-            return Vec::new();
-        }
-    };
+    let core =
+        match SelfConfigCore::new(node.clone(), agent_did.clone(), config.behavior_id.clone()) {
+            Ok(core) => core.with_no_lockout(config.no_lockout),
+            Err(error) => {
+                tracing::warn!(
+                    behavior_id = %config.behavior_id,
+                    %error,
+                    "self-config tools requested but not registrable; failing closed"
+                );
+                return Vec::new();
+            }
+        };
 
     let mut tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(GetMyConfigTool {
         core: core.clone(),
@@ -916,6 +1321,10 @@ pub fn build_self_config_tools(
             "backend" => tools.push(Box::new(ConfigureBackendTool { core: core.clone() })),
             "mcp_service" => tools.push(Box::new(ConfigureMcpServiceTool { core: core.clone() })),
             "automation" => tools.push(Box::new(ConfigureAutomationTool { core: core.clone() })),
+            "persona" => tools.push(Box::new(ConfigurePersonaTool {
+                node: node.clone(),
+                agent_did: agent_did.clone(),
+            })),
             other => {
                 tracing::warn!(category = %other, "unknown self-config category; skipping");
             }
