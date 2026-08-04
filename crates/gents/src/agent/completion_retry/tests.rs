@@ -365,6 +365,59 @@ fn interactive_default_allows_a_single_short_retry_then_fails() {
 }
 
 #[test]
+fn internal_immediate_carries_a_small_fixed_ladder_with_no_resample_or_repair() {
+    // #1016: internal tool-free sub-completions (compaction) recover on a
+    // fixed 0s/1s/2s ladder — the crate-wide three-retry convention with an
+    // immediate first slot — and never on the origin ladders.
+    let policy = CompletionRetryPolicy::internal_immediate();
+    assert_eq!(
+        policy.transport_backoff,
+        vec![
+            Duration::ZERO,
+            Duration::from_secs(1),
+            Duration::from_secs(2)
+        ]
+    );
+    assert_eq!(policy.max_resample, 0);
+    assert!(!policy.allow_repair);
+}
+
+#[test]
+fn internal_immediate_retracts_three_times_then_fails() {
+    // The empty-output path is the no-effect mid-stream failure: each retry
+    // must be a retract-and-resample (never close-and-continue), the first at
+    // the 100ms jitter floor, and the fourth failure is terminal.
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::internal_immediate());
+    let now = Utc::now();
+
+    let expected_ranges = [(100, 100), (750, 1_250), (1_500, 2_500)];
+    for (low_ms, high_ms) in expected_ranges {
+        match state.on_mid_stream_failure(false, now, None) {
+            MidStreamDirective::RetractAndResample { delay } => {
+                assert_in_range(delay, low_ms, high_ms);
+            }
+            other => panic!("expected RetractAndResample, got {other:?}"),
+        }
+    }
+    match state.on_mid_stream_failure(false, now, None) {
+        MidStreamDirective::Fail { reason } => assert!(reason.contains("exhausted")),
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn internal_immediate_is_deadline_aware() {
+    // Even the immediate slot respects the request deadline: a delay that
+    // cannot fit fails fast rather than sleeping into certain death.
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::internal_immediate());
+    let now = Utc::now();
+    match state.on_mid_stream_failure(false, now, Some(now)) {
+        MidStreamDirective::Fail { reason } => assert!(reason.contains("deadline")),
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
 fn default_for_origin_maps_interactive_and_scheduled() {
     use crate::lifecycle::ExecutionOrigin;
 

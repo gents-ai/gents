@@ -439,6 +439,84 @@ fn compaction_prompt_treats_prior_turns_as_data_not_instructions() {
     assert!(prompt.contains("Your only action is to return JSON"));
 }
 
+fn summary_json_body() -> &'static str {
+    r#"{"summary":"Implemented the FEAL-4 linear cryptanalysis attack.","files_read":["src/main.rs"],"files_modified":["src/attack.rs"],"key_decisions":["Used precomputed bias tables"],"pending_questions":[]}"#
+}
+
+#[test]
+fn summary_parser_accepts_bare_json() {
+    let parsed = super::summary::parse_summary_response(summary_json_body()).unwrap();
+    assert_eq!(
+        parsed.summary,
+        "Implemented the FEAL-4 linear cryptanalysis attack."
+    );
+    assert_eq!(parsed.files_read, vec!["src/main.rs"]);
+}
+
+#[test]
+fn summary_parser_accepts_closed_json_fence() {
+    let raw = format!("```json\n{}\n```", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.files_modified, vec!["src/attack.rs"]);
+}
+
+#[test]
+fn summary_parser_accepts_closed_untyped_fence() {
+    let raw = format!("```\n{}\n```\n", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.key_decisions, vec!["Used precomputed bias tables"]);
+}
+
+#[test]
+fn summary_parser_accepts_unterminated_json_fence() {
+    // The DeepSeek V4 Flash shape from the Terminal-Bench run behind #1015: a
+    // complete JSON object after an opening ```json fence that is never closed.
+    let raw = format!("```json\n{}\n", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(
+        parsed.summary,
+        "Implemented the FEAL-4 linear cryptanalysis attack."
+    );
+}
+
+#[test]
+fn summary_parser_accepts_unterminated_untyped_fence() {
+    let raw = format!("```\n{}", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.files_read, vec!["src/main.rs"]);
+}
+
+#[test]
+fn summary_parser_rejects_json_embedded_in_prose() {
+    // The envelope must stay narrow: no greedy first-`{`/last-`}` extraction
+    // that could select an unrelated object out of arbitrary prose.
+    let raw = format!(
+        "Here is what happened: {} — let me know if you need more.",
+        summary_json_body()
+    );
+    assert!(super::summary::parse_summary_response(&raw).is_err());
+}
+
+#[test]
+fn summary_parser_rejects_trailing_prose_after_json() {
+    let raw = format!("```json\n{}\nAnything else?", summary_json_body());
+    assert!(super::summary::parse_summary_response(&raw).is_err());
+}
+
+#[test]
+fn summary_parser_bounds_malformed_response_diagnostics() {
+    // A malformed multi-megabyte response must not be copied wholesale into
+    // the error string (and from there into response documents and logs).
+    let raw = format!("```json\n{{\"summary\": \"{}", "x".repeat(4 * 1024 * 1024));
+    let err = super::summary::parse_summary_response(&raw).unwrap_err();
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.len() < 2048,
+        "diagnostic must be bounded, got {} bytes",
+        rendered.len()
+    );
+}
+
 #[derive(Clone, Default)]
 struct MockSummaryModel {
     response: String,
@@ -635,46 +713,25 @@ impl CompletionModel for CountingFailModel {
     }
 }
 
-#[tokio::test]
-async fn compaction_fails_fast_without_retrying_on_transient_error() {
-    // #648: compaction is an internal sub-completion, not a user execution
-    // origin. A transient provider failure must fail fast, NOT inherit the
-    // scheduled retry ladder (5s/30s/120s, deadline-less) that would block
-    // inline compaction for minutes. `DefraCompactor::new` forces `no_retry`
-    // even when handed a `scheduled_default` config, so exactly one provider
-    // call is made and `compact` returns promptly with the error.
+#[tokio::test(start_paused = true)]
+async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
+    // #648 established that compaction, an internal sub-completion, must not
+    // inherit the scheduled retry ladder (5s/30s/120s, deadline-less), which
+    // would block inline compaction for minutes. #1016 replaces the resulting
+    // zero-recovery rule with a small, fixed, immediate internal budget:
+    // `DefraCompactor::new` forces `internal_immediate` even when handed a
+    // `scheduled_default` config, so a persistently transient provider error
+    // makes exactly 1 + 3 provider calls and fails deterministically within
+    // seconds (virtual time here; the 10s timeout would require the scheduled
+    // ladder to trip it).
     let model = CountingFailModel::new();
     let calls = model.calls();
-    let config = crate::agent::loop_stream::LoopConfig {
-        preamble: None,
-        context_message: None,
-        temperature: None,
-        max_tokens: None,
-        additional_params: None,
-        tool_choice: None,
-        on_rendered_request: None,
-        turn_compactor: None,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
-        deadline: None,
-        max_turns: 0,
-    };
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
-
-    let messages: Vec<Message> = (0..12)
-        .flat_map(|turn| {
-            [
-                text_msg("user", &"x".repeat(800)),
-                text_msg("assistant", &format!("response {turn} {}", "y".repeat(400))),
-            ]
-        })
-        .collect();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(10),
         compactor.compact(
-            messages,
+            summary_worthy_messages(),
             500,
             &CompactionOptions {
                 threshold: 0.50,
@@ -688,7 +745,8 @@ async fn compaction_fails_fast_without_retrying_on_transient_error() {
 
     assert!(
         result.is_ok(),
-        "compaction must fail fast, not run the scheduled retry ladder (#648)"
+        "compaction must recover on the internal immediate ladder, never the \
+         scheduled one (#648/#1016)"
     );
     assert!(
         result.unwrap().is_err(),
@@ -696,8 +754,251 @@ async fn compaction_fails_fast_without_retrying_on_transient_error() {
     );
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "transient failures consume exactly the internal ladder: 1 initial + 3 retries"
+    );
+}
+
+fn summary_worthy_messages() -> Vec<Message> {
+    (0..12)
+        .flat_map(|turn| {
+            [
+                text_msg("user", &"x".repeat(800)),
+                text_msg("assistant", &format!("response {turn} {}", "y".repeat(400))),
+            ]
+        })
+        .collect()
+}
+
+fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
+    crate::agent::loop_stream::LoopConfig {
+        preamble: None,
+        context_message: None,
+        temperature: None,
+        max_tokens: None,
+        additional_params: None,
+        tool_choice: None,
+        on_rendered_request: None,
+        turn_compactor: None,
+        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        deadline: None,
+        max_turns: 0,
+    }
+}
+
+fn valid_summary_json() -> String {
+    serde_json::json!({
+        "summary": "Older turns were compacted.",
+        "files_read": [],
+        "files_modified": [],
+        "key_decisions": [],
+        "pending_questions": []
+    })
+    .to_string()
+}
+
+/// Replays a fixed script of streamed responses, one per provider call, and
+/// panics on any call past the script's end — over-retrying is a test failure,
+/// not a silent loop. `Clone` shares the script and counter (the loop clones
+/// the model).
+#[derive(Clone)]
+struct ScriptedSummaryModel {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    script: Arc<Mutex<std::collections::VecDeque<Vec<RawStreamingChoice<()>>>>>,
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+impl ScriptedSummaryModel {
+    fn new(script: Vec<Vec<RawStreamingChoice<()>>>) -> Self {
+        Self {
+            calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            script: Arc::new(Mutex::new(script.into_iter().collect())),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn empty_turn() -> Vec<RawStreamingChoice<()>> {
+        vec![RawStreamingChoice::FinalResponse(())]
+    }
+
+    fn summary_turn() -> Vec<RawStreamingChoice<()>> {
+        vec![
+            RawStreamingChoice::Message(valid_summary_json()),
+            RawStreamingChoice::FinalResponse(()),
+        ]
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for ScriptedSummaryModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::new(Vec::new())
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        unreachable!("compaction summarizes via the owned loop, which streams");
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.requests.lock().unwrap().push(request);
+        let turn = self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("provider called past the scripted internal retry budget");
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> =
+            turn.into_iter().map(Ok).collect();
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
+    // #1016: a provider turn that ends with no visible output (reasoning only)
+    // is not a usable summary, but no tool effect has run, so the owned loop
+    // can retract and resample it. With `no_retry` this aborted the whole user
+    // request; the internal immediate policy must recover on the second call.
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::empty_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let requests = model.requests.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let result = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("an empty first attempt must be retracted and resampled, not fatal");
+
+    assert!(
+        result.summary.is_some(),
+        "the resampled attempt's summary must be used"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "exactly one retract-and-resample: two provider calls"
+    );
+
+    // No tool effect can be replayed: the compaction sub-completion carries no
+    // tools, and the resample re-issues the identical request the retracted
+    // attempt saw.
+    let requests = requests.lock().unwrap();
+    for request in requests.iter() {
+        assert!(
+            request.tools.is_empty(),
+            "compaction requests must not offer tools"
+        );
+    }
+    let rendered: Vec<String> = requests
+        .iter()
+        .map(|request| serde_json::to_string(&request.chat_history).unwrap())
+        .collect();
+    assert_eq!(
+        rendered[0], rendered[1],
+        "the resample must re-issue the retracted attempt's exact input"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn expired_deadline_stops_compaction_recovery_at_one_provider_call() {
+    // #1016 review: the internal ladder is deadline-aware only if the request's
+    // claimed deadline actually reaches the compactor — the daemon-lifetime
+    // config it stores has `deadline: None`. `CompactionOptions.deadline` is
+    // the request-scoped carrier: with it already expired, an empty first
+    // attempt must fail on the deadline check instead of consuming the ladder.
+    let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::empty_turn()]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let error = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                deadline: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("an expired deadline must fail fast, not resample");
+
+    assert!(
+        error.to_string().contains("deadline"),
+        "the failure must name the deadline, not budget exhaustion: {error}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
-        "compaction must not retry: exactly one provider call"
+        "no retry may be taken once the deadline has passed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn repeated_empty_compaction_completions_fail_after_the_internal_budget() {
+    // #1016: recovery is bounded. A provider that never produces visible
+    // output exhausts the fixed internal ladder deterministically — 1 initial
+    // call + 3 immediate retries — and then fails.
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::empty_turn(),
+        ScriptedSummaryModel::empty_turn(),
+        ScriptedSummaryModel::empty_turn(),
+        ScriptedSummaryModel::empty_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let error = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("persistently empty output must fail once the internal budget is spent");
+
+    assert!(
+        error.to_string().contains("no visible output"),
+        "the failure must name the empty-output condition: {error}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "empty-output retracts consume exactly the internal ladder: 1 initial + 3 retries"
     );
 }
 

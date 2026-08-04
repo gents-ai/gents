@@ -1,6 +1,191 @@
 #!/bin/sh
 set -eu
 
+# Classify a terminal response document. Budget exhaustion is the only
+# terminal error Harbor should verifier-score: the workspace may hold real
+# work. The match is anchored to the full owned-loop error shape — the
+# max-turn guard's `PromptError::MaxTurnsError` display as persisted by
+# `agent stream failed: {error}` (pinned by the runtime max-turns test) at
+# the very start of the error_message value. A provider error that merely
+# echoes upstream text mentioning MaxTurnError therefore stays an agent
+# exception, as does everything else unrecognized. Matching the quoted
+# key-plus-prefix is safe against model content: JSON escapes quotes inside
+# string values, so this byte sequence can only introduce the real field.
+_MAX_TURN_ERROR_PREFIX='"error_message": "agent stream failed: PromptError: MaxTurnError: '
+
+classify_response() {
+  response_file=$1
+  response_file_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_file}" | head -1)
+  case "${response_file_status}" in
+    complete|completed)
+      printf 'completed\n'
+      ;;
+    error)
+      if grep -qF "${_MAX_TURN_ERROR_PREFIX}" "${response_file}"; then
+        printf 'max_turns_exhausted\n'
+      else
+        printf 'agent_error\n'
+      fi
+      ;;
+    *)
+      printf 'unexpected:%s\n' "${response_file_status:-missing}"
+      ;;
+  esac
+}
+
+# Fixture-driven check of terminal-response classification. Runs without any
+# Gents environment; CI executes it next to the shell-syntax check.
+run_self_test() {
+  self_test_dir=$(mktemp -d /tmp/gents-harbor-self-test.XXXXXX)
+  trap 'rm -rf "${self_test_dir}"' EXIT
+  failures=0
+
+  expect_outcome() {
+    fixture_name=$1
+    expected=$2
+    fixture_file="${self_test_dir}/${fixture_name}.json"
+    actual=$(classify_response "${fixture_file}")
+    if [ "${actual}" = "${expected}" ]; then
+      printf 'ok: %s -> %s\n' "${fixture_name}" "${actual}"
+    else
+      printf 'FAIL: %s expected %s, got %s\n' \
+        "${fixture_name}" "${expected}" "${actual}" >&2
+      failures=$((failures + 1))
+    fi
+  }
+
+  cat >"${self_test_dir}/complete.json" <<'EOF'
+{
+  "request_id": "req-1",
+  "status": "complete",
+  "content": "done",
+  "error_message": null
+}
+EOF
+  cat >"${self_test_dir}/completed.json" <<'EOF'
+{
+  "request_id": "req-2",
+  "status": "completed",
+  "content": "done",
+  "error_message": null
+}
+EOF
+  cat >"${self_test_dir}/max-turns.json" <<'EOF'
+{
+  "request_id": "req-3",
+  "status": "error",
+  "content": "partial work",
+  "error_message": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+}
+EOF
+  cat >"${self_test_dir}/provider-error.json" <<'EOF'
+{
+  "request_id": "req-4",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500"
+}
+EOF
+  cat >"${self_test_dir}/compaction-error.json" <<'EOF'
+{
+  "request_id": "req-5",
+  "status": "error",
+  "content": null,
+  "error_message": "compaction failed: summary request rejected by provider"
+}
+EOF
+  cat >"${self_test_dir}/content-mentions-max-turn.json" <<'EOF'
+{
+  "request_id": "req-6",
+  "status": "error",
+  "content": "I hit MaxTurnError: in a log I was reading",
+  "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
+}
+EOF
+  cat >"${self_test_dir}/unexpected-status.json" <<'EOF'
+{
+  "request_id": "req-7",
+  "status": "interrupted",
+  "content": null,
+  "error_message": null
+}
+EOF
+  cat >"${self_test_dir}/missing-status.json" <<'EOF'
+{
+  "request_id": "req-8",
+  "content": null
+}
+EOF
+  # Full `response wait` envelope: flat AgentResponse fields plus a nested
+  # `request` object whose `failure_reason` duplicates the terminal error.
+  cat >"${self_test_dir}/envelope-max-turns.json" <<'EOF'
+{
+  "request_id": "req-9",
+  "behavior_id": "b-1",
+  "session_id": "s-1",
+  "status": "error",
+  "content": "partial work",
+  "reasoning": null,
+  "error_message": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)",
+  "token_count": 12345,
+  "completed_at": "2026-08-04T00:00:00Z",
+  "request": {
+    "request_id": "req-9",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+  }
+}
+EOF
+  # A provider error may embed upstream response text that mentions the
+  # MaxTurn token; that is still an infrastructure failure.
+  cat >"${self_test_dir}/provider-echoes-max-turn.json" <<'EOF'
+{
+  "request_id": "req-11",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: upstream mentioned MaxTurnError: (reached max turn limit: 250)"
+}
+EOF
+  # The nested request's failure_reason must never classify on its own: here
+  # it mentions MaxTurnError but the response's own error is a provider one.
+  cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
+{
+  "request_id": "req-10",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500",
+  "request": {
+    "request_id": "req-10",
+    "lifecycle_state": "failed",
+    "failure_reason": "child subagent hit MaxTurnError: before the provider failed"
+  }
+}
+EOF
+
+  expect_outcome complete completed
+  expect_outcome completed completed
+  expect_outcome max-turns max_turns_exhausted
+  expect_outcome provider-error agent_error
+  expect_outcome compaction-error agent_error
+  expect_outcome content-mentions-max-turn agent_error
+  expect_outcome unexpected-status unexpected:interrupted
+  expect_outcome missing-status unexpected:missing
+  expect_outcome envelope-max-turns max_turns_exhausted
+  expect_outcome envelope-nested-max-turn-only agent_error
+  expect_outcome provider-echoes-max-turn agent_error
+
+  if [ "${failures}" -ne 0 ]; then
+    printf 'self-test failed: %s classification(s) wrong\n' "${failures}" >&2
+    exit 1
+  fi
+  printf 'self-test passed\n'
+  exit 0
+}
+
+if [ "${1:-}" = "self-test" ]; then
+  run_self_test
+fi
+
 : "${GENTS_BINARY:=/usr/local/bin/gents}"
 : "${GENTS_HOME:?GENTS_HOME is required}"
 : "${GENTS_INSTRUCTION_FILE:?GENTS_INSTRUCTION_FILE is required}"
@@ -28,6 +213,7 @@ request_log="${logs_dir}/request.json"
 request_stdout="${logs_dir}/request.stdout.json"
 response_log="${logs_dir}/response.json"
 trajectory_path="${logs_dir}/trajectory.json"
+outcome_log="${logs_dir}/gents-outcome.json"
 status_log="${logs_dir}/gents-status.json"
 profile_log="${logs_dir}/gents-profile.json"
 request_id=""
@@ -48,6 +234,15 @@ case "${GENTS_REASONING_EFFORT}" in
   low|high|max) ;;
   *)
     echo "GENTS_REASONING_EFFORT must be one of: low, high, max" >&2
+    exit 2
+    ;;
+esac
+
+# GENTS_MAX_TURNS is interpolated into the outcome document as a JSON number,
+# so leading zeros are as invalid as non-digits.
+case "${GENTS_MAX_TURNS}" in
+  ''|*[!0-9]*|0?*)
+    echo "GENTS_MAX_TURNS must be a non-negative integer without leading zeros" >&2
     exit 2
     ;;
 esac
@@ -222,12 +417,27 @@ test -s "${trajectory_path}"
 # `response wait` exits successfully after any terminal response, including a
 # provider/runtime failure. Do not let Harbor run the verifier against an
 # untouched task filesystem and record that infrastructure failure as a model
-# zero. Preserve the response and trajectory above, then make the trial an
-# agent exception so it can be retried or recovered separately.
+# zero. The one exception is agent-budget exhaustion (MaxTurn): the workspace
+# holds up to GENTS_MAX_TURNS turns of real work, so return control to Harbor
+# and let the verifier score it. Preserve the response and trajectory above in
+# every case; genuine failures stay agent exceptions so they can be retried or
+# recovered separately.
 response_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_log}" | head -1)
-case "${response_status}" in
-  complete|completed) ;;
-  error)
+outcome=$(classify_response "${response_log}")
+printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n  "request_id": "%s"\n}\n' \
+  "${outcome}" "${response_status:-missing}" "${GENTS_MAX_TURNS}" "${request_id}" \
+  >"${outcome_log}"
+case "${outcome}" in
+  completed)
+    printf 'gents request %s completed; trajectory=%s\n' "${request_id}" "${trajectory_path}"
+    ;;
+  max_turns_exhausted)
+    echo "Gents request ${request_id} exhausted its ${GENTS_MAX_TURNS}-turn budget; returning the workspace for verification" >&2
+    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    printf 'gents request %s reached the %s-turn limit; trajectory=%s\n' \
+      "${request_id}" "${GENTS_MAX_TURNS}" "${trajectory_path}"
+    ;;
+  agent_error)
     echo "Gents request ${request_id} terminated with an error response" >&2
     sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
     exit 1
@@ -237,5 +447,3 @@ case "${response_status}" in
     exit 1
     ;;
 esac
-
-printf 'gents request %s completed; trajectory=%s\n' "${request_id}" "${trajectory_path}"
