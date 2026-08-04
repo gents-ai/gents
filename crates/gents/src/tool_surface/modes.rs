@@ -66,6 +66,7 @@ pub struct ToolCeiling {
     bash: BashMode,
     cli_tools: Vec<CliToolConfig>,
     command_timeout: std::time::Duration,
+    command_timeout_max: Option<std::time::Duration>,
     root: Option<PathBuf>,
     policy: ToolPolicySurface,
 }
@@ -79,6 +80,7 @@ impl ToolCeiling {
             command_timeout: std::time::Duration::from_secs(
                 crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
             ),
+            command_timeout_max: None,
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off),
         }
@@ -92,6 +94,7 @@ impl ToolCeiling {
             command_timeout: std::time::Duration::from_secs(
                 crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
             ),
+            command_timeout_max: None,
             root: None,
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -108,6 +111,7 @@ impl ToolCeiling {
             command_timeout: std::time::Duration::from_secs(
                 crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
             ),
+            command_timeout_max: None,
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadOnly,
@@ -124,6 +128,7 @@ impl ToolCeiling {
             command_timeout: std::time::Duration::from_secs(
                 crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS,
             ),
+            command_timeout_max: None,
             root: Some(root.into()),
             policy: ToolPolicySurface::legacy_non_host_wide(
                 FileToolMode::ReadWrite,
@@ -152,6 +157,13 @@ impl ToolCeiling {
         self
     }
 
+    /// Foreground cap for explicit `timeout_secs` requests (#1018). Unset ⇒
+    /// the cap equals the default, i.e. the coupled #985 behavior.
+    pub fn with_command_timeout_max_secs(mut self, timeout_secs: u64) -> Self {
+        self.command_timeout_max = Some(std::time::Duration::from_secs(timeout_secs.max(1)));
+        self
+    }
+
     pub fn with_policy(mut self, policy: ToolPolicySurface) -> Self {
         self.file_tools = policy.file;
         self.bash = policy.bash.tool;
@@ -174,6 +186,12 @@ impl ToolCeiling {
 
     pub(crate) fn command_timeout(&self) -> std::time::Duration {
         self.command_timeout
+    }
+
+    pub(crate) fn command_timeout_max(&self) -> std::time::Duration {
+        self.command_timeout_max
+            .unwrap_or(self.command_timeout)
+            .max(self.command_timeout)
     }
 
     pub fn root(&self) -> Option<&Path> {

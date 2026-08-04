@@ -91,11 +91,11 @@ pub(super) fn build_host_tools(
                 Some(policy) => builder.bash_read_only_with_policy_and_timeouts(
                     policy,
                     ceiling.command_timeout(),
-                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
                 ),
                 None => builder.bash_read_only_with_timeouts(
                     ceiling.command_timeout(),
-                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
                 ),
             };
         }
@@ -108,12 +108,12 @@ pub(super) fn build_host_tools(
                     root,
                     policy,
                     ceiling.command_timeout(),
-                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
                 ),
                 None => builder.bash_unrestricted_with_timeouts(
                     root,
                     ceiling.command_timeout(),
-                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
                 ),
             };
         }
