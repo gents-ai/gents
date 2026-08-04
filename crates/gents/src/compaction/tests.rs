@@ -1931,7 +1931,10 @@ fn parse_failure_error_is_bounded() {
         "parse error must not embed the raw output; got {} bytes",
         message.len()
     );
-    assert!(message.contains("bytes total]"), "missing truncation marker: {message}");
+    assert!(
+        message.contains("bytes total]"),
+        "missing truncation marker: {message}"
+    );
 }
 
 #[test]
