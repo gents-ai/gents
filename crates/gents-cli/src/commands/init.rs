@@ -704,7 +704,12 @@ async fn initialize_runtime_home(
     })
 }
 
-fn tool_selection_for_package(
+// `pub(crate)` so the cross-crate init-parity drift guard
+// (`crate::commands::config::behavior::tests`) can compare a persona-minted
+// "write" `ToolSelectionDocument` against this authoritative source
+// field-for-field; `gents::agent::persona_presets`' module doc documents the
+// same contract from the other side.
+pub(crate) fn tool_selection_for_package(
     agent_did: &str,
     tool_selection_id: &str,
     tool_package: ToolPackageArg,
