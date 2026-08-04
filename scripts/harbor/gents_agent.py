@@ -312,9 +312,13 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             or "3",
             "GENTS_REQUEST_TIMEOUT_SECS": str(request_timeout),
             "GENTS_COMMAND_TIMEOUT_SECS": self._env(
-                "GENTS_COMMAND_TIMEOUT_SECS", "86400"
+                "GENTS_COMMAND_TIMEOUT_SECS", "600"
             )
-            or "86400",
+            or "600",
+            "GENTS_COMMAND_TIMEOUT_MAX_SECS": self._env(
+                "GENTS_COMMAND_TIMEOUT_MAX_SECS", "3600"
+            )
+            or "3600",
             "GENTS_SERVER_STARTUP_TIMEOUT_SECS": self._env(
                 "GENTS_SERVER_STARTUP_TIMEOUT_SECS", "300"
             )
