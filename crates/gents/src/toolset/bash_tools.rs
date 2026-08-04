@@ -11,15 +11,17 @@ use super::shared::{
 };
 use super::BACKGROUND_COMMAND_TIMEOUT_SECS;
 
-fn timeout_secs_schema(default_timeout: Duration) -> serde_json::Value {
+fn timeout_secs_schema(default_timeout: Duration, max_timeout: Duration) -> serde_json::Value {
+    let max_secs = max_timeout.as_secs().max(default_timeout.as_secs());
     serde_json::json!({
         "type": "integer",
         "default": default_timeout.as_secs(),
         "minimum": 1,
-        "maximum": default_timeout.as_secs(),
+        "maximum": max_secs,
         "description": format!(
-            "Timeout in seconds; omit for the default ({}s), which is also the foreground cap. Backgrounded runs (spawn_process) instead get a {}s lifetime budget.",
+            "Timeout in seconds; omit for the default ({}s). Explicit values are capped at the foreground ceiling ({}s). Backgrounded runs (spawn_process) instead get a {}s lifetime budget.",
             default_timeout.as_secs(),
+            max_secs,
             BACKGROUND_COMMAND_TIMEOUT_SECS,
         )
     })
@@ -29,6 +31,7 @@ fn timeout_secs_schema(default_timeout: Duration) -> serde_json::Value {
 pub(super) struct ReadOnlyBashTool {
     context: ToolContext,
     default_timeout: Duration,
+    max_timeout: Duration,
     policy: CommandExecutionPolicy,
 }
 
@@ -42,6 +45,7 @@ impl ReadOnlyBashTool {
         Self {
             context,
             default_timeout,
+            max_timeout: default_timeout,
             policy: CommandExecutionPolicy::read_only(allowlist),
         }
     }
@@ -49,11 +53,13 @@ impl ReadOnlyBashTool {
     pub(super) fn with_policy(
         context: ToolContext,
         default_timeout: Duration,
+        max_timeout: Duration,
         policy: CommandExecutionPolicy,
     ) -> Self {
         Self {
             context,
             default_timeout,
+            max_timeout: max_timeout.max(default_timeout),
             policy,
         }
     }
@@ -63,6 +69,7 @@ impl ReadOnlyBashTool {
 pub(super) struct UnrestrictedBashTool {
     context: ToolContext,
     default_timeout: Duration,
+    max_timeout: Duration,
     policy: CommandExecutionPolicy,
 }
 
@@ -72,6 +79,7 @@ impl UnrestrictedBashTool {
         Self {
             context,
             default_timeout,
+            max_timeout: default_timeout,
             policy: CommandExecutionPolicy::write_capable(),
         }
     }
@@ -79,11 +87,13 @@ impl UnrestrictedBashTool {
     pub(super) fn with_policy(
         context: ToolContext,
         default_timeout: Duration,
+        max_timeout: Duration,
         policy: CommandExecutionPolicy,
     ) -> Self {
         Self {
             context,
             default_timeout,
+            max_timeout: max_timeout.max(default_timeout),
             policy,
         }
     }
@@ -119,7 +129,7 @@ impl Tool for ReadOnlyBashTool {
                         "default": ".",
                         "description": "Working directory under the allowed root. Omit for the active workspace/root."
                     },
-                    "timeout_secs": timeout_secs_schema(self.default_timeout),
+                    "timeout_secs": timeout_secs_schema(self.default_timeout, self.max_timeout),
                     "raw_json": {
                         "type": "boolean",
                         "default": false,
@@ -139,7 +149,11 @@ impl Tool for ReadOnlyBashTool {
             &args.command,
             &args.args,
             args.cwd.as_deref(),
-            resolve_command_timeout_in_scope(args.timeout_secs, self.default_timeout),
+            resolve_command_timeout_in_scope(
+                args.timeout_secs,
+                self.default_timeout,
+                self.max_timeout,
+            ),
             &self.policy,
             args.raw_json,
         )
@@ -187,7 +201,7 @@ impl Tool for UnrestrictedBashTool {
                         "default": ".",
                         "description": "Working directory under the configured writable root. Omit for the active workspace/root."
                     },
-                    "timeout_secs": timeout_secs_schema(self.default_timeout),
+                    "timeout_secs": timeout_secs_schema(self.default_timeout, self.max_timeout),
                     "raw_json": {
                         "type": "boolean",
                         "default": false,
@@ -213,7 +227,11 @@ impl Tool for UnrestrictedBashTool {
             command,
             &command_args,
             args.cwd.as_deref(),
-            resolve_command_timeout_in_scope(args.timeout_secs, self.default_timeout),
+            resolve_command_timeout_in_scope(
+                args.timeout_secs,
+                self.default_timeout,
+                self.max_timeout,
+            ),
             &self.policy,
             args.raw_json,
         )

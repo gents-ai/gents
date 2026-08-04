@@ -88,9 +88,15 @@ pub(super) fn build_host_tools(
         BashMode::Off => {}
         BashMode::ReadOnly => {
             builder = match command_policy.clone() {
-                Some(policy) => builder
-                    .bash_read_only_with_policy_and_timeout(policy, ceiling.command_timeout()),
-                None => builder.bash_read_only_with_timeout(ceiling.command_timeout()),
+                Some(policy) => builder.bash_read_only_with_policy_and_timeouts(
+                    policy,
+                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
+                ),
+                None => builder.bash_read_only_with_timeouts(
+                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
+                ),
             };
         }
         BashMode::Unrestricted => {
@@ -98,12 +104,17 @@ pub(super) fn build_host_tools(
                 .clone()
                 .ok_or_else(|| anyhow!("unrestricted bash requires a configured tool root"))?;
             builder = match command_policy.clone() {
-                Some(policy) => builder.bash_unrestricted_with_policy_and_timeout(
+                Some(policy) => builder.bash_unrestricted_with_policy_and_timeouts(
                     root,
                     policy,
                     ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
                 ),
-                None => builder.bash_unrestricted_with_timeout(root, ceiling.command_timeout()),
+                None => builder.bash_unrestricted_with_timeouts(
+                    root,
+                    ceiling.command_timeout(),
+                    ceiling.command_timeout_max(),
+                ),
             };
         }
     }
