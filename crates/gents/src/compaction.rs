@@ -11,7 +11,7 @@ mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
 use summary::{
-    compaction_prompt, compaction_request_prompt, dedupe_paths, format_summary,
+    bounded_error_preview, compaction_prompt, compaction_request_prompt, format_summary,
     parse_summary_response,
 };
 
@@ -21,6 +21,11 @@ pub struct CompactionOptions {
     pub tool_result_max_chars: usize,
     pub keep_recent_tokens: usize,
     pub strategy: CompactionStrategy,
+    /// Output budget for the internal summary completion. Deliberately
+    /// independent of the user turn's max_output_tokens (#1017).
+    pub summary_max_output_tokens: usize,
+    /// Most file paths rendered per list in the formatted summary.
+    pub summary_file_list_max: usize,
     /// The caller has already established that the complete provider input is
     /// over budget. Skip the history-only threshold recheck and summarize.
     pub force_summarize: bool,
@@ -39,6 +44,8 @@ impl Default for CompactionOptions {
             tool_result_max_chars: 2000,
             keep_recent_tokens: 20000,
             strategy: CompactionStrategy::StripThenSummarize,
+            summary_max_output_tokens: crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            summary_file_list_max: crate::config::DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX,
             force_summarize: false,
             deadline: None,
         }
@@ -196,6 +203,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         summary_config.tool_choice = None;
         summary_config.turn_compactor = None;
         summary_config.max_turns = 0;
+        // The summary completion has its own output budget, deliberately
+        // independent of the user turn's max_output_tokens (#1017): a large
+        // turn budget must not let the model balloon the internal summary.
+        let summary_max_output_tokens = options
+            .summary_max_output_tokens
+            .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS);
+        summary_config.max_tokens = Some(summary_max_output_tokens as u64);
         // Both deadlines are hard stops when present; recovery must respect
         // the earlier one.
         summary_config.deadline = match (options.deadline, summary_config.deadline) {
@@ -211,24 +225,34 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             summary_config,
         )
         .await
-        .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "compaction summary inference failed: {}",
+                bounded_error_preview(&format!("{error}"))
+            )
+        })?;
         let parsed_summary = parse_summary_response(&raw_summary)?;
 
-        let mut files_read = old_activity.files_read;
-        files_read.extend(parsed_summary.files_read);
-        dedupe_paths(&mut files_read);
+        // Structural extraction is the sole source of file activity (#1017):
+        // the model no longer returns lists, so it can neither balloon the
+        // summary nor inject paths the run never touched.
+        let FileActivity {
+            files_read,
+            files_modified,
+        } = old_activity;
 
-        let mut files_modified = old_activity.files_modified;
-        files_modified.extend(parsed_summary.files_modified);
-        dedupe_paths(&mut files_modified);
-
-        let summary = format_summary(
+        // Bounded at creation so both consumers — the persisted compaction
+        // entry and per-turn provider-view injection — see the same bound.
+        let summary = bounded_summary(format_summary(
             &parsed_summary.summary,
             &files_read,
             &files_modified,
             &parsed_summary.key_decisions,
             &parsed_summary.pending_questions,
-        );
+            options
+                .summary_file_list_max
+                .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX),
+        ));
         let compacted_token_estimate =
             estimate_message_tokens(&recent_messages) + estimate_tokens(&summary);
 
