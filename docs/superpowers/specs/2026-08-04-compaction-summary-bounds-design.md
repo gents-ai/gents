@@ -74,10 +74,29 @@ source bounds every downstream surface, including the ATIF projection.
   ever eat file-list tail, never the task-continuation state — the acceptance
   criterion's ordering requirement.
 - Each file list renders at most `summary_file_list_max` entries, followed by
-  `… and {n} more (full list on the session's compaction entry)`.
-- Durable fields are untouched: `CompactionResult` and `AgentCompactionEntry`
-  keep the complete structural lists. Only the rendered summary string is
-  capped.
+  the neutral marker `… and {n} more (omitted from this summary)`. (Neutral
+  because per-turn compaction — `agent/daemon/inference.rs` — injects the
+  summary into the provider view without persisting a compaction entry, so a
+  marker pointing at "the session's compaction entry" would be false there.)
+- **A list-length cap is not a byte bound.** Structural paths are copied
+  verbatim from tool arguments, so a single enormous or newline-bearing
+  "path" could still blow up the rendered summary. Two further bounds, both
+  in `summary.rs`:
+  - *Per-item:* each rendered list item is sanitized (control characters
+    including newlines replaced with spaces, so one item is one line) and
+    truncated to `SUMMARY_ITEM_MAX_BYTES = 512` bytes (char-boundary floored,
+    `…` suffix). Applied to file paths, key decisions, and pending questions
+    alike.
+  - *Whole-summary:* `compact()` passes the assembled string through the
+    head-truncating `bounded_summary` bound (2000 lines / 50 KiB) **before
+    returning it** in `CompactionResult.summary`. Bounding at creation covers
+    both consumers — persistence via `session/compaction_entries.rs` and raw
+    injection during per-turn compaction — instead of relying on each caller
+    to re-bound. The existing `bounded_summary` call on reload stays as
+    defense for legacy entries.
+- Durable *structural* fields are untouched: `CompactionResult` and
+  `AgentCompactionEntry` keep the complete file lists. Only the rendered
+  summary string is capped.
 
 ### 4. Bounded diagnostics
 
@@ -103,6 +122,32 @@ unconvertible values fall back to the default):
 
 - `compaction_summary_max_output_tokens`
 - `compaction_summary_file_list_max`
+
+**Immutable safety ceilings.** Configurable does not mean unbounded: these
+fields are agent-writable, and a self-config write (or a direct DefraDB
+document write) setting either near `i64::MAX` would recreate the exact
+amplification this change removes. Two non-configurable ceiling consts live
+beside the defaults in `config.rs`:
+
+- `MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 32_768`
+- `MAX_COMPACTION_SUMMARY_FILE_LIST_MAX = 1_000`
+
+Enforcement is layered so every write path is covered:
+
+- **Runtime clamp (authoritative):** `behavior_config_from_documents` clamps
+  the loaded value into `[1, MAX_*]`; out-of-range values are clamped with a
+  `tracing::warn!`. Because this is the single Option→required conversion
+  every document read flows through, it covers CLI writes, desktop writes,
+  desired-state apply, self-config writes, and raw document writes alike —
+  the fields stay in `writableFields`, and the ceiling, not the write fence,
+  is the safety boundary.
+- **Desired-state validation (early feedback):** `desired_state/validate.rs`
+  rejects values outside `[1, MAX_*]` (not just non-positive ones), so a bad
+  manifest fails at `config validate` rather than being silently clamped at
+  load.
+- The whole-summary `bounded_summary` bound at creation (§3) is the backstop
+  even if a clamp is bypassed: no configuration can produce a rendered
+  summary over 50 KiB.
 
 Layers (from the plumbing survey; the implementation plan enumerates exact
 sites):
@@ -140,9 +185,9 @@ sites):
    literal; `init.rs` bootstrap literal; `EXPORT_AGENT_BEHAVIOR_FIELDS` and
    `task.rs::BEHAVIOR_FIELDS` selection strings; `DesiredAgentBehavior`
    fields (`deny_unknown_fields` makes this mandatory); `convert.rs` export
-   allowlist; a "must be a positive integer" rule for both fields in
-   `desired_state/validate.rs` (modeled on the `stream_liveness_timeout_secs`
-   rule).
+   allowlist; a range rule (`1..=MAX_*`, see the safety ceilings above) for
+   both fields in `desired_state/validate.rs` (modeled on the
+   `stream_liveness_timeout_secs` rule).
 6. **Desktop:** `BehaviorSaveRequest` + `BehaviorView` fields; save-command
    default/assignment literals; snapshot projections **including the
    chat-scope redaction site** (`project_behavior_for_chat` sets both to
@@ -166,13 +211,30 @@ sites):
 - Ordering: formatted summary sections appear narrative → key decisions →
   pending questions → files; a fixture with oversized file lists shows pending
   work surviving `bounded_summary` head truncation.
-- Render cap: 100-entry cap honored with the `… and {n} more` marker; full
-  lists still present on `CompactionResult`.
-- **15,000-path regression:** structural extraction over 15k read/write tool
-  calls produces a formatted summary bounded well under `bounded_summary`'s
-  limits with both markers present; a multi-MiB mid-string-truncated JSON
-  model reply produces a parse error message ≤ a few KiB carrying
-  `[truncated, {n} bytes total]`.
+- Render cap: 100-entry cap honored with the `… and {n} more (omitted from
+  this summary)` marker; full lists still present on `CompactionResult`.
+- Byte bounds: a single multi-megabyte "path" renders as one ≤512-byte
+  sanitized item; a path with embedded newlines renders as a single line; the
+  summary returned by `compact()` never exceeds the `bounded_summary` limits
+  regardless of input.
+- Ceiling clamp: behavior documents carrying `i64::MAX` (and `0` / negative)
+  for either field load as the clamped/default values.
+- **15,000-path regression (unit):** structural extraction over 15k
+  read/write tool calls produces a formatted summary bounded well under
+  `bounded_summary`'s limits with both markers present; a multi-MiB
+  mid-string-truncated JSON model reply produces a parse error message ≤ a
+  few KiB carrying `[truncated, {n} bytes total]`.
+- **Downstream-surface regression (integration):** the acceptance criteria
+  name the response document, logs, and ATIF projection, so "bounded at
+  source" must be fenced where it lands, not only where it's produced. A
+  daemon-driven test (e2e_runtime style, mock provider) runs a request whose
+  summary completion returns multi-MiB broken JSON and asserts explicit byte
+  limits on: the persisted response document's error field, the emitted
+  tracing event (captured via a test subscriber), and the ATIF/adapter
+  projection of the failed run. A companion happy-path case with 15k paths
+  asserts the persisted compaction entry's summary is bounded and that the
+  rebuilt provider request passes `build_budgeted_request`'s post-compaction
+  budget guard.
 
 **Migration tests (`gents-migration`):** update `baseline_ensure.rs`
 expectations (AgentBehavior joins InferenceProfile as a frozen collection with
@@ -195,9 +257,17 @@ tables changed), plus the affected desktop JS test suites.
   is the sole source; old-shape replies parse but are ignored.
 - **Configurable caps with full behavior-document plumbing** — operator asked
   for the `compaction_threshold`-grade treatment despite the migration cost.
-- **Both caps agent-writable via self-config**, like `compaction_threshold`.
+- **Both caps agent-writable via self-config**, like `compaction_threshold` —
+  but bounded by immutable ceilings (32,768 tokens / 1,000 entries) clamped at
+  the single document-load site, so no write path can weaponize them.
 - **Defaults:** 4096 summary output tokens; 100 rendered paths per list;
-  2 KiB error preview (constant, not configurable).
+  2 KiB error preview and 512-byte per-item render bound (constants, not
+  configurable).
+- **Byte bounds over item counts:** per-item sanitize+truncate plus a
+  whole-summary `bounded_summary` pass at creation, because item-count caps
+  alone cannot bound bytes when paths come verbatim from tool arguments.
+- **Neutral truncation marker** — per-turn compaction injects summaries
+  without persisting an entry, so the marker must not promise one.
 - **Cap replaces inherited `max_tokens`** rather than `min()`ing.
 - **No `adapter_projection` changes** — bounded at source; projection-side
   defensive truncation deferred (adjacent to #717/#988).
