@@ -16,7 +16,7 @@ output died mid-JSON, and the full 2.1 MiB raw output was embedded in the
 runtime error, response document, server log, Harbor exception, and ATIF
 projection.
 
-Four defects, four fixes, all with an operator-visible configuration surface:
+Four defects, four fixes, enforced at the compactor boundary:
 
 | Defect | Site | Fix |
 |---|---|---|
@@ -100,7 +100,7 @@ source bounds every downstream surface, including the ATIF projection.
 
 ### 4. Bounded diagnostics
 
-- `parse_summary_response` error context carries at most a 2 KiB prefix of the
+- `parse_summary_response` error context carries at most a 256-byte prefix of the
   raw output (floored to a char boundary) plus `[truncated, {n} bytes total]`,
   instead of the full text. This is the string that reached 2.1 MiB in the
   incident; every downstream surface (error response document, server log,
@@ -112,91 +112,21 @@ source bounds every downstream surface, including the ATIF projection.
   inference failed: {error}") gets the same bounded-preview treatment
   defensively, though provider errors are normally short.
 
-### 5. Configuration plumbing
+### 5. Immutable safety ceilings
 
-Two new nillable `Int` columns on `AgentBehavior`, plumbed exactly like
-`compaction_threshold` (Option end-to-end on the persistence path; required
-`usize` in the runtime struct; defaulted once in
-`agent.rs::behavior_config_from_documents`, where non-positive or
-unconvertible values fall back to the default):
-
-- `compaction_summary_max_output_tokens`
-- `compaction_summary_file_list_max`
-
-**Immutable safety ceilings.** Configurable does not mean unbounded: these
-fields are agent-writable, and a self-config write (or a direct DefraDB
-document write) setting either near `i64::MAX` would recreate the exact
-amplification this change removes. Two non-configurable ceiling consts live
-beside the defaults in `config.rs`:
+The two compaction options are internal policy, not persisted behavior
+configuration. `CompactionOptions` supplies safe defaults and
+`DefraCompactor::compact` clamps every caller-provided value before it reaches
+the provider request or formatter. Two non-configurable ceiling constants
+live beside the defaults in `config.rs`:
 
 - `MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS = 32_768`
 - `MAX_COMPACTION_SUMMARY_FILE_LIST_MAX = 1_000`
 
-Enforcement is layered so every write path is covered:
-
-- **Runtime clamp (authoritative):** `behavior_config_from_documents` clamps
-  the loaded value into `[1, MAX_*]`; out-of-range values are clamped with a
-  `tracing::warn!`. Because this is the single Option→required conversion
-  every document read flows through, it covers CLI writes, desktop writes,
-  desired-state apply, self-config writes, and raw document writes alike —
-  the fields stay in `writableFields`, and the ceiling, not the write fence,
-  is the safety boundary.
-- **Desired-state validation (early feedback):** `desired_state/validate.rs`
-  rejects values outside `[1, MAX_*]` (not just non-positive ones), so a bad
-  manifest fails at `config validate` rather than being silently clamped at
-  load.
-- The whole-summary `bounded_summary` bound at creation (§3) is the backstop
-  even if a clamp is bypassed: no configuration can produce a rendered
-  summary over 50 KiB.
-
-Layers (from the plumbing survey; the implementation plan enumerates exact
-sites):
-
-1. **SDL:** `gents-schemas/schemas/agent/agent_behavior.graphql` — both
-   fields appended. Declaration order is conformance-fenced (see 3).
-2. **Migration (highest risk):** editing the SDL changes AgentBehavior's root
-   version CID, which `gents-migration/src/registry.rs` pins in
-   `DEFAULT_BASELINE`. Mirror the `reasoning_effort` precedent: freeze today's
-   SDL as a local `AGENT_BEHAVIOR_BASELINE_SDL` const, repoint the baseline
-   entry at it (same CID), and add **one** `MigrationStep::PatchVersioned` to
-   `DEFAULT_STEPS` adding both columns in a single patch (one new
-   `expected_version` CID pin, `lens: None` — nillable add needs no lens,
-   `expected_state: CollectionExpectation::fields(&[both])`). Update
-   `baseline_ensure.rs`, which currently hardcodes InferenceProfile as the
-   only frozen collection.
-3. **Lean + conformance fence:** `proofs/Proofs/SelfConfig/Types.lean` —
-   append both names to the `.agentBehavior` arm of `allFields` **and**
-   `writableFields` (decision: agents may self-tune these caps, mirroring
-   `compaction_threshold` and the project's self-modification philosophy).
-   `tests/conformance/self_config.rs` asserts SDL, Lean, and Rust field tables
-   agree in declaration order.
-4. **Rust config path:** `gents-protocol/src/row.rs` (`Option<i64>`,
-   `#[serde(default)]`); `document_config/behavior.rs` (struct, three
-   selection sets, upsert add/update via `graphql_optional_int_field`, default
-   literal); `config_client/agent_behavior.rs` (add/update via
-   `optional_i64_field`) and `config_client/patch.rs` (`all_fields` +
-   `writable_fields`, order-fenced); `config.rs` (two `DEFAULT_*` consts,
-   required fields, **manual `Debug` impl** — it feeds the reconcile
-   fingerprint; omitting a field means live config changes don't restart the
-   daemon); `agent.rs::behavior_config_from_documents` (defaulting);
-   `agent/builder.rs` (setters, defaults, projection); `agent/daemon.rs`
-   (populate `CompactionOptions` from behavior).
-5. **CLI + desired state:** `BehaviorUpsertArgs` flags; `behavior_set`
-   literal; `init.rs` bootstrap literal; `EXPORT_AGENT_BEHAVIOR_FIELDS` and
-   `task.rs::BEHAVIOR_FIELDS` selection strings; `DesiredAgentBehavior`
-   fields (`deny_unknown_fields` makes this mandatory); `convert.rs` export
-   allowlist; a range rule (`1..=MAX_*`, see the safety ceilings above) for
-   both fields in `desired_state/validate.rs` (modeled on the
-   `stream_liveness_timeout_secs` rule).
-6. **Desktop:** `BehaviorSaveRequest` + `BehaviorView` fields; save-command
-   default/assignment literals; snapshot projections **including the
-   chat-scope redaction site** (`project_behavior_for_chat` sets both to
-   `None`); desktop-core `AGENT_BEHAVIOR_FIELDS` query string (and its exact-
-   string test) and manage mutations; `BehaviorConfigPanel.tsx` form fields;
-   regenerate TS bindings via
-   `cargo test -p gents-desktop-bridge write_bindings -- --ignored`
-   (CI freshness gate `committed_bindings_match_regeneration`); live-fixture
-   rows and `resolveTargets.ts` pass-through.
+The clamp range is `[1, MAX_*]`. The whole-summary `bounded_summary` pass at
+creation (§3) remains the byte-level backstop. If operators later need to tune
+these values per behavior, that can be designed as separate schema work
+without weakening this safety boundary.
 
 ### 6. Testing
 
@@ -217,51 +147,33 @@ sites):
   sanitized item; a path with embedded newlines renders as a single line; the
   summary returned by `compact()` never exceeds the `bounded_summary` limits
   regardless of input.
-- Ceiling clamp: behavior documents carrying `i64::MAX` (and `0` / negative)
-  for either field load as the clamped/default values.
+- Ceiling clamp: direct `CompactionOptions` values at `usize::MAX` are clamped
+  before both the provider request and rendered file lists.
 - **15,000-path regression (unit):** structural extraction over 15k
   read/write tool calls produces a formatted summary bounded well under
   `bounded_summary`'s limits with both markers present; a multi-MiB
   mid-string-truncated JSON model reply produces a parse error message ≤ a
   few KiB carrying `[truncated, {n} bytes total]`.
-- **Downstream-surface regression (integration):** the acceptance criteria
-  name the response document, logs, and ATIF projection, so "bounded at
-  source" must be fenced where it lands, not only where it's produced. A
-  daemon-driven test (e2e_runtime style, mock provider) runs a request whose
-  summary completion returns multi-MiB broken JSON and asserts explicit byte
-  limits on: the persisted response document's error field, the emitted
-  tracing event (captured via a test subscriber), and the ATIF/adapter
-  projection of the failed run. A companion happy-path case with 15k paths
-  asserts the persisted compaction entry's summary is bounded and that the
-  rebuilt provider request passes `build_budgeted_request`'s post-compaction
-  budget guard.
-
-**Migration tests (`gents-migration`):** update `baseline_ensure.rs`
-expectations (AgentBehavior joins InferenceProfile as a frozen collection with
-a `PatchVersioned` step); add a data-preservation test modeled on
-`inference_profile_reasoning_effort_migration_preserves_existing_document`.
-
-**Plumbing fences:** update the struct-literal construction sites (compile-
-driven), the exact-string assertions (`cli_config_validate.rs`, desired-state
-fixture writer, desktop-core query test, `behavior-config-panel.test.tsx`,
-desktop UI harness), and the Lean/SDL/Rust field-table conformance test.
+- **Downstream surfaces:** diagnostics are bounded before becoming an `Error`,
+  and summaries are bounded before becoming a `CompactionResult`; response
+  persistence, tracing, Harbor, and ATIF receive those same strings rather
+  than the raw provider output. The 15,000-path and multi-MiB parser tests
+  fence those two source boundaries, while existing projection and provider
+  budget-guard tests fence their consumers.
 
 **Gates:** `cargo test -p gents` (full package — integration tests are
-separate compile units), `cargo check --workspace --all-targets`, desktop
-bindings regeneration, `lake build` in `crates/gents/proofs` (SelfConfig
-tables changed), plus the affected desktop JS test suites.
+separate compile units) and `cargo check --workspace --all-targets`.
 
 ## Decisions log
 
 - **Model file lists: removed entirely** (not capped) — structural extraction
   is the sole source; old-shape replies parse but are ignored.
-- **Configurable caps with full behavior-document plumbing** — operator asked
-  for the `compaction_threshold`-grade treatment despite the migration cost.
-- **Both caps agent-writable via self-config**, like `compaction_threshold` —
-  but bounded by immutable ceilings (32,768 tokens / 1,000 entries) clamped at
-  the single document-load site, so no write path can weaponize them.
+- **Internal policy, not behavior schema** — the incident fix does not require
+  a DefraDB migration, CLI/desktop surface, or self-config field. Immutable
+  ceilings (32,768 tokens / 1,000 entries) are clamped at the compactor
+  boundary, so no direct caller can weaponize them.
 - **Defaults:** 4096 summary output tokens; 100 rendered paths per list;
-  2 KiB error preview and 512-byte per-item render bound (constants, not
+  256-byte error preview and 512-byte per-item render bound (constants, not
   configurable).
 - **Byte bounds over item counts:** per-item sanitize+truncate plus a
   whole-summary `bounded_summary` pass at creation, because item-count caps
@@ -271,8 +183,8 @@ tables changed), plus the affected desktop JS test suites.
 - **Cap replaces inherited `max_tokens`** rather than `min()`ing.
 - **No `adapter_projection` changes** — bounded at source; projection-side
   defensive truncation deferred (adjacent to #717/#988).
-- **Lean impact:** `SelfConfig/Types.lean` field tables only. The compaction
-  model (`Proofs/Compaction/Summarize.lean`) treats the summary as an opaque
+- **Lean impact:** none. The compaction model
+  (`Proofs/Compaction/Summarize.lean`) treats the summary as an opaque
   `SummaryHandle`; no transition or invariant changes. The post-compaction
   budget guard (`loop_stream.rs::build_budgeted_request`) is untouched and
   remains the authority for the "rebuilt provider request passes the budget

@@ -15,6 +15,13 @@ pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 250;
 pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
+/// Output budget for the internal compaction summary completion — independent
+/// of the user turn's `max_output_tokens` (#1017).
+pub const DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 4_096;
+pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
+/// Most file paths rendered per list in the formatted compaction summary.
+pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
+pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 1_800;
 pub const DEFAULT_MODEL_NAME: &str = "default";
