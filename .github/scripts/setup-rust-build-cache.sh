@@ -29,27 +29,25 @@ echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
   workspace_root="${GITHUB_WORKSPACE:-$(pwd -P)}"
   direct_wrapper="${workspace_root}/.github/scripts/rustc-direct.sh"
-  cargo_config_dir="${workspace_root}/.cargo"
-  cargo_config="${cargo_config_dir}/config.toml"
   if [[ ! -x "${direct_wrapper}" ]]; then
     echo "::error::Direct rustc wrapper is missing or not executable (${direct_wrapper})."
     exit 1
   fi
-  if [[ ! -f "${cargo_config}" ]]; then
-    echo "::error::Repository Cargo config is missing (${cargo_config})."
+  if [[ -z "${RUNNER_TEMP:-}" ]]; then
+    echo "::error::RUNNER_TEMP must be set to isolate Cargo configuration."
     exit 1
   fi
-  if grep -Eq '^[[:space:]]*(\[build\]|(build\.)?rustc-wrapper[[:space:]]*=)' "${cargo_config}"; then
-    echo "::error::Repository Cargo config already defines build settings; update the CI wrapper injection (${cargo_config})."
-    exit 1
-  fi
-  cargo_config_tmp="$(mktemp "${cargo_config}.ci.XXXXXX")"
-  {
-    printf 'build.rustc-wrapper = "%s"\n\n' "${direct_wrapper}"
-    cat "${cargo_config}"
-  } > "${cargo_config_tmp}"
-  mv "${cargo_config_tmp}" "${cargo_config}"
-  echo "Injected the job-local Cargo wrapper override into ${cargo_config}."
+  shared_cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+  job_cargo_home="$(mktemp -d "${RUNNER_TEMP}/gents-cargo-home.XXXXXX")"
+  for cache_entry in registry git .package-cache .package-cache-mutate; do
+    if [[ -e "${shared_cargo_home}/${cache_entry}" ]]; then
+      ln -s "${shared_cargo_home}/${cache_entry}" "${job_cargo_home}/${cache_entry}"
+    fi
+  done
+  printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${job_cargo_home}/config.toml"
+  echo "CARGO_HOME=${job_cargo_home}" >> "${GITHUB_ENV}"
+  echo "Installed isolated Cargo configuration at ${job_cargo_home}/config.toml."
+  echo "Shared dependency caches remain rooted at ${shared_cargo_home}."
   echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
   exit 0
 fi
