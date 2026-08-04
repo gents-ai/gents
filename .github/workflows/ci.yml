@@ -115,6 +115,9 @@ jobs:
     # also uses the host-shared sccache service.
     timeout-minutes: 180
     env:
+      # RUSTC_WRAPPER controls this Cargo process; the config-form override is
+      # inherited by recursive Cargo invocations from build scripts.
+      CARGO_BUILD_RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
       CARGO_INCREMENTAL: ${{ matrix.cargo_incremental }}
       RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
     steps:

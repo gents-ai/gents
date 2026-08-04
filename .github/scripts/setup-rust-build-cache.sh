@@ -23,6 +23,7 @@ echo "CARGO_TARGET_DIR=${cargo_target_dir}" >> "${GITHUB_ENV}"
 
 echo "Using CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
 echo "Using CARGO_TARGET_DIR=${cargo_target_dir}"
+echo "Using CARGO_BUILD_RUSTC_WRAPPER=${CARGO_BUILD_RUSTC_WRAPPER:-unset}"
 echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 
 if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
