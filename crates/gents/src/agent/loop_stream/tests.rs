@@ -1482,9 +1482,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     // display. If rig's wording changes, MaxTurn trials silently revert to
     // Harbor infrastructure exceptions instead of verifier-scored attempts.
     assert!(
-        error
-            .to_string()
-            .starts_with("PromptError: MaxTurnError: "),
+        error.to_string().starts_with("PromptError: MaxTurnError: "),
         "max-turns error display must start with the anchored Harbor prefix; got {error}"
     );
 }
