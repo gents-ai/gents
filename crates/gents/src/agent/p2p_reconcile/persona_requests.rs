@@ -711,8 +711,10 @@ mod tests {
         let mut fail_catalog_for = BTreeSet::new();
         fail_catalog_for.insert("did:key:bad-agent".to_string());
 
+        // Bad row FIRST: a bail-early regression would never reach the good
+        // row, so this ordering is what actually fences continue-after-failure.
         let store = FixtureStore {
-            all: vec![good_doc, bad_doc],
+            all: vec![bad_doc, good_doc],
             catalog_by_agent,
             fail_catalog_for,
             ..Default::default()
