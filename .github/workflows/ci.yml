@@ -242,7 +242,10 @@ jobs:
         run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # Reuse the warm proof cache on studio-1's light support slot. This keeps
+    # the runtime slot free once rename-guard releases the Rust matrix.
+    runs-on:
+      [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -406,7 +409,9 @@ jobs:
     # Bombadil's exact Linux failure trace passes on macOS. Keep this small
     # platform-specific smoke on a Studio while the portable UI suite runs on
     # hosted Linux; it normally releases the slot before Rust becomes ready.
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # Keep the heavier desktop Rust slot available; the CLI shard is short and
+    # can wait for this platform-specific smoke test to release its runner.
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
