@@ -27,6 +27,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 
 use crate::agent::completion_retry::{
     CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
@@ -78,6 +79,34 @@ pub(crate) type TurnCompactor = Arc<
         + Sync,
 >;
 
+/// A typed-output contract carried through the owned completion loop.
+///
+/// Rig owns the provider schema transport. Gents keeps ownership of the loop
+/// so schema validation participates in its deadline-aware, formally modelled
+/// retract-and-resample lifecycle instead of bypassing persistence and hooks
+/// through `rig::Agent::prompt_typed`.
+#[derive(Clone)]
+pub(crate) struct StructuredOutputConfig {
+    schema: schemars::Schema,
+    validate: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+}
+
+impl StructuredOutputConfig {
+    fn for_type<T>() -> Self
+    where
+        T: DeserializeOwned + schemars::JsonSchema + 'static,
+    {
+        Self {
+            schema: schemars::schema_for!(T),
+            validate: Arc::new(|raw| {
+                serde_json::from_str::<T>(raw)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }),
+        }
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum LoopStreamItem<R> {
@@ -107,6 +136,7 @@ pub(crate) struct LoopConfig {
     pub(crate) temperature: Option<f64>,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
+    pub(crate) structured_output: Option<StructuredOutputConfig>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
     /// Ephemeral provider-view compaction used between completion turns. The
@@ -672,6 +702,54 @@ where
                 }
             }
 
+            let structured_output_error = if pending_results.is_empty() {
+                config
+                    .structured_output
+                    .as_ref()
+                    .and_then(|output| (output.validate)(&turn_text).err())
+            } else {
+                None
+            };
+            if let Some(error) = structured_output_error {
+                // The provider completed normally, but the result does not
+                // satisfy the typed contract Rig sent. No tool effect has run,
+                // so this is the same proven CompletionRetry.retract transition
+                // as an interrupted or empty no-effect turn: discard all
+                // streamed content and resample the identical request.
+                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                    MidStreamDirective::RetractAndResample { delay } => {
+                        yield LoopStreamItem::TurnRetracted {
+                            turn: turn_index,
+                            attempt,
+                            backoff: delay,
+                        };
+                        tracing::warn!(
+                            turn = turn_index,
+                            attempt,
+                            delay_ms = delay.as_millis() as u64,
+                            error = %error,
+                            "retracting completion turn after structured-output validation failure"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue 'attempts;
+                    }
+                    MidStreamDirective::CloseAndContinue { .. } => {
+                        unreachable!(
+                            "invalid structured output without tool effects cannot close and continue"
+                        );
+                    }
+                    MidStreamDirective::Fail { reason } => {
+                        Err(StreamingError::Completion(
+                            CompletionError::ProviderError(format!(
+                                "structured-output validation failed: {error}; {reason}"
+                            )),
+                        ))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                }
+            }
+
             if pending_results.is_empty() {
                 yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
                 break 'turns;
@@ -937,6 +1015,33 @@ where
     Ok(final_text)
 }
 
+/// Runs a typed completion without surrendering the runtime's owned-loop
+/// chokepoint to Rig's `Agent` orchestration. Rig's schema is attached to every
+/// provider request, while the owned loop validates before accepting a final
+/// turn and applies its normal bounded recovery policy on malformed output.
+pub(crate) async fn run_loop_to_typed<M, T>(
+    model: M,
+    hook: Option<DefraSessionHook>,
+    prompt: Message,
+    history: Vec<Message>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    mut config: LoopConfig,
+) -> anyhow::Result<T>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: 'static,
+    T: DeserializeOwned + schemars::JsonSchema + 'static,
+{
+    config.structured_output = Some(StructuredOutputConfig::for_type::<T>());
+    let raw = run_loop_to_text(model, hook, prompt, history, tools, config).await?;
+    serde_json::from_str(&raw).map_err(|error| {
+        anyhow::anyhow!(
+            "decoding validated structured output as {} failed: {error}",
+            std::any::type_name::<T>()
+        )
+    })
+}
+
 fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
     history.iter().chain(new_messages.iter()).cloned().collect()
 }
@@ -1182,6 +1287,12 @@ async fn build_request<M: CompletionModel>(
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
         .additional_params_opt(config.additional_params.clone())
+        .output_schema_opt(
+            config
+                .structured_output
+                .as_ref()
+                .map(|output| output.schema.clone()),
+        )
         .tools(tool_defs);
 
     if let Some(tool_choice) = &config.tool_choice {

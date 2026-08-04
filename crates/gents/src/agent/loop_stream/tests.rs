@@ -294,6 +294,7 @@ fn config(max_turns: usize) -> LoopConfig {
         temperature: None,
         max_tokens: None,
         additional_params: None,
+        structured_output: None,
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,

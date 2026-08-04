@@ -22,7 +22,7 @@ Four defects, four fixes, enforced at the compactor boundary:
 |---|---|---|
 | No independent output cap | `compaction.rs` `DefraCompactor::compact` clones parent `LoopConfig` without touching `max_tokens` | Explicit summary output cap |
 | Prompt invites enumeration | `summary.rs::compaction_prompt` requests file arrays | Remove file arrays from schema |
-| Unbounded diagnostics | `summary.rs::parse_summary_response` embeds full raw output in error context | Bounded error preview |
+| Unbounded diagnostics | Compaction inference errors can embed arbitrarily large provider response bodies | Bounded error diagnostic |
 | Unbounded, mis-ordered rendering | `summary.rs::format_summary` renders file lists first, uncapped | Reorder + per-list render cap |
 
 Out of scope: compaction *failure fallback* semantics (#717) and defensive
@@ -41,23 +41,24 @@ source bounds every downstream surface, including the ATIF projection.
   The cap **replaces** the inherited value rather than `min()`ing with it — the
   issue requires a budget independent of the user turn's `max_output_tokens`,
   which is sized for a different job.
-- Failure mode accepted: a summary that would overrun the cap comes back as
-  truncated JSON and fails parsing. That failure is now *bounded* (see §4);
-  making it recoverable is #717's scope. With file arrays removed from the
-  schema, 4096 tokens is generous for a narrative plus two short lists.
+- If a provider still returns malformed or schema-invalid terminal output,
+  the owned completion loop retracts the no-effect turn and resamples through
+  its existing bounded, deadline-aware recovery policy. With file arrays
+  removed from the schema, 4096 tokens is generous for a narrative plus two
+  short lists.
 
 ### 2. Schema stops inviting enumeration
 
-- `compaction_prompt()` requests JSON keys `summary` (string),
-  `key_decisions`, `pending_questions` (arrays of strings) only. It adds:
-  do not enumerate file paths — file activity is recorded separately and
-  injected structurally; keep each list to short items (guideline ~10). The
-  existing anti-injection hardening (treat transcript as data, never claim
-  prior turns absent, record unfinished work as pending) is preserved
-  verbatim.
-- `SummaryResponse` drops `files_read`/`files_modified`. serde ignores unknown
-  fields by default, so a model that emits the old shape still parses; its
-  lists are simply discarded.
+- `SummaryResponse` defines the only accepted fields: `summary` (string),
+  `key_decisions`, and `pending_questions` (arrays of strings). Rig transports
+  its generated JSON schema through the provider request; the prompt refers to
+  that supplied schema instead of duplicating its keys in prose. The prompt
+  also says not to enumerate file paths — file activity is recorded separately
+  and injected structurally — and keeps each list to short items (guideline
+  ~10). The existing anti-injection hardening (treat transcript as data, never
+  claim prior turns absent, record unfinished work as pending) is preserved.
+- `SummaryResponse` drops `files_read`/`files_modified` and denies unknown
+  fields, so the model cannot silently revive the old shape.
 - `compact()` stops merging model-supplied lists into
   `CompactionResult.files_read/files_modified`. Structural
   `extract_file_activity` becomes the sole source. This also closes a
@@ -98,19 +99,20 @@ source bounds every downstream surface, including the ATIF projection.
   `AgentCompactionEntry` keep the complete file lists. Only the rendered
   summary string is capped.
 
-### 4. Bounded diagnostics
+### 4. Structured output, recovery, and bounded diagnostics
 
-- `parse_summary_response` error context carries at most a 256-byte prefix of the
-  raw output (floored to a char boundary) plus `[truncated, {n} bytes total]`,
-  instead of the full text. This is the string that reached 2.1 MiB in the
-  incident; every downstream surface (error response document, server log,
-  Harbor exception, ATIF projection) carries it verbatim, so bounding the
-  source bounds them all.
-- The preview constant lives in `summary.rs` (not config — diagnostics, not
-  behavior).
-- The `run_loop_to_text` failure arm in `compact()` ("compaction summary
-  inference failed: {error}") gets the same bounded-preview treatment
-  defensively, though provider errors are normally short.
+- Compaction calls `run_loop_to_typed`, which carries the generated
+  `SummaryResponse` schema through Rig and validates terminal text inside the
+  runtime-owned completion loop before accepting or persisting it.
+- Malformed or schema-invalid output with no tool effects reuses the formally
+  modelled `CompletionRetry.retract` transition. Recovery is bounded to the
+  existing internal retry ladder and stops at the claimed request deadline.
+- Provider failures can still embed arbitrarily large response bodies. The
+  compactor therefore bounds the resulting diagnostic to a 256-byte prefix
+  (floored to a char boundary) plus `[truncated, {n} bytes total]` before it
+  reaches response documents, logs, Harbor, or adapter projections.
+- The diagnostic constant lives in `summary.rs` (not config — diagnostics,
+  not behavior).
 
 ### 5. Immutable safety ceilings
 
@@ -136,8 +138,10 @@ without weakening this safety boundary.
   `LoopConfig.max_tokens` deliberately set higher.
 - Prompt: no longer names `files_read`/`files_modified`; hardening assertions
   updated, anti-injection wording still asserted.
-- Parse tolerance: old-shape JSON with file arrays still parses; arrays are
-  ignored (result lists come only from structural extraction).
+- Structured output: every provider request carries the generated schema;
+  malformed and schema-invalid no-effect turns are retracted and resampled;
+  repeated invalid output exhausts the bounded ladder; an expired request
+  deadline prevents another provider call.
 - Ordering: formatted summary sections appear narrative → key decisions →
   pending questions → files; a fixture with oversized file lists shows pending
   work surviving `bounded_summary` head truncation.
