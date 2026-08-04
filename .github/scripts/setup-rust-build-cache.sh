@@ -27,6 +27,21 @@ echo "Using CARGO_BUILD_RUSTC_WRAPPER=${CARGO_BUILD_RUSTC_WRAPPER:-unset}"
 echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 
 if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
+  workspace_root="${GITHUB_WORKSPACE:-$(pwd -P)}"
+  direct_wrapper="${workspace_root}/.github/scripts/rustc-direct.sh"
+  cargo_config_dir="${workspace_root}/.cargo"
+  cargo_config="${cargo_config_dir}/config.toml"
+  if [[ ! -x "${direct_wrapper}" ]]; then
+    echo "::error::Direct rustc wrapper is missing or not executable (${direct_wrapper})."
+    exit 1
+  fi
+  if [[ -e "${cargo_config}" ]]; then
+    echo "::error::Refusing to overwrite repository Cargo config (${cargo_config})."
+    exit 1
+  fi
+  mkdir -p "${cargo_config_dir}"
+  printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${cargo_config}"
+  echo "Installed job-local Cargo wrapper override at ${cargo_config}."
   echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
   exit 0
 fi
