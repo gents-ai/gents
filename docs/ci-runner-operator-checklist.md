@@ -148,12 +148,12 @@ artifacts through normal Cargo operation. This is defense in depth against
 cache poisoning, not a substitute for ephemeral release hosts: PR code still
 runs without a strong isolation boundary on the same machines.
 
-Mathlib is a separate cache surface. Each runner process owns a persistent Lake
-directory under `/Users/admin/.cache/gents-lean/<runner-name>`, linked into its
-clean checkout before proof or runtime conformance work. The workflow also runs
-Mathlib's cache entry point through the Lean interpreter so a new runner
-downloads the official precompiled artifacts instead of rebuilding the full
-dependency graph. It first builds `Cache.Main`, which is required on an empty
+Mathlib is a separate cache surface. Runtime, desktop, and proof work each use a
+persistent Lake directory under `/Users/admin/.cache/gents-lean/<runner-name>`,
+linked into the clean checkout before Lean-backed conformance work. The
+workflow also runs Mathlib's cache entry point through the Lean interpreter so
+a new runner downloads the official precompiled artifacts instead of rebuilding
+the full dependency graph. It first builds `Cache.Main`, which is required on an empty
 Lake directory. Do not replace the interpreter invocation with
 `lake exe cache get` while the repository is pinned to Lean 4.18: its LLVM
 15-linked executable is rejected by macOS 26 dyld
