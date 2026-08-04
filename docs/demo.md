@@ -9,6 +9,8 @@ machine.
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
 
+# Install the Codex CLI separately and make sure `codex` is on PATH.
+
 gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
@@ -69,8 +71,10 @@ cargo install --profile dev-install --locked --path crates/gents-cli
 ```
 
 That installs the `gents` binary into `~/.cargo/bin`.
-For a headless build without the embedded Codex TUI, add
-`--no-default-features`; the server shim and `chat` command still build.
+The Codex TUI is a separate executable; Gents ships the server shim and
+launches `codex --remote ...`. Set `GENTS_CODEX_BIN` when the executable is not
+named `codex` or is not on `PATH`. The `gents chat` command does not require
+Codex.
 
 ## 3. Initialize the agent
 
@@ -201,6 +205,10 @@ home entirely.
 **No Codex endpoint.** If the server was started with `--no-codex-shim`,
 `gents codex` will tell you nothing is listening. Restart the server
 without the flag.
+
+**No Codex executable.** Install the Codex CLI and ensure `codex` is on
+`PATH`, or point `GENTS_CODEX_BIN` at the executable. The shim remains part of
+Gents; only the client UI runs out of process.
 
 **Inference is down.** The server starts degraded if the backend is
 unreachable; `gents status` and `GET /healthz` show backend health.

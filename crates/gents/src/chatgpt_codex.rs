@@ -5,8 +5,6 @@ use std::{fmt, fmt::Formatter};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
-use codex_login::default_client::default_headers;
-use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use defra_node::EmbeddedNode;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
@@ -27,40 +25,38 @@ pub use crate::oauth_credential::{
 };
 
 pub const CHATGPT_CODEX_PROVIDER: &str = "chatgpt-codex";
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 pub fn default_backend_endpoint() -> &'static str {
     CHATGPT_CODEX_BASE_URL
 }
 
 impl OAuthCredential {
-    pub fn from_login_token_data(
+    pub fn from_login_tokens(
         agent_did: impl Into<String>,
         provider: impl Into<String>,
-        token_data: &codex_login::TokenData,
+        id_token: &str,
+        access_token: String,
+        refresh_token: String,
         now: DateTime<Utc>,
     ) -> Self {
         let agent_did = agent_did.into();
         let provider = provider.into();
-        let id_claims =
-            crate::chatgpt_oauth_refresh::decode_id_token_claims(&token_data.id_token.raw_jwt);
-        let access_token_expires_at =
-            crate::chatgpt_oauth_refresh::jwt_expiration(&token_data.access_token)
-                .or(id_claims.expires_at)
-                .unwrap_or_else(|| now + Duration::hours(1));
+        let id_claims = crate::chatgpt_oauth_refresh::decode_id_token_claims(id_token);
+        let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
+            .or(id_claims.expires_at)
+            .unwrap_or_else(|| now + Duration::hours(1));
         Self {
             doc_id: None,
             credential_id: oauth_credential_id(&agent_did, &provider),
             agent_did,
             provider,
-            access_token: token_data.access_token.clone(),
-            refresh_token: token_data.refresh_token.clone(),
-            id_token: Some(token_data.id_token.raw_jwt.clone()),
-            account_id: token_data.account_id.clone().or(id_claims.account_id),
-            chatgpt_plan_type: token_data
-                .id_token
-                .get_chatgpt_plan_type_raw()
-                .or(id_claims.plan_type),
-            is_fedramp: token_data.id_token.is_fedramp_account() || id_claims.is_fedramp,
+            access_token,
+            refresh_token,
+            id_token: Some(id_token.to_string()),
+            account_id: id_claims.account_id,
+            chatgpt_plan_type: id_claims.plan_type,
+            is_fedramp: id_claims.is_fedramp,
             access_token_expires_at,
             last_refresh: Some(now),
             enabled: true,
@@ -90,7 +86,12 @@ pub fn build_chatgpt_codex_headers(
     account_id: Option<&str>,
     is_fedramp: bool,
 ) -> Result<HeaderMap> {
-    let mut headers = default_headers();
+    let mut headers = HeaderMap::new();
+    headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
+    headers.insert(
+        "User-Agent",
+        HeaderValue::from_static(concat!("gents/", env!("CARGO_PKG_VERSION"))),
+    );
     headers.insert(
         "Accept",
         HeaderValue::from_static("text/event-stream, application/json"),
@@ -908,6 +909,42 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("true")
         );
+        assert_eq!(
+            headers
+                .get("originator")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs")
+        );
+    }
+
+    #[test]
+    fn login_tokens_project_claims_without_codex_auth_types() {
+        use base64::Engine as _;
+
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "exp": 1_900_000_000i64,
+                "https://api.openai.com/auth": {
+                    "chatgpt_account_id": "acct-local",
+                    "chatgpt_account_is_fedramp": true,
+                    "chatgpt_plan_type": "pro"
+                }
+            }))
+            .expect("payload"),
+        );
+        let id_token = format!("e30.{payload}.signature");
+        let credential = OAuthCredential::from_login_tokens(
+            "did:key:zAgent",
+            CHATGPT_CODEX_PROVIDER,
+            &id_token,
+            "access".to_string(),
+            "refresh".to_string(),
+            Utc::now(),
+        );
+        assert_eq!(credential.account_id.as_deref(), Some("acct-local"));
+        assert_eq!(credential.chatgpt_plan_type.as_deref(), Some("pro"));
+        assert!(credential.is_fedramp);
+        assert_eq!(credential.id_token.as_deref(), Some(id_token.as_str()));
     }
 
     #[test]

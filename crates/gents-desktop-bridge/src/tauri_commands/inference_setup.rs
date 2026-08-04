@@ -10,14 +10,11 @@
 
 use std::time::Duration;
 
-use codex_login::{
-    run_login_server, AuthCredentialsStoreMode, AuthManager, ServerOptions, CLIENT_ID,
-};
 use gents::chatgpt_codex::{normalize_provider, upsert_oauth_credential, OAuthCredential};
+use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime, State};
-use uuid::Uuid;
 
 use crate::error::BridgeError;
 use crate::state::{current_core, DesktopAppState};
@@ -145,15 +142,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
 
-    let synthetic_home = std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
-    let server_opts = ServerOptions::new(
-        synthetic_home.clone(),
-        CLIENT_ID.to_string(),
-        None,
-        AuthCredentialsStoreMode::Ephemeral,
-    );
-
-    let server = run_login_server(server_opts).map_err(|error| {
+    let server = run_login_server(LoginOptions::default()).map_err(|error| {
         BridgeError::from_legacy_message(format!("starting ChatGPT login server: {error}"))
     })?;
     let _ = app.emit(
@@ -173,47 +162,24 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
         let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
         bridge.codex_login_cancel = None;
     }
-    match wait {
-        Ok(result) => {
-            result.map_err(|error| {
-                BridgeError::from_legacy_message(format!("ChatGPT browser login failed: {error}"))
-            })?;
-        }
+    let tokens = match wait {
+        Ok(result) => result.map_err(|error| {
+            BridgeError::from_legacy_message(format!("ChatGPT browser login failed: {error}"))
+        })?,
         Err(_elapsed) => {
             cancel.shutdown();
             return Err(BridgeError::from_legacy_message(
                 "ChatGPT sign-in timed out waiting for the browser",
             ));
         }
-    }
+    };
 
-    let manager = AuthManager::new(
-        synthetic_home,
-        false,
-        AuthCredentialsStoreMode::Ephemeral,
-        None,
-    )
-    .await;
-    let auth = manager
-        .auth()
-        .await
-        .ok_or_else(|| "ChatGPT login completed but no auth was returned".to_string())?;
-    if !auth.is_chatgpt_auth() {
-        return Err(BridgeError::from_legacy_message(format!(
-            "ChatGPT login returned {:?}; ChatGPT OAuth credentials are required",
-            auth.auth_mode()
-        )));
-    }
-    let token_data = auth.get_token_data().map_err(|error| {
-        BridgeError::from_legacy_message(format!(
-            "ChatGPT login did not expose token data: {error}"
-        ))
-    })?;
-
-    let credential = OAuthCredential::from_login_token_data(
+    let credential = OAuthCredential::from_login_tokens(
         &agent_did,
         &provider,
-        &token_data,
+        &tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
         chrono::Utc::now(),
     );
     let node = core.node_arc();

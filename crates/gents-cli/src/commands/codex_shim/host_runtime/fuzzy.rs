@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 
 use crate::commands::codex_shim::protocol::send_notification;
 use crate::commands::codex_shim::{

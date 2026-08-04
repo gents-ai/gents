@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 
 use super::compat::send_planned_stub;
 use super::protocol::{client_request_from_jsonrpc, send_error};

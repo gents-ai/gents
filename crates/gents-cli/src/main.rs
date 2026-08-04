@@ -160,16 +160,17 @@ Diagnostics:
   gents status
   gents response show REQUEST_ID";
 const CODEX_AFTER_HELP: &str = "\
-Runs the Codex terminal UI in-process, connected to the local agent's Codex
-shim. Codex-side approvals and sandboxing are bypassed: the tool preset chosen
-at `gents init` (read-only by default) is the permission boundary.
+Launches the `codex` terminal UI as a separate process connected to the local
+agent's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
+preset chosen at `gents init` (read-only by default) is the permission boundary.
 
 Examples:
   gents codex
   gents codex \"what is in this directory?\"
   gents codex --remote ws://127.0.0.1:9292/
 
-Requires a running `gents server` in another terminal.";
+Requires a running `gents server` in another terminal and `codex` on PATH.
+Set GENTS_CODEX_BIN to use a different Codex executable.";
 const P2P_AFTER_HELP: &str = "\
 Examples:
   gents p2p status

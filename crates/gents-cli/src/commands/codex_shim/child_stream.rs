@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
 use gents::UpdateSubscriptionSource;
+use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
 use super::progress::timestamp_millis;

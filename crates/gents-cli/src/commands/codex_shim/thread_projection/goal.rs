@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 
 use gents::goal::{
     delete_goals_for_session, load_canonical_goal, refresh_goal_usage, set_goal, GoalDocument,

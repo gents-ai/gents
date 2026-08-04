@@ -1,4 +1,4 @@
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde_json::{json, Value};
 
 use crate::commands::codex_shim::protocol::{absolute_path, thread_json};

@@ -12,13 +12,16 @@ Everything local, on a Mac, in a few minutes:
 brew install llama.cpp
 llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
 
+# Install the Codex CLI separately and make sure `codex` is on PATH.
+# `gents chat` remains the dependency-free fallback UI.
+
 gh release download --repo source-inc/gents -p 'gents-aarch64-apple-darwin.tar.gz'
 tar -xzf gents-aarch64-apple-darwin.tar.gz
 sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
 
 gents init      # provision a safe read-only agent under ~/.gents
 gents server    # start the runtime (embedded DefraDB + GraphQL + P2P)
-gents codex     # chat in the Codex terminal UI (no Codex install needed)
+gents codex     # launch Codex against the Gents app-server shim
 ```
 
 **[The getting-started guide](docs/demo.md)** walks every step and the paths
@@ -82,7 +85,8 @@ Subagents are requests: a parent's tool call spawns a child request — possibly
 ## Development
 
 Building from source needs a few system dependencies (Rust, a C/C++ toolchain,
-`protoc`, `libclang`, OpenSSL headers, SSH access to the private DefraDB repos).
+`protoc`, `libclang`, and OpenSSL headers). DefraDB dependencies are public and
+use pinned HTTPS revisions.
 Build, test, and toolchain setup live in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
 The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.

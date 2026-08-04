@@ -50,26 +50,12 @@ jobs:
       ADAPTER_INTEROP_PROVIDER_MODE: ${{ inputs.langgraph_provider_mode || 'fake' }}
       ADAPTER_INTEROP_OPENAI_BASE_URL: ${{ inputs.openai_base_url || '' }}
       ADAPTER_INTEROP_OPENAI_MODEL: ${{ inputs.openai_model || '' }}
-      GIT_CONFIG_GLOBAL: /tmp/gents-adapter-interop-${{ github.run_id }}.gitconfig
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
 
@@ -127,19 +113,10 @@ jobs:
 
       - name: Upload generated fixtures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: adapter-interop-fixtures
           path: |
             ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/*.json
             ${{ env.ADAPTER_INTEROP_OUTPUT_DIR }}/gents-exports/*
           if-no-files-found: ignore
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          rm -f "${GIT_CONFIG_GLOBAL}"

@@ -5,6 +5,10 @@ self-hosted-runner:
     - studio
     - studio-1
     - studio-2
+    - ci-runtime
+    - ci-support
+    - ci-desktop
+    - ci-cli
     - Linux
     - X64
     - spark
