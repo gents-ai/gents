@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
 use gents::{
     backend_registry::list_enabled_backends, load_agent_behavior, AgentBehaviorDocument,
     InferenceBackend,
 };
+use gents_codex_protocol as codex;
 use serde_json::{json, Value};
 
 use super::super::bound_behavior::{
@@ -240,7 +240,7 @@ pub(super) async fn handle_basic_request(
     }
 }
 
-fn skill_doc_path(skill_id: &str) -> codex_utils_absolute_path::AbsolutePathBuf {
+fn skill_doc_path(skill_id: &str) -> gents_codex_protocol::AbsolutePathBuf {
     std::path::PathBuf::from(format!("/gents/skills/{skill_id}"))
         .try_into()
         .expect("synthetic skill path is absolute")

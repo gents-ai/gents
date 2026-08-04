@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use codex_app_server_protocol as codex;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
 use gents::UpdateSubscriptionSource;
+use gents_codex_protocol as codex;
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -287,7 +287,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use codex_app_server_protocol as codex;
+    use gents_codex_protocol as codex;
     use tokio::sync::{mpsc, oneshot, Mutex};
 
     use super::super::{CodexSidecar, ConnectionState, ShimState};

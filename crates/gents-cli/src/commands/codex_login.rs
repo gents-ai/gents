@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use codex_login::{
-    run_device_code_login, run_login_server, AuthCredentialsStoreMode, AuthManager, ServerOptions,
-    CLIENT_ID,
+use gents_chatgpt_login::{
+    complete_device_code_login, request_device_code, run_login_server, LoginOptions, CLIENT_ID,
 };
 use serde_json::{json, Value};
-use uuid::Uuid;
 
 use crate::cli::args::CodexLoginArgs;
 use crate::config_writes::ConfigAccess;
@@ -47,31 +45,36 @@ pub(crate) async fn run_codex_login(
     opts: &CodexLoginOptions,
 ) -> Result<CodexLoginOutcome> {
     let provider = gents::chatgpt_codex::normalize_provider(&opts.provider);
-    let synthetic_home = std::env::temp_dir().join(format!("gents-codex-login-{}", Uuid::new_v4()));
-    let mut server_opts = ServerOptions::new(
-        synthetic_home.clone(),
-        opts.client_id
+    let mut login_options = LoginOptions {
+        client_id: opts
+            .client_id
             .clone()
             .unwrap_or_else(|| CLIENT_ID.to_string()),
-        None,
-        AuthCredentialsStoreMode::Ephemeral,
-    );
+        ..LoginOptions::default()
+    };
     if let Some(issuer) = opts
         .issuer
         .as_ref()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
     {
-        server_opts.issuer = issuer.to_string();
+        login_options.issuer = issuer.to_string();
     }
 
-    if opts.device_auth {
-        server_opts.open_browser = false;
-        run_device_code_login(server_opts)
+    let tokens = if opts.device_auth {
+        login_options.open_browser = false;
+        let device_code = request_device_code(&login_options)
             .await
-            .context("ChatGPT device-code login failed")?;
+            .context("requesting ChatGPT device code")?;
+        eprintln!(
+            "Open {} and enter code {} (expires in 15 minutes).",
+            device_code.verification_url, device_code.user_code
+        );
+        complete_device_code_login(&login_options, device_code)
+            .await
+            .context("ChatGPT device-code login failed")?
     } else {
-        let server = run_login_server(server_opts).context("starting ChatGPT login server")?;
+        let server = run_login_server(login_options).context("starting ChatGPT login server")?;
         eprintln!(
             "Open this URL to sign in with ChatGPT:\n{}",
             server.auth_url
@@ -79,33 +82,15 @@ pub(crate) async fn run_codex_login(
         server
             .block_until_done()
             .await
-            .context("ChatGPT browser login failed")?;
-    }
+            .context("ChatGPT browser login failed")?
+    };
 
-    let manager = AuthManager::new(
-        synthetic_home,
-        false,
-        AuthCredentialsStoreMode::Ephemeral,
-        None,
-    )
-    .await;
-    let auth = manager
-        .auth()
-        .await
-        .context("ChatGPT login completed but no ephemeral auth was returned")?;
-    if !auth.is_chatgpt_auth() {
-        anyhow::bail!(
-            "ChatGPT login returned {:?}; ChatGPT OAuth credentials are required",
-            auth.auth_mode()
-        );
-    }
-    let token_data = auth
-        .get_token_data()
-        .context("ChatGPT login did not expose token data")?;
-    let credential = gents::chatgpt_codex::OAuthCredential::from_login_token_data(
+    let credential = gents::chatgpt_codex::OAuthCredential::from_login_tokens(
         agent_did,
         &provider,
-        &token_data,
+        &tokens.id_token,
+        tokens.access_token,
+        tokens.refresh_token,
         chrono::Utc::now(),
     );
     let mutation = gents::chatgpt_codex::oauth_credential_upsert_mutation(&credential);

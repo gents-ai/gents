@@ -11,9 +11,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use gents::subagent_target_entry;
+use gents_codex_protocol as codex;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde_json::Value;
 
 use super::progress::{
@@ -347,7 +347,7 @@ fn optional_path_arg(args: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn absolute_tool_path(cwd: &Path, path: &str) -> codex_utils_absolute_path::AbsolutePathBuf {
+fn absolute_tool_path(cwd: &Path, path: &str) -> gents_codex_protocol::AbsolutePathBuf {
     let path = Path::new(path);
     let path = if path.is_absolute() {
         path.to_path_buf()

@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
-use codex_protocol::models::MessagePhase;
 use gents::UpdateSubscriptionSource;
+use gents_codex_protocol as codex;
+use gents_codex_protocol::MessagePhase;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -1253,7 +1253,7 @@ async fn steering_input_for_request(
 
 #[cfg(test)]
 mod tests {
-    use codex_app_server_protocol as codex;
+    use gents_codex_protocol as codex;
 
     use super::{
         content_delta_from_cursor, observe_subagent_link_settle_window, resumable_reasoning_item,

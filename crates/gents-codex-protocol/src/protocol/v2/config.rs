@@ -1,0 +1,622 @@
+use super::shared::default_enabled;
+use super::ApprovalsReviewer;
+use super::AskForApproval;
+use super::SandboxMode;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ConfigLayerSource {
+    /// Managed preferences layer delivered by MDM (macOS only).
+    #[serde(rename_all = "camelCase")]
+    Mdm {
+        domain: String,
+        key: String,
+    },
+
+    /// Managed config layer from a file (usually `managed_config.toml`).
+    #[serde(rename_all = "camelCase")]
+    System {
+        /// This is the path to the system config.toml file, though it is not
+        /// guaranteed to exist.
+        file: AbsolutePathBuf,
+    },
+
+    /// User config layer from $CODEX_HOME/config.toml. This layer is special
+    /// in that it is expected to be:
+    /// - writable by the user
+    /// - generally outside the workspace directory
+    #[serde(rename_all = "camelCase")]
+    User {
+        /// This is the path to the user's config.toml file, though it is not
+        /// guaranteed to exist.
+        file: AbsolutePathBuf,
+
+        /// Name of the selected profile-v2 config layered on top of the base
+        /// user config, when this layer represents one.
+        profile: Option<String>,
+    },
+
+    /// Path to a .codex/ folder within a project. There could be multiple of
+    /// these between `cwd` and the project/repo root.
+    #[serde(rename_all = "camelCase")]
+    Project {
+        dot_codex_folder: AbsolutePathBuf,
+    },
+
+    /// Session-layer overrides supplied via `-c`/`--config`.
+    SessionFlags,
+
+    /// `managed_config.toml` was designed to be a config that was loaded
+    /// as the last layer on top of everything else. This scheme did not quite
+    /// work out as intended, but we keep this variant as a "best effort" while
+    /// we phase out `managed_config.toml` in favor of `requirements.toml`.
+    #[serde(rename_all = "camelCase")]
+    LegacyManagedConfigTomlFromFile {
+        file: AbsolutePathBuf,
+    },
+
+    LegacyManagedConfigTomlFromMdm,
+}
+
+impl ConfigLayerSource {
+    /// A settings from a layer with a higher precedence will override a setting
+    /// from a layer with a lower precedence.
+    pub fn precedence(&self) -> i16 {
+        match self {
+            ConfigLayerSource::Mdm { .. } => 0,
+            ConfigLayerSource::System { .. } => 10,
+            ConfigLayerSource::User { profile, .. } => {
+                if profile.is_some() {
+                    21
+                } else {
+                    20
+                }
+            }
+            ConfigLayerSource::Project { .. } => 25,
+            ConfigLayerSource::SessionFlags => 30,
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
+            ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,
+        }
+    }
+}
+
+/// Compares [ConfigLayerSource] by precedence, so `A < B` means settings from
+/// layer `A` will be overridden by settings from layer `B`.
+impl PartialOrd for ConfigLayerSource {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.precedence().cmp(&other.precedence()))
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct ToolsV2 {
+    pub web_search: Option<WebSearchToolConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AnalyticsConfig {
+    pub enabled: Option<bool>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppToolApproval {
+    Auto,
+    Prompt,
+    Approve,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppsDefaultConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub destructive_enabled: bool,
+    #[serde(default = "default_enabled")]
+    pub open_world_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppToolConfig {
+    pub enabled: Option<bool>,
+    pub approval_mode: Option<AppToolApproval>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppToolsConfig {
+    #[serde(default, flatten)]
+    pub tools: HashMap<String, AppToolConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    pub destructive_enabled: Option<bool>,
+    pub open_world_enabled: Option<bool>,
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+    pub default_tools_enabled: Option<bool>,
+    pub tools: Option<AppToolsConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct AppsConfig {
+    #[serde(default, rename = "_default")]
+    pub default: Option<AppsDefaultConfig>,
+    #[serde(default, flatten)]
+    pub apps: HashMap<String, AppConfig>,
+}
+
+/// Backward-compatible API shape for ChatGPT workspace login restrictions.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct Config {
+    pub model: Option<String>,
+    pub review_model: Option<String>,
+    pub model_context_window: Option<i64>,
+    pub model_auto_compact_token_limit: Option<i64>,
+    pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    /// [UNSTABLE] Optional default for where approval requests are routed for
+    /// review.
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub sandbox_mode: Option<SandboxMode>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub web_search: Option<WebSearchMode>,
+    pub tools: Option<ToolsV2>,
+    pub instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    pub service_tier: Option<String>,
+    pub analytics: Option<AnalyticsConfig>,
+    #[serde(default)]
+    pub apps: Option<AppsConfig>,
+    pub desktop: Option<HashMap<String, JsonValue>>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayerMetadata {
+    pub name: ConfigLayerSource,
+    pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayer {
+    pub name: ConfigLayerSource,
+    pub version: String,
+    pub config: JsonValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeStrategy {
+    Replace,
+    Upsert,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteStatus {
+    Ok,
+    OkOverridden,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OverriddenMetadata {
+    pub message: String,
+    pub overriding_layer: ConfigLayerMetadata,
+    pub effective_value: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWriteResponse {
+    pub status: WriteStatus,
+    pub version: String,
+    /// Canonical path to the config file that was written.
+    pub file_path: AbsolutePathBuf,
+    pub overridden_metadata: Option<OverriddenMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfigWriteErrorCode {
+    ConfigLayerReadonly,
+    ConfigVersionConflict,
+    ConfigValidationError,
+    ConfigPathNotFound,
+    ConfigSchemaUnknownKey,
+    UserLayerNotFound,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_layers: bool,
+    /// Optional working directory to resolve project config layers. If specified,
+    /// return the effective config as seen from that directory (i.e., including any
+    /// project layers between `cwd` and the project/repo root).
+    pub cwd: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadResponse {
+    pub config: Config,
+    pub origins: HashMap<String, ConfigLayerMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRequirements {
+    pub allowed_approval_policies: Option<Vec<AskForApproval>>,
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
+    pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
+    pub allow_managed_hooks_only: Option<bool>,
+    pub allow_appshots: Option<bool>,
+    pub computer_use: Option<ComputerUseRequirements>,
+    pub feature_requirements: Option<BTreeMap<String, bool>>,
+    pub hooks: Option<ManagedHooksRequirements>,
+    pub enforce_residency: Option<ResidencyRequirement>,
+    pub network: Option<NetworkRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerUseRequirements {
+    pub allow_locked_computer_use: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedHooksRequirements {
+    pub managed_dir: Option<PathBuf>,
+    pub windows_managed_dir: Option<PathBuf>,
+    #[serde(rename = "PreToolUse")]
+    pub pre_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PermissionRequest")]
+    pub permission_request: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostToolUse")]
+    pub post_tool_use: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PreCompact")]
+    pub pre_compact: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "PostCompact")]
+    pub post_compact: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SessionStart")]
+    pub session_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "UserPromptSubmit")]
+    pub user_prompt_submit: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStart")]
+    pub subagent_start: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "SubagentStop")]
+    pub subagent_stop: Vec<ConfiguredHookMatcherGroup>,
+    #[serde(rename = "Stop")]
+    pub stop: Vec<ConfiguredHookMatcherGroup>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfiguredHookMatcherGroup {
+    pub matcher: Option<String>,
+    pub hooks: Vec<ConfiguredHookHandler>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum ConfiguredHookHandler {
+    #[serde(rename = "command")]
+    Command {
+        command: String,
+        #[serde(rename = "commandWindows")]
+        command_windows: Option<String>,
+        #[serde(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        r#async: bool,
+        #[serde(rename = "statusMessage")]
+        status_message: Option<String>,
+    },
+    #[serde(rename = "prompt")]
+    Prompt {},
+    #[serde(rename = "agent")]
+    Agent {},
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkRequirements {
+    pub enabled: Option<bool>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
+    /// Canonical network permission map for `experimental_network`.
+    pub domains: Option<BTreeMap<String, NetworkDomainPermission>>,
+    /// When true, only managed allowlist entries are respected while managed
+    /// network enforcement is active.
+    pub managed_allowed_domains_only: Option<bool>,
+    /// Legacy compatibility view derived from `domains`.
+    pub allowed_domains: Option<Vec<String>>,
+    /// Legacy compatibility view derived from `domains`.
+    pub denied_domains: Option<Vec<String>>,
+    /// Canonical unix socket permission map for `experimental_network`.
+    pub unix_sockets: Option<BTreeMap<String, NetworkUnixSocketPermission>>,
+    /// Legacy compatibility view derived from `unix_sockets`.
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkDomainPermission {
+    Allow,
+    Deny,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkUnixSocketPermission {
+    Allow,
+    None,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ResidencyRequirement {
+    Us,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRequirementsReadResponse {
+    /// Null if no requirements are configured (e.g. no requirements.toml/MDM entries).
+    pub requirements: Option<ConfigRequirements>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExternalAgentConfigMigrationItemType {
+    #[serde(rename = "AGENTS_MD")]
+    AgentsMd,
+    #[serde(rename = "CONFIG")]
+    Config,
+    #[serde(rename = "SKILLS")]
+    Skills,
+    #[serde(rename = "PLUGINS")]
+    Plugins,
+    #[serde(rename = "MCP_SERVER_CONFIG")]
+    McpServerConfig,
+    #[serde(rename = "SUBAGENTS")]
+    Subagents,
+    #[serde(rename = "HOOKS")]
+    Hooks,
+    #[serde(rename = "COMMANDS")]
+    Commands,
+    #[serde(rename = "SESSIONS")]
+    Sessions,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginsMigration {
+    #[serde(rename = "marketplaceName")]
+    pub marketplace_name: String,
+    #[serde(rename = "pluginNames")]
+    pub plugin_names: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMigration {
+    pub path: PathBuf,
+    pub cwd: PathBuf,
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HookMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandMigration {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationDetails {
+    #[serde(default)]
+    pub plugins: Vec<PluginsMigration>,
+    #[serde(default)]
+    pub sessions: Vec<SessionMigration>,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerMigration>,
+    #[serde(default)]
+    pub hooks: Vec<HookMigration>,
+    #[serde(default)]
+    pub subagents: Vec<SubagentMigration>,
+    #[serde(default)]
+    pub commands: Vec<CommandMigration>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigMigrationItem {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub description: String,
+    /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
+    pub cwd: Option<PathBuf>,
+    pub details: Option<MigrationDetails>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigDetectResponse {
+    pub items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigDetectParams {
+    /// If true, include detection under the user's home (~/.claude, ~/.codex, etc.).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_home: bool,
+    /// Zero or more working directories to include for repo-scoped detection.
+    pub cwds: Option<Vec<PathBuf>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportParams {
+    pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportCompletedNotification {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigValueWriteParams {
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
+    pub expected_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBatchWriteParams {
+    pub edits: Vec<ConfigEdit>,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
+    pub expected_version: Option<String>,
+    /// When true, hot-reload the updated user config into all loaded threads after writing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reload_user_config: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEdit {
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPosition {
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column number (in Unicode scalar values).
+    pub column: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TextRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWarningNotification {
+    /// Concise summary of the warning.
+    pub summary: String,
+    /// Optional extra guidance or error details.
+    pub details: Option<String>,
+    /// Optional path to the config file that triggered the warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Optional range for the error location inside the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<TextRange>,
+}
+use crate::core_types::{
+    AbsolutePathBuf, AutoCompactTokenLimitScope, ForcedLoginMethod, ReasoningEffort,
+    ReasoningSummary, Verbosity, WebSearchMode, WebSearchToolConfig,
+};

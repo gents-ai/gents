@@ -5,9 +5,9 @@ running the prebuilt binary, see the [README](README.md).
 
 ## Requirements
 
-The prebuilt binary in [Get running](README.md#get-running) needs only a local
-inference server (e.g. `llama.cpp`). Building from source or developing
-additionally needs:
+The prebuilt binary in [Get running](README.md#get-running) needs a local
+inference server (e.g. `llama.cpp`). The `gents codex` command additionally
+needs the Codex CLI on `PATH`. Building from source or developing also needs:
 
 - **Rust** — stable toolchain, edition 2021. There is no pinned MSRV; the
   workspace is developed and built against current stable (1.96). Install via
@@ -56,8 +56,39 @@ link time on incremental rebuilds.
 make help                                    # curated build/test targets
 cargo test -p gents                         # runtime suite (lib + integration)
 cargo test --workspace                       # everything
-cargo build -p gents-cli --no-default-features  # CLI without embedded Codex TUI
+cargo build -p gents-cli                     # CLI + Codex app-server shim
 cd crates/gents/proofs && lake build        # the Lean proofs
 ```
 
 The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
+
+## Binary size and compile graph
+
+Use the checked-in measurement script so comparisons use the shipped release
+profile and the same package-counting rules:
+
+```bash
+scripts/measure-gents-binary.sh
+```
+
+It reports release-build wall time, on-disk binary size, native section sizes,
+unique resolved packages, and Codex packages in the CLI graph. The default
+timing is incremental. For an isolated cold build, point `CARGO_TARGET_DIR` at
+an empty directory; set `SKIP_BUILD=1` to inspect an existing release binary
+without rebuilding.
+
+```bash
+CARGO_TARGET_DIR=/tmp/gents-release-measure scripts/measure-gents-binary.sh
+```
+
+For symbol- and crate-level attribution, install
+[`cargo-bloat`](https://github.com/RazrFalcon/cargo-bloat) and run:
+
+```bash
+cargo bloat --release --locked -p gents-cli --bin gents --crates
+cargo bloat --release --locked -p gents-cli --bin gents -n 40
+```
+
+For iteration, the `dev-install` profile keeps release optimization but uses
+thin LTO and parallel codegen. Release-size comparisons must use `release`,
+which retains fat LTO and one codegen unit.

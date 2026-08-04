@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
-use codex_protocol::models::MessagePhase;
 use gents::graphql::escape_graphql_string;
+use gents_codex_protocol as codex;
+use gents_codex_protocol::MessagePhase;
 use gents_protocol::transcript::present_persisted_message;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};

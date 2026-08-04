@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use codex_app_server_protocol as codex;
-use codex_protocol::models::MessagePhase;
+use gents_codex_protocol as codex;
+use gents_codex_protocol::MessagePhase;
 
 use super::command_projection::{
     command_execution_item, command_output_payload, file_change_item, ToolProjectionStatus,
@@ -750,7 +750,7 @@ fn observe_latest_response_completion(current: &mut Option<i64>, observed: Optio
 
 #[cfg(test)]
 mod tests {
-    use codex_app_server_protocol as codex;
+    use gents_codex_protocol as codex;
 
     use super::{
         observe_latest_response_completion, reasoning_item, suppress_blank_agent_delta,

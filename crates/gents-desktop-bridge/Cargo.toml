@@ -18,8 +18,8 @@ native-e2e = []
 anyhow.workspace = true
 blake3 = "1"
 chrono.workspace = true
-codex-login.workspace = true
 gents = { path = "../gents" }
+gents-chatgpt-login.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 hostname.workspace = true
