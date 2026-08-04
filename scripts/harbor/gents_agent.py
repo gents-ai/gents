@@ -386,15 +386,9 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             self.logger.exception("Failed to read Gents ATIF trajectory")
             return
 
-        request_path = self.logs_dir / "request.json"
-        request: dict[str, Any] = {}
-        if request_path.is_file():
-            try:
-                parsed = json.loads(request_path.read_text())
-                if isinstance(parsed, dict):
-                    request = parsed
-            except (OSError, json.JSONDecodeError):
-                self.logger.debug("Failed to read Gents request metadata", exc_info=True)
+        request = self._read_json_object(self.logs_dir / "request.json")
+        outcome = self._read_json_object(self.logs_dir / "gents-outcome.json")
+        response = self._read_json_object(self.logs_dir / "response.json")
 
         context.metadata = {
             **(context.metadata or {}),
@@ -406,5 +400,21 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "total_steps": (trajectory.get("final_metrics") or {}).get(
                     "total_steps"
                 ),
+                # The runner returns control to Harbor for exhausted turn
+                # budgets so the verifier can score the workspace. Surface the
+                # distinction so budget-limited trials are identifiable.
+                "outcome": outcome.get("outcome"),
+                "budget_exhausted": outcome.get("outcome") == "max_turns_exhausted",
+                "terminal_error": response.get("error_message"),
             },
         }
+
+    def _read_json_object(self, path: Path) -> dict[str, Any]:
+        if not path.is_file():
+            return {}
+        try:
+            parsed = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            self.logger.warning("Failed to read %s", path, exc_info=True)
+            return {}
+        return parsed if isinstance(parsed, dict) else {}

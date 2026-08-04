@@ -70,6 +70,12 @@ jobs:
       - name: Reject stale product identifiers
         run: scripts/rename-to-gents.sh guard all
 
+      - name: Check Harbor runner syntax
+        run: bash -n scripts/harbor/run_gents.sh
+
+      - name: Run Harbor runner self-test
+        run: scripts/harbor/run_gents.sh self-test
+
   rust-and-cli:
     needs: [rename-guard, lean-proofs]
     if: ${{ always() }}
