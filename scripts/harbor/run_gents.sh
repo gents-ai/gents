@@ -17,7 +17,8 @@ set -eu
 : "${GENTS_MAX_TURNS:=250}"
 : "${GENTS_RETRY_MAX_TRANSPORT:=3}"
 : "${GENTS_REQUEST_TIMEOUT_SECS:=86400}"
-: "${GENTS_COMMAND_TIMEOUT_SECS:=86400}"
+: "${GENTS_COMMAND_TIMEOUT_SECS:=600}"
+: "${GENTS_COMMAND_TIMEOUT_MAX_SECS:=3600}"
 : "${GENTS_SERVER_STARTUP_TIMEOUT_SECS:=300}"
 
 logs_dir=/logs/agent
@@ -73,6 +74,7 @@ start_server() {
     --tool-ceiling readwrite \
     --tool-root "${GENTS_TOOL_ROOT}" \
     --command-timeout-secs "${GENTS_COMMAND_TIMEOUT_SECS}" \
+    --command-timeout-max-secs "${GENTS_COMMAND_TIMEOUT_MAX_SECS}" \
     >>"${server_log}" 2>&1 &
   server_pid=$!
 }

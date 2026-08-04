@@ -66,13 +66,21 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH="$PWD" \
   --ae GENTS_CONTEXT_WINDOW=458752 \
   --ae GENTS_MAX_OUTPUT=393216 \
   --ae GENTS_MAX_TURNS=250 \
-  --ae GENTS_REQUEST_TIMEOUT_SECS=86400 \
-  --ae GENTS_COMMAND_TIMEOUT_SECS=86400
+  --ae GENTS_REQUEST_TIMEOUT_SECS=86400
 ```
 
 The `1000` multipliers effectively disable Harbor's environment-build, agent
-setup, agent execution, and verifier deadlines. The explicit 24-hour Gents
-limits serve the same purpose inside the runtime. The Studio Two controller has
+setup, agent execution, and verifier deadlines. The explicit 24-hour request
+deadline serves the same purpose inside the runtime. Foreground commands are
+deliberately bounded far below it (#1018): each command defaults to a 600-second
+timeout and the model may explicitly request up to 3,600 seconds per command. A
+command that hits its timeout is killed as a process group and returns a normal
+`status: "timeout"` tool outcome with partial output, so the model can recover
+or narrow the command instead of silently occupying the benchmark slot; longer
+work belongs in `spawn_process`, which has a 10-hour background lifetime budget.
+Both values are advertised to the model in the bash tool schema, logged at
+server startup in `gents-server.log`, and recorded per call as `timeout_ms` in
+the persisted command result. The Studio Two controller has
 32 CPUs and a 256 GiB OrbStack memory allocation. Concurrency 16 keeps the
 workstation inference service busy while leaving enough aggregate KV-cache
 headroom for typical Terminal-Bench trajectories. The workstation's measured
@@ -120,7 +128,8 @@ Useful overrides:
 | `GENTS_MAX_TURNS` | `250` | Agent completion-loop turn ceiling |
 | `GENTS_RETRY_MAX_TRANSPORT` | `3` | Transient inference retry ceiling |
 | `GENTS_REQUEST_TIMEOUT_SECS` | `86400` | Durable request and Harbor exec timeout |
-| `GENTS_COMMAND_TIMEOUT_SECS` | `86400` | Foreground shell command ceiling |
+| `GENTS_COMMAND_TIMEOUT_SECS` | `600` | Foreground command timeout applied when the model omits `timeout_secs` |
+| `GENTS_COMMAND_TIMEOUT_MAX_SECS` | `3600` | Foreground cap for explicit `timeout_secs` requests; kept far below `GENTS_REQUEST_TIMEOUT_SECS` so a pathological command returns control to the model (#1018) |
 | `GENTS_TOOL_ROOT` | `/app` | Filesystem and shell tool root |
 
 Each trial retains:
