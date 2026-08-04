@@ -991,6 +991,24 @@ impl ScriptedSummaryModel {
             RawStreamingChoice::FinalResponse(()),
         ]
     }
+
+    fn schema_invalid_summary_turn() -> Vec<RawStreamingChoice<()>> {
+        vec![
+            // This is complete JSON, but it violates SummaryResponse: the
+            // required narrative is absent and an unknown legacy field is
+            // present. Typed validation must reject semantic schema drift as
+            // well as truncated JSON syntax.
+            RawStreamingChoice::Message(
+                serde_json::json!({
+                    "key_decisions": [],
+                    "pending_questions": [],
+                    "files_read": ["hallucinated.rs"]
+                })
+                .to_string(),
+            ),
+            RawStreamingChoice::FinalResponse(()),
+        ]
+    }
 }
 
 #[allow(refining_impl_trait)]
@@ -1141,6 +1159,37 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::schema_invalid_summary_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let result = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("complete but schema-invalid output must be retracted and resampled");
+
+    assert!(result.summary.is_some());
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "schema-invalid JSON must consume exactly one retry"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn repeated_malformed_structured_summaries_exhaust_the_internal_budget() {
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::malformed_summary_turn(),
@@ -1179,13 +1228,13 @@ async fn repeated_malformed_structured_summaries_exhaust_the_internal_budget() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn expired_deadline_stops_compaction_recovery_at_one_provider_call() {
+async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_provider_call() {
     // #1016 review: the internal ladder is deadline-aware only if the request's
     // claimed deadline actually reaches the compactor — the daemon-lifetime
     // config it stores has `deadline: None`. `CompactionOptions.deadline` is
     // the request-scoped carrier: with it already expired, an empty first
     // attempt must fail on the deadline check instead of consuming the ladder.
-    let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::empty_turn()]);
+    let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::malformed_summary_turn()]);
     let calls = model.calls.clone();
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
 
