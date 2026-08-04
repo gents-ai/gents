@@ -675,6 +675,16 @@ mod tests {
                 value: "did:key:server".to_string(),
             })
         );
+        // Persona request rows carry requester-authored config picks and the
+        // server's status_detail; losing this rule would push every
+        // requester's rows to every machine peer (the #687 leak class).
+        assert_eq!(
+            filters.get("PersonaConfigRequest"),
+            Some(&FilterPredicate {
+                field: "requester_did".to_string(),
+                value: "did:key:phone".to_string(),
+            })
+        );
     }
 
     #[test]

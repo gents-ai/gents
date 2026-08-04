@@ -1258,7 +1258,7 @@ impl Tool for ConfigurePersonaTool {
                     },
                     "root": {
                         "type": "string",
-                        "description": "Workspace root to scope the persona to, if any.",
+                        "description": "Workspace root to scope the persona to, if any. CAUTION on edit: dimensions are replaced wholesale — omitting root CLEARS the persona's existing root scope (widening file access to the host default). Always resend the current root when editing unless you intend to clear it.",
                     },
                     "preset": {
                         "type": "string",
