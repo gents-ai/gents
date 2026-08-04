@@ -73,17 +73,18 @@ sibling jobs write the same Cargo target tree. Runtime, CLI, and desktop enable
 Rust incremental compilation and use a pass-through rustc wrapper to override
 the hosts' global sccache configuration: an empty `RUSTC_WRAPPER` is treated as
 unset by Cargo. CI sets both wrapper environment forms and writes the absolute
-pass-through path into an isolated, per-job `CARGO_HOME`. Registry
+pass-through path into a stable, per-runner `CARGO_HOME`. Registry
 and Git cache directories plus Cargo's package-cache locks remain symlinked to
 the shared host home, so public dependency caching is preserved. The isolated
 config is also honored by recursive Cargo processes after build-script wrapper
 environment filtering, without changing the host-wide sccache config or the
-repository's tracked `.cargo/config.toml`. The installed sccache rejects
-incremental rustc invocations instead of passing them through. A Studio A/B on
-`gents --all-targets` measured a representative source edit at 14.6 seconds
-with warm incremental state versus 5m54s with sccache and incremental disabled.
-Establishing the incremental graph took 9m26s, so the already-short support
-suite retains sccache instead.
+repository's tracked `.cargo/config.toml`. Keeping that overlay path stable for
+each registration also prevents `CARGO_HOME` from churning Cargo fingerprints.
+The installed sccache rejects incremental rustc invocations instead of passing
+them through. A Studio A/B on `gents --all-targets` measured a representative
+source edit at 14.6 seconds with warm incremental state versus 5m54s with
+sccache and incremental disabled. Establishing the incremental graph took
+9m26s, so the already-short support suite retains sccache instead.
 
 The Rust matrix also has runner affinity: runtime and support run on
 `studio-1`, while desktop and CLI run on `studio-2`, with one suite pinned to

@@ -33,20 +33,28 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
     echo "::error::Direct rustc wrapper is missing or not executable (${direct_wrapper})."
     exit 1
   fi
-  if [[ -z "${RUNNER_TEMP:-}" ]]; then
-    echo "::error::RUNNER_TEMP must be set to isolate Cargo configuration."
-    exit 1
-  fi
   shared_cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
-  job_cargo_home="$(mktemp -d "${RUNNER_TEMP}/gents-cargo-home.XXXXXX")"
+  runner_cargo_home="${CARGO_TARGET_ROOT}/.cargo-home/${runner_cache_key}"
+  mkdir -p "${runner_cargo_home}"
   for cache_entry in registry git .package-cache .package-cache-mutate; do
     if [[ -e "${shared_cargo_home}/${cache_entry}" ]]; then
-      ln -s "${shared_cargo_home}/${cache_entry}" "${job_cargo_home}/${cache_entry}"
+      cache_link="${runner_cargo_home}/${cache_entry}"
+      if [[ -L "${cache_link}" ]]; then
+        if [[ "$(readlink "${cache_link}")" != "${shared_cargo_home}/${cache_entry}" ]]; then
+          echo "::error::Cargo cache link points at the wrong host path (${cache_link})."
+          exit 1
+        fi
+      elif [[ -e "${cache_link}" ]]; then
+        echo "::error::Cargo cache overlay entry is not a symlink (${cache_link})."
+        exit 1
+      else
+        ln -s "${shared_cargo_home}/${cache_entry}" "${cache_link}"
+      fi
     fi
   done
-  printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${job_cargo_home}/config.toml"
-  echo "CARGO_HOME=${job_cargo_home}" >> "${GITHUB_ENV}"
-  echo "Installed isolated Cargo configuration at ${job_cargo_home}/config.toml."
+  printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${runner_cargo_home}/config.toml"
+  echo "CARGO_HOME=${runner_cargo_home}" >> "${GITHUB_ENV}"
+  echo "Installed isolated Cargo configuration at ${runner_cargo_home}/config.toml."
   echo "Shared dependency caches remain rooted at ${shared_cargo_home}."
   echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
   exit 0
