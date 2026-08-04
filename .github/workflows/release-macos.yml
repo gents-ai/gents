@@ -37,12 +37,19 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Do not reuse linked artifacts from the target trees populated by PR jobs.
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_RELEASE_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target-release' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
+  # Release builds must not consume compiler objects written by PR jobs. This
+  # forces rustc to rebuild and replace every otherwise-cacheable result while
+  # ephemeral, isolated macOS release runners remain future work.
+  SCCACHE_RECACHE: "1"
   MACOS_CODESIGN_IDENTIFIER: com.source-inc.gents.cli
   MACOS_KEYCHAIN_ACCESS_GROUP_BASE: com.source-inc.gents
   TARGET_TRIPLE: aarch64-apple-darwin
@@ -276,13 +283,13 @@ jobs:
             exit 1
           fi
           cargo build -p gents-cli --release --locked
-          file target/release/gents
+          file "${CARGO_TARGET_DIR}/release/gents"
 
       - name: Generate dSYM and strip release binary
         run: |
           .github/scripts/prepare-macos-release-dsym.sh \
-            target/release/gents \
-            target/release/gents.dSYM
+            "${CARGO_TARGET_DIR}/release/gents" \
+            "${CARGO_TARGET_DIR}/release/gents.dSYM"
 
       - name: Sign binary with native macOS identity
         env:
@@ -296,7 +303,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${RELEASE_CODESIGN_TIMESTAMP_MODE:-auto}"
@@ -392,7 +399,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           notary_dir="${RUNNER_TEMP}/gents-notary"
           staging_dir="${notary_dir}/payload"
           notary_zip="${notary_dir}/gents-notary.zip"
@@ -425,7 +432,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             codesign --verify --strict --verbose=2 "${binary_path}"
 
@@ -502,11 +509,11 @@ jobs:
 
           rm -rf "${package_parent}" "${symbols_parent}" "${dist_dir}"
           mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
-          cp target/release/gents "${package_root}/gents"
+          cp "${CARGO_TARGET_DIR}/release/gents" "${package_root}/gents"
           chmod 0755 "${package_root}/gents"
           cp LICENSE "${package_root}/LICENSE"
           chmod 0644 "${package_root}/LICENSE"
-          cp -R target/release/gents.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp -R "${CARGO_TARGET_DIR}/release/gents.dSYM" "${symbols_parent}/${dsym_bundle_basename}"
           cp LICENSE "${symbols_parent}/LICENSE"
           chmod 0644 "${symbols_parent}/LICENSE"
 

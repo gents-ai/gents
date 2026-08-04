@@ -91,18 +91,32 @@ jobs:
           - suite: runtime
             host: studio-1
             slot: ci-runtime
+            cargo_incremental: "1"
+            # sccache rejects rustc incremental mode rather than passing it
+            # through, so the persistent target tree owns these rebuilds.
+            rustc_wrapper: ""
           - suite: support
             host: studio-1
             slot: ci-support
+            cargo_incremental: "0"
+            rustc_wrapper: sccache
           - suite: desktop
             host: studio-2
             slot: ci-desktop
+            cargo_incremental: "1"
+            rustc_wrapper: ""
           - suite: cli
             host: studio-2
             slot: ci-cli
+            cargo_incremental: "1"
+            rustc_wrapper: ""
     # A cold runner instance must compile and link every Rust target. Each
-    # runner process owns a durable target directory; sccache is host-shared.
+    # runner process owns a durable target directory; the short support suite
+    # also uses the host-shared sccache service.
     timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: ${{ matrix.cargo_incremental }}
+      RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -117,6 +131,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Install elan
+        if: matrix.suite == 'runtime'
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
@@ -156,13 +171,17 @@ jobs:
         if: matrix.suite == 'support'
         run: ./scripts/check-native-e2e-capabilities.sh
 
+      - name: Verify Rust CI covers every workspace package
+        if: matrix.suite == 'support'
+        run: .github/scripts/check-rust-ci-package-coverage.sh
+
       # Together these four jobs compile and link the FULL workspace target
       # surface — examples, benches, every test target, and the desktop crates.
       # This preserves the #646 construction-site fence without doing a
       # metadata-only cargo check pass before the test-profile build.
       - name: Compile and link runtime targets
         if: matrix.suite == 'runtime'
-        run: cargo test -p gents --all-targets --no-run
+        run: .github/scripts/compile-rust-ci-suite.sh runtime
 
       - name: Run proof conformance tests
         if: matrix.suite == 'runtime'
@@ -170,31 +189,15 @@ jobs:
 
       - name: Compile and link CLI targets
         if: matrix.suite == 'cli'
-        run: cargo test -p gents-cli --all-targets --no-run
+        run: .github/scripts/compile-rust-ci-suite.sh cli
 
       - name: Compile and link desktop targets
         if: matrix.suite == 'desktop'
-        run: |
-          cargo test \
-            -p gents-desktop-core \
-            -p gents-desktop \
-            -p gents-desktop-bridge \
-            -p fixture-domain-plugin \
-            -p gents-fixture-host \
-            --all-targets --no-run
-          cargo test -p gents-desktop-tauri --all-targets --no-run
+        run: .github/scripts/compile-rust-ci-suite.sh desktop
 
       - name: Compile and link support targets
         if: matrix.suite == 'support'
-        run: |
-          cargo test \
-            -p gents-lean-contract \
-            -p gents-migration \
-            -p gents-lens-fixture-add-label \
-            -p gents-fs-runner \
-            -p gents-protocol \
-            -p gents-schemas \
-            --all-targets --no-run
+        run: .github/scripts/compile-rust-ci-suite.sh support
 
       - name: Build the WASM lens target
         if: matrix.suite == 'support'
@@ -238,7 +241,9 @@ jobs:
         run: cargo test -p gents-cli -- --nocapture --test-threads=1
 
       - name: Show Rust build cache stats
-        if: always()
+        # The three heavy suites use runner-local incremental state. Keep one
+        # cache-health report for the support shard and non-CI Studio users.
+        if: always() && matrix.suite == 'support'
         run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:

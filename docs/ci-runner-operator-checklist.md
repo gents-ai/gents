@@ -66,22 +66,29 @@ host-wide CPU admission mechanism or moving Lean to isolated capacity.
 
 ## Rust cache safety
 
-Runner processes on a host share `/Users/admin/.cache/sccache`. Each runner
-process has its own persistent target directory under
+Each runner process has its own persistent target directory under
 `/Users/admin/.cache/gents-cargo-target/<runner-name>`. A runner process accepts
 only one job at a time, so this preserves linked test artifacts without letting
-sibling jobs write the same Cargo target tree.
+sibling jobs write the same Cargo target tree. Runtime, CLI, and desktop enable
+Rust incremental compilation and explicitly disable the sccache wrapper: the
+installed sccache rejects incremental rustc invocations instead of passing them
+through. A Studio A/B on `gents --all-targets` measured a representative source
+edit at 14.6 seconds with warm incremental state versus 5m54s with sccache and
+incremental disabled. Establishing the incremental graph took 9m26s, so the
+already-short support suite retains sccache instead.
 
 The Rust matrix also has runner affinity: runtime and support run on
 `studio-1`, while desktop and CLI run on `studio-2`, with one suite pinned to
-each runner process. Keep that mapping stable. The sccache store is host-local,
-and linked binaries plus procedural macros are not cacheable, so allowing a
-suite to bounce between Studios or runner target directories turns an otherwise
-identical rerun into a substantial rebuild. The tradeoff is deliberate: if one
-registration is offline, its suite queues until an operator restores the runner
-or temporarily moves its `ci-*` label to the healthy sibling.
+each runner process. Keep that mapping stable. Incremental state and linked
+binaries are runner-local; sccache is host-local and cannot cache links or
+procedural macros. Allowing a suite to bounce between Studios or target
+directories therefore turns an otherwise small rebuild into a substantial one.
+The tradeoff is deliberate: if one registration is offline, its suite queues
+until an operator restores the runner or temporarily moves its `ci-*` label to
+the healthy sibling.
 
-The shared sccache server must be owned by launchd, not by a workflow job.
+The support suite, live smoke workflows, and release builds use the shared
+sccache server. It must be owned by launchd, not by a workflow job.
 GitHub runner cleanup kills daemons descended from a completed job; in a
 measured run that terminated sccache underneath a sibling compile and forced a
 16-minute local CLI link. Install the checked-in LaunchAgent on both hosts:
@@ -104,6 +111,17 @@ ssh studio-1 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchct
 ssh studio-2 'chmod 0755 /Users/admin/.ghrunner/start-gents-sccache.sh; launchctl bootout gui/$(id -u)/com.source.gents.sccache 2>/dev/null || true; SCCACHE_DIR=/Users/admin/.cache/sccache /opt/homebrew/bin/sccache --stop-server 2>/dev/null || true; launchctl bootstrap gui/$(id -u) /Users/admin/Library/LaunchAgents/com.source.gents.sccache.plist'
 ```
 
+This service runs in `admin`'s GUI launchd domain while the runner processes
+are system LaunchDaemons. After a reboot, `admin` must log in before the support
+suite, live-smoke, or release job can use sccache; configure automatic login or
+keep their runner registrations disabled until that login has occurred. The
+incremental runtime, CLI, and desktop suites do not depend on the sccache
+service. Verify
+`launchctl print gui/$(id -u)/com.source.gents.sccache` reports
+`state = running` before enabling the runners. Moving sccache into the system
+domain is a coordinated migration: older workflow revisions only recognize the
+GUI service and will fail while they remain in flight.
+
 The service also normalizes every runner checkout and persistent Cargo target
 root through `SCCACHE_BASEDIRS`. Both are necessary for compiler results to hit
 across runner instances because Rust `--extern` arguments contain target paths.
@@ -121,6 +139,14 @@ ssh studio-2 'SCCACHE_DIR=/Users/admin/.cache/sccache sccache --show-stats'
 
 If the daemon must be restarted for maintenance, first confirm that every
 runner on that host is idle in the GitHub API.
+
+The macOS release workflow uses a separate
+`/Users/admin/.cache/gents-cargo-target-release/<runner-name>` tree and sets
+`SCCACHE_RECACHE=1`. Release rustc invocations therefore bypass compiler
+objects populated by pull-request jobs and cannot reuse their linked target
+artifacts through normal Cargo operation. This is defense in depth against
+cache poisoning, not a substitute for ephemeral release hosts: PR code still
+runs without a strong isolation boundary on the same machines.
 
 Mathlib is a separate cache surface. Each runner process owns a persistent Lake
 directory under `/Users/admin/.cache/gents-lean/<runner-name>`, linked into its

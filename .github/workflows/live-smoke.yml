@@ -16,11 +16,13 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
   SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
   GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}

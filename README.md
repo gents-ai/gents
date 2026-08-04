@@ -82,7 +82,8 @@ Subagents are requests: a parent's tool call spawns a child request — possibly
 ## Development
 
 Building from source needs a few system dependencies (Rust, a C/C++ toolchain,
-`protoc`, `libclang`, OpenSSL headers, SSH access to the private DefraDB repos).
+`protoc`, `libclang`, and OpenSSL headers). DefraDB dependencies are public and
+use pinned HTTPS revisions.
 Build, test, and toolchain setup live in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
 The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
