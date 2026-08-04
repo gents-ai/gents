@@ -439,6 +439,84 @@ fn compaction_prompt_treats_prior_turns_as_data_not_instructions() {
     assert!(prompt.contains("Your only action is to return JSON"));
 }
 
+fn summary_json_body() -> &'static str {
+    r#"{"summary":"Implemented the FEAL-4 linear cryptanalysis attack.","files_read":["src/main.rs"],"files_modified":["src/attack.rs"],"key_decisions":["Used precomputed bias tables"],"pending_questions":[]}"#
+}
+
+#[test]
+fn summary_parser_accepts_bare_json() {
+    let parsed = super::summary::parse_summary_response(summary_json_body()).unwrap();
+    assert_eq!(
+        parsed.summary,
+        "Implemented the FEAL-4 linear cryptanalysis attack."
+    );
+    assert_eq!(parsed.files_read, vec!["src/main.rs"]);
+}
+
+#[test]
+fn summary_parser_accepts_closed_json_fence() {
+    let raw = format!("```json\n{}\n```", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.files_modified, vec!["src/attack.rs"]);
+}
+
+#[test]
+fn summary_parser_accepts_closed_untyped_fence() {
+    let raw = format!("```\n{}\n```\n", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.key_decisions, vec!["Used precomputed bias tables"]);
+}
+
+#[test]
+fn summary_parser_accepts_unterminated_json_fence() {
+    // The DeepSeek V4 Flash shape from the Terminal-Bench run behind #1015: a
+    // complete JSON object after an opening ```json fence that is never closed.
+    let raw = format!("```json\n{}\n", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(
+        parsed.summary,
+        "Implemented the FEAL-4 linear cryptanalysis attack."
+    );
+}
+
+#[test]
+fn summary_parser_accepts_unterminated_untyped_fence() {
+    let raw = format!("```\n{}", summary_json_body());
+    let parsed = super::summary::parse_summary_response(&raw).unwrap();
+    assert_eq!(parsed.files_read, vec!["src/main.rs"]);
+}
+
+#[test]
+fn summary_parser_rejects_json_embedded_in_prose() {
+    // The envelope must stay narrow: no greedy first-`{`/last-`}` extraction
+    // that could select an unrelated object out of arbitrary prose.
+    let raw = format!(
+        "Here is what happened: {} — let me know if you need more.",
+        summary_json_body()
+    );
+    assert!(super::summary::parse_summary_response(&raw).is_err());
+}
+
+#[test]
+fn summary_parser_rejects_trailing_prose_after_json() {
+    let raw = format!("```json\n{}\nAnything else?", summary_json_body());
+    assert!(super::summary::parse_summary_response(&raw).is_err());
+}
+
+#[test]
+fn summary_parser_bounds_malformed_response_diagnostics() {
+    // A malformed multi-megabyte response must not be copied wholesale into
+    // the error string (and from there into response documents and logs).
+    let raw = format!("```json\n{{\"summary\": \"{}", "x".repeat(4 * 1024 * 1024));
+    let err = super::summary::parse_summary_response(&raw).unwrap_err();
+    let rendered = format!("{err:#}");
+    assert!(
+        rendered.len() < 2048,
+        "diagnostic must be bounded, got {} bytes",
+        rendered.len()
+    );
+}
+
 #[derive(Clone, Default)]
 struct MockSummaryModel {
     response: String,
