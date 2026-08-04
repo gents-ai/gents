@@ -422,7 +422,7 @@ fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) ->
     }
 }
 
-fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+pub(super) fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     if index >= text.len() {
         return text.len();
     }

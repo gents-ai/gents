@@ -11,8 +11,8 @@ mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
 use summary::{
-    compaction_prompt, compaction_request_prompt, dedupe_paths, format_summary,
-    parse_summary_response,
+    bounded_error_preview, compaction_prompt, compaction_request_prompt, dedupe_paths,
+    format_summary, parse_summary_response,
 };
 
 #[derive(Debug, Clone)]
@@ -211,7 +211,12 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             summary_config,
         )
         .await
-        .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "compaction summary inference failed: {}",
+                bounded_error_preview(&format!("{error}"))
+            )
+        })?;
         let parsed_summary = parse_summary_response(&raw_summary)?;
 
         let mut files_read = old_activity.files_read;

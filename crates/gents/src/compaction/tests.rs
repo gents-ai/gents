@@ -1920,3 +1920,32 @@ fn plain_message_between_a_call_and_its_result_ends_the_turn() {
         "conversation resumed, so the stale pair must go: {out:?}"
     );
 }
+
+#[test]
+fn parse_failure_error_is_bounded() {
+    let huge = format!("{{\"summary\": \"{}", "x".repeat(3_000_000));
+    let err = super::summary::parse_summary_response(&huge).unwrap_err();
+    let message = format!("{err:#}");
+    assert!(
+        message.len() < 4_096,
+        "parse error must not embed the raw output; got {} bytes",
+        message.len()
+    );
+    assert!(message.contains("bytes total]"), "missing truncation marker: {message}");
+}
+
+#[test]
+fn parse_failure_error_keeps_short_output_verbatim() {
+    let err = super::summary::parse_summary_response("not json").unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("not json"));
+    assert!(!message.contains("bytes total]"));
+}
+
+#[test]
+fn error_preview_respects_char_boundaries() {
+    let raw = "é".repeat(2_000); // 4000 bytes of 2-byte chars
+    let preview = super::summary::bounded_error_preview(&raw);
+    assert!(preview.len() < 2_100 + 40);
+    assert!(preview.contains("[truncated, 4000 bytes total]"));
+}
