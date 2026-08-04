@@ -94,7 +94,7 @@ jobs:
             cargo_incremental: "1"
             # sccache rejects rustc incremental mode rather than passing it
             # through, so the persistent target tree owns these rebuilds.
-            rustc_wrapper: ""
+            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: support
             host: studio-1
             slot: ci-support
@@ -104,12 +104,12 @@ jobs:
             host: studio-2
             slot: ci-desktop
             cargo_incremental: "1"
-            rustc_wrapper: ""
+            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: cli
             host: studio-2
             slot: ci-cli
             cargo_incremental: "1"
-            rustc_wrapper: ""
+            rustc_wrapper: .github/scripts/rustc-direct.sh
     # A cold runner instance must compile and link every Rust target. Each
     # runner process owns a durable target directory; the short support suite
     # also uses the host-shared sccache service.
