@@ -82,6 +82,9 @@ pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.gra
 pub const NETWORK_JOIN_REQUEST_NAME: &str = "NetworkJoinRequest";
 pub const NETWORK_JOIN_REQUEST: &str =
     include_str!("../schemas/agent/network_join_request.graphql");
+pub const PERSONA_CONFIG_REQUEST_NAME: &str = "PersonaConfigRequest";
+pub const PERSONA_CONFIG_REQUEST: &str =
+    include_str!("../schemas/agent/persona_config_request.graphql");
 
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
@@ -119,6 +122,7 @@ pub const ALL: &[&str] = &[
     NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
     NETWORK_JOIN_REQUEST,
+    PERSONA_CONFIG_REQUEST,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -157,6 +161,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,
     NETWORK_JOIN_REQUEST_NAME,
+    PERSONA_CONFIG_REQUEST_NAME,
 ];
 
 /// Agent-domain collections that can be replicated across desktop branches.
