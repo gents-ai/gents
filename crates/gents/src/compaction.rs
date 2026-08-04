@@ -11,8 +11,8 @@ mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
 use summary::{
-    bounded_error_preview, compaction_prompt, compaction_request_prompt, format_summary,
-    parse_summary_response,
+    bounded_error_diagnostic, compaction_prompt, compaction_request_prompt, format_summary,
+    SummaryResponse,
 };
 
 #[derive(Debug, Clone)]
@@ -216,7 +216,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
             (from_options, from_config) => from_options.or(from_config),
         };
-        let raw_summary = crate::agent::loop_stream::run_loop_to_text(
+        let parsed_summary: SummaryResponse = crate::agent::loop_stream::run_loop_to_typed(
             (*self.model).clone(),
             None,
             crate::llm::message::Message::user(compaction_request_prompt()),
@@ -228,10 +228,9 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         .map_err(|error| {
             anyhow::anyhow!(
                 "compaction summary inference failed: {}",
-                bounded_error_preview(&format!("{error}"))
+                bounded_error_diagnostic(&format!("{error}"))
             )
         })?;
-        let parsed_summary = parse_summary_response(&raw_summary)?;
 
         // Structural extraction is the sole source of file activity (#1017):
         // the model no longer returns lists, so it can neither balloon the

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use crate::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
+use rig::client::CompletionClient;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, Usage,
 };
@@ -70,6 +71,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         temperature: None,
         max_tokens: None,
         additional_params: None,
+        structured_output: None,
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
@@ -458,7 +460,7 @@ fn compaction_prompt_treats_prior_turns_as_data_not_instructions() {
     assert!(prompt.contains("Do not call or simulate tools"));
     assert!(prompt.contains("Record unfinished instructions as pending work"));
     assert!(prompt.contains("Never claim that prior turns were absent when they are present"));
-    assert!(prompt.contains("Your only action is to return JSON"));
+    assert!(prompt.contains("supplied structured-output schema"));
 }
 
 #[test]
@@ -472,87 +474,62 @@ fn compaction_prompt_does_not_invite_file_enumeration() {
     assert!(prompt.contains("Never claim that prior turns were absent"));
 }
 
-fn summary_json_body() -> &'static str {
-    r#"{"summary":"Implemented the FEAL-4 linear cryptanalysis attack.","files_read":["src/main.rs"],"files_modified":["src/attack.rs"],"key_decisions":["Used precomputed bias tables"],"pending_questions":[]}"#
-}
-
 #[test]
-fn summary_parser_accepts_bare_json() {
-    // Old-shape file arrays remain accepted as unknown fields for compatibility,
-    // but SummaryResponse no longer retains model-authored file activity.
-    let parsed = super::summary::parse_summary_response(summary_json_body()).unwrap();
-    assert_eq!(
-        parsed.summary,
-        "Implemented the FEAL-4 linear cryptanalysis attack."
-    );
-    assert_eq!(parsed.key_decisions, vec!["Used precomputed bias tables"]);
-}
+fn summary_schema_contains_only_the_model_authored_contract() {
+    let schema = schemars::schema_for!(super::summary::SummaryResponse).to_value();
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("summary schema must describe an object");
 
-#[test]
-fn summary_parser_accepts_closed_json_fence() {
-    let raw = format!("```json\n{}\n```", summary_json_body());
-    let parsed = super::summary::parse_summary_response(&raw).unwrap();
-    assert_eq!(
-        parsed.summary,
-        "Implemented the FEAL-4 linear cryptanalysis attack."
-    );
-}
-
-#[test]
-fn summary_parser_accepts_closed_untyped_fence() {
-    let raw = format!("```\n{}\n```\n", summary_json_body());
-    let parsed = super::summary::parse_summary_response(&raw).unwrap();
-    assert_eq!(parsed.key_decisions, vec!["Used precomputed bias tables"]);
-}
-
-#[test]
-fn summary_parser_accepts_unterminated_json_fence() {
-    // The DeepSeek V4 Flash shape from the Terminal-Bench run behind #1015: a
-    // complete JSON object after an opening ```json fence that is never closed.
-    let raw = format!("```json\n{}\n", summary_json_body());
-    let parsed = super::summary::parse_summary_response(&raw).unwrap();
-    assert_eq!(
-        parsed.summary,
-        "Implemented the FEAL-4 linear cryptanalysis attack."
-    );
-}
-
-#[test]
-fn summary_parser_accepts_unterminated_untyped_fence() {
-    let raw = format!("```\n{}", summary_json_body());
-    let parsed = super::summary::parse_summary_response(&raw).unwrap();
-    assert_eq!(parsed.key_decisions, vec!["Used precomputed bias tables"]);
-}
-
-#[test]
-fn summary_parser_rejects_json_embedded_in_prose() {
-    // The envelope must stay narrow: no greedy first-`{`/last-`}` extraction
-    // that could select an unrelated object out of arbitrary prose.
-    let raw = format!(
-        "Here is what happened: {} — let me know if you need more.",
-        summary_json_body()
-    );
-    assert!(super::summary::parse_summary_response(&raw).is_err());
-}
-
-#[test]
-fn summary_parser_rejects_trailing_prose_after_json() {
-    let raw = format!("```json\n{}\nAnything else?", summary_json_body());
-    assert!(super::summary::parse_summary_response(&raw).is_err());
-}
-
-#[test]
-fn summary_parser_bounds_malformed_response_diagnostics() {
-    // A malformed multi-megabyte response must not be copied wholesale into
-    // the error string (and from there into response documents and logs).
-    let raw = format!("```json\n{{\"summary\": \"{}", "x".repeat(4 * 1024 * 1024));
-    let err = super::summary::parse_summary_response(&raw).unwrap_err();
-    let rendered = format!("{err:#}");
+    assert!(properties.contains_key("summary"));
+    assert!(properties.contains_key("key_decisions"));
+    assert!(properties.contains_key("pending_questions"));
     assert!(
-        rendered.len() < 2048,
-        "diagnostic must be bounded, got {} bytes",
-        rendered.len()
+        !properties.contains_key("files_read") && !properties.contains_key("files_modified"),
+        "file activity is structural runtime data, not model-authored output"
     );
+}
+
+#[tokio::test]
+#[ignore = "hits a live OpenAI-compatible endpoint; set GENTS_TEST_INFERENCE_URL"]
+async fn live_compaction_uses_rig_structured_output_end_to_end() {
+    let endpoint = std::env::var("GENTS_TEST_INFERENCE_URL")
+        .expect("set GENTS_TEST_INFERENCE_URL, including the /v1 suffix");
+    let model_name = std::env::var("GENTS_TEST_MODEL").unwrap_or_else(|_| "d4f".to_string());
+    let client = crate::inference_http::build_openai_chat_completions_client(
+        "no-key",
+        &endpoint,
+        crate::inference_http::SessionTaggingHttpClient::<rig::http_client::ReqwestClient>::default(
+        ),
+    )
+    .expect("build live OpenAI-compatible client");
+    let model = client.completion_model(&model_name);
+    let mut config = scheduled_origin_config();
+    config.temperature = Some(1.0);
+    config.additional_params = Some(serde_json::json!({"top_p": 0.95}));
+    let compactor = DefraCompactor::new(Arc::new(model), config);
+
+    let result = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 2_048,
+                force_summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("live schema-constrained compaction must succeed");
+
+    let summary = result
+        .summary
+        .expect("live compaction must return a summary");
+    assert!(!summary.trim().is_empty());
 }
 
 #[derive(Clone, Default)]
@@ -619,8 +596,6 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
     let model = MockSummaryModel::new(
         &serde_json::json!({
             "summary": "Older turns were compacted to honor the provider input budget.",
-            "files_read": [],
-            "files_modified": [],
             "key_decisions": [],
             "pending_questions": []
         })
@@ -952,6 +927,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         temperature: None,
         max_tokens: None,
         additional_params: None,
+        structured_output: None,
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
@@ -966,8 +942,6 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
 fn valid_summary_json() -> String {
     serde_json::json!({
         "summary": "Older turns were compacted.",
-        "files_read": [],
-        "files_modified": [],
         "key_decisions": [],
         "pending_questions": []
     })
@@ -1001,6 +975,19 @@ impl ScriptedSummaryModel {
     fn summary_turn() -> Vec<RawStreamingChoice<()>> {
         vec![
             RawStreamingChoice::Message(valid_summary_json()),
+            RawStreamingChoice::FinalResponse(()),
+        ]
+    }
+
+    fn malformed_summary_turn() -> Vec<RawStreamingChoice<()>> {
+        vec![
+            // Exact failure class observed in the Terminal-Bench run: the
+            // provider reaches a normal final response with JSON cut off in a
+            // string. The owned loop must reject the turn before accepting it.
+            RawStreamingChoice::Message(
+                r#"{"summary":"Older turns were compacted.","key_decisions":["unfinished"#
+                    .to_string(),
+            ),
             RawStreamingChoice::FinalResponse(()),
         ]
     }
@@ -1098,6 +1085,96 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
     assert_eq!(
         rendered[0], rendered[1],
         "the resample must re-issue the retracted attempt's exact input"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_structured_summary_is_retracted_and_resampled() {
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let requests = model.requests.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let result = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("malformed structured output must be retracted and resampled");
+
+    assert!(result.summary.is_some());
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "one invalid turn consumes exactly one retry"
+    );
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        let schema = request
+            .output_schema
+            .as_ref()
+            .expect("every typed compaction request must carry Rig's output schema")
+            .clone()
+            .to_value();
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("summary schema must describe object properties");
+        assert!(properties.contains_key("summary"));
+    }
+    assert_eq!(
+        requests[0].output_schema, requests[1].output_schema,
+        "recovery must resample the identical typed contract"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn repeated_malformed_structured_summaries_exhaust_the_internal_budget() {
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let error = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("persistently malformed output must exhaust bounded recovery");
+
+    assert!(
+        error
+            .to_string()
+            .contains("structured-output validation failed"),
+        "terminal error must identify the typed-output contract: {error}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "typed-output retracts consume exactly 1 initial call + 3 retries"
     );
 }
 
@@ -1741,8 +1818,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let model = MockSummaryModel::new(
         &serde_json::json!({
             "summary": "The agent repeatedly inspected the source files.",
-            "files_read": ["/workspace/main.rs"],
-            "files_modified": [],
             "key_decisions": ["Use compaction to collapse older turns"],
             "pending_questions": []
         })
@@ -1754,6 +1829,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         temperature: None,
         max_tokens: None,
         additional_params: None,
+        structured_output: None,
         tool_choice: None,
         on_rendered_request: None,
         turn_compactor: None,
@@ -2097,33 +2173,26 @@ fn plain_message_between_a_call_and_its_result_ends_the_turn() {
 }
 
 #[test]
-fn parse_failure_error_is_bounded() {
+fn standard_typed_parse_failure_does_not_embed_raw_output() {
     let huge = format!("{{\"summary\": \"{}", "x".repeat(3_000_000));
-    let err = super::summary::parse_summary_response(&huge).unwrap_err();
-    let message = format!("{err:#}");
+    let message = serde_json::from_str::<super::summary::SummaryResponse>(&huge)
+        .unwrap_err()
+        .to_string();
     assert!(
         message.len() < 4_096,
         "parse error must not embed the raw output; got {} bytes",
         message.len()
     );
     assert!(
-        message.contains("bytes total]"),
-        "missing truncation marker: {message}"
+        !message.contains(&"x".repeat(1024)),
+        "standard typed decoding must not copy model output into diagnostics"
     );
 }
 
 #[test]
-fn parse_failure_error_keeps_short_output_verbatim() {
-    let err = super::summary::parse_summary_response("not json").unwrap_err();
-    let message = format!("{err:#}");
-    assert!(message.contains("not json"));
-    assert!(!message.contains("bytes total]"));
-}
-
-#[test]
-fn error_preview_respects_char_boundaries() {
+fn error_diagnostic_respects_char_boundaries() {
     let raw = "é".repeat(2_000); // 4000 bytes of 2-byte chars
-    let preview = super::summary::bounded_error_preview(&raw);
+    let preview = super::summary::bounded_error_diagnostic(&raw);
     assert!(preview.len() < 2_100 + 40);
     assert!(preview.contains("[truncated, 4000 bytes total]"));
 }

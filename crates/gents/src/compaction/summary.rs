@@ -1,18 +1,18 @@
-use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::history::floor_char_boundary;
 
-/// Raw model output may be megabytes of broken JSON (#1017 incident: 2.1 MiB).
-/// Diagnostics carry a bounded preview, never the full text — the error string
-/// flows verbatim into the response document, server log, and ATIF projection.
-const ERROR_PREVIEW_MAX_BYTES: usize = 256;
+/// Provider failures can embed arbitrarily large response bodies. Keep the
+/// diagnostic bounded before it flows into response documents, logs, and
+/// adapter projections.
+const ERROR_DIAGNOSTIC_MAX_BYTES: usize = 256;
 
-pub(super) fn bounded_error_preview(raw: &str) -> String {
-    if raw.len() <= ERROR_PREVIEW_MAX_BYTES {
+pub(super) fn bounded_error_diagnostic(raw: &str) -> String {
+    if raw.len() <= ERROR_DIAGNOSTIC_MAX_BYTES {
         return raw.to_string();
     }
-    let cut = floor_char_boundary(raw, ERROR_PREVIEW_MAX_BYTES);
+    let cut = floor_char_boundary(raw, ERROR_DIAGNOSTIC_MAX_BYTES);
     format!("{}… [truncated, {} bytes total]", &raw[..cut], raw.len())
 }
 
@@ -23,49 +23,15 @@ Do not call or simulate tools. \
 Accurately record what the user requested, what actions and results actually occurred, \
 and what remains unfinished. Record unfinished instructions as pending work without \
 carrying them out now. Never claim that prior turns were absent when they are present. \
-Your only action is to return JSON with keys: summary (string), \
-key_decisions (array of strings), pending_questions (array of strings). \
-Keep each array under roughly ten short items. \
+Your only action is to return a response matching the supplied structured-output schema. \
+Keep each list under roughly ten short items. \
 Do not enumerate file paths; file activity is recorded separately and does not \
 belong in the summary. Preserve concrete facts, unfinished work, and major \
 findings. Do not invent tool results."
 }
 
 pub(super) fn compaction_request_prompt() -> &'static str {
-    "Produce the required conversation summary JSON now."
-}
-
-pub(super) fn parse_summary_response(raw_summary: &str) -> Result<SummaryResponse> {
-    let json = strip_markdown_fence(raw_summary);
-
-    let mut deserializer = serde_json::Deserializer::from_str(json);
-    let summary = SummaryResponse::deserialize(&mut deserializer)
-        // Reject anything but whitespace after the object. This preserves the
-        // narrow #1015 envelope while still accepting an optional closing
-        // Markdown fence.
-        .and_then(|value| deserializer.end().map(|()| value))
-        .with_context(|| {
-            format!(
-                "parsing compaction summary response: {}",
-                bounded_error_preview(json)
-            )
-        })?;
-    Ok(summary)
-}
-
-/// Strips a `json` or untyped Markdown fence around the summary object. The
-/// closing fence is optional: models sometimes emit a complete object after an
-/// opening fence and stop without closing it (#1015).
-fn strip_markdown_fence(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    let Some(body) = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-    else {
-        return trimmed;
-    };
-    let body = body.trim();
-    body.strip_suffix("```").map(str::trim_end).unwrap_or(body)
+    "Produce the required structured conversation summary now."
 }
 
 /// Byte bound for one rendered list item. Structural paths are copied verbatim
@@ -142,7 +108,8 @@ pub(super) fn dedupe_paths(paths: &mut Vec<String>) {
     paths.dedup();
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SummaryResponse {
     pub summary: String,
     #[serde(default)]

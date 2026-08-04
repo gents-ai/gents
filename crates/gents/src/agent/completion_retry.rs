@@ -175,8 +175,9 @@ impl CompletionRetryPolicy {
     /// tool-free sub-completions with no caller-level retry (compaction). Like
     /// [`Self::no_retry`] it never inherits an execution origin's ladder
     /// (#648), but it keeps the already-modelled retract-and-resample
-    /// recovery available: an empty-output turn or transient transport
-    /// failure gets three attempts on the crate-conventional three-slot
+    /// recovery available: an empty-output turn, invalid structured-output
+    /// turn, or transient transport failure gets three attempts on the
+    /// crate-conventional three-slot
     /// ladder — the first immediate (jitter floors it at 100ms) — before
     /// failing deterministically (#1016). No resample or repair: those are
     /// parse-400 remedies for tool-calling requests.

@@ -51,6 +51,7 @@ pub(crate) fn loop_config(
             ),
             behavior.sampling.additional_params(),
         ),
+        structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
         on_rendered_request: None,
         turn_compactor: None,
