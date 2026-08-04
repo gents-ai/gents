@@ -414,7 +414,9 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             return {}
         try:
             parsed = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # ValueError covers JSONDecodeError and the UnicodeDecodeError a
+            # Harbor artifact rewrite can leave behind.
             self.logger.warning("Failed to read %s", path, exc_info=True)
             return {}
         return parsed if isinstance(parsed, dict) else {}

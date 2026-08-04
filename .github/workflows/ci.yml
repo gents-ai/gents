@@ -71,7 +71,9 @@ jobs:
         run: scripts/rename-to-gents.sh guard all
 
       - name: Check Harbor runner syntax
-        run: bash -n scripts/harbor/run_gents.sh
+        run: |
+          bash -n scripts/harbor/run_gents.sh
+          shellcheck -s sh scripts/harbor/run_gents.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test

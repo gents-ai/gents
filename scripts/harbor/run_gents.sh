@@ -110,6 +110,41 @@ EOF
   "content": null
 }
 EOF
+  # Full `response wait` envelope: flat AgentResponse fields plus a nested
+  # `request` object whose `failure_reason` duplicates the terminal error.
+  cat >"${self_test_dir}/envelope-max-turns.json" <<'EOF'
+{
+  "request_id": "req-9",
+  "behavior_id": "b-1",
+  "session_id": "s-1",
+  "status": "error",
+  "content": "partial work",
+  "reasoning": null,
+  "error_message": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)",
+  "token_count": 12345,
+  "completed_at": "2026-08-04T00:00:00Z",
+  "request": {
+    "request_id": "req-9",
+    "lifecycle_state": "failed",
+    "failure_reason": "agent stream failed: PromptError: MaxTurnError: (reached max turn limit: 250)"
+  }
+}
+EOF
+  # The nested request's failure_reason must never classify on its own: here
+  # it mentions MaxTurnError but the response's own error is a provider one.
+  cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
+{
+  "request_id": "req-10",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: upstream returned HTTP 500",
+  "request": {
+    "request_id": "req-10",
+    "lifecycle_state": "failed",
+    "failure_reason": "child subagent hit MaxTurnError: before the provider failed"
+  }
+}
+EOF
 
   expect_outcome complete completed
   expect_outcome completed completed
@@ -119,6 +154,8 @@ EOF
   expect_outcome content-mentions-max-turn agent_error
   expect_outcome unexpected-status unexpected:interrupted
   expect_outcome missing-status unexpected:missing
+  expect_outcome envelope-max-turns max_turns_exhausted
+  expect_outcome envelope-nested-max-turn-only agent_error
 
   if [ "${failures}" -ne 0 ]; then
     printf 'self-test failed: %s classification(s) wrong\n' "${failures}" >&2
@@ -183,10 +220,11 @@ case "${GENTS_REASONING_EFFORT}" in
     ;;
 esac
 
-# GENTS_MAX_TURNS is interpolated into the outcome document as a JSON number.
+# GENTS_MAX_TURNS is interpolated into the outcome document as a JSON number,
+# so leading zeros are as invalid as non-digits.
 case "${GENTS_MAX_TURNS}" in
-  ''|*[!0-9]*)
-    echo "GENTS_MAX_TURNS must be a non-negative integer" >&2
+  ''|*[!0-9]*|0?*)
+    echo "GENTS_MAX_TURNS must be a non-negative integer without leading zeros" >&2
     exit 2
     ;;
 esac
