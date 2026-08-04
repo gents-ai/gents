@@ -21,8 +21,13 @@ The discriminator: budget exhaustion is raised exclusively in
 `agent/loop_stream.rs` as `StreamingError::Prompt(PromptError::MaxTurnsError)`
 and persisted by `agent/daemon/inference.rs` as
 `agent stream failed: PromptError: MaxTurnError: (reached max turn limit: N)`.
-Provider failures render as `CompletionError: …`; persistence, compaction, and
-projection failures never contain the `MaxTurnError:` token.
+The classifier anchors on the full quoted key-plus-prefix
+(`"error_message": "agent stream failed: PromptError: MaxTurnError: `) rather
+than the bare token: a provider error can embed upstream text that mentions
+`MaxTurnError:`, and JSON escaping guarantees the quoted key sequence cannot
+occur inside a string value. The runtime max-turns test pins the rendered
+prefix so a rig wording change breaks CI instead of silently reverting the
+classification.
 
 ## Design
 

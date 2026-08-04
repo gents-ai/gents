@@ -3,10 +3,16 @@ set -eu
 
 # Classify a terminal response document. Budget exhaustion is the only
 # terminal error Harbor should verifier-score: the workspace may hold real
-# work. The `MaxTurnError:` token is produced exclusively by the owned loop's
-# max-turn guard (rig `PromptError::MaxTurnsError` display); provider,
-# persistence, compaction, and projection failures never contain it, so
-# anything unrecognized stays a hard agent exception.
+# work. The match is anchored to the full owned-loop error shape — the
+# max-turn guard's `PromptError::MaxTurnsError` display as persisted by
+# `agent stream failed: {error}` (pinned by the runtime max-turns test) at
+# the very start of the error_message value. A provider error that merely
+# echoes upstream text mentioning MaxTurnError therefore stays an agent
+# exception, as does everything else unrecognized. Matching the quoted
+# key-plus-prefix is safe against model content: JSON escapes quotes inside
+# string values, so this byte sequence can only introduce the real field.
+_MAX_TURN_ERROR_PREFIX='"error_message": "agent stream failed: PromptError: MaxTurnError: '
+
 classify_response() {
   response_file=$1
   response_file_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_file}" | head -1)
@@ -15,7 +21,7 @@ classify_response() {
       printf 'completed\n'
       ;;
     error)
-      if grep '"error_message":' "${response_file}" | grep -q 'MaxTurnError:'; then
+      if grep -qF "${_MAX_TURN_ERROR_PREFIX}" "${response_file}"; then
         printf 'max_turns_exhausted\n'
       else
         printf 'agent_error\n'
@@ -130,6 +136,16 @@ EOF
   }
 }
 EOF
+  # A provider error may embed upstream response text that mentions the
+  # MaxTurn token; that is still an infrastructure failure.
+  cat >"${self_test_dir}/provider-echoes-max-turn.json" <<'EOF'
+{
+  "request_id": "req-11",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: upstream mentioned MaxTurnError: (reached max turn limit: 250)"
+}
+EOF
   # The nested request's failure_reason must never classify on its own: here
   # it mentions MaxTurnError but the response's own error is a provider one.
   cat >"${self_test_dir}/envelope-nested-max-turn-only.json" <<'EOF'
@@ -156,6 +172,7 @@ EOF
   expect_outcome missing-status unexpected:missing
   expect_outcome envelope-max-turns max_turns_exhausted
   expect_outcome envelope-nested-max-turn-only agent_error
+  expect_outcome provider-echoes-max-turn agent_error
 
   if [ "${failures}" -ne 0 ]; then
     printf 'self-test failed: %s classification(s) wrong\n' "${failures}" >&2

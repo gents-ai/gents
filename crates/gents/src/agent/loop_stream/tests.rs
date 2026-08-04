@@ -1477,13 +1477,15 @@ async fn exceeding_max_turns_terminates_with_error() {
         "max-turns exhaustion must be non-retryable; got {last:?}"
     );
     // The Harbor adapter (scripts/harbor/run_gents.sh) classifies budget
-    // exhaustion by this token in the persisted error message
-    // (`agent stream failed: {error}` in agent/daemon/inference.rs). If rig's
-    // display wording changes, MaxTurn trials silently revert to Harbor
-    // infrastructure exceptions instead of verifier-scored attempts.
+    // exhaustion by matching the persisted error message's exact prefix:
+    // `agent stream failed: ` (agent/daemon/inference.rs) followed by this
+    // display. If rig's wording changes, MaxTurn trials silently revert to
+    // Harbor infrastructure exceptions instead of verifier-scored attempts.
     assert!(
-        error.to_string().contains("MaxTurnError:"),
-        "max-turns error display must carry the MaxTurnError: token; got {error}"
+        error
+            .to_string()
+            .starts_with("PromptError: MaxTurnError: "),
+        "max-turns error display must start with the anchored Harbor prefix; got {error}"
     );
 }
 
