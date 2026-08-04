@@ -122,13 +122,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # gents-migration's build script compiles the fixture lens for WASM and
+      # is in the dependency graph of every heavy suite. Install the target
+      # explicitly instead of relying on mutable host toolchain state.
       - uses: dtolnay/rust-toolchain@1.97.1
-
-      - name: Install support-suite Rust components
-        if: matrix.suite == 'support'
-        run: |
-          rustup component add rustfmt
-          rustup target add wasm32-unknown-unknown
+        with:
+          components: rustfmt
+          targets: wasm32-unknown-unknown
 
       - name: Install elan
         if: matrix.suite == 'runtime'
