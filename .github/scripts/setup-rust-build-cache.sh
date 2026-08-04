@@ -35,13 +35,21 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
     echo "::error::Direct rustc wrapper is missing or not executable (${direct_wrapper})."
     exit 1
   fi
-  if [[ -e "${cargo_config}" ]]; then
-    echo "::error::Refusing to overwrite repository Cargo config (${cargo_config})."
+  if [[ ! -f "${cargo_config}" ]]; then
+    echo "::error::Repository Cargo config is missing (${cargo_config})."
     exit 1
   fi
-  mkdir -p "${cargo_config_dir}"
-  printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${cargo_config}"
-  echo "Installed job-local Cargo wrapper override at ${cargo_config}."
+  if grep -Eq '^[[:space:]]*(\[build\]|(build\.)?rustc-wrapper[[:space:]]*=)' "${cargo_config}"; then
+    echo "::error::Repository Cargo config already defines build settings; update the CI wrapper injection (${cargo_config})."
+    exit 1
+  fi
+  cargo_config_tmp="$(mktemp "${cargo_config}.ci.XXXXXX")"
+  {
+    printf 'build.rustc-wrapper = "%s"\n\n' "${direct_wrapper}"
+    cat "${cargo_config}"
+  } > "${cargo_config_tmp}"
+  mv "${cargo_config_tmp}" "${cargo_config}"
+  echo "Injected the job-local Cargo wrapper override into ${cargo_config}."
   echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
   exit 0
 fi
