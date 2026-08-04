@@ -549,7 +549,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = 120,
-        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs and also the foreground cap (backgrounded runs use the built-in background lifetime budget)"
+        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs, and the foreground cap unless --command-timeout-max-secs raises it (backgrounded runs use the built-in background lifetime budget)"
     )]
     pub(crate) command_timeout_secs: u64,
     #[arg(
