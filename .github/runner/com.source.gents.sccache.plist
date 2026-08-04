@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.source.gents.sccache</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/admin/.ghrunner/start-gents-sccache.sh</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SCCACHE_CACHE_SIZE</key>
+    <string>120G</string>
+    <key>SCCACHE_DIR</key>
+    <string>/Users/admin/.cache/sccache</string>
+    <key>SCCACHE_ERROR_LOG</key>
+    <string>/Users/admin/Library/Logs/gents-sccache.log</string>
+    <key>SCCACHE_IDLE_TIMEOUT</key>
+    <string>0</string>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/admin/.cache/sccache</string>
+  <key>StandardOutPath</key>
+  <string>/Users/admin/Library/Logs/gents-sccache.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/admin/Library/Logs/gents-sccache.stderr.log</string>
+</dict>
+</plist>

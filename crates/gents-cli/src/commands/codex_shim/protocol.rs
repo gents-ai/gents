@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
-use codex_protocol::models::MessagePhase;
 use gents::InferenceBackend;
+use gents_codex_protocol as codex;
+use gents_codex_protocol::MessagePhase;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};

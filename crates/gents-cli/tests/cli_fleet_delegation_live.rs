@@ -58,11 +58,11 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use codex_app_server_protocol as codex;
 use futures_util::{SinkExt, StreamExt};
 use gents::{
     subagent_target_entry, JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
+use gents_codex_protocol as codex;
 use gents_protocol::message::{
     AssistantContent, Message as ProtocolMessage, ToolResultContent, UserContent,
 };

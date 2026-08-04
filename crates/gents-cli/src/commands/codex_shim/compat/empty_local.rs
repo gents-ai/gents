@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde_json::json;
 
 use super::super::protocol::{absolute_path, send_result, send_typed_json_result};

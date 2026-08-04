@@ -32,9 +32,8 @@ The macOS release workflow:
 - runs on a self-hosted Mac Studio runner labeled `self-hosted`, `macOS`,
   `ARM64`, and `studio`;
 - caps Cargo build fan-out with `CARGO_BUILD_JOBS` and uses disk-backed
-  `sccache` to reduce repeated Rust compilation on memory-constrained Studio
-  runners;
-- builds `gents-cli` in release mode, producing `target/release/gents`;
+  `sccache`, forcing recache so release objects cannot come from PR jobs;
+- builds `gents-cli` in a release-only persistent Cargo target tree;
 - unlocks the runner's persistent signing keychain;
 - makes that keychain visible to non-interactive `codesign` jobs;
 - smoke-signs a test binary before the Rust build starts;
@@ -65,17 +64,12 @@ when present, because non-interactive runner shells may not include
 Set these repository or environment secrets before running the release workflow:
 
 ```text
-PRIVATE_REPO_PAT
 MACOS_CODESIGN_IDENTITY
 MACOS_CODESIGN_KEYCHAIN_PASSWORD
 MACOS_NOTARY_API_KEY
 MACOS_NOTARY_ISSUER_ID
 MACOS_NOTARY_KEY_ID
 ```
-
-`PRIVATE_REPO_PAT` is the same private dependency fetch token used by CI. The
-workflow disables checkout's persisted `GITHUB_TOKEN` credentials and uses this
-PAT for Source Network git dependencies, matching the Backbone CI pattern.
 
 `MACOS_CODESIGN_IDENTITY` can be the identity name shown by
 `security find-identity -v -p codesigning`, or the certificate SHA-1 hash from
@@ -92,7 +86,8 @@ The workflow also honors optional repository variables:
 
 ```text
 CARGO_BUILD_JOBS=4
-SCCACHE_CACHE_SIZE=60G
+CARGO_RELEASE_TARGET_ROOT=/Users/admin/.cache/gents-cargo-target-release
+SCCACHE_CACHE_SIZE=120G
 SCCACHE_DIR=/Users/admin/.cache/sccache
 MACOS_CODESIGN_KEYCHAIN_PATH=/Users/admin/Library/Keychains/gents-signing.keychain-db
 MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled
@@ -102,6 +97,10 @@ MACOS_CODESIGN_TIMESTAMP_MODE=auto|enabled
 non-model memory headroom on shared Studio hosts. `SCCACHE_DIR` defaults to a
 disk-backed cache under `/Users/admin/.cache/sccache`; do not point it at a
 memory-backed volume.
+
+`CARGO_RELEASE_TARGET_ROOT` defaults to the path shown above. Keep it separate
+from `CARGO_TARGET_ROOT`, which PR jobs populate. The workflow also sets
+`SCCACHE_RECACHE=1` so release builds bypass compiler objects written by PRs.
 
 `MACOS_CODESIGN_KEYCHAIN_PATH` defaults to
 `$HOME/Library/Keychains/gents-signing.keychain-db`.

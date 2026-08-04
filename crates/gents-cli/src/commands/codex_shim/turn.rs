@@ -3,7 +3,7 @@ mod stream;
 mod submission;
 
 use anyhow::Result;
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use tokio::sync::watch;
 
 pub(super) use active::interrupt_active_turn;

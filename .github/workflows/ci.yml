@@ -22,14 +22,20 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
+  # cores free for the OS and other host services.
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
-  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  # The host service and clients normalize every registered checkout root.
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
 
 jobs:
@@ -37,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -71,48 +77,66 @@ jobs:
         run: scripts/rename-to-gents.sh guard all
 
   rust-and-cli:
-    needs: [rename-guard, lean-proofs]
-    if: ${{ always() }}
-    runs-on: [self-hosted, macOS, ARM64, studio]
-    # A cold self-hosted checkout must compile and link every Rust test target;
-    # repository/path changes invalidate the disk-backed build cache.
+    name: rust-and-cli (${{ matrix.suite }})
+    needs: rename-guard
+    runs-on:
+      [self-hosted, macOS, ARM64, studio, "${{ matrix.host }}", "${{ matrix.slot }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep each suite on one runner process so both the host-local
+          # sccache and that process's linked Cargo artifacts stay warm. Pair
+          # a heavy suite with a lighter one on each physical Studio.
+          - suite: runtime
+            host: studio-1
+            slot: ci-runtime
+            cargo_incremental: "1"
+            # sccache rejects rustc incremental mode rather than passing it
+            # through, so the persistent target tree owns these rebuilds.
+            rustc_wrapper: .github/scripts/rustc-direct.sh
+          - suite: support
+            host: studio-1
+            slot: ci-support
+            cargo_incremental: "0"
+            rustc_wrapper: sccache
+          - suite: desktop
+            host: studio-2
+            slot: ci-desktop
+            cargo_incremental: "1"
+            rustc_wrapper: .github/scripts/rustc-direct.sh
+          - suite: cli
+            host: studio-2
+            slot: ci-cli
+            cargo_incremental: "1"
+            rustc_wrapper: .github/scripts/rustc-direct.sh
+    # A cold runner instance must compile and link every Rust target. Each
+    # runner process owns a durable target directory; the short support suite
+    # also uses the host-shared sccache service.
     timeout-minutes: 180
+    env:
+      # RUSTC_WRAPPER controls this Cargo process; the config-form override is
+      # inherited by recursive Cargo invocations from build scripts.
+      CARGO_BUILD_RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
+      CARGO_INCREMENTAL: ${{ matrix.cargo_incremental }}
+      RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
     steps:
-      - name: Require rename guard
-        if: ${{ needs.rename-guard.result != 'success' }}
-        run: |
-          echo "::error::rename-guard must pass before the Rust and CLI suites run (got '${{ needs.rename-guard.result }}')."
-          exit 1
-
-      - name: Require Lean/Rust contract gate
-        if: ${{ needs.lean-proofs.result != 'success' }}
-        run: |
-          echo "::error::lean-proofs must pass before the Rust and CLI suites run (got '${{ needs.lean-proofs.result }}')."
-          exit 1
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
-
-      - uses: dtolnay/rust-toolchain@stable
+      # gents-migration's build script compiles the fixture lens for WASM and
+      # is in the dependency graph of every heavy suite. Install the target
+      # explicitly instead of relying on mutable host toolchain state.
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           components: rustfmt
           targets: wasm32-unknown-unknown
 
       - name: Install elan
+        # Runtime conformance and desktop-bridge tests both load the generated
+        # Lean contract.
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
@@ -122,164 +146,136 @@ jobs:
           "$HOME/.elan/bin/elan" --version
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
 
+      # Runtime conformance and desktop-bridge tests load the generated Lean
+      # contract. Mathlib publishes matching precompiled artifacts; without
+      # this cache Lake recompiles the dependency graph in every clean checkout.
+      - name: Prepare persistent Lean build cache
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
+        run: .github/scripts/setup-lean-build-cache.sh
+
+      - name: Download precompiled Mathlib artifacts
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
+        working-directory: crates/gents/proofs
+        # Lean 4.18's LLVM 15 linker emits a native cache executable that
+        # macOS 26 rejects. Running the same checked-in entry point through the
+        # interpreter avoids that dyld incompatibility without changing tools.
+        run: |
+          lake build Cache.Main
+          lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
+
       - name: Check formatting
+        if: matrix.suite == 'support'
         run: cargo fmt --all --check
 
       - name: Assert native-e2e excluded from production capabilities
+        if: matrix.suite == 'support'
         run: ./scripts/check-native-e2e-capabilities.sh
 
-      # Compile the FULL target surface — examples, every test target, and the
-      # desktop crates — which the test steps below do not cover. A PR that adds
-      # a required field to a widely-constructed struct breaks literal
-      # construction sites in these uncovered targets; this fails fast on them
-      # instead of letting the breakage slip to main and land on the next PR
-      # (#646). It also warms the build cache for the test steps that follow.
-      - name: Compile all targets
-        run: cargo check --workspace --all-targets
+      - name: Verify Rust CI covers every workspace package
+        if: matrix.suite == 'support'
+        run: .github/scripts/check-rust-ci-package-coverage.sh
+
+      # Together these four jobs compile and link the FULL workspace target
+      # surface — examples, benches, every test target, and the desktop crates.
+      # This preserves the #646 construction-site fence without doing a
+      # metadata-only cargo check pass before the test-profile build.
+      - name: Compile and link runtime targets
+        if: matrix.suite == 'runtime'
+        run: .github/scripts/compile-rust-ci-suite.sh runtime
+
+      - name: Run proof conformance tests
+        if: matrix.suite == 'runtime'
+        run: cargo test -p gents --test conformance
+
+      - name: Compile and link CLI targets
+        if: matrix.suite == 'cli'
+        run: .github/scripts/compile-rust-ci-suite.sh cli
+
+      - name: Compile and link desktop targets
+        if: matrix.suite == 'desktop'
+        run: .github/scripts/compile-rust-ci-suite.sh desktop
+
+      - name: Compile and link support targets
+        if: matrix.suite == 'support'
+        run: .github/scripts/compile-rust-ci-suite.sh support
 
       - name: Build the WASM lens target
+        if: matrix.suite == 'support'
         run: cargo build -p gents-lens-fixture-add-label --target wasm32-unknown-unknown
 
       - name: Run migration package tests
+        if: matrix.suite == 'support'
         run: |
-          cargo test -p gents-migration
-          cargo test -p gents-lens-fixture-add-label
+          cargo test -p gents-migration -p gents-lens-fixture-add-label
 
-      - name: Run PR smoke tests
-        if: github.event_name == 'pull_request'
+      - name: Run PR runtime smoke tests
+        if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
         run: |
           cargo test -p gents --lib runtime_status::tests::
           cargo test -p gents --lib toolset::tests::read_only_bash
+
+      - name: Run PR CLI smoke tests
+        if: matrix.suite == 'cli' && github.event_name == 'pull_request'
+        run: |
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
-          cargo test -p gents-desktop-core
-          cargo test -p gents-desktop
-          cargo test -p gents-desktop-bridge
-          cargo test -p gents-desktop-tauri --lib
-          cargo test -p fixture-domain-plugin --lib
-          cargo test -p gents-fixture-host
 
       - name: Run full library and integration tests
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         run: cargo test -p gents --lib --tests
 
       - name: Run desktop Rust package tests
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'desktop'
         run: |
-          cargo test -p gents-desktop-core
-          cargo test -p gents-desktop
-          cargo test -p gents-desktop-bridge
+          cargo test \
+            -p gents-desktop-core \
+            -p gents-desktop \
+            -p gents-desktop-bridge \
+            -p fixture-domain-plugin \
+            -p gents-fixture-host
           cargo test -p gents-desktop-tauri --lib
-          cargo test -p fixture-domain-plugin --lib
-          cargo test -p gents-fixture-host
 
       - name: Run full CLI test suite
-        if: github.event_name != 'pull_request'
+        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
         run: cargo test -p gents-cli -- --nocapture --test-threads=1
 
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-
       - name: Show Rust build cache stats
-        if: always()
+        # The three heavy suites use runner-local incremental state. Keep one
+        # cache-health report for the support shard and non-CI Studio users.
+        if: always() && matrix.suite == 'support'
         run: .github/scripts/show-sccache-stats.sh
 
   lean-proofs:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # Reuse the warm proof cache on studio-1's light support slot. This keeps
+    # the runtime slot free once rename-guard releases the Rust matrix.
+    runs-on:
+      [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
-
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install elan
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          cargo_dir="$(dirname "$(rustup which cargo)")"
-          echo "${cargo_dir}" >> "$GITHUB_PATH"
-          "${cargo_dir}/cargo" --version
           "$HOME/.elan/bin/elan" --version
 
-      - name: Install protobuf compiler
+      - name: Prepare persistent Lean build cache
+        run: .github/scripts/setup-lean-build-cache.sh
+
+      - name: Download precompiled Mathlib artifacts
+        working-directory: crates/gents/proofs
         run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
-
-      - name: Prepare disk-backed Rust build cache
-        run: .github/scripts/setup-rust-build-cache.sh
+          lake build Cache.Main
+          lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
 
       - name: Reject Lean sorry placeholders
         working-directory: crates/gents/proofs
@@ -293,58 +289,104 @@ jobs:
         working-directory: crates/gents/proofs
         run: lake build
 
-      - name: Run proof conformance tests
-        run: cargo test -p gents --test conformance
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-
-      - name: Show Rust build cache stats
-        if: always()
-        run: .github/scripts/show-sccache-stats.sh
-
-  desktop-ui:
-    runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@v4
+      # The chat package consumes the generated ClientShell contract. Running
+      # this test after the proof build reuses the persistent Lake cache; on a
+      # cold hosted runner, the same collection step takes roughly 10 minutes.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Install elan
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Build desktop package dependencies
         run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-          "$HOME/.elan/bin/elan" --version
+          npm run build --workspace @source-inc/gents-desktop-client
+          npm run build --workspace @source-inc/gents-desktop-ui
+          npm run build --workspace @source-inc/gents-desktop-chat
+
+      - name: Run Lean-backed desktop chat conformance tests
+        run: npm test --workspace @source-inc/gents-desktop-chat
+
+  desktop-packages:
+    # Package boundary, publishability, and package-local tests are independent
+    # of the desktop application/browser gate and should not block it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install workspace frontend dependencies
         run: npm ci
 
-      - name: Build and test desktop packages
+      - name: Check desktop package boundaries
+        run: npm run check:package-boundaries
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      # The chat package's Lean-backed conformance test runs in lean-proofs so
+      # it can reuse that job's already-built, persistent proof cache.
+      - name: Run desktop package tests
         run: |
-          npm run check:package-boundaries
-          npm run build:packages
-          npm run test:packages
-          npm run build --workspace @source-inc/fixture-host-ui
-          # Exercise the same relative output path used by the release workflow.
-          ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
+          npm run test --workspace @source-inc/gents-desktop-client
+          npm run test --workspace @source-inc/gents-desktop-ui
+          npm run test --workspace @source-inc/gents-desktop-fleet
+          npm run test --workspace @source-inc/gents-desktop-operations
+
+      - name: Build desktop fixture host
+        run: npm run build --workspace @source-inc/fixture-host-ui
+
+      - name: Verify packed desktop packages
+        # Exercise the same relative output path used by the release workflow.
+        run: ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
+
+  desktop-ui:
+    # This job exercises browser-only code. Keep scarce macOS capacity for the
+    # Rust/Lean work that benefits from persistent host caches.
+    name: desktop-ui (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, browser]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      # The application imports the workspaces through their dist exports, so
+      # each isolated shard prepares those small build products locally.
+      - name: Build desktop packages
+        run: npm run build:packages
 
       - name: Install Playwright browser
+        if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
-        run: npx playwright install chromium
+        run: npx playwright install --with-deps chromium
 
       - name: Check desktop formatting
+        if: matrix.suite == 'unit'
         working-directory: apps/gents-desktop
         run: npm run format:check
 
@@ -353,12 +395,54 @@ jobs:
         run: npm run build
 
       - name: Run desktop unit tests
+        if: matrix.suite == 'unit'
         working-directory: apps/gents-desktop
         run: npm test
 
       - name: Run desktop browser journeys
+        if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
         run: npm run test:ui:e2e
+
+      - name: Upload desktop UI artifacts
+        if: failure() && matrix.suite == 'browser'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-ui-artifacts
+          if-no-files-found: ignore
+          path: |
+            apps/gents-desktop/test-results
+            apps/gents-desktop/playwright-report
+            apps/gents-desktop/playwright-screenshots-report
+
+  desktop-ui-bombadil:
+    # Bombadil's exact Linux failure trace passes on macOS. Keep this small
+    # platform-specific smoke on a Studio while the portable UI suite runs on
+    # hosted Linux; it normally releases the slot before Rust becomes ready.
+    # Keep the heavier desktop Rust slot available; the CLI shard is short and
+    # can wait for this platform-specific smoke test to release its runner.
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install workspace frontend dependencies
+        run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      - name: Install Playwright browser
+        working-directory: apps/gents-desktop
+        run: npx playwright install chromium
 
       - name: Run desktop Bombadil smoke
         working-directory: apps/gents-desktop
@@ -369,20 +453,9 @@ jobs:
       # against a known-good trace (npm run test:ui:fuzz -- --reproduce <dir>).
       - name: Upload Bombadil trace
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-ui-bombadil-trace
           if-no-files-found: ignore
           retention-days: 30
           path: apps/gents-desktop/test-results/bombadil
-
-      - name: Upload desktop UI artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-ui-artifacts
-          if-no-files-found: ignore
-          path: |
-            apps/gents-desktop/test-results
-            apps/gents-desktop/playwright-report
-            apps/gents-desktop/playwright-screenshots-report
