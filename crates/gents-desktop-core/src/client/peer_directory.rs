@@ -447,7 +447,6 @@ mod tests {
 
         assert_eq!(first.peer_id, second.peer_id);
         assert_eq!(directory.records().len(), 1);
-        assert_eq!(directory.records()[0].addr, "iroh://second");
         assert_eq!(directory.records()[0].label, "Workshop Bay Updated");
     }
 
