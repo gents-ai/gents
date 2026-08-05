@@ -84,7 +84,10 @@ export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
 
 export async function openChat(page: Page) {
   await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
+  await page.getByTestId(`fleet-row-${PEER_ID}`).click();
+  if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760) {
+    await page.getByTestId("conversation-session-intro").click();
+  }
   await expect(page.getByTestId("composer-input")).toBeVisible();
 }
 
@@ -101,8 +104,7 @@ export async function openChatNavigation(page: Page) {
 
 export async function openConfig(page: Page) {
   await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-chat-name-${PEER_ID}`).click();
-  await expect(page.getByTestId("composer-input")).toBeVisible();
+  await page.getByTestId(`fleet-row-${PEER_ID}`).click();
   await openChatNavigation(page);
   await page.getByRole("button", { name: "Configure" }).click();
   await expect(page.locator(".config-workspace")).toBeVisible();

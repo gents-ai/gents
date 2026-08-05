@@ -47,7 +47,7 @@ test.describe("desktop live browser smoke", () => {
       await gotoLiveHarness(page, liveRunner.baseUrl);
       await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
-      await page.locator('[data-testid^="fleet-chat-name-"]').first().click();
+      await page.locator('[data-testid^="fleet-row-"]').first().click();
       await expect(page.getByTestId("composer-input")).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
