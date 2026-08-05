@@ -105,16 +105,23 @@ struct ReasoningCursor {
     progress_seq: Option<String>,
     segment: u64,
     /// Text of the most recently completed segment, retained while the durable
-    /// row may still serve it stale — i.e. until the runtime's reset-tail write
-    /// (an observed empty tail) proves the buffer was actually cleared. Without
-    /// it, re-observing the unchanged text after a boundary manufactures a
-    /// full replay on a fresh segment (#1040); the Lean contract
-    /// `reset_before_terminal_suppresses_durable_replay` forbids exactly that.
+    /// row may still serve it stale. Cleared once staleness is disproven: an
+    /// observed empty tail (the runtime's reset-tail write landed), an advanced
+    /// `reasoning_progress_seq`, growth, divergence, `prime()`, or `reset()`.
+    /// Without it, re-observing the unchanged text after a boundary
+    /// manufactures a full replay on a fresh segment (#1040). The Lean
+    /// contract `reset_before_terminal_suppresses_durable_replay` forbids the
+    /// same replay at the terminal boundary; this cursor bookkeeping is what
+    /// establishes that contract's no-live-delta precondition mid-stream.
     completed_preview: String,
-    /// `reasoning_progress_seq` observed when the segment completed: a stale
-    /// re-read carries the same value, a genuine byte-identical rewrite has
-    /// advanced it (`write_reasoning` bumps it on every append).
+    /// `reasoning_progress_seq` from the last observation attributable to the
+    /// completed segment (the poll BEFORE the boundary read — the boundary
+    /// read itself may already carry a post-reset rewrite's advanced seq).
+    /// A stale re-read matches it; a genuine byte-identical rewrite has
+    /// advanced past it (`write_reasoning` bumps the seq on every append).
     completed_reasoning_seq: Option<String>,
+    /// `reasoning_progress_seq` seen on the previous `observe` call.
+    observed_reasoning_seq: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -962,6 +969,8 @@ impl ReasoningCursor {
             && progress_seq.is_some()
             && self.progress_seq != progress_seq;
         self.progress_seq = progress_seq;
+        let previous_reasoning_seq = self.observed_reasoning_seq.take();
+        self.observed_reasoning_seq = reasoning_seq.clone();
         let explicit_boundary = current.is_empty() && !self.observed_preview.is_empty();
         let previous_preview = self.observed_preview.clone();
         let completed_item_id = ((progress_boundary || explicit_boundary)
@@ -969,7 +978,7 @@ impl ReasoningCursor {
         .then(|| self.active_item_id(request_id));
         if completed_item_id.is_some() {
             self.completed_preview = std::mem::take(&mut self.observed_preview);
-            self.completed_reasoning_seq = reasoning_seq.clone();
+            self.completed_reasoning_seq = previous_reasoning_seq.or_else(|| reasoning_seq.clone());
             self.active_item_id = None;
             self.segment = self.segment.saturating_add(1);
         }
@@ -1022,6 +1031,32 @@ impl ReasoningCursor {
                         text: suffix.to_string(),
                     }),
                 };
+            } else if !progress_boundary {
+                // The durable reasoning column is a bounded rolling tail
+                // (MAX_LIVE_REASONING_BYTES); once the completed segment's
+                // stored tail was at capacity, growth rolls the window instead
+                // of prefix-extending it. On a stale-window poll (no fresh
+                // boundary), recover the unseen suffix via overlap so the
+                // already-completed bytes are not re-streamed. Boundary-call
+                // divergence keeps full-text semantics (pinned by
+                // reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed).
+                let overlap = suffix_prefix_overlap(&self.completed_preview, current);
+                self.completed_preview.clear();
+                self.completed_reasoning_seq = None;
+                if overlap > 0 {
+                    self.observed_preview = current.to_string();
+                    let item_id = self
+                        .active_item_id
+                        .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
+                        .clone();
+                    return ReasoningObservation {
+                        completed_item_id,
+                        delta: Some(ReasoningDelta {
+                            item_id,
+                            text: current[overlap..].to_string(),
+                        }),
+                    };
+                }
             } else {
                 self.completed_preview.clear();
                 self.completed_reasoning_seq = None;
@@ -1069,6 +1104,7 @@ impl ReasoningCursor {
         self.active_item_id = Some(item_id);
         self.completed_preview.clear();
         self.completed_reasoning_seq = None;
+        self.observed_reasoning_seq = None;
     }
 
     fn active_item_id(&self, request_id: &str) -> String {
@@ -1084,6 +1120,7 @@ impl ReasoningCursor {
         self.segment = 0;
         self.completed_preview.clear();
         self.completed_reasoning_seq = None;
+        self.observed_reasoning_seq = None;
     }
 }
 
@@ -1774,6 +1811,64 @@ mod tests {
             .expect("post-reset reasoning streams from scratch");
         assert_eq!(fresh.item_id, "gents-reasoning-request-1");
         assert_eq!(fresh.text, "durable thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_streams_identical_rewrite_that_landed_with_the_boundary() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("1".to_string()),
+                Some("5".to_string()),
+            )
+            .delta
+            .expect("first reasoning delta");
+
+        // Reset-tail AND a byte-identical rewrite both landed inside the poll
+        // gap: the boundary read itself already carries the NEW segment's seq.
+        let boundary = cursor.observe(
+            "request-1",
+            "durable thought",
+            Some("2".to_string()),
+            Some("7".to_string()),
+        );
+        assert!(boundary.completed_item_id.is_some());
+
+        // The completed-segment memory must hold the PRE-boundary seq, so the
+        // genuinely new identical segment streams on the next poll.
+        let fresh = cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("2".to_string()),
+                Some("7".to_string()),
+            )
+            .delta
+            .expect("identical rewrite observed at the boundary must still stream");
+        assert_eq!(fresh.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(fresh.text, "durable thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_streams_only_rolled_suffix_when_stale_tail_rolls() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "first middle", Some("1".to_string()), None)
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe("request-1", "first middle", Some("2".to_string()), None);
+        assert!(boundary.completed_item_id.is_some());
+
+        // The bounded tail rolled past the completed segment without an
+        // observed reset: only the unseen portion may stream.
+        let rolled = cursor
+            .observe("request-1", "middle last", Some("2".to_string()), None)
+            .delta
+            .expect("rolled suffix after boundary");
+        assert_eq!(rolled.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(rolled.text, " last");
     }
 
     #[test]
