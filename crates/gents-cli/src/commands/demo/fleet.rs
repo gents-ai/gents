@@ -71,6 +71,38 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
     cmd.spawn().context("spawning demo server")
 }
 
+/// `/healthz` answering only proves the node HTTP server is up; the runtime
+/// (and the schemas the p2p subcommands query, e.g. AgentNetwork before a
+/// pairings join) is ready strictly later. Gate on AgentRuntime reaching
+/// `ready` before driving CLI subcommands at this node (#990 — the pattern
+/// from #935/#926).
+pub(super) async fn wait_runtime_ready(
+    graphql: &str,
+    agent_did: &str,
+    server: &mut Child,
+) -> Result<()> {
+    let query = format!(
+        r#"{{ AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ process_state }} }}"#,
+        escape_graphql_string(agent_did)
+    );
+    for _ in 0..240 {
+        if let Ok(resp) = post_graphql(graphql, &query).await {
+            if resp
+                .pointer("/data/AgentRuntime/0/process_state")
+                .and_then(Value::as_str)
+                == Some("ready")
+            {
+                return Ok(());
+            }
+        }
+        if let Ok(Some(status)) = server.try_wait() {
+            bail!("demo server exited before its runtime became ready ({status})");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    bail!("timed out waiting for the demo runtime at {graphql} to become ready")
+}
+
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
     let client = reqwest::Client::new();
     for _ in 0..300 {
@@ -113,6 +145,7 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     println!("  starting node B…");
     let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
     wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await?;
+    wait_runtime_ready(&graphql_b, &did_b, &mut server_b).await?;
 
     let (peer_a, addr_a) = p2p_identity(&bin, &home_a, &graphql_a).await?;
     let (peer_b, addr_b) = p2p_identity(&bin, &home_b, &graphql_b).await?;

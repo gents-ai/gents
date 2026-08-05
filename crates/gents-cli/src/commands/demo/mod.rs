@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::cli::args::DemoArgs;
 
 use backend::{read_backend_args, resolve_backend, write_backend_args, BackendChoice};
-use fleet::{desktop, spawn_server, wait_http, Fleet};
+use fleet::{desktop, spawn_server, wait_http, wait_runtime_ready, Fleet};
 use setup::{init_agent, read_agent_did, resolve_home, seed_demo_skills};
 use shell::{print_welcome, run_shell};
 use util::short;
@@ -53,6 +53,7 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
     let mut server = spawn_server(&bin, &home, port, &home.join("server.log"))?;
     wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
+    wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
 
     if first_run {
         seed_demo_skills(&bin, &graphql, &agent_did).await;
