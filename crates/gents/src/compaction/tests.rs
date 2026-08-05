@@ -1214,7 +1214,15 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
     ]);
     let calls = model.calls.clone();
     let requests = model.requests.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let inherited_reasoning = serde_json::json!({
+        "chat_template_kwargs": {
+            "enable_thinking": true,
+            "reasoning_effort": "max"
+        }
+    });
+    let mut config = scheduled_origin_config();
+    config.additional_params = Some(inherited_reasoning.clone());
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 
     let result = compactor
         .compact(
@@ -1249,6 +1257,12 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
     assert!(
         requests[4].output_schema.is_none(),
         "the final escape hatch must bypass the failing guided decoder"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.additional_params.as_ref() == Some(&inherited_reasoning)),
+        "guided compaction and its fallback must inherit the parent reasoning profile"
     );
 }
 
