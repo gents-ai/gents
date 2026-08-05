@@ -45,7 +45,9 @@ structure Catalog where
   models : Finset String
   roots : Finset String
   profiles : Finset String
-  deriving DecidableEq, Repr
+  -- No `Repr`: `Finset` has no `Repr` instance (quotient type); mirrors
+  -- `BearerClaim.ClaimState`.
+  deriving DecidableEq
 
 /-- A typed persona request. String payload fields carry the requested
 values; `key` is the request key that derives the minted selection id. -/
@@ -254,6 +256,9 @@ theorem disable_only_flips_enabled (cat : Catalog) (st : State) (r : Request)
   have hb : (applyStep cat st r).behaviors
       = insert (r.target, false) (st.behaviors.erase (r.target, true)) := by
     rw [applyStep_admitted cat st r hadm, applyAdmitted_disable st r hop]
+    -- `rw`'s implicit rfl uses reducible transparency only; `flipDisabled`
+    -- is a plain def, so close the remaining definitional goal explicitly.
+    exact rfl
   rw [hb]
   refine ⟨Finset.mem_insert_self _ _, ?_, ?_⟩
   · intro hmem
