@@ -17,7 +17,7 @@ export function BehaviorSelectorSection({
   onStartNewConversation,
 }: BehaviorSelectorSectionProps) {
   return (
-    <section className="sidebar-section">
+    <section className="sidebar-section behavior-section">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Chat</p>

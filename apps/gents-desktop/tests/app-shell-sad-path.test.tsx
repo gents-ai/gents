@@ -87,7 +87,9 @@ describe("App shell command sad paths", () => {
         );
       });
       expect(screen.getByRole("heading", { name: "Behavior" })).toBeInTheDocument();
-      expect(screen.getByText("Conversations")).toBeInTheDocument();
+      expect(
+        document.querySelector(".conversation-section .eyebrow"),
+      ).toHaveTextContent("Conversations");
     } finally {
       await driver.dispose();
     }

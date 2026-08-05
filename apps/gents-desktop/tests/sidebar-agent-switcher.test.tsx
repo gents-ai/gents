@@ -48,4 +48,29 @@ describe("sidebar agent switcher", () => {
     expect(screen.queryByTestId("sidebar-agent-switcher")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Alpha" })).toBeInTheDocument();
   });
+
+  it("keeps back navigation and document counts at the top of agent details", () => {
+    const onOpenFleet = vi.fn();
+    const deployment = {
+      ...dep("did:a", "Alpha"),
+      behaviors: [{ behaviorId: "default" }, { behaviorId: "review" }],
+      conversations: [{ sessionId: "session-a" }],
+      tasks: [{ taskId: "task-a" }],
+    } as unknown as DeploymentView;
+
+    render(
+      <ConnectedPeerSection
+        deployments={[deployment]}
+        selectedAgentDid="did:a"
+        onOpenFleet={onOpenFleet}
+        onConfigureDeployment={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText("2 behaviors, 1 conversations, 1 tasks"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("sidebar-back-to-fleet"));
+    expect(onOpenFleet).toHaveBeenCalledOnce();
+  });
 });

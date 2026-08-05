@@ -40,6 +40,20 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
   });
 
+  it("opens agent details from the whole card and summarizes its documents", () => {
+    const props = renderRow();
+
+    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+      `${deployment.behaviors.length} behaviors`,
+    );
+    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+      `${deployment.conversations.length} conversations`,
+    );
+    fireEvent.click(screen.getByTestId("fleet-row-peer-1"));
+
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
+  });
+
   it("keeps chat disabled while signed bearer readiness is pending", () => {
     const props = renderRow(
       {},
@@ -60,6 +74,7 @@ describe("FleetRow", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-config-peer-1"));
     expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.agentDid);
+    expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
   it("shows the deployment's own runtime heartbeat as Last update", () => {

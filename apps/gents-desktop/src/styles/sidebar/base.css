@@ -1,7 +1,7 @@
 @layer sidebar {
   .sidebar {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 2fr) minmax(0, 3fr);
     gap: var(--space-6);
     min-height: 0;
     min-width: 0;
@@ -20,6 +20,18 @@
   .conversation-section {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .behavior-section {
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .behavior-section .compact-list,
+  .conversation-list {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .sidebar .panel-header {
@@ -74,7 +86,7 @@
     }
 
     .sidebar {
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 2fr) minmax(0, 3fr);
       gap: var(--space-3);
       padding: 0;
     }

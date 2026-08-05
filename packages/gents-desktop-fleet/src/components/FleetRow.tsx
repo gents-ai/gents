@@ -1,15 +1,9 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent, type MouseEvent } from "react";
 
 import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
   BootstrapSummary,
   DeploymentView,
-} from "@source-inc/gents-desktop-client";
-import { CopyButton } from "@source-inc/gents-desktop-ui";
-import {
-  displayAgentIdentity,
-  displayBehaviorLabel,
-  displayGraphqlEndpoint,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import {
@@ -97,15 +91,36 @@ export function FleetRow({
     defaultBehavior?.toolSelectionId,
     isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
   );
-  const agentIdentity = displayAgentIdentity(deployment.agentDid);
-  const graphqlEndpoint = displayGraphqlEndpoint(deployment.graphql);
-  const defaultBehaviorLabel = displayBehaviorLabel(
-    deployment.defaultBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId,
-  );
   const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;
 
+  function openDetailsFromCard(
+    event: MouseEvent<HTMLTableRowElement> | KeyboardEvent<HTMLTableRowElement>,
+  ) {
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      target.closest("button, input, select, textarea, a")
+    ) {
+      return;
+    }
+    onOpenChat(deployment.agentDid);
+  }
+
   return (
-    <tr data-testid={`fleet-row-${deployment.peerId}`}>
+    <tr
+      aria-label={`Open ${deployment.label} details`}
+      className="fleet-deployment-row"
+      data-testid={`fleet-row-${deployment.peerId}`}
+      onClick={openDetailsFromCard}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openDetailsFromCard(event);
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <td>
         <div className="fleet-agent-cell">
           <span className={`fleet-status ${status.tone}`} title={status.title}>
@@ -140,14 +155,9 @@ export function FleetRow({
             ) : (
               <button
                 className="fleet-agent-name"
-                data-testid={`fleet-chat-name-${deployment.peerId}`}
-                disabled={!chatReady}
+                data-testid={`fleet-detail-name-${deployment.peerId}`}
                 onClick={() => onOpenChat(deployment.agentDid)}
-                title={
-                  chatReady
-                    ? `Open ${deployment.label} chat`
-                    : "Chat unlocks after signed reciprocal pairing completes"
-                }
+                title={`Open ${deployment.label} details`}
                 type="button"
               >
                 {deployment.agentPrincipal.displayName ?? deployment.label}
@@ -165,20 +175,13 @@ export function FleetRow({
                 <PencilIcon />
               </button>
             ) : null}
-            <span className="muted mono fleet-agent-identity">
-              {[
-                agentIdentity,
-                defaultBehaviorLabel
-                  ? `default: ${defaultBehaviorLabel}`
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" | ")}
-              <CopyButton
-                className="fleet-did-copy"
-                label="Copy DID"
-                getText={() => deployment.agentDid}
-              />
+            <span
+              className="muted fleet-agent-summary"
+              data-testid={`fleet-summary-${deployment.peerId}`}
+            >
+              {deployment.behaviors.length} behaviors ·{" "}
+              {deployment.conversations.length} conversations ·{" "}
+              {deployment.tasks.length} tasks
             </span>
             {status.lastError ? (
               <span
@@ -186,14 +189,6 @@ export function FleetRow({
                 data-testid={`fleet-error-${deployment.peerId}`}
               >
                 {formatPeerConnectionError(status.lastError, "repair-p2p")}
-              </span>
-            ) : null}
-            {graphqlEndpoint ? (
-              <span
-                className="fleet-agent-endpoint mono"
-                title={`GraphQL endpoint: ${deployment.graphql ?? ""}`}
-              >
-                GraphQL {graphqlEndpoint}
               </span>
             ) : null}
           </div>
@@ -242,7 +237,7 @@ export function FleetRow({
         <div className="fleet-row-actions">
           <button
             aria-label={`Open ${deployment.label} chat`}
-            className="primary-button fleet-table-action"
+            className="primary-button fleet-table-action fleet-open-chat-action"
             data-testid={`fleet-chat-${deployment.peerId}`}
             disabled={!chatReady}
             onClick={() => onOpenChat(deployment.agentDid)}
@@ -258,7 +253,7 @@ export function FleetRow({
           {onOpenCode ? (
             <button
               aria-label={`Open ${deployment.label} in Code mode`}
-              className="ghost-button fleet-table-action"
+              className="ghost-button fleet-table-action fleet-open-code-action"
               data-testid={`fleet-code-${deployment.peerId}`}
               onClick={() => onOpenCode(deployment.agentDid)}
               title="Open Code mode"

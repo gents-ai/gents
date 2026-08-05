@@ -37,7 +37,7 @@ function renderList(
             { behaviorId: "default", displayName: "Amy", isDefault: true },
             { behaviorId: "session-classifier", displayName: "Session Classifier" },
           ],
-          tasks: [],
+          tasks: [{ taskId: "task-a", name: "Daily review" }],
         } as unknown as DeploymentView,
       ]}
       selectedAgentDid={AGENT}
@@ -88,6 +88,18 @@ describe("conversation list", () => {
     expect(screen.getByTestId("conversation-s-default")).toBeInTheDocument();
     expect(screen.getByTestId("conversation-s-legacy")).toBeInTheDocument();
     expect(screen.queryByTestId("conversation-s-classifier")).not.toBeInTheDocument();
+  });
+
+  it("shows task-linked conversations without a task dropdown", () => {
+    renderList([
+      conv({ sessionId: "s-task", taskId: "task-a", taskName: "Daily review" }),
+      conv({ sessionId: "s-manual", taskId: null, title: "manual chat" }),
+    ]);
+
+    expect(screen.queryByTestId("conversation-task-filter")).not.toBeInTheDocument();
+    expect(screen.getByTestId("conversation-s-task")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-s-manual")).toBeInTheDocument();
+    expect(screen.getByText("Daily review")).toBeInTheDocument();
   });
 
   it("renames inline and cancels on Escape", async () => {

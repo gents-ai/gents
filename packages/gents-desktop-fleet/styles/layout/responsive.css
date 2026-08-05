@@ -57,5 +57,88 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
     }
+
+    .fleet-dashboard .fleet-table-wrap {
+      overflow: visible;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .fleet-dashboard .fleet-table,
+    .fleet-dashboard .fleet-table tbody {
+      display: block;
+      width: 100%;
+    }
+
+    .fleet-dashboard .fleet-table thead {
+      display: none;
+    }
+
+    .fleet-dashboard .fleet-table tbody {
+      display: grid;
+      gap: var(--space-4);
+    }
+
+    .fleet-dashboard .fleet-table tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      border: 1px solid var(--border-default);
+      background: var(--color-surface-row);
+    }
+
+    .fleet-dashboard .fleet-table tbody tr:hover td {
+      background: transparent;
+    }
+
+    .fleet-dashboard .fleet-table td {
+      display: none;
+      border: 0;
+    }
+
+    .fleet-dashboard .fleet-table td:first-child,
+    .fleet-dashboard .fleet-table td.fleet-actions-cell {
+      display: block;
+    }
+
+    .fleet-dashboard .fleet-table td:first-child {
+      min-width: 0;
+      padding: var(--space-5);
+    }
+
+    .fleet-table .fleet-agent-cell {
+      min-width: 0;
+    }
+
+    .fleet-table .fleet-actions-cell {
+      position: static;
+      min-width: 0;
+      padding: var(--space-4);
+      background: transparent;
+      background-image: none;
+      box-shadow: none;
+    }
+
+    .fleet-dashboard .fleet-table tbody tr:hover td.fleet-actions-cell {
+      background: transparent;
+      background-image: none;
+    }
+
+    .fleet-table .fleet-row-actions {
+      height: 100%;
+      align-content: center;
+      justify-content: flex-end;
+      gap: var(--space-2);
+    }
+
+    .fleet-open-chat-action,
+    .fleet-open-code-action {
+      display: none;
+    }
+
+    .fleet-row-icon,
+    .fleet-did-copy {
+      opacity: 1;
+    }
   }
 }
