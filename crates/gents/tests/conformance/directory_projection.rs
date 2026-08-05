@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use gents::agent::directory_projection::{
     derive_directory_entries, directory_entry_key, reconcile_directory_tick, BehaviorInfo,
     CatalogOptions, DirectoryEntry, DirectoryStore, DirectoryTickOutcome, SelectionInfo,
+    SourceSnapshot,
 };
 use gents::agent::persona_presets::preset_fields;
 
@@ -23,20 +24,14 @@ struct DirectoryFixtureStore {
 
 #[async_trait]
 impl DirectoryStore for DirectoryFixtureStore {
-    async fn load_principals(&self) -> Result<Vec<(String, String, String)>> {
-        Ok(self.principals.clone())
-    }
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<BehaviorInfo>>> {
-        Ok(self.behaviors.clone())
-    }
-    async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
-        Ok(self.runtimes.clone())
-    }
-    async fn load_tool_selections(&self) -> Result<BTreeMap<String, SelectionInfo>> {
-        Ok(self.selections.clone())
-    }
-    async fn load_catalog_options(&self) -> Result<CatalogOptions> {
-        Ok(self.options.clone())
+    async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
+        Ok(SourceSnapshot {
+            principals: self.principals.clone(),
+            behaviors: self.behaviors.clone(),
+            runtimes: self.runtimes.clone(),
+            selections: self.selections.clone(),
+            options: self.options.clone(),
+        })
     }
     async fn list_directory_entries(
         &self,

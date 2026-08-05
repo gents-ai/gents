@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
@@ -46,7 +46,17 @@ fn canonicalize_workspace_root_path(path: &Path) -> Result<PathBuf> {
 
 pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<()> {
     let path = canonicalize_workspace_root_path(&args.path)?;
-    let root_path = path.to_string_lossy().into_owned();
+    // Reject rather than lossy-convert: a lossy string would silently
+    // register a root_path different from the actual directory.
+    let root_path = path
+        .to_str()
+        .with_context(|| {
+            format!(
+                "--path must be valid UTF-8 to be stored as a root_path, got {}",
+                path.display()
+            )
+        })?
+        .to_owned();
     let enabled = !args.disabled;
     let updated_at = chrono::Utc::now().to_rfc3339();
 

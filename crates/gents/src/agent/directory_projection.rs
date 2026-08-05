@@ -39,7 +39,9 @@ pub struct DirectoryEntry {
     /// when the principal has none.
     pub default_behavior_id: String,
     /// Per-behavior persona dimensions, index-aligned with `behavior_ids`.
-    /// `"backend_id|model_name"`; `""` when both are blank.
+    /// `"backend_id|model_name"`, split on the FIRST `|` (ids must not
+    /// contain `|`); `""` only when both are blank, so a half-configured
+    /// behavior yields `"|model"` or `"backend|"`.
     pub behavior_models: Vec<String>,
     /// Per-behavior file tool root (`""` when the behavior's `ToolSelection`
     /// is missing or unset), index-aligned with `behavior_ids`.
@@ -86,8 +88,31 @@ pub struct CatalogOptions {
     pub allowed_roots: Vec<String>,
     /// `builtin_preset_names()`.
     pub permission_presets: Vec<String>,
-    /// `"profile_id|display_name"`, sorted.
+    /// `"profile_id|display_name"`, sorted; split on the FIRST `|` —
+    /// display names may contain `|`, profile ids must not.
     pub available_profiles: Vec<String>,
+}
+
+/// Everything `derive_directory_entries` consumes, loaded as one unit. The
+/// sweep runs on every source Update event (and concurrently across
+/// automated homes), so the store contract is a *single* snapshot load per
+/// tick — `GraphqlDirectoryStore` satisfies it with one multi-root query
+/// rather than one round trip per collection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceSnapshot {
+    /// One row per enabled principal: `(agent_did, display_name,
+    /// default_behavior_id)`. `default_behavior_id` is empty when the
+    /// principal has none.
+    pub principals: Vec<(String, String, String)>,
+    /// Per principal, the enabled behaviors as `BehaviorInfo` (display name
+    /// falls back to the id when blank).
+    pub behaviors: BTreeMap<String, Vec<BehaviorInfo>>,
+    /// Per principal, `(process_state, updated_at)` from `AgentRuntime`.
+    pub runtimes: BTreeMap<String, (String, String)>,
+    /// `ToolSelection` rows keyed by `selection_id`.
+    pub selections: BTreeMap<String, SelectionInfo>,
+    /// Home-level composer options (backends, roots, presets, profiles).
+    pub options: CatalogOptions,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,18 +124,8 @@ pub struct DirectoryTickOutcome {
 
 #[async_trait]
 pub trait DirectoryStore: Send + Sync {
-    /// One row per enabled principal: `(agent_did, display_name,
-    /// default_behavior_id)`. `default_behavior_id` is empty when the
-    /// principal has none.
-    async fn load_principals(&self) -> Result<Vec<(String, String, String)>>;
-    /// Per principal, the enabled behaviors as `BehaviorInfo` (display name
-    /// falls back to the id when blank).
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<BehaviorInfo>>>;
-    async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>>;
-    /// `ToolSelection` rows keyed by `selection_id`.
-    async fn load_tool_selections(&self) -> Result<BTreeMap<String, SelectionInfo>>;
-    /// Home-level composer options (backends, roots, presets, profiles).
-    async fn load_catalog_options(&self) -> Result<CatalogOptions>;
+    /// Load every projection input in one shot (see [`SourceSnapshot`]).
+    async fn load_source_snapshot(&self) -> Result<SourceSnapshot>;
     async fn list_directory_entries(
         &self,
         source_did: &str,
@@ -264,30 +279,17 @@ pub async fn reconcile_directory_tick(
     store: &dyn DirectoryStore,
     source_did: &str,
 ) -> Result<DirectoryTickOutcome> {
-    let principals = store
-        .load_principals()
+    let snapshot = store
+        .load_source_snapshot()
         .await
-        .context("load agent principals")?;
-    let behaviors = store.load_behaviors().await.context("load behaviors")?;
-    let runtimes = store
-        .load_runtime_states()
-        .await
-        .context("load runtime states")?;
-    let selections = store
-        .load_tool_selections()
-        .await
-        .context("load tool selections")?;
-    let options = store
-        .load_catalog_options()
-        .await
-        .context("load catalog options")?;
+        .context("load source snapshot")?;
     let desired = derive_directory_entries(
         source_did,
-        &principals,
-        &behaviors,
-        &runtimes,
-        &selections,
-        &options,
+        &snapshot.principals,
+        &snapshot.behaviors,
+        &snapshot.runtimes,
+        &snapshot.selections,
+        &snapshot.options,
     );
     let existing = store
         .list_directory_entries(source_did)
@@ -417,7 +419,11 @@ impl GraphqlDirectoryStore {
 
 #[async_trait]
 impl DirectoryStore for GraphqlDirectoryStore {
-    async fn load_principals(&self) -> Result<Vec<(String, String, String)>> {
+    async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
+        // One multi-root document on purpose: the sweep re-runs on every
+        // source Update event, and homes running concurrent automation
+        // multiply that rate — per-collection executes here would each pay
+        // their own parse/plan/transaction overhead per sweep.
         let query = r#"{
             AgentPrincipal {
                 agent_did
@@ -425,38 +431,6 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 default_behavior_id
                 enabled
             }
-        }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query AgentPrincipal")?;
-        Ok(rows::<PrincipalRow>(&response, "AgentPrincipal")?
-            .into_iter()
-            .filter_map(|row| {
-                if !row.enabled.unwrap_or(true) {
-                    return None;
-                }
-                let did = row.agent_did?.trim().to_string();
-                if did.is_empty() {
-                    return None;
-                }
-                let display_name = row
-                    .display_name
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or_default()
-                    .to_string();
-                let default_behavior_id = row
-                    .default_behavior_id
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or_default()
-                    .to_string();
-                Some((did, display_name, default_behavior_id))
-            })
-            .collect())
-    }
-
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<BehaviorInfo>>> {
-        let query = r#"{
             AgentBehavior {
                 agent_did
                 display_name
@@ -467,74 +441,11 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 inference_profile_id
                 enabled
             }
-        }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query AgentBehavior")?;
-        let mut grouped: BTreeMap<String, Vec<BehaviorInfo>> = BTreeMap::new();
-        for row in rows::<BehaviorRow>(&response, "AgentBehavior")? {
-            if !row.enabled.unwrap_or(true) {
-                continue;
+            AgentRuntime {
+                agent_did
+                process_state
+                updated_at
             }
-            let Some(did) = row.agent_did.map(|did| did.trim().to_string()) else {
-                continue;
-            };
-            if did.is_empty() {
-                continue;
-            }
-            let Some(behavior_id) = row
-                .behavior_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-            else {
-                continue;
-            };
-            let display_name = row
-                .display_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| behavior_id.clone());
-            let backend_id = row
-                .backend_id
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let model_name = row
-                .model_name
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let tool_selection_id = row
-                .tool_selection_id
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let inference_profile_id = row
-                .inference_profile_id
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            grouped.entry(did).or_default().push(BehaviorInfo {
-                behavior_id,
-                display_name,
-                backend_id,
-                model_name,
-                tool_selection_id,
-                inference_profile_id,
-            });
-        }
-        Ok(grouped)
-    }
-
-    async fn load_tool_selections(&self) -> Result<BTreeMap<String, SelectionInfo>> {
-        let query = r#"{
             ToolSelection {
                 selection_id
                 file_tool_root
@@ -548,158 +459,29 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 enable_self_config
                 write_tools
             }
-        }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query ToolSelection")?;
-        let mut grouped: BTreeMap<String, SelectionInfo> = BTreeMap::new();
-        for row in rows::<ToolSelectionRow>(&response, "ToolSelection")? {
-            let Some(selection_id) = row
-                .selection_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-            else {
-                continue;
-            };
-            let file_tool_root = row
-                .file_tool_root
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default()
-                .to_string();
-            let preset = PresetFields {
-                enable_file_tools: row.enable_file_tools.unwrap_or_default(),
-                file_tools_mode: row.file_tools_mode.unwrap_or_default(),
-                enable_bash: row.enable_bash.unwrap_or_default(),
-                bash_mode: row.bash_mode.unwrap_or_default(),
-                command_allowed_argv_prefixes: row
-                    .command_allowed_argv_prefixes
-                    .unwrap_or_default(),
-                command_forbidden_argv_prefixes: row
-                    .command_forbidden_argv_prefixes
-                    .unwrap_or_default(),
-                read_only_command_allowlist: row.read_only_command_allowlist.unwrap_or_default(),
-                enable_self_config: row.enable_self_config.unwrap_or_default(),
-                write_tools: row.write_tools.unwrap_or_default(),
-            };
-            grouped.insert(
-                selection_id,
-                SelectionInfo {
-                    file_tool_root,
-                    preset,
-                },
-            );
-        }
-        Ok(grouped)
-    }
-
-    async fn load_catalog_options(&self) -> Result<CatalogOptions> {
-        let backends_query = r#"{
             InferenceBackend {
                 backend_id
                 models
                 enabled
             }
-        }"#;
-        let response = self.node.execute(backends_query).await;
-        ensure_no_errors(&response, "query InferenceBackend")?;
-        let mut available_models: Vec<String> =
-            rows::<InferenceBackendRow>(&response, "InferenceBackend")?
-                .into_iter()
-                .filter(|row| row.enabled.unwrap_or(false))
-                .flat_map(|row| {
-                    let backend_id = row.backend_id.unwrap_or_default();
-                    row.models
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(move |model| format!("{backend_id}|{model}"))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-        available_models.sort();
-        available_models.dedup();
-
-        let roots_query = r#"{
             WorkspaceRoot {
                 root_path
                 enabled
             }
-        }"#;
-        let response = self.node.execute(roots_query).await;
-        ensure_no_errors(&response, "query WorkspaceRoot")?;
-        let mut allowed_roots: Vec<String> = rows::<WorkspaceRootRow>(&response, "WorkspaceRoot")?
-            .into_iter()
-            .filter(|row| row.enabled.unwrap_or(false))
-            .filter_map(|row| row.root_path)
-            .collect();
-        allowed_roots.sort();
-
-        let profiles_query = r#"{
             InferenceProfile {
                 profile_id
                 display_name
             }
         }"#;
-        let response = self.node.execute(profiles_query).await;
-        ensure_no_errors(&response, "query InferenceProfile")?;
-        let mut available_profiles: Vec<String> =
-            rows::<InferenceProfileRow>(&response, "InferenceProfile")?
-                .into_iter()
-                .filter_map(|row| {
-                    let profile_id = row.profile_id?;
-                    let display_name = row
-                        .display_name
-                        .filter(|name| !name.is_empty())
-                        .unwrap_or_else(|| profile_id.clone());
-                    Some(format!("{profile_id}|{display_name}"))
-                })
-                .collect();
-        available_profiles.sort();
-
-        Ok(CatalogOptions {
-            available_models,
-            allowed_roots,
-            permission_presets: builtin_preset_names()
-                .iter()
-                .map(|name| name.to_string())
-                .collect(),
-            available_profiles,
-        })
-    }
-
-    async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
-        let query = r#"{
-            AgentRuntime {
-                agent_did
-                process_state
-                updated_at
-            }
-        }"#;
         let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query AgentRuntime")?;
-        Ok(rows::<RuntimeRow>(&response, "AgentRuntime")?
-            .into_iter()
-            .filter_map(|row| {
-                let did = row.agent_did?.trim().to_string();
-                if did.is_empty() {
-                    return None;
-                }
-                let process_state = row
-                    .process_state
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or_default()
-                    .to_string();
-                let updated_at = row
-                    .updated_at
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or_default()
-                    .to_string();
-                Some((did, (process_state, updated_at)))
-            })
-            .collect())
+        ensure_no_errors(&response, "query directory source snapshot")?;
+        Ok(SourceSnapshot {
+            principals: parse_principals(&response)?,
+            behaviors: parse_behaviors(&response)?,
+            runtimes: parse_runtime_states(&response)?,
+            selections: parse_tool_selections(&response)?,
+            options: parse_catalog_options(&response)?,
+        })
     }
 
     async fn list_directory_entries(
@@ -910,6 +692,222 @@ where
         return Ok(Vec::new());
     };
     serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+}
+
+// The per-collection decoders behind `load_source_snapshot`, each reading its
+// root field out of the shared multi-root response.
+
+fn parse_principals(response: &QueryResponse) -> Result<Vec<(String, String, String)>> {
+    Ok(rows::<PrincipalRow>(response, "AgentPrincipal")?
+        .into_iter()
+        .filter_map(|row| {
+            if !row.enabled.unwrap_or(true) {
+                return None;
+            }
+            let did = row.agent_did?.trim().to_string();
+            if did.is_empty() {
+                return None;
+            }
+            let display_name = row
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let default_behavior_id = row
+                .default_behavior_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            Some((did, display_name, default_behavior_id))
+        })
+        .collect())
+}
+
+fn parse_behaviors(response: &QueryResponse) -> Result<BTreeMap<String, Vec<BehaviorInfo>>> {
+    let mut grouped: BTreeMap<String, Vec<BehaviorInfo>> = BTreeMap::new();
+    for row in rows::<BehaviorRow>(response, "AgentBehavior")? {
+        if !row.enabled.unwrap_or(true) {
+            continue;
+        }
+        let Some(did) = row.agent_did.map(|did| did.trim().to_string()) else {
+            continue;
+        };
+        if did.is_empty() {
+            continue;
+        }
+        let Some(behavior_id) = row
+            .behavior_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        let display_name = row
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| behavior_id.clone());
+        let backend_id = row
+            .backend_id
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let model_name = row
+            .model_name
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let tool_selection_id = row
+            .tool_selection_id
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let inference_profile_id = row
+            .inference_profile_id
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        grouped.entry(did).or_default().push(BehaviorInfo {
+            behavior_id,
+            display_name,
+            backend_id,
+            model_name,
+            tool_selection_id,
+            inference_profile_id,
+        });
+    }
+    Ok(grouped)
+}
+
+fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (String, String)>> {
+    Ok(rows::<RuntimeRow>(response, "AgentRuntime")?
+        .into_iter()
+        .filter_map(|row| {
+            let did = row.agent_did?.trim().to_string();
+            if did.is_empty() {
+                return None;
+            }
+            let process_state = row
+                .process_state
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            let updated_at = row
+                .updated_at
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string();
+            Some((did, (process_state, updated_at)))
+        })
+        .collect())
+}
+
+fn parse_tool_selections(response: &QueryResponse) -> Result<BTreeMap<String, SelectionInfo>> {
+    let mut grouped: BTreeMap<String, SelectionInfo> = BTreeMap::new();
+    for row in rows::<ToolSelectionRow>(response, "ToolSelection")? {
+        let Some(selection_id) = row
+            .selection_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        let file_tool_root = row
+            .file_tool_root
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let preset = PresetFields {
+            enable_file_tools: row.enable_file_tools.unwrap_or_default(),
+            file_tools_mode: row.file_tools_mode.unwrap_or_default(),
+            enable_bash: row.enable_bash.unwrap_or_default(),
+            bash_mode: row.bash_mode.unwrap_or_default(),
+            command_allowed_argv_prefixes: row.command_allowed_argv_prefixes.unwrap_or_default(),
+            command_forbidden_argv_prefixes: row
+                .command_forbidden_argv_prefixes
+                .unwrap_or_default(),
+            read_only_command_allowlist: row.read_only_command_allowlist.unwrap_or_default(),
+            enable_self_config: row.enable_self_config.unwrap_or_default(),
+            write_tools: row.write_tools.unwrap_or_default(),
+        };
+        grouped.insert(
+            selection_id,
+            SelectionInfo {
+                file_tool_root,
+                preset,
+            },
+        );
+    }
+    Ok(grouped)
+}
+
+fn parse_catalog_options(response: &QueryResponse) -> Result<CatalogOptions> {
+    // Backend rows always carry `enabled` (backend_registry treats it as
+    // required on decode), so the conservative null-means-disabled default
+    // here is a dead branch — deliberately stricter than `parse_behaviors`'
+    // null-means-enabled, because advertising models for a half-written
+    // backend row is worse than omitting them for a tick.
+    let mut available_models: Vec<String> =
+        rows::<InferenceBackendRow>(response, "InferenceBackend")?
+            .into_iter()
+            .filter(|row| row.enabled.unwrap_or(false))
+            .flat_map(|row| {
+                let backend_id = row.backend_id.unwrap_or_default();
+                row.models
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |model| format!("{backend_id}|{model}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    available_models.sort();
+    available_models.dedup();
+
+    let mut allowed_roots: Vec<String> = rows::<WorkspaceRootRow>(response, "WorkspaceRoot")?
+        .into_iter()
+        .filter(|row| row.enabled.unwrap_or(false))
+        .filter_map(|row| row.root_path)
+        .collect();
+    allowed_roots.sort();
+
+    let mut available_profiles: Vec<String> =
+        rows::<InferenceProfileRow>(response, "InferenceProfile")?
+            .into_iter()
+            .filter_map(|row| {
+                let profile_id = row.profile_id?;
+                let display_name = row
+                    .display_name
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| profile_id.clone());
+                Some(format!("{profile_id}|{display_name}"))
+            })
+            .collect();
+    available_profiles.sort();
+
+    Ok(CatalogOptions {
+        available_models,
+        allowed_roots,
+        permission_presets: builtin_preset_names()
+            .iter()
+            .map(|name| name.to_string())
+            .collect(),
+        available_profiles,
+    })
 }
 
 #[derive(Deserialize)]

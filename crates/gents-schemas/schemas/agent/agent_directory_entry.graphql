@@ -38,7 +38,10 @@ type AgentDirectoryEntry @branchable {
     # when the principal has none.
     default_behavior_id: String
     # Per-behavior persona dimensions, index-aligned with behavior_ids.
-    # Entries: "backend_id|model_name". Null (never []) when empty.
+    # Entries: "backend_id|model_name". Parse by splitting on the FIRST "|"
+    # (ids must not contain "|"; names after the first "|" may). "" only when
+    # backend AND model are both blank — a half-configured behavior yields
+    # "|model" or "backend|". Null (never []) when empty.
     behavior_models: [String]
     # File tool root per behavior ("" = none/host default). Aligned; null never [].
     behavior_roots: [String]
@@ -53,7 +56,9 @@ type AgentDirectoryEntry @branchable {
     available_models: [String]
     allowed_roots: [String]
     permission_presets: [String]
-    # "profile_id|display_name" pairs. Null (never []) when empty.
+    # "profile_id|display_name" pairs; split on the FIRST "|" — display
+    # names may contain "|", profile ids must not. Null (never []) when
+    # empty.
     available_profiles: [String]
     runtime_state: String @index
     last_seen: DateTime

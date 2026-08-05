@@ -12,8 +12,9 @@ use uuid::Uuid;
 /// publication) to Task 4 (the operator CLI): set two roots through `gents
 /// config workspace-root set`, disable one, confirm `list` surfaces both,
 /// `show` round-trips the disabled root's fields, and the live
-/// `WorkspaceRoot` collection — the exact source `load_catalog_options`
-/// (crates/gents/src/agent/directory_projection.rs) reads `allowed_roots`
+/// `WorkspaceRoot` collection — the exact source the directory projection's
+/// snapshot load (`parse_catalog_options` in
+/// crates/gents/src/agent/directory_projection.rs) reads `allowed_roots`
 /// from — filters down to only the enabled path. `rm` then deletes both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
@@ -162,7 +163,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     );
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
 
-    // The directory projection's `load_catalog_options` (directory_projection.rs)
+    // The directory projection's snapshot load (`parse_catalog_options` in
+    // directory_projection.rs)
     // computes `allowed_roots` by querying this exact WorkspaceRoot collection
     // and filtering on `enabled`; assert that invariant directly against the
     // live collection the CLI just wrote to.
@@ -183,6 +185,64 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         enabled_paths,
         vec![enabled_root_str],
         "allowed_roots' enabled-filter source must publish only the enabled root"
+    );
+
+    // Re-setting an existing root exercises the upsert's update branch:
+    // flip the disabled root to enabled with a new display name, and the
+    // enabled-filter source must now publish both roots.
+    let reset_disabled = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "workspace-root",
+            "set",
+            "--graphql",
+            &graphql,
+            "--path",
+            disabled_root_str,
+            "--display-name",
+            "Re-enabled Root",
+        ],
+    )?;
+    assert_eq!(
+        reset_disabled.get("enabled").and_then(Value::as_bool),
+        Some(true)
+    );
+    let show_reset = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "workspace-root",
+            "show",
+            "--graphql",
+            &graphql,
+            disabled_root_str,
+        ],
+    )?;
+    assert_eq!(
+        show_reset.get("display_name").and_then(Value::as_str),
+        Some("Re-enabled Root"),
+        "update branch must overwrite mutable fields on the existing row"
+    );
+    let both_enabled = graphql_query(
+        &graphql,
+        r#"{ WorkspaceRoot(filter: { enabled: { _eq: true } }) { root_path } }"#,
+    )
+    .await?;
+    let mut both_paths = both_enabled
+        .get("data")
+        .and_then(|data| data.get("WorkspaceRoot"))
+        .and_then(Value::as_array)
+        .context("WorkspaceRoot query must return an array")?
+        .iter()
+        .filter_map(|row| row.get("root_path").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    both_paths.sort_unstable();
+    let mut expected_paths = vec![enabled_root_str, disabled_root_str];
+    expected_paths.sort_unstable();
+    assert_eq!(
+        both_paths, expected_paths,
+        "re-enabling via set must update the existing row, not mint a duplicate"
     );
 
     // rm deletes both; a second rm reports not-found.
