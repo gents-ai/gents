@@ -27,7 +27,10 @@
 //! [`decide_persona_request`] validating against the published catalog, not
 //! in re-verifying who sent the row. Paired devices are trusted in v1; a
 //! revoked-membership check can be layered in later without changing this
-//! module's shape.
+//! module's shape. One boundary IS enforced regardless: the request's
+//! `agent_did` must name an enabled local `AgentPrincipal` (the catalog
+//! view's `known_agent_dids`, Lean `agentOk`), so a request can never mint
+//! orphan config for a phantom or foreign agent.
 //!
 //! CRASH REPAIR — [`apply_persona_request`] is idempotent: if a prior tick
 //! applied the request (writing the `AgentBehavior`/`ToolSelection`) but
@@ -268,25 +271,61 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
 }
 
 /// Build a [`PersonaCatalogView`] straight from source collections: enabled
-/// `InferenceBackend` models (`"backend_id|model_name"`), enabled
-/// `WorkspaceRoot` paths, `InferenceProfile` ids, and `agent_did`'s own
-/// `AgentBehavior` rows. Deliberately independent of the
-/// `AgentDirectoryEntry` projection (`crate::agent::directory_projection`) —
-/// coupling admission to that projection's sweep cadence would make this
-/// reconciler's correctness depend on another reconciler having already run.
+/// `AgentPrincipal` DIDs, enabled `InferenceBackend` models
+/// (`"backend_id|model_name"`), enabled `WorkspaceRoot` paths,
+/// `InferenceProfile` ids, and `agent_did`'s own `AgentBehavior` rows.
+/// Deliberately independent of the `AgentDirectoryEntry` projection
+/// (`crate::agent::directory_projection`) — coupling admission to that
+/// projection's sweep cadence would make this reconciler's correctness
+/// depend on another reconciler having already run.
+///
+/// One multi-root document on purpose (the same shape as the directory
+/// projection's `load_source_snapshot`): this loads once per pending row,
+/// and per-collection executes would each pay their own parse/plan/
+/// transaction overhead.
 async fn load_catalog_view_from_node(
     node: &Arc<EmbeddedNode>,
     agent_did: &str,
 ) -> Result<PersonaCatalogView> {
-    let backends_query = r#"{
-        InferenceBackend {
-            backend_id
-            models
-            enabled
-        }
-    }"#;
-    let response = node.execute(backends_query).await;
-    ensure_no_errors(&response, "query InferenceBackend for persona catalog")?;
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentPrincipal {{
+                agent_did
+                enabled
+            }}
+            InferenceBackend {{
+                backend_id
+                models
+                enabled
+            }}
+            WorkspaceRoot {{
+                root_path
+                enabled
+            }}
+            InferenceProfile {{
+                profile_id
+            }}
+            AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
+                behavior_id
+                enabled
+                tool_selection_id
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    ensure_no_errors(&response, "query persona catalog sources")?;
+
+    let known_agent_dids: BTreeSet<String> =
+        rows::<AgentPrincipalCatalogRow>(&response, "AgentPrincipal")?
+            .into_iter()
+            .filter(|row| row.enabled.unwrap_or(true))
+            .filter_map(|row| {
+                let did = row.agent_did?.trim().to_string();
+                (!did.is_empty()).then_some(did)
+            })
+            .collect();
+
     let available_models: BTreeSet<String> =
         rows::<InferenceBackendRow>(&response, "InferenceBackend")?
             .into_iter()
@@ -301,45 +340,18 @@ async fn load_catalog_view_from_node(
             })
             .collect();
 
-    let roots_query = r#"{
-        WorkspaceRoot {
-            root_path
-            enabled
-        }
-    }"#;
-    let response = node.execute(roots_query).await;
-    ensure_no_errors(&response, "query WorkspaceRoot for persona catalog")?;
     let allowed_roots: BTreeSet<String> = rows::<WorkspaceRootRow>(&response, "WorkspaceRoot")?
         .into_iter()
         .filter(|row| row.enabled.unwrap_or(false))
         .filter_map(|row| row.root_path)
         .collect();
 
-    let profiles_query = r#"{
-        InferenceProfile {
-            profile_id
-        }
-    }"#;
-    let response = node.execute(profiles_query).await;
-    ensure_no_errors(&response, "query InferenceProfile for persona catalog")?;
     let available_profile_ids: BTreeSet<String> =
         rows::<InferenceProfileRow>(&response, "InferenceProfile")?
             .into_iter()
             .filter_map(|row| row.profile_id)
             .collect();
 
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let behaviors_query = format!(
-        r#"{{
-            AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
-                behavior_id
-                enabled
-                tool_selection_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&behaviors_query).await;
-    ensure_no_errors(&response, "query AgentBehavior for persona catalog")?;
     let behaviors: BTreeMap<String, BehaviorRef> =
         rows::<AgentBehaviorCatalogRow>(&response, "AgentBehavior")?
             .into_iter()
@@ -362,6 +374,7 @@ async fn load_catalog_view_from_node(
         available_models,
         allowed_roots,
         available_profile_ids,
+        known_agent_dids,
         behaviors,
     })
 }
@@ -470,6 +483,14 @@ struct PersonaRequestRow {
 }
 
 #[derive(Deserialize)]
+struct AgentPrincipalCatalogRow {
+    #[serde(default)]
+    agent_did: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct InferenceBackendRow {
     #[serde(default)]
     backend_id: Option<String>,
@@ -521,11 +542,12 @@ mod tests {
         Arc::new(node)
     }
 
-    fn happy_catalog() -> PersonaCatalogView {
+    fn happy_catalog(agent_did: &str) -> PersonaCatalogView {
         PersonaCatalogView {
             available_models: BTreeSet::from(["openai|gpt-5".to_string()]),
             allowed_roots: BTreeSet::new(),
             available_profile_ids: BTreeSet::from(["profile-1".to_string()]),
+            known_agent_dids: BTreeSet::from([agent_did.to_string()]),
             behaviors: BTreeMap::new(),
         }
     }
@@ -614,7 +636,7 @@ mod tests {
 
         let doc = pending_create_doc("req-1", "did:key:agent");
         let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog());
+        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog("did:key:agent"));
         let store = FixtureStore {
             all: vec![doc],
             catalog_by_agent,
@@ -641,7 +663,7 @@ mod tests {
         let mut doc = pending_create_doc("req-invalid", "did:key:agent");
         doc.backend_model = Some("nope|nope".to_string());
         let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog());
+        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog("did:key:agent"));
         let store = FixtureStore {
             all: vec![doc],
             catalog_by_agent,
@@ -677,7 +699,7 @@ mod tests {
         rejected_doc.status = Some("rejected".to_string());
 
         let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog());
+        catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog("did:key:agent"));
         let store = FixtureStore {
             all: vec![pending_doc, applied_doc, rejected_doc],
             catalog_by_agent,
@@ -707,7 +729,10 @@ mod tests {
         let bad_doc = pending_create_doc("req-bad", "did:key:bad-agent");
 
         let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert("did:key:good-agent".to_string(), happy_catalog());
+        catalog_by_agent.insert(
+            "did:key:good-agent".to_string(),
+            happy_catalog("did:key:good-agent"),
+        );
         let mut fail_catalog_for = BTreeSet::new();
         fail_catalog_for.insert("did:key:bad-agent".to_string());
 
@@ -749,7 +774,7 @@ mod tests {
         let doc = pending_create_doc("req-repair", "did:key:repair-agent");
         let agent_did = doc.agent_did.clone();
         let mut catalog_by_agent = BTreeMap::new();
-        catalog_by_agent.insert(agent_did.clone(), happy_catalog());
+        catalog_by_agent.insert(agent_did.clone(), happy_catalog(&agent_did));
 
         let mut fail_mark_applied_once = BTreeSet::new();
         fail_mark_applied_once.insert("req-repair".to_string());
@@ -780,7 +805,7 @@ mod tests {
             "apply must have written exactly one behavior before the mark failure"
         );
 
-        let mut catalog_after = happy_catalog();
+        let mut catalog_after = happy_catalog(&agent_did);
         for behavior in &behaviors {
             catalog_after.behaviors.insert(
                 behavior.behavior_id.clone(),

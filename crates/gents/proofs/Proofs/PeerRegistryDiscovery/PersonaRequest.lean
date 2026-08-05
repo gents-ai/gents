@@ -16,8 +16,9 @@ guarantee that:
 * `decide_persona_request` — the admission gate. Modelled here as `admits`,
   a Prop with a `Decidable` instance (the `BearerClaim.lean` precedent),
   whose conjuncts mirror the Rust admission verbatim (folded: unknown preset
-  names are rejected on create, and `clone_from` must be an existing ENABLED
-  behavior).
+  names are rejected on create, `clone_from` must be an existing ENABLED
+  behavior, and — for every op — the request's `agent_did` must name a
+  known enabled principal on this deployment).
 * `apply_persona_request` — the materializer. Modelled here as `applyStep`,
   which only runs its effect on an admitted request and is idempotent.
 
@@ -40,20 +41,25 @@ inductive Op
   deriving DecidableEq, Repr
 
 /-- The published options a request is validated against: the model, root,
-and inference-profile catalogs for this deployment. -/
+and inference-profile catalogs for this deployment, plus the deployment's
+known (enabled) principal DIDs — a request naming a phantom or foreign
+`agent_did` must be rejected, never mint orphan config. -/
 structure Catalog where
   models : Finset String
   roots : Finset String
   profiles : Finset String
+  agents : Finset String
   -- No `Repr`: `Finset` has no `Repr` instance (quotient type); mirrors
   -- `BearerClaim.ClaimState`.
   deriving DecidableEq
 
 /-- A typed persona request. String payload fields carry the requested
-values; `key` is the request key that derives the minted selection id. -/
+values; `key` is the request key that derives the minted selection id;
+`agent` is the `agent_did` the request claims to configure. -/
 structure Request where
   key : String
   op : Op
+  agent : String
   name : String
   model : String
   root : String
@@ -111,8 +117,14 @@ abbrev behaviorPresent (st : State) (id : String) : Prop :=
 /-- Edit may keep the current selection (empty preset) or name a known one. -/
 abbrev editPresetOk (r : Request) : Prop := r.preset = "" ∨ presetKnown r
 
-/-- Admission gate, mirroring `decide_persona_request` conjunct-for-conjunct. -/
-def admits (cat : Catalog) (st : State) (r : Request) : Prop :=
+/-- The request's `agent_did` names a known (enabled) principal on this
+deployment. The reconciler builds `Catalog.agents` from local enabled
+`AgentPrincipal` rows, so a request for a phantom or foreign agent is
+rejected instead of minting orphan behaviors/selections. -/
+abbrev agentOk (cat : Catalog) (r : Request) : Prop := r.agent ∈ cat.agents
+
+/-- The per-op admission conjuncts. -/
+def opOk (cat : Catalog) (st : State) (r : Request) : Prop :=
   match r.op with
   | Op.create =>
       nameOk r ∧ modelOk cat r ∧ rootOk cat r ∧ profileOk cat r ∧ createModeOk st r
@@ -122,9 +134,18 @@ def admits (cat : Catalog) (st : State) (r : Request) : Prop :=
   | Op.disable =>
       behaviorPresent st r.target
 
+instance (cat : Catalog) (st : State) (r : Request) : Decidable (opOk cat st r) := by
+  unfold opOk
+  cases r.op <;> infer_instance
+
+/-- Admission gate, mirroring `decide_persona_request` conjunct-for-conjunct:
+the agent must be known regardless of op, then the per-op conjuncts apply. -/
+def admits (cat : Catalog) (st : State) (r : Request) : Prop :=
+  agentOk cat r ∧ opOk cat st r
+
 instance (cat : Catalog) (st : State) (r : Request) : Decidable (admits cat st r) := by
   unfold admits
-  cases r.op <;> infer_instance
+  infer_instance
 
 /-- The minted behavior id (abstractly the request key: `derive_behavior_id`
 derives a fresh, collision-free id per request). -/
@@ -141,8 +162,11 @@ def flipDisabled (b : Finset (String × Bool)) (id : String) : Finset (String ×
 /-- The effect of an ADMITTED request (`apply_persona_request` assuming
 admission ran). Payload writes ride below the abstraction, so:
 * create (preset or clone) mints `(mintedBehaviorId, true)` and `selId`;
-* edit rewrites payload only — the behavior/selection id set is preserved,
-  so abstractly it is the identity on `State`;
+* edit with an empty preset patches the current selection's payload in
+  place — abstractly the identity on `State`; edit with a NAMED preset
+  mints a fresh `selId` selection and repoints the behavior at it (the
+  Rust `apply_edit` never mutates a possibly-shared selection in place),
+  so the selection set grows while the behavior set is preserved;
 * disable flips the target's enabled flag. -/
 def applyAdmitted (st : State) (r : Request) : State :=
   match r.op with
@@ -150,7 +174,9 @@ def applyAdmitted (st : State) (r : Request) : State :=
       { st with
           behaviors := insert (mintedBehaviorId r, true) st.behaviors,
           selections := insert (selId r) st.selections }
-  | Op.edit => st
+  | Op.edit =>
+      if r.preset = "" then st
+      else { st with selections := insert (selId r) st.selections }
   | Op.disable =>
       { st with behaviors := flipDisabled st.behaviors r.target }
 
@@ -173,9 +199,16 @@ theorem applyAdmitted_create (st : State) (r : Request) (hop : r.op = Op.create)
           selections := insert (selId r) st.selections } := by
   simp only [applyAdmitted, hop]
 
-theorem applyAdmitted_edit (st : State) (r : Request) (hop : r.op = Op.edit) :
-    applyAdmitted st r = st := by
+theorem applyAdmitted_edit_keep (st : State) (r : Request) (hop : r.op = Op.edit)
+    (hp : r.preset = "") : applyAdmitted st r = st := by
   simp only [applyAdmitted, hop]
+  rw [if_pos hp]
+
+theorem applyAdmitted_edit_repoint (st : State) (r : Request) (hop : r.op = Op.edit)
+    (hp : r.preset ≠ "") :
+    applyAdmitted st r = { st with selections := insert (selId r) st.selections } := by
+  simp only [applyAdmitted, hop]
+  rw [if_neg hp]
 
 theorem applyAdmitted_disable (st : State) (r : Request) (hop : r.op = Op.disable) :
     applyAdmitted st r = { st with behaviors := flipDisabled st.behaviors r.target } := by
@@ -198,8 +231,18 @@ theorem rejected_changes_nothing (cat : Catalog) (st : State) (r : Request)
     applyStep cat st r = st := by
   apply pending_request_grants_nothing
   intro hadm
-  simp only [admits, hop, modelOk] at hadm
-  exact hmodel hadm.2.1
+  simp only [admits, opOk, hop, modelOk] at hadm
+  exact hmodel hadm.2.2.1
+
+/-- A request naming an unknown `agent_did` changes nothing, whatever its
+op: the `agentOk` conjunct fails, so `applyStep` is a no-op — a paired
+device cannot mint orphan config for a phantom or foreign agent. -/
+theorem unknown_agent_changes_nothing (cat : Catalog) (st : State) (r : Request)
+    (hagent : r.agent ∉ cat.agents) : applyStep cat st r = st := by
+  apply pending_request_grants_nothing
+  intro hadm
+  unfold admits at hadm
+  exact hagent hadm.1
 
 /-- An admitted create mints a well-formed behavior: the minted behavior is
 enabled, its fresh selection is in `selections`, and the profile was
@@ -212,8 +255,8 @@ theorem admitted_create_mints_wellformed (cat : Catalog) (st : State) (r : Reque
   rw [applyStep_admitted cat st r hadm, applyAdmitted_create st r hop]
   refine ⟨Finset.mem_insert_self _ _, Finset.mem_insert_self _ _, ?_⟩
   have ha := hadm
-  simp only [admits, hop, profileOk] at ha
-  exact ha.2.2.2.1
+  simp only [admits, opOk, hop, profileOk] at ha
+  exact ha.2.2.2.2.1
 
 /-- An admitted clone mints a fresh selection distinct from the source's,
 mints the new behavior, and leaves the source behavior present. The
@@ -228,8 +271,8 @@ theorem admitted_clone_copies_selection (cat : Catalog) (st : State) (r : Reques
       mintedBehaviorId r ≠ r.cloneFrom := by
   have hsrc : (r.cloneFrom, true) ∈ st.behaviors := by
     have ha := hadm
-    simp only [admits, hop, createModeOk, cloneOk] at ha
-    rcases ha.2.2.2.2 with ⟨he, _⟩ | ⟨_, _, hmem⟩
+    simp only [admits, opOk, hop, createModeOk, cloneOk] at ha
+    rcases ha.2.2.2.2.2 with ⟨he, _⟩ | ⟨_, _, hmem⟩
     · exact absurd he hclone
     · exact hmem
   rw [applyStep_admitted cat st r hadm, applyAdmitted_create st r hop]
@@ -237,12 +280,24 @@ theorem admitted_clone_copies_selection (cat : Catalog) (st : State) (r : Reques
     Finset.mem_insert_self _ _, hdistinct⟩
 
 /-- An edit never adds or removes a behavior id: the behavior set is
-preserved (it rewrites payload only). -/
+preserved (payload rewrites and selection repoints ride below it). -/
 theorem admitted_edit_preserves_behavior_set (cat : Catalog) (st : State) (r : Request)
     (hop : r.op = Op.edit) : (applyStep cat st r).behaviors = st.behaviors := by
   by_cases h : admits cat st r
-  · rw [applyStep_admitted cat st r h, applyAdmitted_edit st r hop]
+  · rw [applyStep_admitted cat st r h]
+    by_cases hp : r.preset = ""
+    · rw [applyAdmitted_edit_keep st r hop hp]
+    · rw [applyAdmitted_edit_repoint st r hop hp]
   · rw [pending_request_grants_nothing cat st r h]
+
+/-- An admitted edit that names a preset mints the fresh `sel-{request_key}`
+selection it repoints the behavior to (the Rust `apply_edit` never mutates a
+possibly-shared selection in place). -/
+theorem admitted_edit_with_preset_mints_selection (cat : Catalog) (st : State) (r : Request)
+    (hadm : admits cat st r) (hop : r.op = Op.edit) (hp : r.preset ≠ "") :
+    selId r ∈ (applyStep cat st r).selections := by
+  rw [applyStep_admitted cat st r hadm, applyAdmitted_edit_repoint st r hop hp]
+  exact Finset.mem_insert_self _ _
 
 /-- Disable flips only the enabled flag: the target becomes `(target, false)`
 and is no longer `(target, true)`, while every unrelated behavior is
@@ -291,7 +346,10 @@ theorem applyAdmitted_idem (st : State) (r : Request) :
       rw [applyAdmitted_create st r hop, applyAdmitted_create _ r hop]
       simp [Finset.insert_idem]
   | edit =>
-      rw [applyAdmitted_edit st r hop, applyAdmitted_edit st r hop]
+      by_cases hp : r.preset = ""
+      · rw [applyAdmitted_edit_keep st r hop hp, applyAdmitted_edit_keep st r hop hp]
+      · rw [applyAdmitted_edit_repoint st r hop hp, applyAdmitted_edit_repoint _ r hop hp]
+        simp [Finset.insert_idem]
   | disable =>
       rw [applyAdmitted_disable st r hop, applyAdmitted_disable _ r hop]
       simp [flipDisabled_idem]
@@ -315,7 +373,10 @@ theorem applyStep_ownership_safe (cat : Catalog) (st : State) (r : Request) :
   · rw [applyStep_admitted cat st r h]
     cases hop : r.op with
     | create => rw [applyAdmitted_create st r hop]
-    | edit => rw [applyAdmitted_edit st r hop]
+    | edit =>
+        by_cases hp : r.preset = ""
+        · rw [applyAdmitted_edit_keep st r hop hp]
+        · rw [applyAdmitted_edit_repoint st r hop hp]
     | disable => rw [applyAdmitted_disable st r hop]
   · rw [pending_request_grants_nothing cat st r h]
 

@@ -57,6 +57,11 @@ pub struct PersonaCatalogView {
     pub allowed_roots: BTreeSet<String>,
     /// Inference profile ids published for this deployment.
     pub available_profile_ids: BTreeSet<String>,
+    /// Enabled `AgentPrincipal` DIDs on this deployment. Every op requires
+    /// the request's `agent_did` to be in this set (Lean `agentOk`): a
+    /// paired device cannot mint orphan behaviors/selections for a phantom
+    /// or foreign agent.
+    pub known_agent_dids: BTreeSet<String>,
     /// This agent's own `AgentBehavior` rows, keyed by `behavior_id`.
     pub behaviors: BTreeMap<String, BehaviorRef>,
 }
@@ -196,6 +201,15 @@ pub fn decide_persona_request(
             doc.op_raw
         ));
     };
+
+    // Lean `agentOk`: every op requires a known enabled principal, so a
+    // request can never mint or touch config for a phantom/foreign agent.
+    if !catalog.known_agent_dids.contains(&doc.agent_did) {
+        return PersonaVerdict::Reject(format!(
+            r#"unknown agent_did "{}" — no enabled AgentPrincipal with this DID on this deployment"#,
+            doc.agent_did
+        ));
+    }
 
     match op {
         PersonaOp::Create { clone_from } => {
@@ -703,6 +717,7 @@ mod tests {
             available_models: models.iter().map(|s| s.to_string()).collect(),
             allowed_roots: roots.iter().map(|s| s.to_string()).collect(),
             available_profile_ids: profiles.iter().map(|s| s.to_string()).collect(),
+            known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
             behaviors: behaviors
                 .iter()
                 .map(|(id, enabled, selection_id)| {
@@ -760,6 +775,20 @@ mod tests {
             verdict,
             PersonaVerdict::Reject(
                 r#"unknown op "yeet" — pick from create|edit|disable"#.to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_agent_did() {
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.agent_did = "did:key:phantom".to_string();
+        let verdict = decide_persona_request(&doc, &base_catalog());
+        assert_eq!(
+            verdict,
+            PersonaVerdict::Reject(
+                r#"unknown agent_did "did:key:phantom" — no enabled AgentPrincipal with this DID on this deployment"#
+                    .to_string()
             )
         );
     }
@@ -907,6 +936,7 @@ mod tests {
     #[test]
     fn rejects_disable_unknown_behavior_id() {
         let doc = PersonaRequestDoc {
+            agent_did: "did:key:agent".to_string(),
             op_raw: "disable".to_string(),
             op: Some(PersonaOp::Disable),
             behavior_id: Some("no-such-behavior".to_string()),
@@ -969,6 +999,7 @@ mod tests {
     #[test]
     fn admits_happy_disable() {
         let doc = PersonaRequestDoc {
+            agent_did: "did:key:agent".to_string(),
             op_raw: "disable".to_string(),
             op: Some(PersonaOp::Disable),
             behavior_id: Some("existing-enabled".to_string()),

@@ -38,6 +38,7 @@ fn catalog_with(
             .iter()
             .map(|s| s.to_string())
             .collect::<BTreeSet<_>>(),
+        known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
         behaviors: behaviors
             .iter()
             .map(|(id, enabled, selection_id)| {
@@ -128,6 +129,7 @@ fn admission_matrix_mirrors_lean_admits() {
     );
 
     let happy_disable = PersonaRequestDoc {
+        agent_did: "did:key:agent".to_string(),
         op_raw: "disable".to_string(),
         op: Some(PersonaOp::Disable),
         behavior_id: Some("existing-enabled".to_string()),
@@ -148,6 +150,16 @@ fn admission_matrix_mirrors_lean_admits() {
         op: None,
         ..Default::default()
     });
+    // agentOk: the request's agent_did must name a known enabled principal
+    // (mirrors Lean `unknown_agent_changes_nothing`) — for every op.
+    let mut phantom_create = create_doc(PersonaOp::Create { clone_from: None });
+    phantom_create.agent_did = "did:key:phantom".to_string();
+    rejects.push(phantom_create);
+    let mut phantom_disable = create_doc(PersonaOp::Disable);
+    phantom_disable.op_raw = "disable".to_string();
+    phantom_disable.agent_did = "did:key:phantom".to_string();
+    phantom_disable.behavior_id = Some("existing-enabled".to_string());
+    rejects.push(phantom_disable);
     // modelOk.
     let mut bad_model = create_doc(PersonaOp::Create { clone_from: None });
     bad_model.backend_model = Some("nope|nope".to_string());
@@ -193,6 +205,7 @@ fn admission_matrix_mirrors_lean_admits() {
     rejects.push(edit_missing);
     // behaviorPresent (disable).
     rejects.push(PersonaRequestDoc {
+        agent_did: "did:key:agent".to_string(),
         op_raw: "disable".to_string(),
         op: Some(PersonaOp::Disable),
         behavior_id: Some("no-such-behavior".to_string()),
@@ -497,10 +510,11 @@ async fn reprocessing_is_idempotent_mirrors_lean() -> Result<()> {
     Ok(())
 }
 
-/// Mirrors Lean `applyStep_ownership_safe`: request processing never touches an
-/// operator-authored selection. A request-driven edit that repoints to a newly
-/// minted selection leaves the operator's original selection byte-for-byte
-/// intact.
+/// Mirrors Lean `applyStep_ownership_safe` and
+/// `admitted_edit_with_preset_mints_selection`: a named-preset edit mints the
+/// fresh `sel-{request_key}` selection and repoints the behavior to it, and
+/// request processing never touches an operator-authored selection — the
+/// operator's original selection stays byte-for-byte intact.
 #[tokio::test]
 async fn ownership_safe_operator_selection_untouched_mirrors_lean() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
