@@ -117,12 +117,7 @@ describe("conversation list", () => {
 
   it("shows P2P sync progress and prevents duplicate requests", () => {
     const onSyncConversations = vi.fn();
-    renderList(
-      [conv({ sessionId: "s-1" })],
-      vi.fn(),
-      onSyncConversations,
-      true,
-    );
+    renderList([conv({ sessionId: "s-1" })], vi.fn(), onSyncConversations, true);
 
     const sync = screen.getByTestId("conversation-sync-p2p");
     expect(sync).toBeDisabled();

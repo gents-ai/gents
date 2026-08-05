@@ -24,9 +24,7 @@ export function BehaviorSelectorSection({
           <h2>Behaviors</h2>
         </div>
         {behaviorOptions.length > 1 ? (
-          <span className="sidebar-scroll-hint">
-            {behaviorOptions.length} · swipe
-          </span>
+          <span className="sidebar-scroll-hint">{behaviorOptions.length} · swipe</span>
         ) : null}
       </div>
       {!selectedAgentDid ? (

@@ -1,0 +1,63 @@
+@layer fleet {
+  @media (max-width: 760px) {
+    .fleet-dashboard .fleet-table-wrap {
+      overflow: visible;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .fleet-dashboard .fleet-table,
+    .fleet-dashboard .fleet-table tbody {
+      display: block;
+      width: 100%;
+    }
+
+    .fleet-dashboard .fleet-table thead {
+      display: none;
+    }
+
+    .fleet-dashboard .fleet-table tbody {
+      display: grid;
+      gap: var(--space-4);
+    }
+
+    .fleet-dashboard .fleet-table tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      border: 1px solid var(--border-default);
+      background: var(--color-surface-row);
+    }
+
+    .fleet-dashboard .fleet-table tbody tr:hover td {
+      background: transparent;
+    }
+
+    .fleet-dashboard .fleet-table td {
+      display: none;
+      border: 0;
+    }
+
+    .fleet-dashboard .fleet-table td:first-child {
+      display: block;
+      min-width: 0;
+      padding: var(--space-5);
+    }
+
+    .fleet-table .fleet-agent-cell {
+      min-width: 0;
+    }
+
+    .fleet-dashboard .fleet-table td.fleet-actions-cell {
+      display: none;
+    }
+
+    .fleet-status.green .fleet-status-label {
+      display: none;
+    }
+
+    .fleet-table .fleet-rename {
+      display: none;
+    }
+  }
+}
