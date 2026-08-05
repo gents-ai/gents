@@ -99,6 +99,7 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     }
     let bin = fleet.bin.clone();
     let home_a = fleet.home_a.clone();
+    let graphql_a = fleet.graphql_a.clone();
     let backend = fleet.backend.clone();
     let home_b = home_a.join("node-b");
     let work_b = home_b.join("work");
@@ -113,8 +114,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
     wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await?;
 
-    let (peer_a, addr_a) = p2p_identity(&bin, &home_a).await?;
-    let (peer_b, addr_b) = p2p_identity(&bin, &home_b).await?;
+    let (peer_a, addr_a) = p2p_identity(&bin, &home_a, &graphql_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&bin, &home_b, &graphql_b).await?;
 
     println!("  creating the network and enrolling node B…");
     run_cli_text(
@@ -125,6 +126,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "create",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             "--name",
             "Demo Fleet",
             "--output",
@@ -140,6 +143,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "grant",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             &did_b,
             "--output",
             "json",
@@ -154,6 +159,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "invite",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             "--member-did",
             &did_b,
             "--template",
@@ -173,6 +180,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "join",
             "--home",
             &path_arg(&home_b),
+            "--graphql",
+            &graphql_b,
             &token,
         ]),
     )
@@ -205,8 +214,24 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     Ok(())
 }
 
-async fn p2p_identity(bin: &Path, home: &Path) -> Result<(String, String)> {
-    let status = run_cli_json(bin, &cli(&["p2p", "status", "--home", &path_arg(home)])).await?;
+/// The fleet always knows each node's admin endpoint, so pass it explicitly:
+/// `--home`-only invocations resolve the endpoint from the node's persisted
+/// `runtime_state.json`, which the server only writes once its runtime reaches
+/// Ready — later than `/healthz` starts answering — and the fallback is the
+/// hardcoded default port 9191 (#990).
+async fn p2p_identity(bin: &Path, home: &Path, graphql: &str) -> Result<(String, String)> {
+    let status = run_cli_json(
+        bin,
+        &cli(&[
+            "p2p",
+            "status",
+            "--home",
+            &path_arg(home),
+            "--graphql",
+            graphql,
+        ]),
+    )
+    .await?;
     let peer = status
         .get("p2p_peer_id")
         .and_then(Value::as_str)
@@ -355,8 +380,8 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         bail!("not paired — run `pair` first");
     };
     println!("  configuring cross-node delegation…");
-    let (peer_a, addr_a) = p2p_identity(&fleet.bin, &fleet.home_a).await?;
-    let (peer_b, addr_b) = p2p_identity(&fleet.bin, &worker.home).await?;
+    let (peer_a, addr_a) = p2p_identity(&fleet.bin, &fleet.home_a, &fleet.graphql_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&fleet.bin, &worker.home, &worker.graphql).await?;
 
     println!("  switching the data plane to subagent delegation templates…");
     upsert_data_plane(
