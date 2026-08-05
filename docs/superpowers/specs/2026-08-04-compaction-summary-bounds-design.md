@@ -4,6 +4,12 @@
 **Issue:** [#1017 — Bound compaction summaries and stop model-generated file-list expansion](https://github.com/source-inc/gents/issues/1017)
 **Branch:** `issue-1017-compaction-summary-size`
 
+> **Follow-up:** The three-field `SummaryResponse` described here was later
+> expanded into the continuation-checkpoint contract in
+> [Compaction continuation checkpoints](2026-08-04-continuation-checkpoint-design.md).
+> The byte bounds, structural file extraction, and safety ceilings specified
+> here remain in force.
+
 ## Problem
 
 Compaction's summary completion inherits the user turn's output budget, its

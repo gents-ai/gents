@@ -12,7 +12,7 @@ mod tests;
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
 use summary::{
     bounded_error_diagnostic, compaction_prompt, compaction_request_prompt, format_summary,
-    SummaryResponse,
+    ContinuationCheckpoint,
 };
 
 #[derive(Debug, Clone)]
@@ -216,7 +216,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
             (from_options, from_config) => from_options.or(from_config),
         };
-        let parsed_summary: SummaryResponse = crate::agent::loop_stream::run_loop_to_typed(
+        let checkpoint: ContinuationCheckpoint = crate::agent::loop_stream::run_loop_to_typed(
             (*self.model).clone(),
             None,
             crate::llm::message::Message::user(compaction_request_prompt()),
@@ -243,11 +243,9 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         // Bounded at creation so both consumers — the persisted compaction
         // entry and per-turn provider-view injection — see the same bound.
         let summary = bounded_summary(format_summary(
-            &parsed_summary.summary,
+            &checkpoint,
             &files_read,
             &files_modified,
-            &parsed_summary.key_decisions,
-            &parsed_summary.pending_questions,
             options
                 .summary_file_list_max
                 .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX),

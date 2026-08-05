@@ -2659,7 +2659,7 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
     }
     let text = sole_user_text(message);
     if let Some(body) = text.strip_prefix("<system-reminder>\n") {
-        if body.starts_with("Previous conversation summary") {
+        if body.starts_with("Continuation checkpoints from earlier conversation") {
             return "summaryReminder".to_string();
         }
         if let Some(rest) = body.strip_prefix("skill-") {
