@@ -611,7 +611,7 @@ re-calls `set_active_collection_version(pin)` when needed and always runs
 | --- | --- | --- | --- |
 | **A** | `gents-migration`; baseline (zero production steps); unbypassable `ensure_migrations`; delete legacy; Lean + conformance | — | **done** (#931) |
 | **B** | Fixture lens; `DynamicRegistry`; inactive+fields; PatchVersioned e2e; crash-resume | — | **done** (#931) |
-| **C** | Eager `materialize_collection` driver (hard-fail on collection error) | [defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230) via [#1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) | **done** |
+| **C** | Eager `materialize_collection` driver (hard-fail on collection error, with one carve-out since #984: a unique-index violation from a merge-parked document skips that collection's eager pass and is reported, never bricking boot; see [defradb.rs#1308](https://github.com/sourcenetwork/defradb.rs/issues/1308) for the upstream half) | [defradb.rs#1230](https://github.com/sourcenetwork/defradb.rs/issues/1230) via [#1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) | **done** |
 | **D** | Unknown *document* version pass-through + rolling-upgrade guidance | [defradb.rs#1231](https://github.com/sourcenetwork/defradb.rs/issues/1231) via [#1232](https://github.com/sourcenetwork/defradb.rs/pull/1232) | **done** |
 
 ### 8.10 Feature-invariant baseline

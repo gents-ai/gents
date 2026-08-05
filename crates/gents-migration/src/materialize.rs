@@ -103,6 +103,16 @@ fn is_unique_index_violation(error: &anyhow::Error) -> bool {
         .any(|cause| cause.to_string().contains("violates unique index"))
 }
 
+/// Bare `[A-Za-z0-9_]` check for GraphQL identifier positions.
+///
+/// `escape_graphql_string` covers string literals only; collection and field
+/// names interpolate as identifiers, where validation is the only defense.
+/// Both come from trusted sources (the static registry and the node's own
+/// schema), so this is a trust-boundary backstop, not input sanitization.
+fn is_safe_graphql_identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// Best-effort identification of the parked document(s) behind a boot-time
 /// unique-index violation.
 ///
@@ -119,8 +129,14 @@ async fn describe_parked_unique_conflict(
 ) -> String {
     let mut detail = format!(
         "{collection}: eager materialization skipped ({error}); \
-         a P2P merge parked a unique-index-conflicting document unindexed (#984)"
+         consistent with a P2P merge having parked a unique-index-conflicting \
+         document unindexed (#984)"
     );
+
+    if !is_safe_graphql_identifier(collection) {
+        warn!(collection = %collection, "parked-doc diagnostics: unsafe collection identifier");
+        return detail;
+    }
 
     let unique_indexes = match node.get_collection(collection) {
         Ok(Some(version)) => version
@@ -137,7 +153,7 @@ async fn describe_parked_unique_conflict(
 
     for index in unique_indexes {
         let fields: Vec<&str> = index.fields.iter().map(|f| f.name.as_str()).collect();
-        if fields.is_empty() {
+        if fields.is_empty() || !fields.iter().all(|f| is_safe_graphql_identifier(f)) {
             continue;
         }
         let query = format!(

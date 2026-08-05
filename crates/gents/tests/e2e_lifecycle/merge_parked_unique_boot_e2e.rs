@@ -20,17 +20,20 @@ use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents::defra_node::EmbeddedNode;
+use gents::graphql::escape_graphql_string;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
-use crate::support::{first_row, test_p2p_db, DocIdRow};
+use crate::support::test_p2p_db;
 
 const CONFLICT_DID: &str = "did:test:984-stale-endpoint";
 
 async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
+    let did = escape_graphql_string(CONFLICT_DID);
+    let address = escape_graphql_string(address);
     let mutation = format!(
         r#"mutation {{
             create_PeerEndpoint(input: {{
-                did: "{CONFLICT_DID}",
+                did: "{did}",
                 node_id: "node-{address}",
                 address: "{address}",
                 updated_at: "2026-07-31T00:00:00Z",
@@ -44,12 +47,21 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
         "create_PeerEndpoint failed: {:?}",
         resp.errors
     );
+    let indexed = indexed_endpoint_doc_ids(node).await;
+    assert_eq!(indexed.len(), 1, "freshly created endpoint must be indexed");
+    indexed.into_iter().next().unwrap()
+}
+
+/// Index-backed lookup: filtering on the unique `did` resolves through the
+/// index, so only the deterministic winner is visible here.
+async fn indexed_endpoint_doc_ids(node: &EmbeddedNode) -> Vec<String> {
+    let did = escape_graphql_string(CONFLICT_DID);
     let resp = node
         .execute(&format!(
-            r#"{{ PeerEndpoint(filter: {{ did: {{ _eq: "{CONFLICT_DID}" }} }}) {{ _docID }} }}"#
+            r#"{{ PeerEndpoint(filter: {{ did: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
         ))
         .await;
-    first_row::<DocIdRow>(&resp, "PeerEndpoint").doc_id
+    scan_endpoint_doc_ids(&resp)
 }
 
 fn scan_endpoint_doc_ids(resp: &gents::defra_node::QueryResponse) -> Vec<String> {
@@ -152,15 +164,8 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     // the deterministic winner (smallest docID) while the scan sees both.
     let winner = std::cmp::min(home_doc.clone(), client_doc.clone());
     let parked = std::cmp::max(home_doc.clone(), client_doc.clone());
-    let filtered = home
-        .node
-        .execute(&format!(
-            r#"{{ PeerEndpoint(filter: {{ did: {{ _eq: "{CONFLICT_DID}" }} }}) {{ _docID }} }}"#
-        ))
-        .await;
-    let indexed = scan_endpoint_doc_ids(&filtered);
     assert_eq!(
-        indexed,
+        indexed_endpoint_doc_ids(&home.node).await,
         vec![winner.clone()],
         "unique index must resolve to the deterministic winner"
     );
@@ -226,14 +231,8 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     let mut expected = vec![home_doc, client_doc];
     expected.sort();
     assert_eq!(docs, expected, "parked doc must survive boot");
-    let filtered = home
-        .node
-        .execute(&format!(
-            r#"{{ PeerEndpoint(filter: {{ did: {{ _eq: "{CONFLICT_DID}" }} }}) {{ _docID }} }}"#
-        ))
-        .await;
     assert_eq!(
-        scan_endpoint_doc_ids(&filtered),
+        indexed_endpoint_doc_ids(&home.node).await,
         vec![winner],
         "boot must not flip the deterministic winner"
     );
