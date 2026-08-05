@@ -104,6 +104,17 @@ struct ReasoningCursor {
     active_item_id: Option<String>,
     progress_seq: Option<String>,
     segment: u64,
+    /// Text of the most recently completed segment, retained while the durable
+    /// row may still serve it stale — i.e. until the runtime's reset-tail write
+    /// (an observed empty tail) proves the buffer was actually cleared. Without
+    /// it, re-observing the unchanged text after a boundary manufactures a
+    /// full replay on a fresh segment (#1040); the Lean contract
+    /// `reset_before_terminal_suppresses_durable_replay` forbids exactly that.
+    completed_preview: String,
+    /// `reasoning_progress_seq` observed when the segment completed: a stale
+    /// re-read carries the same value, a genuine byte-identical rewrite has
+    /// advanced it (`write_reasoning` bumps it on every append).
+    completed_reasoning_seq: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -362,6 +373,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     &current.request_id,
                     reasoning,
                     response_row.and_then(|row| scalar_marker(Some(row), "progress_seq")),
+                    response_row
+                        .and_then(|row| scalar_marker(Some(row), "reasoning_progress_seq")),
                 );
                 if let Some(item_id) = observation.completed_item_id {
                     projection
@@ -943,6 +956,7 @@ impl ReasoningCursor {
         request_id: &str,
         current: &str,
         progress_seq: Option<String>,
+        reasoning_seq: Option<String>,
     ) -> ReasoningObservation {
         let progress_boundary = self.progress_seq.is_some()
             && progress_seq.is_some()
@@ -954,19 +968,64 @@ impl ReasoningCursor {
             && !self.observed_preview.is_empty())
         .then(|| self.active_item_id(request_id));
         if completed_item_id.is_some() {
-            self.observed_preview.clear();
+            self.completed_preview = std::mem::take(&mut self.observed_preview);
+            self.completed_reasoning_seq = reasoning_seq.clone();
             self.active_item_id = None;
             self.segment = self.segment.saturating_add(1);
         }
 
-        if current.is_empty()
-            || (progress_boundary && current == previous_preview)
-            || current == self.observed_preview
-        {
+        if current.is_empty() {
+            // An observed empty tail proves the runtime's reset-tail write
+            // landed; identical text after this point is a genuine new segment.
+            self.completed_preview.clear();
+            self.completed_reasoning_seq = None;
             return ReasoningObservation {
                 completed_item_id,
                 delta: None,
             };
+        }
+        if (progress_boundary && current == previous_preview) || current == self.observed_preview {
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
+        }
+        if self.observed_preview.is_empty() && !self.completed_preview.is_empty() {
+            if current == self.completed_preview {
+                let seq_advanced = reasoning_seq.is_some()
+                    && self.completed_reasoning_seq.is_some()
+                    && reasoning_seq != self.completed_reasoning_seq;
+                if !seq_advanced {
+                    // Stale re-read of the segment that already completed:
+                    // never reopen it.
+                    return ReasoningObservation {
+                        completed_item_id,
+                        delta: None,
+                    };
+                }
+                self.completed_preview.clear();
+                self.completed_reasoning_seq = None;
+            } else if let Some(suffix) = current.strip_prefix(self.completed_preview.as_str()) {
+                // The tail grew past the completed segment without an observed
+                // reset: only the unseen suffix is new.
+                self.completed_preview.clear();
+                self.completed_reasoning_seq = None;
+                self.observed_preview = current.to_string();
+                let item_id = self
+                    .active_item_id
+                    .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
+                    .clone();
+                return ReasoningObservation {
+                    completed_item_id,
+                    delta: Some(ReasoningDelta {
+                        item_id,
+                        text: suffix.to_string(),
+                    }),
+                };
+            } else {
+                self.completed_preview.clear();
+                self.completed_reasoning_seq = None;
+            }
         }
 
         let (delta, discontinuity) = if self.observed_preview.is_empty() {
@@ -1008,6 +1067,8 @@ impl ReasoningCursor {
     fn prime(&mut self, item_id: String, text: &str) {
         self.observed_preview = text.to_string();
         self.active_item_id = Some(item_id);
+        self.completed_preview.clear();
+        self.completed_reasoning_seq = None;
     }
 
     fn active_item_id(&self, request_id: &str) -> String {
@@ -1021,6 +1082,8 @@ impl ReasoningCursor {
         self.active_item_id = None;
         self.progress_seq = None;
         self.segment = 0;
+        self.completed_preview.clear();
+        self.completed_reasoning_seq = None;
     }
 }
 
@@ -1384,20 +1447,20 @@ mod tests {
     fn reasoning_cursor_emits_live_append_without_duplication() {
         let mut cursor = ReasoningCursor::default();
         let first = cursor
-            .observe("request-1", "inspect", Some("1".to_string()))
+            .observe("request-1", "inspect", Some("1".to_string()), None)
             .delta
             .expect("first reasoning delta");
         assert_eq!(first.item_id, "gents-reasoning-request-1");
         assert_eq!(first.text, "inspect");
 
         let appended = cursor
-            .observe("request-1", "inspect then test", Some("1".to_string()))
+            .observe("request-1", "inspect then test", Some("1".to_string()), None)
             .delta
             .expect("appended reasoning delta");
         assert_eq!(appended.item_id, first.item_id);
         assert_eq!(appended.text, " then test");
         assert_eq!(
-            cursor.observe("request-1", "inspect then test", Some("1".to_string())),
+            cursor.observe("request-1", "inspect then test", Some("1".to_string()), None),
             Default::default()
         );
     }
@@ -1406,11 +1469,11 @@ mod tests {
     fn reasoning_cursor_recovers_delta_after_bounded_tail_rolls() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "first middle", Some("1".to_string()))
+            .observe("request-1", "first middle", Some("1".to_string()), None)
             .delta
             .expect("first reasoning delta");
         let rolled = cursor
-            .observe("request-1", "middle last", Some("1".to_string()))
+            .observe("request-1", "middle last", Some("1".to_string()), None)
             .delta
             .expect("rolled reasoning delta");
         assert_eq!(rolled.item_id, "gents-reasoning-request-1");
@@ -1422,7 +1485,7 @@ mod tests {
         let mut cursor = ReasoningCursor::default();
         cursor.prime("gents-reasoning-request-1".to_string(), "already visible");
         assert!(cursor
-            .observe("request-1", "already visible", Some("1".to_string()))
+            .observe("request-1", "already visible", Some("1".to_string()), None)
             .delta
             .is_none());
         let delta = cursor
@@ -1430,6 +1493,7 @@ mod tests {
                 "request-1",
                 "already visible plus new",
                 Some("1".to_string()),
+                None,
             )
             .delta
             .expect("new reasoning after resume");
@@ -1459,11 +1523,16 @@ mod tests {
     fn reasoning_cursor_starts_new_item_after_unrecoverable_gap() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "old preview", Some("1".to_string()))
+            .observe("request-1", "old preview", Some("1".to_string()), None)
             .delta
             .expect("first reasoning delta");
         let replacement = cursor
-            .observe("request-1", "entirely new preview", Some("1".to_string()))
+            .observe(
+                "request-1",
+                "entirely new preview",
+                Some("1".to_string()),
+                None,
+            )
             .delta
             .expect("replacement reasoning delta");
         assert_eq!(replacement.item_id, "gents-reasoning-request-1-segment-1");
@@ -1474,11 +1543,11 @@ mod tests {
     fn reasoning_cursor_segments_on_observed_empty_runtime_boundary() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "first turn", Some("1".to_string()))
+            .observe("request-1", "first turn", Some("1".to_string()), None)
             .delta
             .expect("first reasoning delta");
 
-        let boundary = cursor.observe("request-1", "", Some("2".to_string()));
+        let boundary = cursor.observe("request-1", "", Some("2".to_string()), None);
         assert_eq!(
             boundary.completed_item_id.as_deref(),
             Some("gents-reasoning-request-1")
@@ -1486,7 +1555,7 @@ mod tests {
         assert!(boundary.delta.is_none());
 
         let next = cursor
-            .observe("request-1", "second turn", Some("2".to_string()))
+            .observe("request-1", "second turn", Some("2".to_string()), None)
             .delta
             .expect("second reasoning delta");
         assert_eq!(next.item_id, "gents-reasoning-request-1-segment-1");
@@ -1497,7 +1566,7 @@ mod tests {
     fn reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed() {
         let mut cursor = ReasoningCursor::default();
         cursor
-            .observe("request-1", "tail shared", Some("1".to_string()))
+            .observe("request-1", "tail shared", Some("1".to_string()), None)
             .delta
             .expect("first reasoning delta");
 
@@ -1505,6 +1574,7 @@ mod tests {
             "request-1",
             "shared but belongs to the next turn",
             Some("2".to_string()),
+            None,
         );
         assert_eq!(
             next.completed_item_id.as_deref(),
@@ -1513,6 +1583,217 @@ mod tests {
         let delta = next.delta.expect("next-turn reasoning delta");
         assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
         assert_eq!(delta.text, "shared but belongs to the next turn");
+    }
+
+    #[test]
+    fn reasoning_cursor_does_not_reopen_completed_segment_from_stale_tail() {
+        let mut cursor = ReasoningCursor::default();
+        let first = cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("1".to_string()),
+                Some("5".to_string()),
+            )
+            .delta
+            .expect("first reasoning delta");
+        assert_eq!(first.item_id, "gents-reasoning-request-1");
+
+        let boundary = cursor.observe(
+            "request-1",
+            "durable thought",
+            Some("2".to_string()),
+            Some("5".to_string()),
+        );
+        assert_eq!(
+            boundary.completed_item_id.as_deref(),
+            Some("gents-reasoning-request-1")
+        );
+        assert!(boundary.delta.is_none());
+
+        // The reset-tail write has not been observed yet; the row still serves
+        // the completed text. This must never reopen the segment (#1040).
+        assert_eq!(
+            cursor.observe(
+                "request-1",
+                "durable thought",
+                Some("2".to_string()),
+                Some("5".to_string()),
+            ),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn reasoning_cursor_ignores_stale_tail_across_repeated_progress_boundaries() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "durable thought", Some("1".to_string()), None)
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
+        assert!(boundary.completed_item_id.is_some());
+
+        // A second progress boundary (e.g. a tool-result advance) with the
+        // reset still unobserved must not resurrect the completed text.
+        assert_eq!(
+            cursor.observe("request-1", "durable thought", Some("3".to_string()), None),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn reasoning_cursor_streams_only_new_suffix_when_stale_tail_grows() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("1".to_string()),
+                Some("5".to_string()),
+            )
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe(
+            "request-1",
+            "durable thought",
+            Some("2".to_string()),
+            Some("5".to_string()),
+        );
+        assert!(boundary.completed_item_id.is_some());
+
+        let grown = cursor
+            .observe(
+                "request-1",
+                "durable thought and more",
+                Some("2".to_string()),
+                Some("6".to_string()),
+            )
+            .delta
+            .expect("suffix delta after growth");
+        assert_eq!(grown.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(grown.text, " and more");
+    }
+
+    #[test]
+    fn reasoning_cursor_streams_identical_segment_after_observed_reset() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "durable thought", Some("1".to_string()), None)
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
+        assert!(boundary.completed_item_id.is_some());
+
+        // Observing the cleared tail proves reset-tail landed; suppression ends.
+        let reset = cursor.observe("request-1", "", Some("2".to_string()), None);
+        assert!(reset.completed_item_id.is_none());
+        assert!(reset.delta.is_none());
+
+        let fresh = cursor
+            .observe("request-1", "durable thought", Some("2".to_string()), None)
+            .delta
+            .expect("identical text after observed reset is a genuine segment");
+        assert_eq!(fresh.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(fresh.text, "durable thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_streams_identical_segment_when_reasoning_seq_advances() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("1".to_string()),
+                Some("5".to_string()),
+            )
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe(
+            "request-1",
+            "durable thought",
+            Some("2".to_string()),
+            Some("5".to_string()),
+        );
+        assert!(boundary.completed_item_id.is_some());
+
+        // write_reasoning bumps reasoning_progress_seq on every append, so an
+        // advanced seq with identical bytes is a genuine rewrite, not a stale read.
+        let rewrite = cursor
+            .observe(
+                "request-1",
+                "durable thought",
+                Some("2".to_string()),
+                Some("7".to_string()),
+            )
+            .delta
+            .expect("identical text with advanced reasoning seq streams fresh");
+        assert_eq!(rewrite.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(rewrite.text, "durable thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_stale_window_divergence_streams_full_new_text() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "durable thought", Some("1".to_string()), None)
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
+        assert!(boundary.completed_item_id.is_some());
+
+        let diverged = cursor.observe(
+            "request-1",
+            "completely different reasoning",
+            Some("2".to_string()),
+            None,
+        );
+        assert!(diverged.completed_item_id.is_none());
+        let delta = diverged.delta.expect("diverged text streams in full");
+        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(delta.text, "completely different reasoning");
+    }
+
+    #[test]
+    fn reasoning_cursor_reset_clears_completed_segment_memory() {
+        let mut cursor = ReasoningCursor::default();
+        cursor
+            .observe("request-1", "durable thought", Some("1".to_string()), None)
+            .delta
+            .expect("first reasoning delta");
+        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
+        assert!(boundary.completed_item_id.is_some());
+
+        // Steering handoff resets the cursor for a new request/response doc;
+        // the new request's first segment must stream even if byte-identical.
+        cursor.reset();
+        let fresh = cursor
+            .observe("request-1", "durable thought", Some("9".to_string()), None)
+            .delta
+            .expect("post-reset reasoning streams from scratch");
+        assert_eq!(fresh.item_id, "gents-reasoning-request-1");
+        assert_eq!(fresh.text, "durable thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_primed_resume_does_not_replay_after_boundary() {
+        let mut cursor = ReasoningCursor::default();
+        cursor.prime("gents-reasoning-request-1".to_string(), "resumed thought");
+        assert!(cursor
+            .observe("request-1", "resumed thought", Some("1".to_string()), None)
+            .delta
+            .is_none());
+        let boundary = cursor.observe("request-1", "resumed thought", Some("2".to_string()), None);
+        assert_eq!(
+            boundary.completed_item_id.as_deref(),
+            Some("gents-reasoning-request-1")
+        );
+
+        assert_eq!(
+            cursor.observe("request-1", "resumed thought", Some("2".to_string()), None),
+            Default::default()
+        );
     }
 
     #[test]
