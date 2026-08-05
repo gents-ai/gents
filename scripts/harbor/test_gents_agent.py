@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -129,6 +131,154 @@ class PopulateContextPostRunTest(unittest.TestCase):
         self.assertIsNone(gents.get("outcome"))
         self.assertIs(gents.get("budget_exhausted"), False)
         self.assertEqual(gents.get("terminal_error"), _MAX_TURN_ERROR)
+
+    def test_server_loss_metadata_survives_without_atif(self) -> None:
+        gents = self._run(
+            {
+                "request.json": {"request_id": "req-lost"},
+                "gents-outcome.json": {"outcome": "runtime_server_lost"},
+                "gents-diagnostic.json": {
+                    "reason": "server_lost_during_request",
+                    "graphql_available": False,
+                },
+                "gents-server-exit.json": {
+                    "status": "signal",
+                    "signal": 9,
+                    "wait_status": 137,
+                },
+            }
+        )
+        self.assertEqual(gents.get("request_id"), "req-lost")
+        self.assertEqual(gents.get("failure_origin"), "gents_server")
+        self.assertIs(gents.get("diagnostic_graphql_available"), False)
+        self.assertEqual((gents.get("server_exit") or {}).get("signal"), 9)
+
+
+class RunnerSupervisionTest(unittest.TestCase):
+    def test_server_signal_cancels_waiter_and_preserves_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logs = root / "logs"
+            home = root / "home"
+            instruction = root / "instruction.md"
+            fake_gents = root / "gents"
+            instruction.write_text("finish the task")
+            fake_gents.write_text(_FAKE_GENTS)
+            fake_gents.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "GENTS_BINARY": str(fake_gents),
+                "GENTS_HOME": str(home),
+                "GENTS_INSTRUCTION_FILE": str(instruction),
+                "GENTS_INFERENCE_URL": "http://127.0.0.1:8000/v1",
+                "GENTS_MODEL": "fake-model",
+                "GENTS_TOOL_ROOT": str(root),
+                "GENTS_LOGS_DIR": str(logs),
+                "GENTS_SERVER_STARTUP_TIMEOUT_SECS": "5",
+                "GENTS_DIAGNOSTIC_TIMEOUT_SECS": "2",
+                "GENTS_SUPERVISION_POLL_SECS": "0.05",
+            }
+            result = subprocess.run(
+                ["sh", str(_REPO_ROOT / "scripts/harbor/run_gents.sh")],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 70, result.stderr)
+            self.assertIn(
+                "Gents server exited during active request (signal 15)", result.stderr
+            )
+            self.assertTrue((home / "waiter-cancelled").is_file())
+            self.assertEqual(
+                json.loads((logs / "gents-server-exit.json").read_text())["signal"],
+                15,
+            )
+            diagnostic = json.loads((logs / "gents-diagnostic.json").read_text())
+            self.assertEqual(diagnostic["reason"], "server_lost_during_request")
+            self.assertIs(diagnostic["graphql_available"], False)
+            self.assertTrue((logs / "graphql-unavailable.txt").is_file())
+            self.assertGreater((logs / "gents-server-tail.txt").stat().st_size, 0)
+            self.assertGreater((logs / "process-tree.txt").stat().st_size, 0)
+            self.assertGreater((logs / "gents-home-inventory.txt").stat().st_size, 0)
+            self.assertGreater((logs / "gents-home.tar.gz").stat().st_size, 0)
+            self.assertGreater((logs / "partial-timeline.json").stat().st_size, 0)
+            trajectory = json.loads((logs / "trajectory.json").read_text())
+            self.assertEqual(trajectory["trajectory_id"], "partial-trajectory")
+
+
+_FAKE_GENTS = r'''#!/usr/bin/env python3
+import json
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+args = sys.argv[1:]
+
+def option(name, default=None):
+    if name not in args:
+        return default
+    return args[args.index(name) + 1]
+
+home = Path(option("--home", os.environ.get("GENTS_HOME", "/tmp/fake-gents")))
+home.mkdir(parents=True, exist_ok=True)
+(home / "store-evidence.db").touch()
+
+if args[:1] == ["init"]:
+    print(json.dumps({"inference_profile_id": "profile-1"}, indent=2))
+elif args[:1] == ["server"]:
+    count_file = home / "server-count"
+    count = int(count_file.read_text()) + 1 if count_file.exists() else 1
+    count_file.write_text(str(count))
+    print(f"fake server start {count}", flush=True)
+    if count == 1:
+        while True:
+            time.sleep(1)
+    while not (home / "waiter-started").exists():
+        time.sleep(0.01)
+    time.sleep(0.05)
+    (home / "server-lost").write_text("signal 15")
+    os.kill(os.getpid(), signal.SIGTERM)
+elif args[:3] == ["config", "profile", "set"]:
+    print("{}")
+elif args[:1] == ["status"]:
+    if (home / "server-lost").exists():
+        print("GraphQL connection refused", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({"process_state": "ready", "behavior_readiness": "ready"}, indent=2))
+elif args[:2] == ["request", "submit"]:
+    request = {"request_id": "request-1"}
+    Path(option("--output-file")).write_text(json.dumps(request, indent=2))
+    print(json.dumps(request, indent=2))
+elif args[:2] == ["response", "wait"]:
+    (home / "waiter-started").touch()
+    def cancelled(_signum, _frame):
+        (home / "waiter-cancelled").touch()
+        sys.exit(143)
+    signal.signal(signal.SIGTERM, cancelled)
+    while True:
+        time.sleep(1)
+elif args[:2] == ["response", "show"]:
+    print("GraphQL connection refused", file=sys.stderr)
+    sys.exit(1)
+elif args[:2] == ["trace", "timeline"]:
+    print(json.dumps({"request_id": "request-1", "events": [{"kind": "partial"}]}))
+elif args[:2] == ["trace", "project"]:
+    trajectory = {
+        "trajectory_id": "partial-trajectory",
+        "session_id": "partial-session",
+        "steps": [{"step_id": "partial-step"}],
+    }
+    Path(option("--output-file")).write_text(json.dumps(trajectory))
+else:
+    print(f"unsupported fake gents invocation: {args}", file=sys.stderr)
+    sys.exit(2)
+'''
 
 
 if __name__ == "__main__":
