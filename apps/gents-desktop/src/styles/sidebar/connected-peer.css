@@ -1,6 +1,13 @@
 @layer sidebar {
+  .connected-peer-section {
+    align-content: start;
+    align-self: start;
+  }
+
   .connected-peer-card {
     display: grid;
+    grid-auto-rows: max-content;
+    align-content: start;
     gap: var(--space-4);
     min-width: 0;
     border: 1px solid var(--border-default);
@@ -99,6 +106,7 @@
 
   @media (max-width: 760px) {
     .connected-peer-card {
+      height: fit-content;
       gap: var(--space-2);
       padding: var(--space-3);
     }
