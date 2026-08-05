@@ -117,9 +117,8 @@
       display: none;
     }
 
-    .fleet-row-icon,
-    .fleet-did-copy {
-      opacity: 1;
+    .fleet-table .fleet-rename {
+      display: none;
     }
   }
 }
