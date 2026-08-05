@@ -31,8 +31,11 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::Behavior { command } => match command {
             BehaviorCommand::Set(args) => behavior::behavior_set(args).await,
+            BehaviorCommand::Create(args) => behavior::behavior_create(args).await,
+            BehaviorCommand::Clone(args) => behavior::behavior_clone(args).await,
+            BehaviorCommand::Disable(args) => behavior::behavior_disable(args).await,
             BehaviorCommand::List(args) => crud::config_list(crud::BEHAVIOR_SPEC, args).await,
-            BehaviorCommand::Show(args) => crud::config_show(crud::BEHAVIOR_SPEC, args).await,
+            BehaviorCommand::Show(args) => behavior::behavior_show(args).await,
             BehaviorCommand::Rm(args) => crud::config_rm(crud::BEHAVIOR_SPEC, args).await,
         },
         ConfigCommand::Tools { command } => match command {
