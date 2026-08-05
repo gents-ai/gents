@@ -51,6 +51,24 @@ impl ServeProcess {
             read_captured_log(self.stderr_log.as_ref())?,
         ))
     }
+
+    /// Run a fallible future and, on failure, append the server's captured
+    /// stdout/stderr to the error — mirroring the `wait_for_port` bail format —
+    /// so mid-test connection failures are diagnosable (#1041).
+    pub async fn capturing<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        match fut.await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let (stdout, stderr) = self.captured_output().unwrap_or_default();
+                Err(error.context(format!(
+                    "server stdout:\n{stdout}\nserver stderr:\n{stderr}"
+                )))
+            }
+        }
+    }
 }
 
 pub fn cli_bin() -> &'static str {
