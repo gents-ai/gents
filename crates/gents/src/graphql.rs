@@ -1,12 +1,16 @@
 //! Shared GraphQL utility functions used across Gents runtime modules.
 //!
-//! Two distinct defenses live here, one per grammatical position:
+//! Two defenses live here, one per grammatical position:
 //! - [`escape_graphql_string`] for values interpolated inside **string
 //!   literals** — escaping makes any content safe to embed.
 //! - [`validate_graphql_name`] / [`validate_collection_identifier`] for
 //!   values interpolated as bare **identifiers** (collection names, field
 //!   names). Identifiers sit outside string literals, so escaping cannot
 //!   apply; validation against the GraphQL Name grammar is the only defense.
+//!
+//! A third position — a raw **object/fragment** spliced in whole, as
+//! `EventTrigger.filter` is by the trigger engine's filter probe — is
+//! covered by neither, and has no defense here yet. See #1038.
 
 use anyhow::{bail, Result};
 

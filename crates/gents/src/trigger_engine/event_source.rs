@@ -407,14 +407,21 @@ impl EventSource {
     /// itself errored — the caller treats errors as "skip this fire" so a
     /// transient GraphQL failure doesn't brick the source.
     ///
-    /// Trust boundary: `trigger.filter` is operator-authored and validated
-    /// at apply time (the apply path rejects ill-formed filter objects
-    /// before the trigger ever lands in `active_event_triggers`). It's
-    /// interpolated directly as a filter-object fragment — we do NOT run
-    /// it through `escape_graphql_string`, because that helper escapes
-    /// scalar string literals and would break the object syntax. The
-    /// `_docID` value, which comes from the event payload (external
-    /// input), IS escaped.
+    /// Trust boundary: `source_collection` is validated as a collection
+    /// identifier above, and the `_docID` value from the event payload IS
+    /// escaped.
+    ///
+    /// `trigger.filter` is NOT. It is interpolated directly as a
+    /// filter-object fragment, a third grammatical position that neither
+    /// `escape_graphql_string` (which escapes scalar string literals and
+    /// would break the object syntax) nor identifier validation covers.
+    /// This doc used to claim the value was operator-authored and rejected
+    /// at apply time if ill-formed; that is true only of the CLI apply path
+    /// (`gents-cli` desired_state::validate runs a filter syntax probe).
+    /// Since `filter` became an agent-writable self-config field it is
+    /// reachable with no validation at all, and a crafted value can close
+    /// the enclosing `_and: [ ... ] }` and append its own selections to this
+    /// query. Tracked in #1038 — do not treat this as a closed boundary.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
