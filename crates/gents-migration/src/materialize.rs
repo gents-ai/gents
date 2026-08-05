@@ -156,10 +156,7 @@ async fn describe_parked_unique_conflict(
         if fields.is_empty() || !fields.iter().all(|f| is_safe_graphql_identifier(f)) {
             continue;
         }
-        let query = format!(
-            "{{ {collection} {{ _docID {} }} }}",
-            fields.join(" ")
-        );
+        let query = format!("{{ {collection} {{ _docID {} }} }}", fields.join(" "));
         let resp = node.execute(&query).await;
         if resp.has_errors() {
             warn!(
