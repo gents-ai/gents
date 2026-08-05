@@ -58,6 +58,16 @@ help:
 	@echo "  make live-cli              Run live CLI smoke test"
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
+	@echo
+	@echo "Worktrees:"
+	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"
+	@echo "                             Create a worktree with target/ and proofs/.lake"
+	@echo "                             cloned from this checkout (APFS clonefile)"
+
+.PHONY: worktree
+worktree:
+	@test -n "$(BRANCH)" || { echo "usage: make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]" >&2; exit 2; }
+	@scripts/worktree-bootstrap.sh "$(BRANCH)" $(DIR) $(BASE)
 
 .PHONY: build build-cli build-cli-headless build-desktop build-desktop-ui
 build:
