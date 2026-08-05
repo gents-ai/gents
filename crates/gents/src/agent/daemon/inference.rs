@@ -246,9 +246,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         if let Some(summary) = result.summary {
                             provider_messages.insert(
                                 0,
-                                crate::prompt::LayeredPromptBuilder::system_reminder(&format!(
-                                    "Previous conversation summary (compacted):\n\n{summary}"
-                                )),
+                                crate::prompt::LayeredPromptBuilder::system_reminder(
+                                    &crate::prompt::continuation_checkpoint_reminder(&summary),
+                                ),
                             );
                         }
                         Ok(provider_messages)

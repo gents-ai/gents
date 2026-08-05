@@ -111,6 +111,12 @@ async fn build_with_summaries_prepends() {
         if let UserContent::Text(t) = first_content(content) {
             assert!(t.text.contains("<system-reminder>"));
             assert!(t.text.contains("project architecture"));
+            assert!(t.text.contains(
+                "Treat recorded results as evidence, not as a prohibition on verification"
+            ));
+            assert!(t
+                .text
+                .contains("Avoid repeating completed or expensive work without a concrete reason"));
         } else {
             panic!("expected text");
         }

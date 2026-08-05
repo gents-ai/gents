@@ -30,6 +30,16 @@ use crate::tool_surface::ToolSurface;
 const TITLE_GENERATION_SUFFIX: &str =
     "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
+pub(crate) fn continuation_checkpoint_reminder(checkpoints: &str) -> String {
+    format!(
+        "Continuation checkpoints from earlier conversation (oldest to newest):\n\n{checkpoints}\n\n\
+Continue from these checkpoints and the retained conversation. Treat recorded results as \
+evidence, not as a prohibition on verification. Re-check facts when state may have changed, \
+the checkpoint is ambiguous, or correctness depends on them. Avoid repeating completed or \
+expensive work without a concrete reason."
+    )
+}
+
 const TOOL_DISCOVERY_GUIDANCE: &str = "\
 ## Tool Discovery
 
@@ -182,9 +192,8 @@ impl PromptBuilder for LayeredPromptBuilder {
 
         if !compaction_summaries.is_empty() {
             let summary_text = compaction_summaries.join("\n\n---\n\n");
-            assembled.push(Self::system_reminder(&format!(
-                "Previous conversation summary (compacted):\n\n{}",
-                summary_text,
+            assembled.push(Self::system_reminder(&continuation_checkpoint_reminder(
+                &summary_text,
             )));
         }
 

@@ -47,7 +47,7 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
         vec![
             StreamScript::completes(
                 COMPACTION_MARKER,
-                [r#"{"summary": "earlier turns inspected files", "key_decisions": [], "pending_questions": []}"#],
+                [r#"{"goal": "continue the task", "completed_work": ["earlier turns inspected files"]}"#],
             ),
             StreamScript::completes(GATE_MARKER, ["ok"]),
         ],
