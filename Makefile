@@ -67,7 +67,7 @@ help:
 .PHONY: worktree
 worktree:
 	@test -n "$(BRANCH)" || { echo "usage: make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]" >&2; exit 2; }
-	@scripts/worktree-bootstrap.sh "$(BRANCH)" $(DIR) $(BASE)
+	@WORKTREE_DIR="$(DIR)" WORKTREE_BASE="$(BASE)" scripts/worktree-bootstrap.sh "$(BRANCH)"
 
 .PHONY: build build-cli build-cli-headless build-desktop build-desktop-ui
 build:

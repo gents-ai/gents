@@ -30,7 +30,9 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
 /// COMMIT does. Routing skill enable/disable writes through here lets a running
 /// agent pick up Codex-driven toggles without a restart — matching the
 /// `config skill` CLI path (#340). Mirrors the Local arm of
-/// `config_writes::txn::ConfigApplyTxn`.
+/// `gents::config_client::txn::ConfigApplyTxn`, plus a bounded conflict retry
+/// that arm does not have (#933): a conflicted cycle commits nothing, so a
+/// successful call still emits exactly one Update event.
 pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
     let mut retry_index = 0;
     loop {

@@ -10,16 +10,18 @@
 #
 # Usage: scripts/worktree-bootstrap.sh <branch> [dest-dir] [base-ref]
 #   branch    branch to check out; created from base-ref if it does not exist
-#   dest-dir  defaults to a sibling directory gents-<slug> derived from branch
-#   base-ref  defaults to HEAD; only used when creating the branch
+#   dest-dir  defaults to $WORKTREE_DIR, then a sibling gents-<slug> directory
+#   base-ref  defaults to $WORKTREE_BASE, then HEAD; used when creating the branch
+# The env-var forms exist so `make worktree` can pass optional values without
+# positional-argument collapse (an empty positional would shift later ones).
 set -eu
 
 branch="${1:?usage: worktree-bootstrap.sh <branch> [dest-dir] [base-ref]}"
 repo_root="$(git rev-parse --show-toplevel)"
 
 slug="$(printf '%s' "$branch" | sed -E 's#^(fix|feat|feature|docs|perf|chore|agent)/##; s#/#-#g')"
-dest="${2:-"$(dirname "$repo_root")/gents-$slug"}"
-base="${3:-HEAD}"
+dest="${2:-${WORKTREE_DIR:-"$(dirname "$repo_root")/gents-$slug"}}"
+base="${3:-${WORKTREE_BASE:-HEAD}}"
 
 if [ -e "$dest" ]; then
     echo "error: destination $dest already exists" >&2
