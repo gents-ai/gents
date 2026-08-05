@@ -1,13 +1,21 @@
 use anyhow::Result;
 use gents::defra_node::{EmbeddedNode, QueryRequest};
+use gents::retry::{
+    defradb_conflict_retry_backoff, execute_graphql_with_conflict_retry,
+    is_defradb_transaction_conflict_text, DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
 
 use super::progress::response_field_is_blank;
 use crate::materialized_message_query;
 
+/// All shim reads and auto-committed writes go through the runtime's bounded
+/// DefraDB conflict retry (#440): right after startup the runtime's own
+/// reconciliation writes are still in flight, and an unretried auto-commit
+/// surfaces a raw `transaction conflict` to the Codex client (#933).
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
-    let response = node.execute(query).await;
+    let response = execute_graphql_with_conflict_retry(node, query, "codex shim store").await;
     if response.has_errors() {
         anyhow::bail!("GENTS Codex shim query failed: {:?}", response.errors);
     }
@@ -24,6 +32,31 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
 /// `config skill` CLI path (#340). Mirrors the Local arm of
 /// `config_writes::txn::ConfigApplyTxn`.
 pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
+    let mut retry_index = 0;
+    loop {
+        match execute_committed_once(node, mutation).await {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
+                    && is_defradb_transaction_conflict_text(&format!("{error:#}")) =>
+            {
+                let backoff = defradb_conflict_retry_backoff(retry_index);
+                retry_index += 1;
+                tracing::warn!(
+                    retry_count = retry_index,
+                    max_retries = DEFRA_DB_CONFLICT_MAX_RETRIES,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %error,
+                    "retrying Codex shim committed mutation after transaction conflict"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn execute_committed_once(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
     let handle = node
         .runner()
         .begin_txn(false)
