@@ -409,6 +409,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         failure_origin = None
         if diagnostic.get("reason") == "server_lost_during_request":
             failure_origin = "gents_server"
+        elif outcome.get("outcome") == "compaction_provider_error":
+            failure_origin = "compaction_provider"
 
         context.metadata = {
             **(context.metadata or {}),

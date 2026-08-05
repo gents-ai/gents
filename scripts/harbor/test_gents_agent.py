@@ -153,6 +153,20 @@ class PopulateContextPostRunTest(unittest.TestCase):
         self.assertIs(gents.get("diagnostic_graphql_available"), False)
         self.assertEqual((gents.get("server_exit") or {}).get("signal"), 9)
 
+    def test_compaction_provider_failure_has_distinct_origin(self) -> None:
+        gents = self._run(
+            {
+                "request.json": {"request_id": "req-compaction"},
+                "gents-outcome.json": {"outcome": "compaction_provider_error"},
+                "response.json": {
+                    "status": "error",
+                    "error_message": "compaction_provider_failure: guided and fallback output failed",
+                },
+            }
+        )
+        self.assertEqual(gents.get("outcome"), "compaction_provider_error")
+        self.assertEqual(gents.get("failure_origin"), "compaction_provider")
+
 
 class RunnerSupervisionTest(unittest.TestCase):
     def test_server_signal_cancels_waiter_and_preserves_diagnostics(self) -> None:

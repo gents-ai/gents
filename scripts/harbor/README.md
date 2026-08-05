@@ -105,7 +105,9 @@ runner attempts a bounded status query, partial response, timeline and ATIF
 projection, captures a server-log tail and process tree, inventories the local
 store, and archives the home only when it fits the configured size ceiling.
 GraphQL failure is retained explicitly rather than replacing the server-loss
-cause with a connection error.
+cause with a connection error. Compaction failures that exhaust both guided
+decoding and the strict non-guided JSON fallback are classified separately as
+`compaction_provider_error` in `gents-outcome.json`.
 
 For task images that need the glibc compatibility loader, the adapter installs
 an explicit `gents-fs-runner` shim and verifies it during setup. This keeps the

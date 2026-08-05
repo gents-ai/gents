@@ -12,6 +12,15 @@ set -eu
 # key-plus-prefix is safe against model content: JSON escapes quotes inside
 # string values, so this byte sequence can only introduce the real field.
 _MAX_TURN_ERROR_PREFIX='"error_message": "agent stream failed: PromptError: MaxTurnError: '
+_COMPACTION_PROVIDER_ERROR='compaction_provider_failure:'
+
+response_error_has() {
+  response_file=$1
+  expected=$2
+  sed -n '/^[[:space:]]*"error_message":/p' "${response_file}" |
+    head -1 |
+    grep -qF "${expected}"
+}
 
 classify_response() {
   response_file=$1
@@ -23,6 +32,8 @@ classify_response() {
     error)
       if grep -qF "${_MAX_TURN_ERROR_PREFIX}" "${response_file}"; then
         printf 'max_turns_exhausted\n'
+      elif response_error_has "${response_file}" "${_COMPACTION_PROVIDER_ERROR}"; then
+        printf 'compaction_provider_error\n'
       else
         printf 'agent_error\n'
       fi
@@ -94,11 +105,27 @@ EOF
   "error_message": "compaction failed: summary request rejected by provider"
 }
 EOF
+  cat >"${self_test_dir}/compaction-provider-error.json" <<'EOF'
+{
+  "request_id": "req-12",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: per-turn provider-input compaction failed: compaction_provider_failure: guided and fallback output failed"
+}
+EOF
   cat >"${self_test_dir}/content-mentions-max-turn.json" <<'EOF'
 {
   "request_id": "req-6",
   "status": "error",
   "content": "I hit MaxTurnError: in a log I was reading",
+  "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
+}
+EOF
+  cat >"${self_test_dir}/content-mentions-compaction-provider.json" <<'EOF'
+{
+  "request_id": "req-13",
+  "status": "error",
+  "content": "A log contained compaction_provider_failure: but it was not this request failure.",
   "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
 }
 EOF
@@ -167,7 +194,9 @@ EOF
   expect_outcome max-turns max_turns_exhausted
   expect_outcome provider-error agent_error
   expect_outcome compaction-error agent_error
+  expect_outcome compaction-provider-error compaction_provider_error
   expect_outcome content-mentions-max-turn agent_error
+  expect_outcome content-mentions-compaction-provider agent_error
   expect_outcome unexpected-status unexpected:interrupted
   expect_outcome missing-status unexpected:missing
   expect_outcome envelope-max-turns max_turns_exhausted
@@ -626,6 +655,11 @@ case "${outcome}" in
     sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
     printf 'gents request %s reached the %s-turn limit; trajectory=%s\n' \
       "${request_id}" "${GENTS_MAX_TURNS}" "${trajectory_path}"
+    ;;
+  compaction_provider_error)
+    echo "Gents request ${request_id} terminated because both guided and strict fallback compaction failed" >&2
+    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    exit 1
     ;;
   agent_error)
     echo "Gents request ${request_id} terminated with an error response" >&2

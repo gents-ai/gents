@@ -955,7 +955,8 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
 
 fn valid_summary_json() -> String {
     serde_json::json!({
-        "goal": "Continue the task from the compacted turns."
+        "goal": "Continue the task from the compacted turns.",
+        "next_actions": ["Run the pending verification command."]
     })
     .to_string()
 }
@@ -1203,17 +1204,19 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn repeated_malformed_structured_summaries_exhaust_the_internal_budget() {
+async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback() {
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::malformed_summary_turn(),
         ScriptedSummaryModel::malformed_summary_turn(),
         ScriptedSummaryModel::malformed_summary_turn(),
         ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::summary_turn(),
     ]);
     let calls = model.calls.clone();
+    let requests = model.requests.clone();
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
 
-    let error = compactor
+    let result = compactor
         .compact(
             summary_worthy_messages(),
             500,
@@ -1225,18 +1228,27 @@ async fn repeated_malformed_structured_summaries_exhaust_the_internal_budget() {
             },
         )
         .await
-        .expect_err("persistently malformed output must exhaust bounded recovery");
+        .expect("a strict non-guided JSON fallback should recover after guided decoding fails");
 
     assert!(
-        error
-            .to_string()
-            .contains("structured-output validation failed"),
-        "terminal error must identify the typed-output contract: {error}"
+        result
+            .summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("Run the pending verification command.")),
+        "the fallback must preserve the pending next action"
     );
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        4,
-        "typed-output retracts consume exactly 1 initial call + 3 retries"
+        5,
+        "guided output consumes 1 initial call + 3 retries, then one fallback"
+    );
+    let requests = requests.lock().unwrap();
+    assert!(requests[..4]
+        .iter()
+        .all(|request| request.output_schema.is_some()));
+    assert!(
+        requests[4].output_schema.is_none(),
+        "the final escape hatch must bypass the failing guided decoder"
     );
 }
 
@@ -1278,15 +1290,53 @@ async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_prov
 }
 
 #[tokio::test(start_paused = true)]
-async fn repeated_empty_compaction_completions_fail_after_the_internal_budget() {
-    // #1016: recovery is bounded. A provider that never produces visible
-    // output exhausts the fixed internal ladder deterministically — 1 initial
-    // call + 3 immediate retries — and then fails.
+async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
+    // Guided recovery remains bounded at 1 initial call + 3 immediate retries.
+    // The fifth and final call drops the schema transport that exercises the
+    // provider's guided decoder, but still requires strict local JSON.
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::empty_turn(),
         ScriptedSummaryModel::empty_turn(),
         ScriptedSummaryModel::empty_turn(),
         ScriptedSummaryModel::empty_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+
+    let result = compactor
+        .compact(
+            summary_worthy_messages(),
+            500,
+            &CompactionOptions {
+                threshold: 0.50,
+                keep_recent_tokens: 50,
+                strategy: CompactionStrategy::Summarize,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a visible strict JSON fallback should recover after empty guided turns");
+
+    assert!(
+        result.summary.is_some(),
+        "the strict fallback checkpoint must be used"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        5,
+        "empty guided turns consume the internal ladder plus one fallback"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
     ]);
     let calls = model.calls.clone();
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
@@ -1303,17 +1353,24 @@ async fn repeated_empty_compaction_completions_fail_after_the_internal_budget() 
             },
         )
         .await
-        .expect_err("persistently empty output must fail once the internal budget is spent");
+        .expect_err("invalid guided and fallback output must never become a checkpoint");
 
+    let diagnostic = error.to_string();
+    assert!(diagnostic.starts_with("compaction_provider_failure:"));
+    assert!(diagnostic.contains("non-guided JSON fallback failed"));
+    assert!(diagnostic.contains("raw_output_preview"));
     assert!(
-        error.to_string().contains("no visible output"),
-        "the failure must name the empty-output condition: {error}"
+        diagnostic.len() < 800,
+        "diagnostic must remain bounded: {diagnostic}"
     );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        4,
-        "empty-output retracts consume exactly the internal ladder: 1 initial + 3 retries"
-    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+}
+
+#[test]
+fn non_guided_fallback_rejects_a_vague_checkpoint_without_pending_actions() {
+    let error = super::summary::parse_fallback_checkpoint(r#"{"goal":"Keep going."}"#)
+        .expect_err("a fallback may not silently discard pending work");
+    assert!(error.contains("no pending next action"));
 }
 
 #[test]

@@ -101,10 +101,26 @@ impl StructuredOutputConfig {
             validate: Arc::new(|raw| {
                 serde_json::from_str::<T>(raw)
                     .map(|_| ())
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| {
+                        format!(
+                            "{error}; raw_output_preview={}; finish_metadata=unavailable_at_rig_streaming_boundary",
+                            bounded_structured_output_preview(raw)
+                        )
+                    })
             }),
         }
     }
+}
+
+fn bounded_structured_output_preview(raw: &str) -> String {
+    const MAX_PREVIEW_BYTES: usize = 192;
+    let mut cut = raw.len().min(MAX_PREVIEW_BYTES);
+    while !raw.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let suffix = if cut < raw.len() { "…" } else { "" };
+    serde_json::to_string(&format!("{}{suffix}", &raw[..cut]))
+        .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
 }
 
 #[derive(Debug)]
@@ -694,7 +710,9 @@ where
                     MidStreamDirective::Fail { reason } => {
                         Err(StreamingError::Completion(
                             CompletionError::ProviderError(format!(
-                                "completion produced no visible output: {reason}"
+                                "completion produced no visible output: {reason}; \
+                                 raw_output_preview=\"\"; \
+                                 finish_metadata=unavailable_at_rig_streaming_boundary"
                             )),
                         ))?;
                         unreachable!("Err(..)? above ends the stream");
