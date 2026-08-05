@@ -101,6 +101,47 @@ pub struct GraphqlSessionShape {
     pub tool_results: Vec<AgentToolResultRow>,
 }
 
+/// Validate `name` against the GraphQL `Name` grammar:
+/// `[_A-Za-z][_0-9A-Za-z]*` (ASCII only). Anything interpolated into a
+/// GraphQL document in identifier position MUST pass this check first —
+/// escaping does not exist for identifiers.
+pub fn validate_graphql_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        Some(c) => {
+            return Err(anyhow!(
+                "invalid identifier {name:?}: must start with a letter or underscore, got {c:?}"
+            ))
+        }
+        None => return Err(anyhow!("invalid identifier: empty string")),
+    }
+    if let Some(c) = name
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
+    {
+        return Err(anyhow!(
+            "invalid identifier {name:?}: only ASCII letters, digits, and underscore are allowed, got {c:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a value used as a **collection name** in identifier position
+/// (e.g. `EventTrigger.source_collection`). On top of the Name grammar this
+/// rejects the `__` prefix, which the GraphQL spec reserves for
+/// introspection — a "collection" of `__Type` or `__schema` would aim a
+/// query at the introspection surface instead of a document collection.
+pub fn validate_collection_identifier(name: &str) -> Result<()> {
+    validate_graphql_name(name)?;
+    if name.starts_with("__") {
+        return Err(anyhow!(
+            "invalid collection name {name:?}: the __ prefix is reserved for GraphQL introspection"
+        ));
+    }
+    Ok(())
+}
+
 pub fn escape_graphql_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -585,7 +626,14 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
         Value::Object(map) => {
             let rendered = map
                 .iter()
-                .map(|(key, value)| Ok(format!("{key}: {}", graphql_input_literal(value)?)))
+                .map(|(key, value)| {
+                    // Keys render in identifier position, where escaping
+                    // cannot apply. Values reaching here are caller-supplied
+                    // (self-config patches are agent-authored), so an
+                    // unvalidated key is an injection into the mutation.
+                    validate_graphql_name(key)?;
+                    Ok(format!("{key}: {}", graphql_input_literal(value)?))
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(format!("{{ {} }}", rendered.join(", ")))
         }
@@ -1015,6 +1063,30 @@ mod tests {
         assert!(rendered.contains("enabled: true"));
         assert!(rendered.contains(r#"name: "alpha""#));
         assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+
+    #[test]
+    fn graphql_input_literal_rejects_object_keys_that_are_not_graphql_names() {
+        // Object keys land in identifier position in the rendered literal,
+        // where escaping does not apply. A self-config patch value is
+        // agent-controlled, so a non-Name key is an injection, not a typo.
+        let hostile = serde_json::json!({
+            "endpoint": {
+                r#"x: 1 }, api_key: "leaked" }) { _docID } #"#: 1
+            }
+        });
+        let err = graphql_input_literal(&hostile)
+            .expect_err("a non-Name object key must be rejected, not spliced");
+        assert!(
+            err.to_string().contains("identifier"),
+            "error should name the identifier rule: {err}"
+        );
+
+        // Well-formed nested keys still render.
+        let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
+        assert!(graphql_input_literal(&ok)
+            .expect("valid Name keys render")
+            .contains("inner_1: \"v\""));
     }
 
     #[test]

@@ -408,20 +408,17 @@ impl EventSource {
     /// transient GraphQL failure doesn't brick the source.
     ///
     /// Trust boundary: `source_collection` is validated as a collection
-    /// identifier above, and the `_docID` value from the event payload IS
-    /// escaped.
+    /// identifier above, and the `_docID` from the event payload is escaped.
     ///
-    /// `trigger.filter` is NOT. It is interpolated directly as a
-    /// filter-object fragment, a third grammatical position that neither
-    /// `escape_graphql_string` (which escapes scalar string literals and
-    /// would break the object syntax) nor identifier validation covers.
-    /// This doc used to claim the value was operator-authored and rejected
-    /// at apply time if ill-formed; that is true only of the CLI apply path
-    /// (`gents-cli` desired_state::validate runs a filter syntax probe).
-    /// Since `filter` became an agent-writable self-config field it is
-    /// reachable with no validation at all, and a crafted value can close
-    /// the enclosing `_and: [ ... ] }` and append its own selections to this
-    /// query. Tracked in #1038 — do not treat this as a closed boundary.
+    /// `trigger.filter` is neither. It is spliced in as a filter-object
+    /// fragment — a position where escaping would break the object syntax
+    /// and identifier validation does not apply — and it is agent-writable
+    /// via self-config with nothing on that path checking it. A crafted
+    /// value can close the enclosing `_and: [ ... ] }` and append its own
+    /// selections here. The CLI apply probe is not a check either: it
+    /// executes the filter rather than validating it, in a different
+    /// embedding than this one. Tracked in #1038 — this is an open hole,
+    /// not a closed boundary.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
@@ -470,7 +467,8 @@ impl EventSource {
         collection: &str,
         source_doc_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
-        crate::graphql::validate_collection_identifier(collection)?;
+        // `fields_for` validates this same binding and `?`-propagates before
+        // the query below is built, so it is the one gate for both sites.
         let fields = self
             .source_schema_cache
             .fields_for(collection, &self.node)

@@ -285,6 +285,102 @@ async fn get_my_config_reports_documents_and_never_the_api_key() {
     );
 }
 
+/// A patch value is a scalar in the model (`FieldValue := String` in
+/// `proofs/Proofs/SelfConfig/Apply.lean`), but the tool schema accepts
+/// arbitrary JSON. An object value used to reach the mutation renderer,
+/// whose object keys land in identifier position — letting a patch on one
+/// writable field write a protected field, or a document in another
+/// collection entirely. Both must be refused before anything commits.
+#[tokio::test]
+async fn configure_rejects_non_scalar_patch_values() {
+    let db = test_db("self-config-nonscalar").await;
+    seed_config(&db.node).await;
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.to_string(),
+        &tool_config(&["backend", "automation"], false, false),
+    );
+
+    let error = call_tool(
+        &tools,
+        "configure_backend",
+        json!({ "patch": { "endpoint": {
+            r#"x: 1 }, api_key: "leaked-by-injection", endpoint: "http://injected/v1""#: 1
+        }}}),
+    )
+    .await
+    .expect_err("an object-valued patch must be refused");
+    assert!(
+        error.contains("scalar") || error.contains("identifier"),
+        "rejection should name the value-shape rule: {error}"
+    );
+
+    let stored = db
+        .node
+        .execute(
+            r#"query { InferenceBackend(filter: { backend_id: { _eq: "self-config-backend" } }) { endpoint api_key } }"#,
+        )
+        .await;
+    let row = stored
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("backend row");
+    assert_eq!(
+        row["endpoint"], "http://127.0.0.1:11434/v1",
+        "the injected endpoint must not have landed"
+    );
+    assert_eq!(
+        row["api_key"], "sk-secret-should-never-leak",
+        "a patch on a writable field must not reach the protected api_key"
+    );
+
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "task", "id": "nonscalar-task", "patch": { "enabled": true } }),
+    )
+    .await
+    .expect("task create commits");
+    let error = call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "event_trigger", "id": "nonscalar-trigger", "patch": {
+            "task_id": "nonscalar-task",
+            "source_collection": "CustomerSignup",
+            "event_kind": "created",
+            "filter": {
+                r#"x: 1 }) { _docID } create_AgentBehavior(input: { behavior_id: "evil-injected", agent_did: "did:key:zAttacker" }) { _docID } #"#: 1
+            },
+        }}),
+    )
+    .await
+    .expect_err("an object-valued filter must be refused");
+    assert!(
+        error.contains("scalar") || error.contains("identifier"),
+        "rejection should name the value-shape rule: {error}"
+    );
+
+    let forged = db
+        .node
+        .execute(r#"query { AgentBehavior(filter: { behavior_id: { _eq: "evil-injected" } }) { behavior_id } }"#)
+        .await;
+    let rows = forged
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentBehavior"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        rows.is_empty(),
+        "no document may be forged in another collection: {rows:?}"
+    );
+}
+
 #[tokio::test]
 async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     let db = test_db("self-config-automation").await;
@@ -429,6 +525,42 @@ async fn configure_automation_rejects_injection_shaped_source_collection() {
     .await
     .expect("a grammar-valid source_collection commits");
     assert!(output.contains("\"created\": true"), "{output}");
+
+    // Patching an existing trigger is the realistic attack shape — commit a
+    // benign one, then flip the field. Create and patch share a branch today
+    // because the check reads the merged doc; this keeps them from drifting.
+    let error = call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
+            "source_collection": "Msg(limit: 1) { _docID } Foo",
+        }}),
+    )
+    .await
+    .expect_err("patching source_collection to a hostile value must be rejected");
+    assert!(
+        error.contains("identifier") || error.contains("collection"),
+        "rejection should name the identifier rule: {error}"
+    );
+
+    let stored = db
+        .node
+        .execute(
+            r#"query { EventTrigger(filter: { trigger_id: { _eq: "watcher-trigger" } }) { source_collection } }"#,
+        )
+        .await;
+    let row = stored
+        .data
+        .as_ref()
+        .and_then(|data| data.get("EventTrigger"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("trigger row");
+    assert_eq!(
+        row["source_collection"], "CustomerSignup",
+        "the rejected patch must not have landed"
+    );
 }
 
 #[tokio::test]
