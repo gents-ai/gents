@@ -85,7 +85,10 @@ pub(super) async fn wait_runtime_ready(
         r#"{{ AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ process_state }} }}"#,
         escape_graphql_string(agent_did)
     );
-    for _ in 0..240 {
+    // 180s: a second node cold-starts a full DefraDB + runtime process, and on
+    // a contended host (parallel test suites, sibling builds) that can take
+    // minutes. Bounded and explicit — on expiry the error names the node.
+    for _ in 0..360 {
         if let Ok(resp) = post_graphql(graphql, &query).await {
             if resp
                 .pointer("/data/AgentRuntime/0/process_state")
@@ -105,7 +108,10 @@ pub(super) async fn wait_runtime_ready(
 
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
     let client = reqwest::Client::new();
-    for _ in 0..300 {
+    // 120s: /healthz reports 200 only once the runtime row exists, so this is
+    // already a coarse readiness gate; give a cold second node headroom on a
+    // contended host. Bounded — server death is still detected immediately.
+    for _ in 0..600 {
         if client
             .get(url)
             .timeout(Duration::from_millis(500))
