@@ -43,6 +43,13 @@ pub async fn ensure_migrations_with_registry(
     verify_managed_lineages(node, registry, &mut report).await?;
 
     report.materialization = materialize::materialize_all(node, registry).await?;
+    report.warnings.extend(
+        report
+            .materialization
+            .parked_unique_conflicts
+            .iter()
+            .cloned(),
+    );
 
     info!(
         baseline_registered = report.baseline_registered,
