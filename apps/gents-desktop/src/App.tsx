@@ -151,6 +151,11 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               ? (agentName) => bridge.api.startManagedServer!(agentName)
               : undefined
           }
+          onCommitManagedServerAutoStart={
+            bridge.api.commitManagedServerAutoStart
+              ? (agentName) => bridge.api.commitManagedServerAutoStart!(agentName)
+              : undefined
+          }
           onOpenChat={openChat}
           onOpenCode={openCode}
           onOpenConfig={openConfig}

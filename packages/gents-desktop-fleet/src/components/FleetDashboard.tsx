@@ -16,9 +16,6 @@ import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
 
-const SEEDED_LOCAL_ENDPOINT = "http://127.0.0.1:8080/v1";
-const SEEDED_LOCAL_MODEL = "google/gemma-4-12B-it-qat-q4_0-gguf";
-
 function needsInferenceSetup(deployment: DeploymentView): boolean {
   const behavior =
     deployment.behaviors.find((entry) => entry.isDefault) ??
@@ -30,12 +27,7 @@ function needsInferenceSetup(deployment: DeploymentView): boolean {
   if (!backend) return true;
   if (backend.enabled === false) return true;
   if (backend.models.length === 0) return true;
-  return (
-    deployment.source === "local-standard" &&
-    backend.endpoint === SEEDED_LOCAL_ENDPOINT &&
-    backend.models.length === 1 &&
-    backend.models[0] === SEEDED_LOCAL_MODEL
-  );
+  return false;
 }
 
 export type FleetDashboardProps = {

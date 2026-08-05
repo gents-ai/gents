@@ -265,7 +265,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.7",
+  "contractVersion": "0.8",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -290,7 +290,8 @@
     "desktop://client-updated",
     "desktop://codex-login-url",
     "desktop://grok-login-url",
-    "desktop://managed-server-updated"
+    "desktop://managed-server-updated",
+    "desktop://managed-server-tray-stop"
   ],
   "packageVersion": "0.10.1",
   "permissionSets": [

@@ -29,6 +29,10 @@ impl ServerConfig {
             http_port: crate::DEFAULT_HTTP_PORT,
         }
     }
+
+    pub fn status_url(&self) -> String {
+        format!("http://{}:{}/status", self.http_addr, self.http_port)
+    }
 }
 
 #[derive(Debug, Clone)]

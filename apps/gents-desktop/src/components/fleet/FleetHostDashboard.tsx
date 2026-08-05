@@ -26,6 +26,7 @@ export type FleetHostDashboardProps = Omit<
 > & {
   onInitLocalRuntime: (label?: string | null) => Promise<unknown>;
   onStartManagedServer?: (agentName: string) => Promise<unknown>;
+  onCommitManagedServerAutoStart?: (agentName: string) => Promise<unknown>;
   onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
   onProbeInferenceEndpoint: (endpoint: string) => Promise<InferenceProbeResult>;
@@ -38,6 +39,7 @@ export type FleetHostDashboardProps = Omit<
 export function FleetHostDashboard({
   onInitLocalRuntime,
   onStartManagedServer,
+  onCommitManagedServerAutoStart,
   onSaveBackendConfig,
   onSaveBehaviorConfig,
   onProbeInferenceEndpoint,
@@ -69,6 +71,7 @@ export function FleetHostDashboard({
           copy={fleetProps.copy}
           onConnect={onInitLocalRuntime}
           onStartServer={onStartManagedServer}
+          onCommitServerAutoStart={onCommitManagedServerAutoStart}
         />
       }
       renderInferenceSetup={(deployment, onClose) => (

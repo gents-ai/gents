@@ -1,3 +1,7 @@
+#[cfg(desktop)]
+use gents_desktop_bridge::contract::{
+    MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
+};
 use gents_desktop_bridge::{
     init, init_tracing as install_tracing, install_runtime, AgentHomePolicy, AppMeta,
     BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
@@ -90,7 +94,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "stop" => {
-                let _ = app.emit("desktop://managed-server-tray-stop", ());
+                let _ = app.emit(MANAGED_SERVER_TRAY_STOP_EVENT, ());
                 show_main_window(app);
             }
             "quit" => shutdown_and_quit(app),
@@ -101,7 +105,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let tray_id = tray.id().clone();
     let app_handle = app.handle().clone();
-    app.listen("desktop://managed-server-updated", move |event| {
+    app.listen(MANAGED_SERVER_UPDATED_EVENT, move |event| {
         let running = serde_json::from_str::<serde_json::Value>(event.payload())
             .ok()
             .and_then(|value| {
@@ -134,8 +138,16 @@ fn shutdown_and_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         if let Some(state) = app.try_state::<gents_desktop_bridge::state::DesktopAppState>() {
             let server = state.managed_server.lock().await.server.take();
             if let Some(server) = server {
-                if let Err(error) = server.shutdown().await {
-                    tracing::warn!(%error, "managed local server shutdown failed during quit");
+                match tokio::time::timeout(std::time::Duration::from_secs(5), server.shutdown())
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, "managed local server shutdown failed during quit");
+                    }
+                    Err(_) => {
+                        tracing::warn!("managed local server shutdown timed out during quit");
+                    }
                 }
             }
         }

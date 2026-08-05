@@ -94,6 +94,10 @@ export function createDesktopApiAdapter(
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
         request: { agentName },
       }),
+    commitManagedServerAutoStart: (agentName) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
+        request: { agentName },
+      }),
     stopManagedServer: (disableAutoStart) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
         disableAutoStart,

@@ -1,4 +1,5 @@
 import type { BackendHealth } from "../types/backendHealth.js";
+import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
 import type {
   AgentConfigSaveRequest,
   BackendDeleteRequest,
@@ -68,6 +69,9 @@ export type DesktopApiAdapter = {
   shutdownDesktopClient: () => Promise<DesktopClientSnapshot>;
   managedServerStatus?: () => Promise<ManagedServerStatus>;
   startManagedServer?: (agentName: string) => Promise<ManagedServerStatus>;
+  commitManagedServerAutoStart?: (
+    agentName: string,
+  ) => Promise<ManagedServerStatus>;
   stopManagedServer?: (
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
@@ -205,12 +209,4 @@ export type DesktopApiAdapter = {
   ) => Promise<ResolveHoldResult>;
 };
 
-export type ManagedServerStatus = {
-  state:
-    "disabled" | "starting" | "running" | "external" | "stopped" | "failed";
-  autoStart: boolean;
-  agentName: string | null;
-  agentDid: string | null;
-  graphql: string | null;
-  error: string | null;
-};
+export type { ManagedServerStatus };

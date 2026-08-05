@@ -41,6 +41,10 @@ pub struct DesktopAppState {
     /// `start_inflight` instead) so a cancelled Tauri command cannot drop the
     /// lock while RocksDB is still opening on a background thread.
     pub client_lifecycle: tokio::sync::Mutex<()>,
+    /// Serializes managed server start/stop operations. Startup intentionally
+    /// spans provisioning and server readiness, so the state flag alone is
+    /// not sufficient to prevent two callers from racing the port bind.
+    pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
 }
@@ -77,6 +81,7 @@ impl DesktopAppState {
                 start_inflight: None,
             }),
             client_lifecycle: tokio::sync::Mutex::new(()),
+            managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
         }

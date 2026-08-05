@@ -12,6 +12,7 @@ export type LocalRuntimeConnectProps = {
   copy?: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName">;
   onConnect: (label?: string | null) => Promise<unknown>;
   onStartServer?: (agentName: string) => Promise<unknown>;
+  onCommitServerAutoStart?: (agentName: string) => Promise<unknown>;
 };
 
 export function LocalRuntimeConnect({
@@ -21,6 +22,7 @@ export function LocalRuntimeConnect({
   copy,
   onConnect,
   onStartServer,
+  onCommitServerAutoStart,
 }: LocalRuntimeConnectProps) {
   const [error, setError] = useState<string | null>(null);
   const [newAgentName, setNewAgentName] = useState("Local Agent");
@@ -34,9 +36,7 @@ export function LocalRuntimeConnect({
     try {
       await onStartServer?.(agentName);
       await onConnect(agentName);
-      // The second call commits launch restoration only after the client has
-      // successfully provisioned and connected the local peer.
-      await onStartServer?.(agentName);
+      await onCommitServerAutoStart?.(agentName);
     } catch (connectError) {
       setError(formatPeerConnectionError(connectError, "local-runtime", copy));
     }

@@ -221,6 +221,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         BridgeErrorCode,
         BridgeError,
         DesktopClientSnapshot,
+        ManagedServerState,
         ManagedServerStatus,
         PeerRemoveResponse,
         BearerPairingResponse,

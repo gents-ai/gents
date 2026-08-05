@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -30,10 +30,22 @@ pub struct DesktopBootstrapSummary {
     pub saved_peers: Vec<SavedPeerView>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum ManagedServerState {
+    Disabled,
+    Starting,
+    Running,
+    External,
+    Stopped,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerStatus {
-    pub state: String,
+    pub state: ManagedServerState,
     pub auto_start: bool,
     pub agent_name: Option<String>,
     pub agent_did: Option<String>,

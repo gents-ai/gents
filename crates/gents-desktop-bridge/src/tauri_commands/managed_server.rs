@@ -6,11 +6,11 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
 
 use crate::config::ManagedServerPolicy;
+use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
-use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
+use crate::types::{ManagedServerStartRequest, ManagedServerState, ManagedServerStatus};
 
-const MANAGED_SERVER_EVENT: &str = "desktop://managed-server-updated";
 const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -37,6 +37,7 @@ pub async fn desktop_managed_server_start<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
     let agent_name = request.agent_name.trim();
     if agent_name.is_empty() {
         return Err(BridgeError::new(
@@ -140,14 +141,16 @@ pub async fn desktop_managed_server_start<R: Runtime>(
     }
 
     emit_status(&app, &state).await;
+    drop(_lifecycle);
     desktop_managed_server_status(state).await
 }
 
 async fn matching_external_server(
     agent_home: &std::path::Path,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
+    let config = gents_server::server_host::ServerConfig::standard(agent_home.to_path_buf());
     let payload = match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        "http://127.0.0.1:9191/status",
+        &config.status_url(),
     )
     .await
     {
@@ -158,27 +161,12 @@ async fn matching_external_server(
         .get("agent_did")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    let initialized_did = tokio::fs::read(agent_home.join("init.json"))
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("agent_did")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        });
-    if initialized_did
-        .as_deref()
-        .is_some_and(|initialized| initialized != live_did)
-    {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            "port 9191 is occupied by a different Gents identity",
-        ));
+    if gents_server::server_host::initialized_home(agent_home) {
+        let initialized_did = read_initialized_did(agent_home).await;
+        ensure_matching_identity(initialized_did.as_deref(), live_did, config.http_port)?;
     }
     Ok(Some(ManagedServerStatus {
-        state: "external".to_string(),
+        state: ManagedServerState::External,
         auto_start: false,
         agent_name: payload
             .get("agent_name")
@@ -201,6 +189,7 @@ pub async fn desktop_managed_server_stop<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
     let server = {
         let mut managed = state.managed_server.lock().await;
         managed.starting = false;
@@ -219,6 +208,7 @@ pub async fn desktop_managed_server_stop<R: Runtime>(
         save_preference(&state, &stored).await?;
     }
     emit_status(&app, &state).await;
+    drop(_lifecycle);
     desktop_managed_server_status(state).await
 }
 
@@ -239,17 +229,16 @@ fn status_from(
     let ready = managed.server.as_ref().map(|server| server.ready());
     ManagedServerStatus {
         state: if ready.is_some() {
-            "running"
+            ManagedServerState::Running
         } else if managed.starting {
-            "starting"
+            ManagedServerState::Starting
         } else if managed.last_error.is_some() {
-            "failed"
+            ManagedServerState::Failed
         } else if stored.is_some_and(|stored| stored.enabled) {
-            "stopped"
+            ManagedServerState::Stopped
         } else {
-            "disabled"
-        }
-        .to_string(),
+            ManagedServerState::Disabled
+        },
         auto_start: stored.is_some_and(|stored| stored.enabled),
         agent_name: ready
             .map(|ready| ready.agent_name.clone())
@@ -263,7 +252,37 @@ fn status_from(
 async fn emit_status<R: Runtime>(app: &AppHandle<R>, state: &DesktopAppState) {
     let stored = load_preference(state).await.ok().flatten();
     let managed = state.managed_server.lock().await;
-    let _ = app.emit(MANAGED_SERVER_EVENT, status_from(&managed, stored.as_ref()));
+    let _ = app.emit(
+        MANAGED_SERVER_UPDATED_EVENT,
+        status_from(&managed, stored.as_ref()),
+    );
+}
+
+async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
+    tokio::fs::read(agent_home.join("init.json"))
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("agent_did")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn ensure_matching_identity(
+    initialized_did: Option<&str>,
+    live_did: &str,
+    port: u16,
+) -> Result<(), BridgeError> {
+    if initialized_did.is_some_and(|initialized| initialized != live_did) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            format!("port {port} is occupied by a different Gents identity"),
+        ));
+    }
+    Ok(())
 }
 
 async fn load_preference(
@@ -303,4 +322,50 @@ async fn save_preference(
     tokio::fs::write(path, bytes)
         .await
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    #[test]
+    fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
+        let stored = StoredManagedServer {
+            enabled: true,
+            agent_name: "local".to_string(),
+        };
+        let mut runtime = ManagedServerRuntimeState {
+            starting: true,
+            last_error: Some("boom".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            status_from(&runtime, Some(&stored)).state,
+            ManagedServerState::Starting
+        );
+        runtime.starting = false;
+        assert_eq!(
+            status_from(&runtime, Some(&stored)).state,
+            ManagedServerState::Failed
+        );
+        runtime.last_error = None;
+        assert_eq!(
+            status_from(&runtime, Some(&stored)).state,
+            ManagedServerState::Stopped
+        );
+        assert_eq!(
+            status_from(&runtime, None).state,
+            ManagedServerState::Disabled
+        );
+    }
+
+    #[test]
+    fn external_server_rejects_a_different_initialized_identity() {
+        let error = ensure_matching_identity(Some("did:key:local"), "did:key:other", 9191)
+            .expect_err("different identity must be rejected");
+        assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
+        assert!(error.message.contains("port 9191"));
+        ensure_matching_identity(Some("did:key:local"), "did:key:local", 9191).unwrap();
+    }
 }
