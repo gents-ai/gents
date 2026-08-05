@@ -20,11 +20,6 @@ pub async fn desktop_tool_surface_explain(
         ));
     };
 
-    if core.graphql_for_agent(&agent_did).await.is_some() {
-        return Err(BridgeError::from_legacy_message(
-            "tool-surface explanation for remote agents is not yet supported",
-        ));
-    }
     let snapshot = core.store().snapshot();
 
     let behavior = snapshot

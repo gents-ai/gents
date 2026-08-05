@@ -546,7 +546,6 @@ pub(super) async fn desktop(fleet: &Fleet) -> Result<()> {
     println!("  launching the desktop app…");
     let mut cmd = std::process::Command::new(&desktop_bin);
     cmd.env("GENTS_DESKTOP_HOME", path_arg(&desktop_home));
-    cmd.env("GENTS_DESKTOP_PAIR_REMOTE_P2P", "0");
     cmd.spawn().context("launching the desktop app")?;
 
     println!("  ✓ Desktop app launched — it pairs with your demo node(s) over P2P.");

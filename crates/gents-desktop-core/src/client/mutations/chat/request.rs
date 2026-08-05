@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents::config_client::ConfigApplyTxn;
 use gents::skills::prompt_slash_skill_selection;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
@@ -11,8 +11,7 @@ use uuid::Uuid;
 use crate::client::store::ClientStore;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_mutation, normalize_optional_string,
-    normalize_required,
+    escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
 };
 use super::binding::resolve_agent_binding;
 use super::conversation::{build_upsert_conversation_field, build_upsert_session_field};
@@ -126,87 +125,6 @@ pub async fn submit_request(
     let mutation =
         build_coalesced_submit_mutation(&[session_field, request_field, conversation_field]);
     execute_mutation(node, &mutation, "submit_request").await?;
-
-    Ok(SubmittedRequest {
-        request_id,
-        session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: binding.behavior_id,
-    })
-}
-
-pub async fn submit_request_to_graphql(
-    graphql: &str,
-    store: &ClientStore,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: &str,
-    content: &str,
-    behavior_id: Option<&str>,
-    options: SubmitRequestOptions,
-) -> Result<SubmittedRequest> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let session_id = normalize_required("session_id", session_id)?;
-    let agent_did = normalize_required("agent_did", agent_did)?;
-    let requester_did = normalize_required("requester_did", requester_did)?;
-    let content = normalize_required("content", content)?;
-    let (content, options) = prepare_prompt_submission(content, options)?;
-
-    let request_id = Uuid::new_v4().to_string();
-    let created_at = Utc::now().to_rfc3339();
-    let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(session_id))?;
-    let (retry_parent_request, retry_root_request) =
-        if let Some(parent_id) = options.retry_parent_request.as_deref() {
-            let root = fetch_retry_root_from_graphql(graphql, parent_id, agent_did, requester_did)
-                .await?
-                .unwrap_or_else(|| parent_id.to_string());
-            (parent_id.to_string(), root)
-        } else {
-            (String::new(), request_id.clone())
-        };
-    let session_field = build_upsert_session_field(
-        "session",
-        store,
-        session_id,
-        agent_did,
-        requester_did,
-        &binding.agent_name,
-        &binding.behavior_id,
-        &created_at,
-    );
-    let request_field = build_add_agent_request_field(
-        "request",
-        &request_id,
-        agent_did,
-        requester_did,
-        binding.behavior_id.as_deref().unwrap_or(""),
-        session_id,
-        &retry_parent_request,
-        &retry_root_request,
-        &content,
-        &created_at,
-        0,
-        i64::from(DEFAULT_REQUEST_MAX_RETRIES),
-        "",
-        "interactive",
-        &submit_request_extra_fields(&options),
-    );
-    let conversation_field = build_upsert_conversation_field(
-        "conversation",
-        store,
-        session_id,
-        agent_did,
-        requester_did,
-        &binding.agent_name,
-        &binding.behavior_id,
-        &request_id,
-        &content,
-        "active",
-        &created_at,
-    );
-    let mutation =
-        build_coalesced_submit_mutation(&[session_field, request_field, conversation_field]);
-    execute_remote_mutation(graphql, &mutation, "submit_request").await?;
 
     Ok(SubmittedRequest {
         request_id,
@@ -331,60 +249,6 @@ async fn retry_request_with_request_id(
     }
     Err(last_error
         .unwrap_or_else(|| anyhow::anyhow!("retry transaction exhausted without an error")))
-}
-
-pub async fn retry_request_to_graphql(
-    graphql: &str,
-    store: &ClientStore,
-    parent: &AgentRequestRow,
-    requester_did: &str,
-) -> Result<SubmittedRequest> {
-    let request_id = Uuid::new_v4().to_string();
-    let parent_request_id = normalize_required("request_id", &parent.request_id)?;
-    let agent_did = normalize_required(
-        "agent_did",
-        parent
-            .agent_did
-            .as_deref()
-            .context("retry parent request must have an agent_did")?,
-    )?;
-    let requester_did = normalize_required("requester_did", requester_did)?;
-    let access = ConfigAccess::Graphql(normalize_required("graphql", graphql)?.to_string());
-
-    let mut last_error = None;
-    for attempt in 0..RETRY_TRANSACTION_ATTEMPTS {
-        let txn = access.begin_apply_txn().await?;
-        match retry_request_in_txn(
-            &txn,
-            store,
-            parent_request_id,
-            agent_did,
-            requester_did,
-            &request_id,
-        )
-        .await
-        {
-            Ok(submitted) => match txn.commit().await {
-                Ok(()) => return Ok(submitted),
-                Err(error) => {
-                    last_error = Some(error.context("committing remote retry transaction"));
-                }
-            },
-            Err(error) => {
-                let retryable = retry_transaction_error_is_retryable(&error);
-                let _ = txn.discard().await;
-                if !retryable {
-                    return Err(error);
-                }
-                last_error = Some(error);
-            }
-        }
-        if attempt + 1 < RETRY_TRANSACTION_ATTEMPTS {
-            tokio::time::sleep(gents::retry::defradb_conflict_retry_backoff(attempt as u32)).await;
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("remote retry transaction exhausted without an error")))
 }
 
 async fn retry_request_in_txn(
@@ -1022,45 +886,6 @@ pub async fn resend_request(
     .await
 }
 
-pub async fn resend_request_to_graphql(
-    graphql: &str,
-    store: &ClientStore,
-    stale_request_id: &str,
-    agent_did: &str,
-    requester_did: &str,
-) -> Result<SubmittedRequest> {
-    let stale =
-        fetch_request_view_from_graphql(graphql, stale_request_id, agent_did, requester_did)
-            .await?;
-    if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
-        anyhow::bail!(
-            "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
-            stale.lifecycle_state,
-            stale.failure_reason
-        );
-    }
-    let retry_session_id = Uuid::new_v4().to_string();
-    submit_request_to_graphql(
-        graphql,
-        store,
-        &retry_session_id,
-        &stale.agent_did,
-        requester_did,
-        &stale.content,
-        stale.behavior_id.as_deref(),
-        SubmitRequestOptions {
-            valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
-            retry_parent_request: Some(stale_request_id.to_string()),
-            temperature: stale.temperature,
-            top_p: stale.top_p,
-            top_k: stale.top_k,
-            max_tokens: stale.max_tokens,
-            metadata: stale.metadata.clone(),
-        },
-    )
-    .await
-}
-
 /// Minimal projection of an AgentRequest used by resend to copy over inputs.
 /// Carries sampling overrides + metadata so resend preserves submitter intent.
 struct StaleRequestView {
@@ -1157,88 +982,6 @@ async fn fetch_request_view(
     })
 }
 
-async fn fetch_request_view_from_graphql(
-    graphql: &str,
-    request_id: &str,
-    agent_did: &str,
-    requester_did: &str,
-) -> Result<StaleRequestView> {
-    let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
-            ) {{
-                agent_did
-                behavior_id
-                content
-                lifecycle_state
-                failure_reason
-                temperature
-                top_p
-                top_k
-                max_tokens
-                metadata
-            }}
-        }}"#
-    );
-    let access = ConfigAccess::Graphql(graphql.to_string());
-    let response = access.execute(&query).await?;
-    let row = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    Ok(stale_request_view_from_value(row))
-}
-
-fn stale_request_view_from_value(row: &Value) -> StaleRequestView {
-    StaleRequestView {
-        agent_did: row
-            .get("agent_did")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        behavior_id: row
-            .get("behavior_id")
-            .and_then(Value::as_str)
-            .and_then(|value| normalize_optional_string(Some(value)))
-            .map(str::to_string),
-        content: row
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        lifecycle_state: row
-            .get("lifecycle_state")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        failure_reason: row
-            .get("failure_reason")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        temperature: row.get("temperature").and_then(Value::as_f64),
-        top_p: row.get("top_p").and_then(Value::as_f64),
-        top_k: row.get("top_k").and_then(Value::as_i64),
-        max_tokens: row.get("max_tokens").and_then(Value::as_i64),
-        metadata: row
-            .get("metadata")
-            .and_then(Value::as_str)
-            .and_then(|value| normalize_optional_string(Some(value)))
-            .map(str::to_string),
-    }
-}
-
 async fn fetch_retry_root(
     node: &EmbeddedNode,
     request_id: &str,
@@ -1276,40 +1019,6 @@ async fn fetch_retry_root(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from))
-}
-
-async fn fetch_retry_root_from_graphql(
-    graphql: &str,
-    request_id: &str,
-    agent_did: &str,
-    requester_did: &str,
-) -> Result<Option<String>> {
-    let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
-            ) {{ retry_root_request }}
-        }}"#
-    );
-    let access = ConfigAccess::Graphql(graphql.to_string());
-    let response = access.execute(&query).await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("retry_root_request"))
-        .and_then(Value::as_str)
-        .and_then(|value| normalize_optional_string(Some(value)))
-        .map(str::to_string))
 }
 
 #[cfg(test)]

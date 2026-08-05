@@ -66,6 +66,12 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
     : "No configured inference backends";
 }
 
+export function needsInferenceSetup(deployment: DeploymentView): boolean {
+  return !deployment.inferenceBackends.some(
+    (backend) => backend.enabled !== false && backend.models.length > 0,
+  );
+}
+
 export function toolCeilingIcons(
   selections: ToolSelectionView[],
   selectedToolSelectionId?: string | null,

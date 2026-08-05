@@ -105,6 +105,8 @@ mod compaction_gate;
 mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
 mod composed_invariants;
+#[path = "conformance/config_replication.rs"]
+mod config_replication;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]

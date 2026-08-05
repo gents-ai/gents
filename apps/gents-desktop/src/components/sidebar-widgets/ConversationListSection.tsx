@@ -4,14 +4,10 @@ import { conversationBelongsToBehavior } from "@source-inc/gents-desktop-chat";
 import type {
   ConversationSummary,
   DeploymentView,
-  TaskView,
 } from "@source-inc/gents-desktop-client";
 import { displayConversationTitle } from "@source-inc/gents-desktop-client";
 import { formatRelativeTime, PencilIcon } from "@source-inc/gents-desktop-fleet";
 import { conversationStatusClass } from "./sidebarUtils";
-
-const ALL_TASKS_FILTER = "__all__";
-const UNTASKED_FILTER = "__untasked__";
 
 export type ConversationListSectionProps = {
   conversations: ConversationSummary[];
@@ -25,6 +21,8 @@ export type ConversationListSectionProps = {
     sessionId: string,
     title: string,
   ) => void | Promise<void>;
+  onSyncConversations?: () => Promise<unknown> | void;
+  syncingConversations?: boolean;
 };
 
 export function ConversationListSection({
@@ -36,6 +34,8 @@ export function ConversationListSection({
   onSelectSession,
   onOpenSession,
   onRenameConversationTitle,
+  onSyncConversations,
+  syncingConversations = false,
 }: ConversationListSectionProps) {
   const [query, setQuery] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -89,80 +89,23 @@ export function ConversationListSection({
       ),
     [conversations, defaultBehaviorId, selectedBehaviorId],
   );
-  const tasks = selectedDeployment?.tasks ?? [];
-  const hasUntaskedConversations = behaviorConversations.some(
-    (conversation) => !conversation.taskId,
-  );
-  const taskFilterOptions = useMemo(
-    () => tasks.filter((task) => task.taskId.trim().length > 0),
-    [tasks],
-  );
-  const [selectedTaskFilter, setSelectedTaskFilter] = useState(ALL_TASKS_FILTER);
-
   useEffect(() => {
-    setSelectedTaskFilter(ALL_TASKS_FILTER);
     setQuery("");
     setRenamingSessionId(null);
     setSavingRename(false);
   }, [selectedAgentDid]);
 
-  useEffect(() => {
-    if (
-      selectedTaskFilter !== ALL_TASKS_FILTER &&
-      selectedTaskFilter !== UNTASKED_FILTER &&
-      !taskFilterOptions.some((task) => task.taskId === selectedTaskFilter)
-    ) {
-      setSelectedTaskFilter(ALL_TASKS_FILTER);
-    }
-
-    if (selectedTaskFilter === UNTASKED_FILTER && !hasUntaskedConversations) {
-      setSelectedTaskFilter(ALL_TASKS_FILTER);
-    }
-  }, [hasUntaskedConversations, selectedTaskFilter, taskFilterOptions]);
-
   const filteredConversations = useMemo(() => {
-    let rows = behaviorConversations;
-    if (selectedTaskFilter === UNTASKED_FILTER) {
-      rows = rows.filter((conversation) => !conversation.taskId);
-    } else if (selectedTaskFilter !== ALL_TASKS_FILTER) {
-      rows = rows.filter((conversation) => conversation.taskId === selectedTaskFilter);
-    }
     const needle = query.trim().toLowerCase();
-    if (needle) {
-      rows = rows.filter((conversation) =>
-        `${displayConversationTitle(conversation.title)} ${conversation.previewText ?? ""}`
-          .toLowerCase()
-          .includes(needle),
-      );
+    if (!needle) {
+      return behaviorConversations;
     }
-    return rows;
-  }, [behaviorConversations, query, selectedTaskFilter]);
-  const showTaskFilter =
-    Boolean(selectedAgentDid) &&
-    behaviorConversations.length > 0 &&
-    (taskFilterOptions.length > 0 || hasUntaskedConversations);
-
-  useEffect(() => {
-    if (
-      !selectedAgentDid ||
-      !selectedSessionId ||
-      selectedTaskFilter === ALL_TASKS_FILTER ||
-      filteredConversations.length === 0 ||
-      filteredConversations.some(
-        (conversation) => conversation.sessionId === selectedSessionId,
-      )
-    ) {
-      return;
-    }
-
-    onSelectSession(filteredConversations[0].sessionId);
-  }, [
-    filteredConversations,
-    onSelectSession,
-    selectedAgentDid,
-    selectedSessionId,
-    selectedTaskFilter,
-  ]);
+    return behaviorConversations.filter((conversation) =>
+      `${displayConversationTitle(conversation.title)} ${conversation.previewText ?? ""}`
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [behaviorConversations, query]);
 
   return (
     <section className="sidebar-section conversation-section">
@@ -171,27 +114,28 @@ export function ConversationListSection({
           <p className="eyebrow">Conversations</p>
           <h2>{selectedDeploymentLabel}</h2>
         </div>
+        <div className="sidebar-section-controls">
+          {behaviorConversations.length > 1 ? (
+            <span className="sidebar-scroll-hint">
+              {behaviorConversations.length} · swipe
+            </span>
+          ) : null}
+          {onSyncConversations ? (
+            <button
+              className="ghost-button conversation-sync"
+              data-testid="conversation-sync-p2p"
+              disabled={!selectedAgentDid || syncingConversations}
+              onClick={() => {
+                void Promise.resolve(onSyncConversations()).catch(() => {});
+              }}
+              title="Reconnect the signed P2P replica and sync conversations"
+              type="button"
+            >
+              {syncingConversations ? "Syncing…" : "Sync P2P"}
+            </button>
+          ) : null}
+        </div>
       </div>
-      {showTaskFilter ? (
-        <label className="conversation-filter">
-          <span>Task</span>
-          <select
-            data-testid="conversation-task-filter"
-            onChange={(event) => setSelectedTaskFilter(event.target.value)}
-            value={selectedTaskFilter}
-          >
-            <option value={ALL_TASKS_FILTER}>All tasks</option>
-            {taskFilterOptions.map((task) => (
-              <option key={task.taskId} value={task.taskId}>
-                {displayTaskLabel(task)}
-              </option>
-            ))}
-            {hasUntaskedConversations ? (
-              <option value={UNTASKED_FILTER}>Manual</option>
-            ) : null}
-          </select>
-        </label>
-      ) : null}
       {selectedAgentDid && behaviorConversations.length > 0 ? (
         <input
           className="conversation-search"
@@ -210,11 +154,7 @@ export function ConversationListSection({
           one automatically.
         </p>
       ) : !filteredConversations.length ? (
-        <p className="muted">
-          {query.trim()
-            ? "No conversations match the search."
-            : "No conversations for this task."}
-        </p>
+        <p className="muted">No conversations match the search.</p>
       ) : (
         <div className="list conversation-list">
           {filteredConversations.map((conversation) => {
@@ -308,11 +248,6 @@ export function ConversationListSection({
       )}
     </section>
   );
-}
-
-function displayTaskLabel(task: TaskView) {
-  const name = task.name?.trim();
-  return name && name.length > 0 ? name : task.taskId;
 }
 
 function displayConversationTaskLabel(conversation: ConversationSummary) {

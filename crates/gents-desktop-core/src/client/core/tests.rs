@@ -315,9 +315,14 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
         .upsert(record.clone())
         .await
         .expect("save invalid peer fixture");
-    super::bootstrap::write_peer_pairing_desired(core.node(), &record)
-        .await
-        .expect("save pairing desired fixture");
+    super::bootstrap::write_peer_pairing_desired(
+        core.node(),
+        &record,
+        "did:key:desktop-requester",
+        "endpoint-requester-ticket",
+    )
+    .await
+    .expect("save pairing desired fixture");
 
     let error = core
         .remove_peer(&record.peer_id)
@@ -342,18 +347,27 @@ async fn remove_peer_retains_saved_deployment_when_p2p_cleanup_fails() {
     let response = core
         .node()
         .execute(&format!(
-            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID }} }}"#
+            r#"query {{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{ _docID agent_did replicator_addresses }} }}"#
         ))
         .await;
     assert!(!response.has_errors());
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("PeerPairingDesired"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .expect("saved pairing desired row");
     assert_eq!(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("PeerPairingDesired"))
-            .and_then(|rows| rows.as_array())
-            .map(Vec::len),
-        Some(1)
+        row.get("agent_did").and_then(serde_json::Value::as_str),
+        Some("did:key:desktop-requester")
+    );
+    assert_eq!(
+        row.get("replicator_addresses")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|addresses| addresses.first())
+            .and_then(serde_json::Value::as_str),
+        Some("endpoint-requester-ticket")
     );
 
     core.shutdown().await.expect("shutdown");
@@ -394,13 +408,14 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
 }
 
 #[tokio::test]
-async fn repair_saved_peer_forces_reconfiguration_while_peer_is_connected() {
+async fn repair_saved_graphql_peer_installs_p2p_replicator_while_connected() {
     let recording = Arc::new(RecordingP2P::default());
-    let record = PeerRecord::new(
+    let mut record = PeerRecord::new(
         "Workshop Bay",
         "127.0.0.1:56000/p2p/peer-alpha",
         "did:test:workshop-bay",
     );
+    record.graphql = Some("http://100.69.4.79:9191/api/v0/graphql".to_string());
     recording.set_connected_peers(vec![record.addr.clone()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
 

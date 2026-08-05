@@ -17,13 +17,10 @@ use gents_protocol::schemas::{
     TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
 };
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
-
-const REMOTE_SNAPSHOT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 const AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
@@ -82,61 +79,6 @@ pub async fn load_full_snapshot_with_peer_records(
 ) -> Result<ClientStore> {
     let mut rows = load_full_snapshot(node).await?.to_rows();
     isolate_legacy_bearer_rows(&mut rows, peers, requester_did);
-    let mut remote_loads = Vec::new();
-
-    for peer in peers {
-        let Some(graphql) = peer
-            .graphql
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-
-        let peer = peer.clone();
-        let graphql = graphql.to_string();
-        remote_loads.push(tokio::spawn(async move {
-            let result = load_full_snapshot_from_graphql(&graphql, &peer.agent_did).await;
-            (peer, graphql, result)
-        }));
-    }
-
-    for remote_load in remote_loads {
-        match remote_load.await {
-            Ok((peer, graphql, Ok(mut remote))) => {
-                remote.stamp_source_agent_did(&peer.agent_did);
-                let remote_count = remote.row_count();
-                append_rows(&mut rows, remote.to_rows());
-                tracing::info!(
-                    target: "gents_desktop_core::query",
-                    peer_id = %peer.peer_id,
-                    label = %peer.label,
-                    graphql,
-                    rows = remote_count,
-                    "desktop loaded remote GraphQL snapshot"
-                );
-            }
-            Ok((peer, graphql, Err(error))) => {
-                tracing::warn!(
-                    target: "gents_desktop_core::query",
-                    peer_id = %peer.peer_id,
-                    label = %peer.label,
-                    graphql,
-                    error = %error,
-                    "desktop could not load remote GraphQL snapshot"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "gents_desktop_core::query",
-                    error = %error,
-                    "desktop remote GraphQL snapshot task failed"
-                );
-            }
-        }
-    }
-
     Ok(ClientStore::from_rows(rows))
 }
 
@@ -245,20 +187,13 @@ pub(crate) fn isolate_legacy_bearer_rows(
     rows.goals
         .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
 
-    // Configuration was also outside the signed bearer grant. The desktop
-    // uses the invite's signed default behavior until scoped conversation data
-    // arrives, rather than trusting legacy replicated configuration.
+    // Principal/runtime projections are not part of the signed client grant.
+    // Agent configuration is included by the conversation/machine template
+    // and must remain visible after it arrives through the local replica.
     rows.agent_principals
         .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
-    rows.behaviors
-        .retain(|row| !is_bearer_did(row.agent_did.as_deref()));
     rows.runtimes
         .retain(|row| !bearer_dids.contains(row.agent_did.as_str()));
-    rows.tool_selections
-        .retain(|row| !is_bearer_did(row.agent_did.as_deref()));
-    retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
-        !is_bearer_did(row.agent_did.as_deref())
-    });
 }
 
 pub async fn load_agent_scoped_snapshot_with_peer_records(
@@ -475,88 +410,6 @@ pub async fn load_tool_service_registries(
     .await
 }
 
-/// Load the connected agent's host view.
-///
-/// Requester identity remains attached to rows for audit and future policy
-/// projection, but it does not partition conversation visibility here. This
-/// lets a user start a session through one client and continue observing it
-/// from another client connected to the same agent runtime.
-pub async fn load_full_snapshot_from_graphql(
-    graphql: &str,
-    agent_did: &str,
-) -> Result<ClientStore> {
-    let client = reqwest::Client::builder()
-        .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
-        .build()
-        .context("building remote GraphQL snapshot HTTP client")?;
-    let data = execute_remote_snapshot_query(&client, graphql, agent_did).await?;
-
-    Ok(ClientStore::from_rows(ClientStoreRows {
-        agent_principals: parse_remote_rows(&data, "AgentPrincipal")?,
-        behaviors: parse_remote_rows(&data, "AgentBehavior")?,
-        runtimes: parse_remote_rows(&data, "AgentRuntime")?,
-        conversations: parse_remote_rows(&data, "AgentConversation")?,
-        requests: parse_remote_rows(&data, "AgentRequest")?,
-        responses: parse_remote_rows(&data, "AgentResponse")?,
-        messages: parse_remote_rows(&data, "AgentMessage")?,
-        sessions: parse_remote_rows(&data, "AgentSession")?,
-        goals: parse_remote_rows(&data, "Goal")?,
-        tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
-        tool_results: parse_remote_rows(&data, "AgentToolResult")?,
-        compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
-        tasks: parse_remote_rows(&data, "Task")?,
-        schedules: parse_remote_rows(&data, "Schedule")?,
-        event_triggers: parse_remote_rows(&data, "EventTrigger")?,
-        skills: parse_remote_rows(&data, "Skill")?,
-        tool_selections: parse_remote_rows(&data, "ToolSelection")?,
-        inference_backends: parse_remote_rows(&data, "InferenceBackend")?,
-        inference_profiles: parse_remote_rows(&data, "InferenceProfile")?,
-        tool_service_registries: parse_remote_rows(&data, "ToolServiceRegistry")?,
-        ..ClientStoreRows::default()
-    }))
-}
-
-pub async fn load_chat_patch_from_graphql(graphql: &str, request_id: &str) -> Result<ClientStore> {
-    let request_id = request_id.trim();
-    if request_id.is_empty() {
-        return Ok(ClientStore::default());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(REMOTE_SNAPSHOT_HTTP_TIMEOUT)
-        .build()
-        .context("building remote GraphQL chat patch HTTP client")?;
-    let lookup_query = remote_request_lookup_query(request_id);
-    let lookup_data = execute_remote_graphql_query(
-        &client,
-        graphql,
-        &lookup_query,
-        "remote GraphQL request lookup",
-    )
-    .await?;
-    let request_rows: Vec<AgentRequestRow> = parse_remote_rows(&lookup_data, "AgentRequest")?;
-    let Some(session_id) = request_rows
-        .first()
-        .and_then(|row| row.session_id.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests: request_rows,
-            responses: parse_remote_rows(&lookup_data, "AgentResponse")?,
-            ..ClientStoreRows::default()
-        }));
-    };
-
-    let patch_query = remote_chat_patch_query(&session_id);
-    let data =
-        execute_remote_graphql_query(&client, graphql, &patch_query, "remote GraphQL chat patch")
-            .await?;
-
-    chat_patch_from_data(&data)
-}
-
 /// Load only the selected request's conversation slice from the embedded
 /// replica. This is the bounded polling fallback for a dropped/coalesced
 /// observer event; it does not reload every conversation for the agent.
@@ -566,10 +419,10 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
         return Ok(ClientStore::default());
     }
 
-    let lookup_query = remote_request_lookup_query(request_id);
+    let lookup_query = local_request_lookup_query(request_id);
     let lookup_data =
         execute_local_graphql_query(node, &lookup_query, "local request lookup").await?;
-    let request_rows: Vec<AgentRequestRow> = parse_remote_rows(&lookup_data, "AgentRequest")?;
+    let request_rows: Vec<AgentRequestRow> = parse_query_rows(&lookup_data, "AgentRequest")?;
     let Some(session_id) = request_rows
         .first()
         .and_then(|row| row.session_id.as_deref())
@@ -579,7 +432,7 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
     else {
         return Ok(ClientStore::from_rows(ClientStoreRows {
             requests: request_rows,
-            responses: parse_remote_rows(&lookup_data, "AgentResponse")?,
+            responses: parse_query_rows(&lookup_data, "AgentResponse")?,
             ..ClientStoreRows::default()
         }));
     };
@@ -591,15 +444,15 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
 
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
-        conversations: parse_remote_rows(&data, "AgentConversation")?,
-        requests: parse_remote_rows(&data, "AgentRequest")?,
-        responses: parse_remote_rows(&data, "AgentResponse")?,
-        messages: parse_remote_rows(&data, "AgentMessage")?,
-        sessions: parse_remote_rows(&data, "AgentSession")?,
-        goals: parse_remote_rows(&data, "Goal")?,
-        tool_calls: parse_remote_rows(&data, "AgentToolCall")?,
-        tool_results: parse_remote_rows(&data, "AgentToolResult")?,
-        compaction_entries: parse_remote_rows(&data, "CompactionEntry")?,
+        conversations: parse_query_rows(&data, "AgentConversation")?,
+        requests: parse_query_rows(&data, "AgentRequest")?,
+        responses: parse_query_rows(&data, "AgentResponse")?,
+        messages: parse_query_rows(&data, "AgentMessage")?,
+        sessions: parse_query_rows(&data, "AgentSession")?,
+        goals: parse_query_rows(&data, "Goal")?,
+        tool_calls: parse_query_rows(&data, "AgentToolCall")?,
+        tool_results: parse_query_rows(&data, "AgentToolResult")?,
+        compaction_entries: parse_query_rows(&data, "CompactionEntry")?,
         ..ClientStoreRows::default()
     }))
 }
@@ -673,68 +526,13 @@ where
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct RemoteGraphqlResponse {
-    #[serde(default)]
-    data: Option<Value>,
-    #[serde(default)]
-    errors: Option<Value>,
-}
-
-async fn execute_remote_snapshot_query(
-    client: &reqwest::Client,
-    graphql: &str,
-    agent_did: &str,
-) -> Result<Value> {
-    let query = remote_snapshot_query(agent_did);
-    execute_remote_graphql_query(client, graphql, &query, "snapshot").await
-}
-
-async fn execute_remote_graphql_query(
-    client: &reqwest::Client,
-    graphql: &str,
-    query: &str,
-    operation: &str,
-) -> Result<Value> {
-    let response = client
-        .post(graphql)
-        .json(&json!({ "query": query }))
-        .send()
-        .await
-        .with_context(|| format!("sending {operation} query to {graphql}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading {operation} response from {graphql}"))?;
-    if !status.is_success() {
-        bail!(
-            "{operation} query to {graphql} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-
-    let response: RemoteGraphqlResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding {operation} response from {graphql}"))?;
-    if let Some(errors) = response
-        .errors
-        .as_ref()
-        .filter(|errors| !errors_is_empty(errors))
-    {
-        bail!("{operation} query returned errors: {errors}");
-    }
-    response
-        .data
-        .context(format!("{operation} query returned no data"))
-}
-
-fn parse_remote_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
+fn parse_query_rows<T>(data: &Value, root: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
 {
     let rows = data
         .get(root)
-        .ok_or_else(|| anyhow!("remote GraphQL snapshot missing root field {root}"))?;
+        .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
     parse_row_array(rows, root)
 }
 
@@ -753,100 +551,23 @@ where
                         target: "gents_desktop_core::query",
                         root,
                         error = %error,
-                        "skipping malformed remote row"
+                        "skipping malformed query row"
                     ),
                 }
             }
             Ok(parsed)
         }
         other => Err(anyhow!(
-            "remote GraphQL snapshot for {root} returned non-array payload: {other}"
+            "query result for {root} returned non-array payload: {other}"
         )),
     }
 }
 
-fn errors_is_empty(errors: &Value) -> bool {
-    match errors {
-        Value::Null => true,
-        Value::Array(errors) => errors.is_empty(),
-        _ => false,
-    }
-}
-
-fn append_rows(target: &mut ClientStoreRows, mut incoming: ClientStoreRows) {
-    target
-        .agent_principals
-        .append(&mut incoming.agent_principals);
-    target.behaviors.append(&mut incoming.behaviors);
-    target.runtimes.append(&mut incoming.runtimes);
-    target.conversations.append(&mut incoming.conversations);
-    target.requests.append(&mut incoming.requests);
-    target.responses.append(&mut incoming.responses);
-    target.messages.append(&mut incoming.messages);
-    target.sessions.append(&mut incoming.sessions);
-    target.goals.append(&mut incoming.goals);
-    target.tool_calls.append(&mut incoming.tool_calls);
-    target.tool_results.append(&mut incoming.tool_results);
-    target
-        .compaction_entries
-        .append(&mut incoming.compaction_entries);
-    target
-        .message_source_agent_dids
-        .append(&mut incoming.message_source_agent_dids);
-    target
-        .session_source_agent_dids
-        .append(&mut incoming.session_source_agent_dids);
-    target
-        .tool_call_source_agent_dids
-        .append(&mut incoming.tool_call_source_agent_dids);
-    target
-        .tool_result_source_agent_dids
-        .append(&mut incoming.tool_result_source_agent_dids);
-    target
-        .compaction_entry_source_agent_dids
-        .append(&mut incoming.compaction_entry_source_agent_dids);
-    target.tasks.append(&mut incoming.tasks);
-    target.schedules.append(&mut incoming.schedules);
-    target.event_triggers.append(&mut incoming.event_triggers);
-    target
-        .task_source_agent_dids
-        .append(&mut incoming.task_source_agent_dids);
-    target
-        .schedule_source_agent_dids
-        .append(&mut incoming.schedule_source_agent_dids);
-    target
-        .event_trigger_source_agent_dids
-        .append(&mut incoming.event_trigger_source_agent_dids);
-    target.skills.append(&mut incoming.skills);
-    target
-        .skill_source_agent_dids
-        .append(&mut incoming.skill_source_agent_dids);
-    target.tool_selections.append(&mut incoming.tool_selections);
-    target
-        .inference_backends
-        .append(&mut incoming.inference_backends);
-    target
-        .inference_profiles
-        .append(&mut incoming.inference_profiles);
-    target
-        .tool_service_registries
-        .append(&mut incoming.tool_service_registries);
-    target
-        .inference_backend_source_agent_dids
-        .append(&mut incoming.inference_backend_source_agent_dids);
-    target
-        .inference_profile_source_agent_dids
-        .append(&mut incoming.inference_profile_source_agent_dids);
-    target
-        .tool_service_registry_source_agent_dids
-        .append(&mut incoming.tool_service_registry_source_agent_dids);
-}
-
-fn remote_request_lookup_query(request_id: &str) -> String {
+fn local_request_lookup_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
         r#"
-query DesktopRemoteRequestLookup {{
+query DesktopLocalRequestLookup {{
   AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ {AGENT_REQUEST_FIELDS} }}
   AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
 }}
@@ -868,36 +589,6 @@ query DesktopRemoteChatPatch {{
   AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
-}}
-"#
-    )
-}
-
-fn remote_snapshot_query(agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
-    format!(
-        r#"
-query DesktopRemoteSnapshot {{
-  AgentPrincipal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }}
-  AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }}
-  AgentRuntime(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_RUNTIME_FIELDS} }}
-  AgentConversation(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
-  AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
-  AgentResponse(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
-  AgentMessage(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
-  AgentSession(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
-  Goal(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {GOAL_FIELDS} }}
-  AgentToolCall(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
-  AgentToolResult(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
-  CompactionEntry(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
-  Task {{ task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at }}
-  Schedule {{ schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at }}
-  EventTrigger {{ trigger_id task_id source_collection event_kind filter enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count }}
-  Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {SKILL_FIELDS} }}
-  ToolSelection(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {TOOL_SELECTION_FIELDS} }}
-  InferenceBackend {{ backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status }}
-  InferenceProfile {{ profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k min_p frequency_penalty presence_penalty repetition_penalty stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max }}
-  ToolServiceRegistry {{ service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at }}
 }}
 "#
     )
@@ -1090,6 +781,32 @@ pub async fn fetch_doc_patch(
     Ok(ClientStore::from_rows(rows))
 }
 
+pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
+    matches!(
+        collection_name,
+        AGENT_PRINCIPAL_NAME
+            | AGENT_BEHAVIOR_NAME
+            | AGENT_RUNTIME_NAME
+            | AGENT_CONVERSATION_NAME
+            | AGENT_REQUEST_NAME
+            | AGENT_RESPONSE_NAME
+            | AGENT_MESSAGE_NAME
+            | AGENT_SESSION_NAME
+            | GOAL_NAME
+            | AGENT_TOOL_CALL_NAME
+            | AGENT_TOOL_RESULT_NAME
+            | COMPACTION_ENTRY_NAME
+            | TASK_NAME
+            | SCHEDULE_NAME
+            | EVENT_TRIGGER_NAME
+            | SKILL_NAME
+            | TOOL_SELECTION_NAME
+            | INFERENCE_BACKEND_NAME
+            | INFERENCE_PROFILE_NAME
+            | TOOL_SERVICE_REGISTRY_NAME
+    )
+}
+
 /// Load a snapshot of all rows for a specific `agent_did`. Agent-keyed
 /// collections (including Goal) are filtered by `agent_did`; transcript collections
 /// (Message, Session, ToolCall, CompactionEntry) are filtered by the
@@ -1259,9 +976,8 @@ mod tests {
     use crate::client::schema::ensure_runtime_schemas;
     use defra_node::NodeBuilder;
     use gents_protocol::schemas::AGENT_MESSAGE_NAME;
+    use serde_json::json;
     use std::sync::Arc;
-    use wiremock::matchers::{body_string_contains, method};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn upgraded_bearer_snapshot_isolates_unscoped_legacy_rows() {
@@ -1271,6 +987,12 @@ mod tests {
             agent_principals: vec![serde_json::from_value(json!({
                 "agent_did": "did:key:remote",
                 "display_name": "legacy remote config"
+            }))
+            .unwrap()],
+            behaviors: vec![serde_json::from_value(json!({
+                "behavior_id": "default",
+                "agent_did": "did:key:remote",
+                "display_name": "Replicated config"
             }))
             .unwrap()],
             conversations: vec![
@@ -1329,6 +1051,7 @@ mod tests {
         assert_eq!(rows.message_source_agent_dids, vec![None]);
         assert!(rows.goals.is_empty());
         assert!(rows.agent_principals.is_empty());
+        assert_eq!(rows.behaviors.len(), 1);
     }
 
     #[tokio::test]
@@ -1449,65 +1172,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_snapshot_hydrates_from_agent_scoped_query() {
-        let server = MockServer::start().await;
-        let data = json!({
-            "AgentPrincipal": [],
-            "AgentBehavior": [],
-            "AgentRuntime": [],
-            "AgentConversation": [
-                {
-                    "session_id": "host-session",
-                    "agent_did": "did:test:agent",
-                    "requester_did": null
-                },
-                {
-                    "session_id": "phone-session",
-                    "agent_did": "did:test:agent",
-                    "requester_did": "did:test:requester"
-                }
-            ],
-            "AgentRequest": [],
-            "AgentResponse": [],
-            "AgentMessage": [],
-            "AgentSession": [],
-            "Goal": [],
-            "AgentToolCall": [],
-            "AgentToolResult": [],
-            "CompactionEntry": [],
-            "Task": [],
-            "Schedule": [],
-            "EventTrigger": [],
-            "Skill": [],
-            "ToolSelection": [],
-            "InferenceBackend": [],
-            "InferenceProfile": [],
-            "ToolServiceRegistry": []
-        });
-        Mock::given(method("POST"))
-            .and(body_string_contains("did:test:agent"))
-            .and(body_string_contains("requester_did"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": data })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let snapshot = load_full_snapshot_from_graphql(&server.uri(), "did:test:agent")
-            .await
-            .expect("agent-scoped remote snapshot");
-
-        assert_eq!(snapshot.conversations.len(), 2);
-        assert!(snapshot
-            .conversations
-            .iter()
-            .any(|row| row.session_id == "host-session" && row.requester_did.is_none()));
-        assert!(snapshot.conversations.iter().any(|row| {
-            row.session_id == "phone-session"
-                && row.requester_did.as_deref() == Some("did:test:requester")
-        }));
-    }
-
-    #[tokio::test]
     async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
         let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
         ensure_runtime_schemas(node.as_ref())
@@ -1542,6 +1206,14 @@ mod tests {
 
         let result = fetch_doc_patch(node.as_ref(), "NotARealCollection", &["x"]).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn doc_patch_support_excludes_pairing_control_collections() {
+        assert!(supports_doc_patch_collection(INFERENCE_BACKEND_NAME));
+        assert!(supports_doc_patch_collection(TOOL_SERVICE_REGISTRY_NAME));
+        assert!(!supports_doc_patch_collection("PeerPairingApplied"));
+        assert!(!supports_doc_patch_collection("BearerPairingReady"));
     }
 
     #[tokio::test]
@@ -1688,63 +1360,5 @@ mod tests {
         );
         assert_eq!(store.goals.len(), 1);
         assert_eq!(store.goals[0].session_id, "alpha-goal-only");
-    }
-
-    #[test]
-    fn remote_tool_call_queries_include_local_field_set() {
-        let chat_patch = remote_chat_patch_query("sess-1");
-        let remote_snapshot = remote_snapshot_query("did:test:agent");
-        for field in AGENT_TOOL_CALL_FIELDS.split_whitespace() {
-            assert!(
-                chat_patch.contains(field),
-                "remote chat patch missing AgentToolCall field {field}"
-            );
-            assert!(
-                remote_snapshot.contains(field),
-                "remote snapshot missing AgentToolCall field {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn remote_goal_queries_include_local_field_set() {
-        let chat_patch = remote_chat_patch_query("sess-1");
-        let remote_snapshot = remote_snapshot_query("did:test:agent");
-        for field in GOAL_FIELDS.split_whitespace() {
-            assert!(
-                chat_patch.contains(field),
-                "remote chat patch missing Goal field {field}"
-            );
-            assert!(
-                remote_snapshot.contains(field),
-                "remote snapshot missing Goal field {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn remote_runtime_query_includes_local_field_set() {
-        let remote_snapshot = remote_snapshot_query("did:test:agent");
-        for field in AGENT_RUNTIME_FIELDS.split_whitespace() {
-            assert!(
-                remote_snapshot.contains(field),
-                "remote snapshot missing AgentRuntime field {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn remote_snapshot_scopes_conversation_rows_to_agent() {
-        let query = remote_snapshot_query(r#"did:test:agent"with-quote"#);
-
-        assert!(query.contains(
-            r#"AgentConversation(filter: { agent_did: { _eq: "did:test:agent\"with-quote" } })"#
-        ));
-        assert!(query.contains(
-            r#"AgentMessage(filter: { agent_did: { _eq: "did:test:agent\"with-quote" } })"#
-        ));
-        assert!(!query.contains("requester_did: { _eq:"));
-        assert!(!query.contains("AgentConversation {"));
-        assert!(!query.contains("AgentRequest {"));
     }
 }

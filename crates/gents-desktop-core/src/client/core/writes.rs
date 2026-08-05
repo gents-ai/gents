@@ -1,7 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock as StdRwLock};
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use defra_p2p_adapter::P2POperations as P2POps;
@@ -9,26 +8,28 @@ use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
 };
+use p2p::iroh::parse_public_peer_addr;
+use tokio::time::{sleep, Instant};
 
 use super::super::mutations::{
     self, CreatedConversation, PeerMutationResult, SubmitRequestOptions, SubmittedRequest,
 };
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::{load_chat_patch, load_chat_patch_from_graphql};
+use super::super::query::load_chat_patch;
 use super::super::schema::subscribed_collection_names;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::{
     add_replicator_with_retry_until, branchable_pair_sync_enabled, connect_peer_with_retry_until,
-    normalize_required, p2p_pairing_enabled_for_graphql, sync_branchable_collections_with_retry,
-    BRANCHABLE_PAIR_SYNC_ENV, REMOTE_P2P_PAIRING_ENV,
+    is_connected_peer, normalize_required, sync_branchable_collections_with_retry,
+    BRANCHABLE_PAIR_SYNC_ENV,
 };
 use super::p2p_ops;
 use super::p2p_ops::{p2p_disconnect_peer, p2p_remove_replicator};
-use super::{ClientCore, ClientPeerStatus, PEER_ADD_OPERATION_TIMEOUT};
+use super::{
+    ClientCore, ClientPeerStatus, BOOTSTRAP_OPERATION_BACKOFF, PEER_ADD_OPERATION_TIMEOUT,
+};
 
-const REMOTE_REQUEST_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
-const REMOTE_REQUEST_REFRESH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
 fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
@@ -203,168 +204,6 @@ impl ClientCore {
         }
     }
 
-    pub async fn submit_remote_graphql_request_with_options(
-        &self,
-        graphql: &str,
-        session_id: &str,
-        agent_did: &str,
-        content: &str,
-        behavior_id: Option<&str>,
-        options: SubmitRequestOptions,
-    ) -> Result<SubmittedRequest> {
-        let snapshot = self.store.snapshot();
-        let peer_record = self.peer_record_for_agent(agent_did).await;
-        ensure_peer_chat_ready(peer_record.as_ref())?;
-        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
-        match mutations::submit_request_to_graphql(
-            graphql,
-            snapshot.as_ref(),
-            session_id,
-            agent_did,
-            self.principal.did(),
-            content,
-            behavior_id.as_deref(),
-            options,
-        )
-        .await
-        {
-            Ok(result) => {
-                self.store
-                    .set_focused_request_id(Some(result.request_id.clone()));
-                self.spawn_remote_request_refresh(
-                    graphql.to_string(),
-                    agent_did.to_string(),
-                    result.request_id.clone(),
-                    session_id.to_string(),
-                    peer_record.clone(),
-                );
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "gents_desktop_core::writes",
-                    action = "chat_submit_remote_graphql",
-                    row_id = %result.request_id,
-                    agent_did,
-                    session_id,
-                    peer_id = %peer_record.as_ref().map(|record| record.peer_id.as_str()).unwrap_or(""),
-                    peer_label = %peer_record.as_ref().map(|record| record.label.as_str()).unwrap_or(""),
-                    peer_addr = %peer_record.as_ref().map(|record| record.addr.as_str()).unwrap_or(""),
-                    graphql,
-                    "desktop remote write saved"
-                );
-                Ok(result)
-            }
-            Err(error) => Err(self.record_mutation_error("submit remote GraphQL request", error)),
-        }
-    }
-
-    fn spawn_remote_request_refresh(
-        &self,
-        graphql: String,
-        agent_did: String,
-        request_id: String,
-        session_id: String,
-        peer_record: Option<PeerRecord>,
-    ) {
-        let store = Arc::clone(&self.store);
-
-        tokio::spawn(async move {
-            let peer_id = peer_record
-                .as_ref()
-                .map(|record| record.peer_id.clone())
-                .unwrap_or_default();
-            let peer_label = peer_record
-                .as_ref()
-                .map(|record| record.label.clone())
-                .unwrap_or_default();
-            let peer_addr = peer_record
-                .as_ref()
-                .map(|record| record.addr.clone())
-                .unwrap_or_default();
-            let started = Instant::now();
-            let mut last_patch_signature: Option<(usize, usize, u64)> = None;
-            loop {
-                if started.elapsed() >= REMOTE_REQUEST_REFRESH_TIMEOUT {
-                    tracing::warn!(
-                        target: "gents_desktop_core::writes",
-                        request_id = %request_id,
-                        agent_did = %agent_did,
-                        session_id = %session_id,
-                        peer_id = %peer_id,
-                        peer_label = %peer_label,
-                        peer_addr = %peer_addr,
-                        graphql = %graphql,
-                        "desktop remote request refresh timed out before terminal state"
-                    );
-                    break;
-                }
-
-                tokio::time::sleep(REMOTE_REQUEST_REFRESH_INTERVAL).await;
-                match load_chat_patch_from_graphql(&graphql, &request_id).await {
-                    Ok(mut patch) => {
-                        patch.stamp_source_agent_did(&agent_did);
-                        let terminal = patch.request_row(&request_id).is_some_and(|row| {
-                            is_terminal_lifecycle_state(row.lifecycle_state.as_deref())
-                        });
-                        let patch_signature = chat_patch_signature(&patch);
-                        let (rows, bytes, _hash) = patch_signature;
-
-                        if !terminal && last_patch_signature == Some(patch_signature) {
-                            tracing::debug!(
-                                target: "gents_desktop_core::writes",
-                                request_id = %request_id,
-                                agent_did = %agent_did,
-                                session_id = %session_id,
-                                peer_id = %peer_id,
-                                peer_label = %peer_label,
-                                peer_addr = %peer_addr,
-                                graphql = %graphql,
-                                rows,
-                                bytes,
-                                "desktop remote request patch unchanged"
-                            );
-                            continue;
-                        }
-
-                        last_patch_signature = Some(patch_signature);
-                        let version = store.merge_chat_patch(patch);
-                        tracing::info!(
-                            target: "gents_desktop_core::writes",
-                            request_id = %request_id,
-                            agent_did = %agent_did,
-                            session_id = %session_id,
-                            peer_id = %peer_id,
-                            peer_label = %peer_label,
-                            peer_addr = %peer_addr,
-                            graphql = %graphql,
-                            version,
-                            rows,
-                            bytes,
-                            terminal,
-                            "desktop remote request patch merged"
-                        );
-                        if terminal {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            target: "gents_desktop_core::writes",
-                            request_id = %request_id,
-                            agent_did = %agent_did,
-                            session_id = %session_id,
-                            peer_id = %peer_id,
-                            peer_label = %peer_label,
-                            peer_addr = %peer_addr,
-                            graphql = %graphql,
-                            error = %error,
-                            "desktop could not load remote request patch"
-                        );
-                    }
-                }
-            }
-        });
-    }
-
     pub async fn fork_session(
         &self,
         agent_did: &str,
@@ -380,10 +219,7 @@ impl ClientCore {
             caller_agent_did: agent_did,
             target_behavior_id,
         };
-        let result = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => gents::fork_via_http(&graphql, params).await,
-            None => gents::fork(self.node(), params).await,
-        };
+        let result = gents::fork(self.node(), params).await;
         match result {
             Ok(outcome) => {
                 self.refresh_store().await?;
@@ -403,21 +239,17 @@ impl ClientCore {
         }
     }
 
-    /// Reconstruct a request's persisted event timeline, routed like every
-    /// per-agent operation: remote GraphQL when the peer registers an
-    /// endpoint, the local node otherwise. Bounded so a dead peer fails the
-    /// panel instead of hanging it.
+    /// Reconstruct a request's persisted event timeline from the local P2P
+    /// replica. Bounded so an unavailable replica fails the panel instead of
+    /// hanging it.
     pub async fn request_timeline(
         &self,
         agent_did: &str,
         request_id: &str,
     ) -> Result<gents::run_timeline::RunTimeline> {
-        let agent_did = normalize_required("agent_did", agent_did)?;
+        normalize_required("agent_did", agent_did)?;
         let request_id = normalize_required("request_id", request_id)?;
-        let access = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
-            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
-        };
+        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::run_timeline_fetch::load_run_timeline(&access, request_id),
@@ -433,10 +265,7 @@ impl ClientCore {
         agent_did: &str,
     ) -> Result<Vec<gents::config_client::HeldToolCall>> {
         let agent_did = normalize_required("agent_did", agent_did)?;
-        let access = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
-            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
-        };
+        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
         let held = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
@@ -481,10 +310,7 @@ impl ClientCore {
         approve: bool,
         reason: Option<String>,
     ) -> Result<String> {
-        let access = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => gents::config_client::ConfigAccess::Graphql(graphql),
-            None => gents::config_client::ConfigAccess::Local(self.node_arc()),
-        };
+        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
         let held = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::config_client::list_held_tool_calls(&access, Some(agent_did)),
@@ -541,19 +367,6 @@ impl ClientCore {
         }
     }
 
-    pub async fn graphql_for_agent(&self, agent_did: &str) -> Option<String> {
-        self.peer_record_for_agent(agent_did)
-            .await
-            .and_then(|record| {
-                record
-                    .graphql
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-            })
-    }
-
     pub async fn peer_record_for_agent(&self, agent_did: &str) -> Option<PeerRecord> {
         let agent_did = agent_did.trim();
         if agent_did.is_empty() {
@@ -565,66 +378,6 @@ impl ClientCore {
             .iter()
             .find(|record| record.agent_did == agent_did)
             .cloned()
-    }
-
-    /// Refresh one selected legacy GraphQL request. Unlike the submit-time
-    /// poller, this path survives app relaunch because the UI can invoke it
-    /// while reconstructing an already-active session.
-    pub async fn refresh_remote_request(
-        &self,
-        agent_did: &str,
-        request_id: &str,
-    ) -> Result<Option<u64>> {
-        let Some(record) = self.peer_record_for_agent(agent_did).await else {
-            return Ok(None);
-        };
-        let Some(graphql) = record
-            .graphql
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(None);
-        };
-        let request_id = request_id.trim();
-        if request_id.is_empty() {
-            return Ok(None);
-        }
-
-        let mut patch = load_chat_patch_from_graphql(graphql, request_id).await?;
-        patch.stamp_source_agent_did(agent_did);
-        let signature = chat_patch_signature(&patch);
-        let cache_key = format!("{agent_did}\0{request_id}");
-        {
-            let mut signatures = self.request_patch_signatures.lock().await;
-            if signatures.get(&cache_key) == Some(&signature) {
-                return Ok(None);
-            }
-            if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-                signatures.clear();
-            }
-            signatures.insert(cache_key, signature);
-        }
-
-        let (rows, bytes, _hash) = signature;
-        let terminal = patch
-            .request_row(request_id)
-            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
-        let version = self.store.merge_chat_patch(patch);
-        tracing::info!(
-            target: "gents_desktop_core::writes",
-            request_id,
-            agent_did,
-            peer_id = %record.peer_id,
-            peer_label = %record.label,
-            graphql,
-            version,
-            rows,
-            bytes,
-            terminal,
-            "desktop selected remote request patch merged"
-        );
-        Ok(Some(version))
     }
 
     pub async fn refresh_local_request(
@@ -682,33 +435,18 @@ impl ClientCore {
         title: &str,
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
-        let result = match self.graphql_for_agent(agent_did).await {
-            Some(graphql) => {
-                mutations::rename_conversation_to_graphql(
-                    &graphql,
-                    snapshot.as_ref(),
-                    agent_did,
-                    self.principal.did(),
-                    session_id,
-                    title,
-                )
-                .await
-            }
-            None => {
-                mutations::rename_conversation(
-                    self.node.as_ref(),
-                    snapshot.as_ref(),
-                    agent_did,
-                    self.principal.did(),
-                    session_id,
-                    title,
-                )
-                .await
-            }
-        };
+        let result = mutations::rename_conversation(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            agent_did,
+            self.principal.did(),
+            session_id,
+            title,
+        )
+        .await;
         match result {
             Ok(()) => {
-                if self.refresh_remote_agent(agent_did).await?.is_none() {
+                if self.refresh_agent(agent_did).await?.is_none() {
                     self.refresh_store().await?;
                 }
                 self.clear_mutation_error();
@@ -727,7 +465,6 @@ impl ClientCore {
     pub async fn delete_skill(&self, skill_id: &str, source_agent_did: &str) -> Result<()> {
         let skill_id = normalize_required("skill_id", skill_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot.skills.iter().any(|row| {
             row.skill_id == skill_id && row.agent_did.as_deref() == Some(source_agent_did)
@@ -752,25 +489,13 @@ impl ClientCore {
             .collect::<Vec<_>>();
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_skill_from_graphql(graphql, source_agent_did, skill_id)
-                        .await?
-                }
-                None => {
-                    mutations::delete_skill(self.node.as_ref(), source_agent_did, skill_id).await?
-                }
-            };
+            let deleted =
+                mutations::delete_skill(self.node.as_ref(), source_agent_did, skill_id).await?;
             if deleted == 0 {
                 bail!("no Skill document with skill_id {skill_id:?} for {source_agent_did}");
             }
             for behavior in affected_behaviors {
-                match remote_graphql.as_deref() {
-                    Some(graphql) => {
-                        mutations::upsert_agent_behavior_to_graphql(graphql, &behavior).await?
-                    }
-                    None => mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?,
-                }
+                mutations::upsert_agent_behavior(self.node.as_ref(), &behavior).await?;
             }
             Ok(())
         }
@@ -797,7 +522,6 @@ impl ClientCore {
     pub async fn delete_task(&self, task_id: &str, source_agent_did: &str) -> Result<()> {
         let task_id = normalize_required("task_id", task_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot.tasks.iter().enumerate().any(|(index, row)| {
             row.task_id == task_id
@@ -805,7 +529,7 @@ impl ClientCore {
                     &snapshot.task_source_agent_dids,
                     index,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                 )
         }) {
             bail!("no Task document with task_id {task_id:?}");
@@ -820,7 +544,7 @@ impl ClientCore {
                         &snapshot.schedule_source_agent_dids,
                         *index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
             .count();
@@ -834,7 +558,7 @@ impl ClientCore {
                         &snapshot.event_trigger_source_agent_dids,
                         *index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
             .count();
@@ -845,10 +569,7 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => mutations::delete_task_from_graphql(graphql, task_id).await?,
-                None => mutations::delete_task(self.node.as_ref(), task_id).await?,
-            };
+            let deleted = mutations::delete_task(self.node.as_ref(), task_id).await?;
             if deleted == 0 {
                 bail!("no Task document with task_id {task_id:?}");
             }
@@ -866,7 +587,7 @@ impl ClientCore {
                     &mut rows.tasks,
                     &mut rows.task_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.task_id == task_id,
                 );
             },
@@ -877,7 +598,6 @@ impl ClientCore {
     pub async fn delete_schedule(&self, schedule_id: &str, source_agent_did: &str) -> Result<()> {
         let schedule_id = normalize_required("schedule_id", schedule_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot.schedules.iter().enumerate().any(|(index, row)| {
             row.schedule_id == schedule_id
@@ -885,19 +605,14 @@ impl ClientCore {
                     &snapshot.schedule_source_agent_dids,
                     index,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                 )
         }) {
             bail!("no Schedule document with schedule_id {schedule_id:?}");
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_schedule_from_graphql(graphql, schedule_id).await?
-                }
-                None => mutations::delete_schedule(self.node.as_ref(), schedule_id).await?,
-            };
+            let deleted = mutations::delete_schedule(self.node.as_ref(), schedule_id).await?;
             if deleted == 0 {
                 bail!("no Schedule document with schedule_id {schedule_id:?}");
             }
@@ -915,7 +630,7 @@ impl ClientCore {
                     &mut rows.schedules,
                     &mut rows.schedule_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.schedule_id == schedule_id,
                 );
             },
@@ -930,7 +645,6 @@ impl ClientCore {
     ) -> Result<()> {
         let trigger_id = normalize_required("trigger_id", trigger_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .event_triggers
@@ -942,7 +656,7 @@ impl ClientCore {
                         &snapshot.event_trigger_source_agent_dids,
                         index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
         {
@@ -950,12 +664,7 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_event_trigger_from_graphql(graphql, trigger_id).await?
-                }
-                None => mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?,
-            };
+            let deleted = mutations::delete_event_trigger(self.node.as_ref(), trigger_id).await?;
             if deleted == 0 {
                 bail!("no EventTrigger document with trigger_id {trigger_id:?}");
             }
@@ -973,7 +682,7 @@ impl ClientCore {
                     &mut rows.event_triggers,
                     &mut rows.event_trigger_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.trigger_id == trigger_id,
                 );
             },
@@ -988,7 +697,6 @@ impl ClientCore {
     ) -> Result<()> {
         let backend_id = normalize_required("backend_id", backend_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .inference_backends
@@ -1000,7 +708,7 @@ impl ClientCore {
                         &snapshot.inference_backend_source_agent_dids,
                         index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
         {
@@ -1023,12 +731,8 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_inference_backend_from_graphql(graphql, backend_id).await?
-                }
-                None => mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?,
-            };
+            let deleted =
+                mutations::delete_inference_backend(self.node.as_ref(), backend_id).await?;
             if deleted == 0 {
                 bail!("no InferenceBackend document with backend_id {backend_id:?}");
             }
@@ -1046,7 +750,7 @@ impl ClientCore {
                     &mut rows.inference_backends,
                     &mut rows.inference_backend_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.backend_id == backend_id,
                 );
             },
@@ -1061,7 +765,6 @@ impl ClientCore {
     ) -> Result<()> {
         let profile_id = normalize_required("profile_id", profile_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .inference_profiles
@@ -1073,7 +776,7 @@ impl ClientCore {
                         &snapshot.inference_profile_source_agent_dids,
                         index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
         {
@@ -1096,12 +799,8 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_inference_profile_from_graphql(graphql, profile_id).await?
-                }
-                None => mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?,
-            };
+            let deleted =
+                mutations::delete_inference_profile(self.node.as_ref(), profile_id).await?;
             if deleted == 0 {
                 bail!("no InferenceProfile document with profile_id {profile_id:?}");
             }
@@ -1119,7 +818,7 @@ impl ClientCore {
                     &mut rows.inference_profiles,
                     &mut rows.inference_profile_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.profile_id == profile_id,
                 );
             },
@@ -1134,7 +833,6 @@ impl ClientCore {
     ) -> Result<()> {
         let selection_id = normalize_required("selection_id", selection_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot.tool_selections.iter().any(|row| {
             row.selection_id == selection_id && row.agent_did.as_deref() == Some(source_agent_did)
@@ -1158,24 +856,12 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_tool_selection_from_graphql(
-                        graphql,
-                        source_agent_did,
-                        selection_id,
-                    )
-                    .await?
-                }
-                None => {
-                    mutations::delete_tool_selection(
-                        self.node.as_ref(),
-                        source_agent_did,
-                        selection_id,
-                    )
-                    .await?
-                }
-            };
+            let deleted = mutations::delete_tool_selection(
+                self.node.as_ref(),
+                source_agent_did,
+                selection_id,
+            )
+            .await?;
             if deleted == 0 {
                 bail!("no ToolSelection document with selection_id {selection_id:?}");
             }
@@ -1205,7 +891,6 @@ impl ClientCore {
     ) -> Result<()> {
         let service_id = normalize_required("service_id", service_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot
             .tool_service_registries
@@ -1217,7 +902,7 @@ impl ClientCore {
                         &snapshot.tool_service_registry_source_agent_dids,
                         index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
         {
@@ -1243,15 +928,8 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_tool_service_registry_from_graphql(graphql, service_id)
-                        .await?
-                }
-                None => {
-                    mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?
-                }
-            };
+            let deleted =
+                mutations::delete_tool_service_registry(self.node.as_ref(), service_id).await?;
             if deleted == 0 {
                 bail!("no ToolServiceRegistry document with service_id {service_id:?}");
             }
@@ -1269,7 +947,7 @@ impl ClientCore {
                     &mut rows.tool_service_registries,
                     &mut rows.tool_service_registry_source_agent_dids,
                     source_agent_did,
-                    remote_graphql.is_some(),
+                    false,
                     |row| row.service_id == service_id,
                 );
             },
@@ -1280,7 +958,6 @@ impl ClientCore {
     pub async fn delete_behavior(&self, behavior_id: &str, source_agent_did: &str) -> Result<()> {
         let behavior_id = normalize_required("behavior_id", behavior_id)?;
         let source_agent_did = normalize_required("source_agent_did", source_agent_did)?;
-        let remote_graphql = self.graphql_for_agent(source_agent_did).await;
         let snapshot = self.store.snapshot();
         if !snapshot.behaviors.iter().any(|row| {
             row.behavior_id == behavior_id && row.agent_did.as_deref() == Some(source_agent_did)
@@ -1306,7 +983,7 @@ impl ClientCore {
                         &snapshot.task_source_agent_dids,
                         *index,
                         source_agent_did,
-                        remote_graphql.is_some(),
+                        false,
                     )
             })
             .map(|(_index, task)| task.task_id.clone())
@@ -1330,24 +1007,9 @@ impl ClientCore {
         }
 
         let result = async {
-            let deleted = match remote_graphql.as_deref() {
-                Some(graphql) => {
-                    mutations::delete_agent_behavior_from_graphql(
-                        graphql,
-                        source_agent_did,
-                        behavior_id,
-                    )
-                    .await?
-                }
-                None => {
-                    mutations::delete_agent_behavior(
-                        self.node.as_ref(),
-                        source_agent_did,
-                        behavior_id,
-                    )
-                    .await?
-                }
-            };
+            let deleted =
+                mutations::delete_agent_behavior(self.node.as_ref(), source_agent_did, behavior_id)
+                    .await?;
             if deleted == 0 {
                 bail!("no AgentBehavior document with behavior_id {behavior_id:?}");
             }
@@ -1398,7 +1060,7 @@ impl ClientCore {
     }
 
     async fn refresh_config_source(&self, source_agent_did: &str) -> Result<u64> {
-        match self.refresh_remote_agent(source_agent_did).await? {
+        match self.refresh_agent(source_agent_did).await? {
             Some(version) => Ok(version),
             None => self.refresh_store().await,
         }
@@ -1426,38 +1088,19 @@ impl ClientCore {
             .agent_did
             .as_deref()
             .context("stale request has no agent_did")?;
-        let remote_graphql = self.graphql_for_agent(agent_did).await;
-        let result = match remote_graphql.as_deref() {
-            Some(graphql) => {
-                mutations::resend_request_to_graphql(
-                    graphql,
-                    snapshot.as_ref(),
-                    stale_request_id,
-                    agent_did,
-                    self.principal.did(),
-                )
-                .await
-            }
-            None => {
-                mutations::resend_request(
-                    self.node.as_ref(),
-                    snapshot.as_ref(),
-                    stale_request_id,
-                    agent_did,
-                    self.principal.did(),
-                )
-                .await
-            }
-        };
+        let result = mutations::resend_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            stale_request_id,
+            agent_did,
+            self.principal.did(),
+        )
+        .await;
         match result {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
-                if remote_graphql.is_some() {
-                    self.refresh_remote_agent(agent_did).await?;
-                } else {
-                    self.refresh_store().await?;
-                }
+                self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1490,40 +1133,22 @@ impl ClientCore {
 
     pub async fn retry_request(&self, parent: &AgentRequestRow) -> Result<SubmittedRequest> {
         let snapshot = self.store.snapshot();
-        let agent_did = parent
+        parent
             .agent_did
             .as_deref()
             .context("retry parent has no agent_did")?;
-        let remote_graphql = self.graphql_for_agent(agent_did).await;
-        let result = match remote_graphql.as_deref() {
-            Some(graphql) => {
-                mutations::retry_request_to_graphql(
-                    graphql,
-                    snapshot.as_ref(),
-                    parent,
-                    self.principal.did(),
-                )
-                .await
-            }
-            None => {
-                mutations::retry_request(
-                    self.node.as_ref(),
-                    snapshot.as_ref(),
-                    parent,
-                    self.principal.did(),
-                )
-                .await
-            }
-        };
+        let result = mutations::retry_request(
+            self.node.as_ref(),
+            snapshot.as_ref(),
+            parent,
+            self.principal.did(),
+        )
+        .await;
         match result {
             Ok(result) => {
                 self.store
                     .set_focused_request_id(Some(result.request_id.clone()));
-                if remote_graphql.is_some() {
-                    self.refresh_remote_agent(agent_did).await?;
-                } else {
-                    self.refresh_store().await?;
-                }
+                self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1584,11 +1209,6 @@ impl ClientCore {
         };
 
         let mut warning = None;
-        let p2p_pairing_enabled = record
-            .graphql
-            .as_deref()
-            .map(p2p_pairing_enabled_for_graphql)
-            .unwrap_or(true);
 
         let connected = match connect_peer_with_retry_until(
             &self.p2p,
@@ -1599,37 +1219,25 @@ impl ClientCore {
         .await
         {
             Ok(()) => {
-                if p2p_pairing_enabled {
-                    match add_replicator_with_retry_until(
-                        &self.p2p,
-                        subscribed_collection_names()
-                            .into_iter()
-                            .map(str::to_owned)
-                            .collect(),
-                        &record.addr,
-                        &record.label,
-                        PEER_ADD_OPERATION_TIMEOUT,
-                    )
-                    .await
-                    {
-                        Ok(()) => {}
-                        Err(error) => {
-                            append_warning(
-                                &mut warning,
-                                format!(
-                                    "deployment connected but replication setup failed: {error}"
-                                ),
-                            );
-                        }
+                match add_replicator_with_retry_until(
+                    &self.p2p,
+                    subscribed_collection_names()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    &record.addr,
+                    &record.label,
+                    PEER_ADD_OPERATION_TIMEOUT,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(error) => {
+                        append_warning(
+                            &mut warning,
+                            format!("deployment connected but replication setup failed: {error}"),
+                        );
                     }
-                } else {
-                    tracing::info!(
-                        target: "gents_desktop_core::peer",
-                        peer_id = %record.peer_id,
-                        label = %record.label,
-                        env = REMOTE_P2P_PAIRING_ENV,
-                        "skipping automatic remote P2P replicator setup for GraphQL-managed peer"
-                    );
                 }
                 true
             }
@@ -1642,86 +1250,69 @@ impl ClientCore {
             }
         };
 
-        if let Some(graphql) = record.graphql.as_deref() {
-            if p2p_pairing_enabled {
-                match super::bootstrap::configure_local_runtime_pairing(self.node.as_ref(), &record)
+        match super::bootstrap::configure_local_runtime_pairing(
+            self.node.as_ref(),
+            &self.p2p,
+            &self.principal,
+            &record,
+        )
+        .await
+        {
+            Ok(()) => {
+                if branchable_pair_sync_enabled() {
+                    match sync_branchable_collections_with_retry(
+                        self.node.as_ref(),
+                        &self.p2p,
+                        &record.label,
+                        PEER_ADD_OPERATION_TIMEOUT,
+                    )
                     .await
-                {
-                    Ok(()) => {
-                        if branchable_pair_sync_enabled() {
-                            match sync_branchable_collections_with_retry(
-                                self.node.as_ref(),
-                                &self.p2p,
-                                &record.label,
-                                PEER_ADD_OPERATION_TIMEOUT,
-                            )
-                            .await
-                            {
-                                Ok(synced) => {
-                                    tracing::info!(
-                                        target: "gents_desktop_core::peer",
-                                        peer_id = %record.peer_id,
-                                        label = %record.label,
-                                        synced_collections = ?synced,
-                                        "desktop requested branchable collection sync after peer add"
-                                    );
-                                }
-                                Err(error) => {
-                                    append_warning(
-                                        &mut warning,
-                                        format!(
-                                            "deployment paired but existing branchable sync failed: {error}"
-                                        ),
-                                    );
-                                }
-                            }
-                        } else {
-                            tracing::debug!(
+                    {
+                        Ok(synced) => {
+                            tracing::info!(
                                 target: "gents_desktop_core::peer",
                                 peer_id = %record.peer_id,
                                 label = %record.label,
-                                env = BRANCHABLE_PAIR_SYNC_ENV,
-                                "skipping opt-in branchable collection sync after peer add"
+                                synced_collections = ?synced,
+                                "desktop requested branchable collection sync after peer add"
+                            );
+                        }
+                        Err(error) => {
+                            append_warning(
+                                &mut warning,
+                                format!(
+                                    "deployment paired but existing branchable sync failed: {error}"
+                                ),
                             );
                         }
                     }
-                    Err(error) => {
-                        let prefix = if connected {
-                            "deployment connected"
-                        } else {
-                            "deployment saved"
-                        };
-                        append_warning(
-                            &mut warning,
-                            format!("{prefix} but reverse pairing failed: {error}"),
-                        );
-                    }
+                } else {
+                    tracing::debug!(
+                        target: "gents_desktop_core::peer",
+                        peer_id = %record.peer_id,
+                        label = %record.label,
+                        env = BRANCHABLE_PAIR_SYNC_ENV,
+                        "skipping opt-in branchable collection sync after peer add"
+                    );
                 }
-            } else {
-                tracing::info!(
-                    target: "gents_desktop_core::peer",
-                    peer_id = %record.peer_id,
-                    label = %record.label,
-                    graphql,
-                    env = REMOTE_P2P_PAIRING_ENV,
-                    "skipping automatic reverse P2P pairing for GraphQL-managed peer"
-                );
             }
-            let refresh_result = if record
-                .graphql
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-            {
-                self.refresh_remote_peer_record(&record).await.map(|_| ())
-            } else {
-                self.refresh_store().await.map(|_| ())
-            };
-            if let Err(error) = refresh_result {
+            Err(error) => {
+                let prefix = if connected {
+                    "deployment connected"
+                } else {
+                    "deployment saved"
+                };
                 append_warning(
                     &mut warning,
-                    format!("deployment saved but remote snapshot refresh failed: {error}"),
+                    format!("{prefix} but reverse pairing failed: {error}"),
                 );
             }
+        }
+        if let Err(error) = self.refresh_agent(&record.agent_did).await {
+            append_warning(
+                &mut warning,
+                format!("deployment saved but local replica refresh failed: {error}"),
+            );
         }
 
         self.update_peer_status(ClientPeerStatus {
@@ -1872,25 +1463,10 @@ impl ClientCore {
     }
 
     pub async fn save_behavior(&self, row: &AgentBehaviorRow) -> Result<()> {
-        let remote_graphql = match row.agent_did.as_deref() {
-            Some(agent_did) => self.graphql_for_agent(agent_did).await,
-            None => None,
-        };
-        let result = match remote_graphql.as_deref() {
-            Some(graphql) => mutations::upsert_agent_behavior_to_graphql(graphql, row).await,
-            None => mutations::upsert_agent_behavior(self.node.as_ref(), row).await,
-        };
+        let result = mutations::upsert_agent_behavior(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
-                if let Some(agent_did) = row.agent_did.as_deref() {
-                    if remote_graphql.is_some() {
-                        self.refresh_remote_agent(agent_did).await?;
-                    } else {
-                        self.refresh_store().await?;
-                    }
-                } else {
-                    self.refresh_store().await?;
-                }
+                self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1905,18 +1481,10 @@ impl ClientCore {
     }
 
     pub async fn save_agent_principal(&self, row: &AgentPrincipalRow) -> Result<()> {
-        let remote_graphql = self.graphql_for_agent(&row.agent_did).await;
-        let result = match remote_graphql.as_deref() {
-            Some(graphql) => mutations::upsert_agent_principal_to_graphql(graphql, row).await,
-            None => mutations::upsert_agent_principal(self.node.as_ref(), row).await,
-        };
+        let result = mutations::upsert_agent_principal(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
-                if remote_graphql.is_some() {
-                    self.refresh_remote_agent(&row.agent_did).await?;
-                } else {
-                    self.refresh_store().await?;
-                }
+                self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1948,25 +1516,10 @@ impl ClientCore {
     }
 
     pub async fn save_tool_selection(&self, row: &ToolSelectionRow) -> Result<()> {
-        let remote_graphql = match row.agent_did.as_deref() {
-            Some(agent_did) => self.graphql_for_agent(agent_did).await,
-            None => None,
-        };
-        let result = match remote_graphql.as_deref() {
-            Some(graphql) => mutations::upsert_tool_selection_to_graphql(graphql, row).await,
-            None => mutations::upsert_tool_selection(self.node.as_ref(), row).await,
-        };
+        let result = mutations::upsert_tool_selection(self.node.as_ref(), row).await;
         match result {
             Ok(()) => {
-                if let Some(agent_did) = row.agent_did.as_deref() {
-                    if remote_graphql.is_some() {
-                        self.refresh_remote_agent(agent_did).await?;
-                    } else {
-                        self.refresh_store().await?;
-                    }
-                } else {
-                    self.refresh_store().await?;
-                }
+                self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -2281,7 +1834,30 @@ pub(super) async fn cleanup_saved_peer_p2p(
             .collect()
     };
     let replicator_result = p2p_remove_replicator(p2p, collections, &record.addr).await;
-    let disconnect_result = p2p_disconnect_peer(p2p, &record.addr).await;
+    let disconnect_result = async {
+        p2p_disconnect_peer(p2p, &record.addr).await?;
+
+        let Some(expected_peer_id) = parse_public_peer_addr(&record.addr)
+            .ok()
+            .map(|(peer_id, _)| peer_id.to_string())
+        else {
+            return Ok(());
+        };
+        let deadline = Instant::now() + PEER_ADD_OPERATION_TIMEOUT;
+        loop {
+            if !is_connected_peer(p2p, &expected_peer_id).await? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "timed out waiting for peer {} to disconnect",
+                    expected_peer_id
+                );
+            }
+            sleep(BOOTSTRAP_OPERATION_BACKOFF).await;
+        }
+    }
+    .await;
 
     match (replicator_result, disconnect_result) {
         (Ok(()), Ok(())) => Ok(()),
