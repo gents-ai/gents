@@ -135,8 +135,10 @@ jobs:
 
       - name: Install elan
         # Runtime conformance and desktop-bridge tests both load the generated
-        # Lean contract.
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
+        # Lean contract. The FULL CLI suite (main pushes only — PR runs use
+        # the smoke subset) loads it too, via gents-cli's lean_apply_write_
+        # boundary and identity_decide fences.
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         run: |
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
@@ -155,11 +157,11 @@ jobs:
       # contract. Mathlib publishes matching precompiled artifacts; without
       # this cache Lake recompiles the dependency graph in every clean checkout.
       - name: Prepare persistent Lean build cache
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         run: .github/scripts/setup-lean-build-cache.sh
 
       - name: Download precompiled Mathlib artifacts
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop'
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         working-directory: crates/gents/proofs
         # Lean 4.18's LLVM 15 linker emits a native cache executable that
         # macOS 26 rejects. Running the same checked-in entry point through the

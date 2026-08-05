@@ -32,6 +32,7 @@ enum BackgroundTaskResult {
     NetworkReconcile(Result<()>),
     ReciprocalReconcile(Result<()>),
     BearerClaimReconcile(Result<()>),
+    PersonaRequestReconcile(Result<()>),
     DiscoveryReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
@@ -454,6 +455,18 @@ pub(in crate::agent) async fn run_agent(
         )
     });
 
+    let persona_request_node = agent.node.clone();
+    let persona_request_cancel = cancel.child_token();
+    background_tasks.spawn(async move {
+        BackgroundTaskResult::PersonaRequestReconcile(
+            crate::agent::p2p_reconcile::run_persona_request_reconciler(
+                persona_request_node,
+                persona_request_cancel,
+            )
+            .await,
+        )
+    });
+
     let reciprocal_node = agent.node.clone();
     let reciprocal_identity = agent.principal_arc().identity.clone();
     let reciprocal_cancel = cancel.child_token();
@@ -596,6 +609,7 @@ pub(in crate::agent) async fn run_agent(
             Ok(BackgroundTaskResult::NetworkReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::ReciprocalReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::BearerClaimReconcile(result)) => (result, false),
+            Ok(BackgroundTaskResult::PersonaRequestReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DiscoveryReconcile(result)) => (result, false),
             Ok(BackgroundTaskResult::DirectoryProjection(result)) => (result, false),
             Err(error) => (Err(anyhow!("background task join failed: {error}")), false),

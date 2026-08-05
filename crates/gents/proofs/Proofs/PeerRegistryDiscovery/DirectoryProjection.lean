@@ -4,6 +4,12 @@ import Mathlib.Data.Finset.Image
 
 namespace DirectoryProjection
 
+/-- The projected row's contents are abstracted as an opaque `payload`
+string: display name, behavior name/id arrays, runtime state — and, since
+the persona catalog (#986), the per-behavior dimension arrays
+(models/roots/presets/profiles) and home-level composer option lists. All
+of these ride below this abstraction; only the (source, did) identity and
+payload-equality drive the projection theorems. -/
 structure Principal where
   did : String
   payload : String

@@ -1,0 +1,37 @@
+# A phone-authored request to create, clone, or update a persona's backing
+# AgentBehavior configuration. The requesting device writes this row locally
+# and pushes it to the server; the server-side persona reconciler validates
+# the requested shape against the published persona catalog before
+# materializing any AgentBehavior change and writes the outcome back onto
+# this same row.
+#
+# TRUST BASIS — this row grants NOTHING by itself (mirrors
+# `PairingBearerClaim`'s `unsigned_claim_grants_nothing`): it is a request.
+# Authority lives entirely in the server-side persona reconciler, which
+# validates against the published persona catalog before materializing any
+# config; forged or unauthorized rows are inert.
+#
+# `@branchable` is REQUIRED: the row replicates over P2P (phone-authored
+# requests reach the server) — DefraDB only P2P-syncs branchable
+# collections.
+type PersonaConfigRequest @branchable {
+    request_key: String @index(unique: true) @immutable
+    # Replication pushback filters on this field; must be @immutable
+    # (add_replicator rejects mutable filter fields).
+    requester_did: String @index @immutable
+    agent_did: String @immutable
+    op: String @immutable
+    behavior_id: String @immutable
+    clone_from: String @immutable
+    persona_name: String
+    backend_model: String
+    root: String
+    preset: String
+    profile_id: String
+    created_at: DateTime
+    # Server-written outcome. pending | applied | rejected.
+    status: String @index
+    status_detail: String
+    applied_behavior_id: String
+    processed_at: DateTime
+}

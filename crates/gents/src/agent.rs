@@ -29,6 +29,8 @@ pub mod directory_projection;
 mod document_view;
 pub(crate) mod loop_stream;
 pub mod p2p_reconcile;
+pub mod persona_ops;
+pub mod persona_presets;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;

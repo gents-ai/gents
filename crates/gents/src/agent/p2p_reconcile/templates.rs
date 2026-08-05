@@ -213,6 +213,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "InferenceProfile",
     "ToolServiceRegistry",
     "Skill",
+    "PersonaConfigRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
 
@@ -260,6 +261,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "BearerPairingReady",
         field: "claimant_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "PersonaConfigRequest",
+        field: "requester_did",
         source: DidSource::PeerDid,
     },
     CollectionRule {
@@ -681,7 +687,7 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 16);
+        assert_eq!(t.collections.len(), 17);
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.
@@ -700,6 +706,16 @@ mod tests {
             Some(&FilterPredicate {
                 field: "source_did".to_string(),
                 value: "did:key:server".to_string(),
+            })
+        );
+        // Persona request rows carry requester-authored config picks and the
+        // server's status_detail; losing this rule would push every
+        // requester's rows to every machine peer (the #687 leak class).
+        assert_eq!(
+            filters.get("PersonaConfigRequest"),
+            Some(&FilterPredicate {
+                field: "requester_did".to_string(),
+                value: "did:key:phone".to_string(),
             })
         );
     }
