@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde::Serialize;
 use serde_json::{json, Value};
 

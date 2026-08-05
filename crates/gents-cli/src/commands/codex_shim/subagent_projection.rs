@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
-use codex_app_server_protocol as codex;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
+use gents_codex_protocol as codex;
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;

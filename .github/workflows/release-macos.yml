@@ -37,12 +37,19 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Do not reuse linked artifacts from the target trees populated by PR jobs.
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_RELEASE_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target-release' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
-  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
+  # Release builds must not consume compiler objects written by PR jobs. This
+  # forces rustc to rebuild and replace every otherwise-cacheable result while
+  # ephemeral, isolated macOS release runners remain future work.
+  SCCACHE_RECACHE: "1"
   MACOS_CODESIGN_IDENTIFIER: com.source-inc.gents.cli
   MACOS_KEYCHAIN_ACCESS_GROUP_BASE: com.source-inc.gents
   TARGET_TRIPLE: aarch64-apple-darwin
@@ -54,7 +61,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -96,49 +103,12 @@ jobs:
 
           echo "RELEASE_VERSION=${workspace_version}" >> "${GITHUB_ENV}"
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
@@ -313,13 +283,13 @@ jobs:
             exit 1
           fi
           cargo build -p gents-cli --release --locked
-          file target/release/gents
+          file "${CARGO_TARGET_DIR}/release/gents"
 
       - name: Generate dSYM and strip release binary
         run: |
           .github/scripts/prepare-macos-release-dsym.sh \
-            target/release/gents \
-            target/release/gents.dSYM
+            "${CARGO_TARGET_DIR}/release/gents" \
+            "${CARGO_TARGET_DIR}/release/gents.dSYM"
 
       - name: Sign binary with native macOS identity
         env:
@@ -333,7 +303,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           keychain_path="${SIGNING_KEYCHAIN}"
           signing_identity="${SIGNING_IDENTITY_NAME}"
           timestamp_mode="${RELEASE_CODESIGN_TIMESTAMP_MODE:-auto}"
@@ -429,7 +399,7 @@ jobs:
             exit 0
           fi
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           notary_dir="${RUNNER_TEMP}/gents-notary"
           staging_dir="${notary_dir}/payload"
           notary_zip="${notary_dir}/gents-notary.zip"
@@ -462,7 +432,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          binary_path="target/release/gents"
+          binary_path="${CARGO_TARGET_DIR}/release/gents"
           if [[ "${SIGNING_ENABLED}" == "true" ]]; then
             codesign --verify --strict --verbose=2 "${binary_path}"
 
@@ -539,11 +509,11 @@ jobs:
 
           rm -rf "${package_parent}" "${symbols_parent}" "${dist_dir}"
           mkdir -p "${package_root}" "${symbols_parent}" "${dist_dir}"
-          cp target/release/gents "${package_root}/gents"
+          cp "${CARGO_TARGET_DIR}/release/gents" "${package_root}/gents"
           chmod 0755 "${package_root}/gents"
           cp LICENSE "${package_root}/LICENSE"
           chmod 0644 "${package_root}/LICENSE"
-          cp -R target/release/gents.dSYM "${symbols_parent}/${dsym_bundle_basename}"
+          cp -R "${CARGO_TARGET_DIR}/release/gents.dSYM" "${symbols_parent}/${dsym_bundle_basename}"
           cp LICENSE "${symbols_parent}/LICENSE"
           chmod 0644 "${symbols_parent}/LICENSE"
 
@@ -555,11 +525,13 @@ jobs:
             shasum -a 256 "${dsym_archive_basename}.tar.gz" > "${dsym_archive_basename}.tar.gz.sha256"
           )
 
-          echo "tarball=${tarball}" >> "${GITHUB_OUTPUT}"
-          echo "checksum_file=${checksum_file}" >> "${GITHUB_OUTPUT}"
-          echo "dsym_tarball=${dsym_tarball}" >> "${GITHUB_OUTPUT}"
-          echo "dsym_checksum_file=${dsym_checksum_file}" >> "${GITHUB_OUTPUT}"
-          echo "artifact_basename=${artifact_basename}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "tarball=${tarball}"
+            echo "checksum_file=${checksum_file}"
+            echo "dsym_tarball=${dsym_tarball}"
+            echo "dsym_checksum_file=${dsym_checksum_file}"
+            echo "artifact_basename=${artifact_basename}"
+          } >> "${GITHUB_OUTPUT}"
           ls -lh "${dist_dir}"
 
       - name: Verify packaged artifact
@@ -646,7 +618,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.artifact_basename }}
           path: |
@@ -688,12 +660,8 @@ jobs:
 
       - name: Restore keychain search list
         if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
         run: |
           set -euo pipefail
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
           original_keychains_path="${RUNNER_TEMP}/gents-original-keychains.txt"
           original_default_keychain_path="${RUNNER_TEMP}/gents-original-default-keychain.txt"
 

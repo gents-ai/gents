@@ -6,6 +6,8 @@ use serde_json::Value;
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
 
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+const CHATGPT_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdTokenClaims {
@@ -36,12 +38,12 @@ pub async fn refresh_chatgpt_token(
     refresh_token: &str,
     http: &reqwest::Client,
 ) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = std::env::var(codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
+    let endpoint = std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| REFRESH_TOKEN_URL.to_string());
     let request = RefreshRequest {
-        client_id: codex_login::CLIENT_ID,
+        client_id: CHATGPT_OAUTH_CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
     };

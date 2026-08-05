@@ -11,10 +11,6 @@ autobins = false
 name = "gents_server"
 path = "src/lib.rs"
 
-[features]
-default = ["codex-tui"]
-codex-tui = ["dep:codex-arg0", "dep:codex-config", "dep:codex-tui"]
-
 [[bin]]
 name = "gents"
 path = "src/main.rs"
@@ -27,13 +23,8 @@ qrcode = { version = "0.14", default-features = false }
 chrono.workspace = true
 ciborium = "0.2"
 clap.workspace = true
-codex-app-server-protocol.workspace = true
-codex-arg0 = { workspace = true, optional = true }
-codex-config = { workspace = true, optional = true }
-codex-login.workspace = true
-codex-protocol.workspace = true
-codex-tui = { workspace = true, optional = true }
-codex-utils-absolute-path.workspace = true
+gents-chatgpt-login.workspace = true
+gents-codex-protocol.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
@@ -67,6 +58,7 @@ tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+url = "2"
 
 [dev-dependencies]
 acp.workspace = true

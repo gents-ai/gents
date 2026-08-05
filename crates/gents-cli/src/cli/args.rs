@@ -1226,6 +1226,11 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    #[command(about = "Write a WorkspaceRoot document")]
+    WorkspaceRoot {
+        #[command(subcommand)]
+        command: WorkspaceRootCommand,
+    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
     #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
@@ -1277,6 +1282,22 @@ pub(crate) enum BehaviorCommand {
     #[command(
         name = "rm",
         about = "Delete an AgentBehavior document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkspaceRootCommand {
+    #[command(name = "set")]
+    Set(WorkspaceRootUpsertArgs),
+    #[command(name = "list", about = "List WorkspaceRoot documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a WorkspaceRoot document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete a WorkspaceRoot document",
         alias = "remove"
     )]
     Rm(ConfigShowArgs),
@@ -1530,6 +1551,21 @@ pub(crate) struct ConfigShowArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct WorkspaceRootUpsertArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long, help = "Absolute path to register as a workspace root")]
+    pub(crate) path: PathBuf,
+    #[arg(long)]
+    pub(crate) display_name: Option<String>,
+    #[arg(
+        long,
+        help = "Register the root disabled; excluded from allowed_roots until re-enabled"
+    )]
+    pub(crate) disabled: bool,
 }
 
 #[derive(clap::Args)]

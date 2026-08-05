@@ -1,4 +1,4 @@
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

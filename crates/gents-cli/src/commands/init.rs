@@ -1179,6 +1179,60 @@ mod tests {
         assert_eq!(selection.file_tools_mode.as_deref(), Some("ReadOnly"));
     }
 
+    /// Drift fence between init's tool packages and the directory persona
+    /// catalog's preset templates (`gents::agent::persona_presets`): the
+    /// templates are copied verbatim from `tool_package_profile`, and
+    /// nothing else ties the two together. Classify the exact
+    /// `ToolSelectionDocument` init mints — projected into `PresetFields`
+    /// with the same None-means-default reads the directory projection
+    /// applies to stored rows — so a change to either side fails here
+    /// instead of silently mislabeling directory rows.
+    #[test]
+    fn init_minted_selections_classify_as_their_persona_preset() {
+        use gents::agent::persona_presets::{preset_name, PresetFields};
+
+        fn classify(package: ToolPackageArg) -> Option<&'static str> {
+            let doc = tool_selection_for_package(
+                "did:key:z-init",
+                "default-tools",
+                package,
+                false,
+                false,
+                Vec::new(),
+            );
+            preset_name(&PresetFields {
+                enable_file_tools: doc.enable_file_tools.unwrap_or_default(),
+                file_tools_mode: doc.file_tools_mode.unwrap_or_default(),
+                enable_bash: doc.enable_bash.unwrap_or_default(),
+                bash_mode: doc.bash_mode.unwrap_or_default(),
+                command_allowed_argv_prefixes: doc
+                    .command_allowed_argv_prefixes
+                    .unwrap_or_default(),
+                command_forbidden_argv_prefixes: doc
+                    .command_forbidden_argv_prefixes
+                    .unwrap_or_default(),
+                read_only_command_allowlist: doc.read_only_command_allowlist.unwrap_or_default(),
+                enable_self_config: doc.enable_self_config.unwrap_or_default(),
+                // The `[String]` column stores each decl JSON-encoded.
+                write_tools: doc
+                    .write_tools
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|decl| serde_json::to_string(decl).expect("encode write tool decl"))
+                    .collect(),
+            })
+        }
+
+        assert_eq!(classify(ToolPackageArg::Readonly), Some("readonly"));
+        assert_eq!(classify(ToolPackageArg::Write), Some("write"));
+        // Yolo differs from Write only in fields the classifier deliberately
+        // excludes (display name, exec policy), so it badges as "write".
+        assert_eq!(classify(ToolPackageArg::Yolo), Some("write"));
+        assert_eq!(classify(ToolPackageArg::Minimal), None);
+        assert_eq!(classify(ToolPackageArg::Introspection), None);
+    }
+
     #[test]
     fn init_tool_packages_seed_expected_tool_selection_documents() {
         struct Case {

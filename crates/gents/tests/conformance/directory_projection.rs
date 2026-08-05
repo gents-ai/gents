@@ -4,15 +4,19 @@ use std::sync::Mutex;
 use anyhow::Result;
 use async_trait::async_trait;
 use gents::agent::directory_projection::{
-    derive_directory_entries, directory_entry_key, reconcile_directory_tick, DirectoryEntry,
-    DirectoryStore, DirectoryTickOutcome,
+    derive_directory_entries, directory_entry_key, reconcile_directory_tick, BehaviorInfo,
+    CatalogOptions, DirectoryEntry, DirectoryStore, DirectoryTickOutcome, SelectionInfo,
+    SourceSnapshot,
 };
+use gents::agent::persona_presets::preset_fields;
 
 #[derive(Default)]
 struct DirectoryFixtureStore {
     principals: Vec<(String, String, String)>,
-    behaviors: BTreeMap<String, Vec<(String, String)>>,
+    behaviors: BTreeMap<String, Vec<BehaviorInfo>>,
     runtimes: BTreeMap<String, (String, String)>,
+    selections: BTreeMap<String, SelectionInfo>,
+    options: CatalogOptions,
     entries: Mutex<BTreeMap<(String, String), DirectoryEntry>>,
     upserts: Mutex<Vec<String>>,
     deletes: Mutex<Vec<String>>,
@@ -20,14 +24,14 @@ struct DirectoryFixtureStore {
 
 #[async_trait]
 impl DirectoryStore for DirectoryFixtureStore {
-    async fn load_principals(&self) -> Result<Vec<(String, String, String)>> {
-        Ok(self.principals.clone())
-    }
-    async fn load_behaviors(&self) -> Result<BTreeMap<String, Vec<(String, String)>>> {
-        Ok(self.behaviors.clone())
-    }
-    async fn load_runtime_states(&self) -> Result<BTreeMap<String, (String, String)>> {
-        Ok(self.runtimes.clone())
+    async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
+        Ok(SourceSnapshot {
+            principals: self.principals.clone(),
+            behaviors: self.behaviors.clone(),
+            runtimes: self.runtimes.clone(),
+            selections: self.selections.clone(),
+            options: self.options.clone(),
+        })
     }
     async fn list_directory_entries(
         &self,
@@ -76,25 +80,86 @@ fn principal_with_default(
     )
 }
 
+fn empty_entry(agent_did: &str, source_did: &str, display_name: &str) -> DirectoryEntry {
+    DirectoryEntry {
+        directory_key: directory_entry_key(source_did, agent_did),
+        agent_did: agent_did.to_string(),
+        source_did: source_did.to_string(),
+        display_name: display_name.to_string(),
+        behaviors: Vec::new(),
+        behavior_ids: Vec::new(),
+        default_behavior_id: String::new(),
+        behavior_models: Vec::new(),
+        behavior_roots: Vec::new(),
+        behavior_presets: Vec::new(),
+        behavior_profiles: Vec::new(),
+        options: CatalogOptions::default(),
+        runtime_state: String::new(),
+        last_seen: String::new(),
+    }
+}
+
 #[test]
 fn derivation_projects_exactly_the_principals() {
+    let coder = BehaviorInfo {
+        behavior_id: "did:key:a:coder".to_string(),
+        display_name: "Coder".to_string(),
+        backend_id: "openai".to_string(),
+        model_name: "gpt-5".to_string(),
+        tool_selection_id: "sel-coder".to_string(),
+        inference_profile_id: "profile-fast".to_string(),
+    };
+    let artist = BehaviorInfo {
+        behavior_id: "did:key:a:artist".to_string(),
+        display_name: "Artist".to_string(),
+        backend_id: "anthropic".to_string(),
+        model_name: "claude".to_string(),
+        tool_selection_id: "sel-artist".to_string(),
+        inference_profile_id: "".to_string(),
+    };
+    let selections = BTreeMap::from([
+        (
+            "sel-coder".to_string(),
+            SelectionInfo {
+                file_tool_root: "/repo/a".to_string(),
+                preset: preset_fields("readonly").expect("readonly preset should exist"),
+            },
+        ),
+        (
+            "sel-artist".to_string(),
+            SelectionInfo {
+                file_tool_root: String::new(),
+                preset: {
+                    let mut fields =
+                        preset_fields("readonly").expect("readonly preset should exist");
+                    fields
+                        .command_allowed_argv_prefixes
+                        .push("git status".to_string());
+                    fields
+                },
+            },
+        ),
+    ]);
+    let options = CatalogOptions {
+        available_models: vec!["anthropic|claude".to_string(), "openai|gpt-5".to_string()],
+        allowed_roots: vec!["/repo/a".to_string()],
+        permission_presets: vec!["readonly".to_string(), "write".to_string()],
+        available_profiles: vec!["profile-fast|Fast".to_string()],
+    };
+
     let derived = derive_directory_entries(
         "did:key:home",
         &[
             principal_with_default("did:key:a", "Amy", "did:key:a:coder"),
             principal("did:key:b", "Bob"),
         ],
-        &BTreeMap::from([(
-            "did:key:a".to_string(),
-            vec![
-                ("did:key:a:coder".to_string(), "Coder".to_string()),
-                ("did:key:a:artist".to_string(), "Artist".to_string()),
-            ],
-        )]),
+        &BTreeMap::from([("did:key:a".to_string(), vec![coder.clone(), artist.clone()])]),
         &BTreeMap::from([(
             "did:key:a".to_string(),
             ("running".to_string(), "2026-07-23T00:00:00Z".to_string()),
         )]),
+        &selections,
+        &options,
     );
     assert_eq!(
         derived.keys().cloned().collect::<BTreeSet<_>>(),
@@ -117,6 +182,35 @@ fn derivation_projects_exactly_the_principals() {
         "default_behavior_id must copy through from the principal"
     );
     assert_eq!(a.runtime_state, "running");
+
+    // The four `behavior_*` arrays are index-aligned with the sorted
+    // `behavior_ids` (artist first, coder second).
+    assert_eq!(
+        a.behavior_models,
+        vec!["anthropic|claude".to_string(), "openai|gpt-5".to_string()],
+        "behavior_models must be backend_id|model_name, aligned with behavior_ids"
+    );
+    assert_eq!(
+        a.behavior_roots,
+        vec![String::new(), "/repo/a".to_string()],
+        "behavior_roots must copy each selection's file_tool_root, aligned"
+    );
+    assert_eq!(
+        a.behavior_presets,
+        vec![String::new(), "readonly".to_string()],
+        "custom selection (extra argv prefix) must classify as \"\", exact match as its preset name"
+    );
+    assert_eq!(
+        a.behavior_profiles,
+        vec![String::new(), "profile-fast".to_string()],
+        "behavior_profiles must copy inference_profile_id, aligned"
+    );
+
+    assert_eq!(
+        a.options, options,
+        "the four option lists must pass through verbatim on every entry"
+    );
+
     let b = &derived["did:key:b"];
     assert!(b.behaviors.is_empty() && b.behavior_ids.is_empty());
     assert_eq!(
@@ -124,10 +218,48 @@ fn derivation_projects_exactly_the_principals() {
         "a principal with no default behavior must derive an empty default_behavior_id"
     );
     assert_eq!(b.runtime_state, "");
+    assert!(
+        b.behavior_models.is_empty()
+            && b.behavior_roots.is_empty()
+            && b.behavior_presets.is_empty()
+            && b.behavior_profiles.is_empty(),
+        "a principal with no behaviors derives empty dimension arrays"
+    );
+    assert_eq!(
+        b.options, options,
+        "options are home-level, so every entry on the source carries them"
+    );
+}
+
+#[test]
+fn derivation_yields_empty_strings_for_a_behavior_with_no_matching_selection() {
+    let coder = BehaviorInfo {
+        behavior_id: "did:key:a:coder".to_string(),
+        display_name: "Coder".to_string(),
+        backend_id: String::new(),
+        model_name: String::new(),
+        tool_selection_id: "missing-selection".to_string(),
+        inference_profile_id: String::new(),
+    };
+    let derived = derive_directory_entries(
+        "did:key:home",
+        &[principal("did:key:a", "Amy")],
+        &BTreeMap::from([("did:key:a".to_string(), vec![coder])]),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &CatalogOptions::default(),
+    );
+    let a = &derived["did:key:a"];
+    assert_eq!(a.behavior_models, vec![String::new()]);
+    assert_eq!(a.behavior_roots, vec![String::new()]);
+    assert_eq!(a.behavior_presets, vec![String::new()]);
+    assert_eq!(a.behavior_profiles, vec![String::new()]);
 }
 
 #[tokio::test]
 async fn tick_converges_then_quiesces() {
+    let mut settled = empty_entry("did:key:a", "did:key:home", "Amy");
+    settled.runtime_state = "starting".to_string();
     let store = DirectoryFixtureStore {
         principals: vec![principal("did:key:a", "Amy")],
         runtimes: BTreeMap::from([(
@@ -136,17 +268,7 @@ async fn tick_converges_then_quiesces() {
         )]),
         entries: Mutex::new(BTreeMap::from([(
             ("did:key:home".to_string(), "did:key:a".to_string()),
-            DirectoryEntry {
-                directory_key: directory_entry_key("did:key:home", "did:key:a"),
-                agent_did: "did:key:a".to_string(),
-                source_did: "did:key:home".to_string(),
-                display_name: "Amy".to_string(),
-                behaviors: Vec::new(),
-                behavior_ids: Vec::new(),
-                default_behavior_id: String::new(),
-                runtime_state: "starting".to_string(),
-                last_seen: String::new(),
-            },
+            settled,
         )])),
         ..Default::default()
     };
@@ -178,31 +300,11 @@ async fn tick_retracts_only_removed_principals() {
         entries: Mutex::new(BTreeMap::from([
             (
                 ("did:key:home".to_string(), "did:key:a".to_string()),
-                DirectoryEntry {
-                    directory_key: directory_entry_key("did:key:home", "did:key:a"),
-                    agent_did: "did:key:a".to_string(),
-                    source_did: "did:key:home".to_string(),
-                    display_name: "Amy".to_string(),
-                    behaviors: Vec::new(),
-                    behavior_ids: Vec::new(),
-                    default_behavior_id: String::new(),
-                    runtime_state: String::new(),
-                    last_seen: String::new(),
-                },
+                empty_entry("did:key:a", "did:key:home", "Amy"),
             ),
             (
                 ("did:key:home".to_string(), "did:key:b".to_string()),
-                DirectoryEntry {
-                    directory_key: directory_entry_key("did:key:home", "did:key:b"),
-                    agent_did: "did:key:b".to_string(),
-                    source_did: "did:key:home".to_string(),
-                    display_name: "Bob".to_string(),
-                    behaviors: Vec::new(),
-                    behavior_ids: Vec::new(),
-                    default_behavior_id: String::new(),
-                    runtime_state: String::new(),
-                    last_seen: String::new(),
-                },
+                empty_entry("did:key:b", "did:key:home", "Bob"),
             ),
         ])),
         ..Default::default()
@@ -221,17 +323,7 @@ async fn tick_retracts_only_removed_principals() {
 
 #[tokio::test]
 async fn tick_preserves_foreign_same_agent_did_and_converges_local_row() {
-    let foreign = DirectoryEntry {
-        directory_key: directory_entry_key("did:key:foreign-home", "did:key:shared-agent"),
-        agent_did: "did:key:shared-agent".to_string(),
-        source_did: "did:key:foreign-home".to_string(),
-        display_name: "Foreign".to_string(),
-        behaviors: Vec::new(),
-        behavior_ids: Vec::new(),
-        default_behavior_id: String::new(),
-        runtime_state: String::new(),
-        last_seen: String::new(),
-    };
+    let foreign = empty_entry("did:key:shared-agent", "did:key:foreign-home", "Foreign");
     let store = DirectoryFixtureStore {
         principals: vec![principal("did:key:shared-agent", "Local")],
         entries: Mutex::new(BTreeMap::from([(

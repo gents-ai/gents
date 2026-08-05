@@ -5,7 +5,9 @@ members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-chatgpt-login",
     "crates/gents-cli",
+    "crates/gents-codex-protocol",
     "crates/gents-desktop",
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
@@ -27,7 +29,9 @@ default-members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-chatgpt-login",
     "crates/gents-cli",
+    "crates/gents-codex-protocol",
     "crates/gents-desktop",
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
@@ -49,30 +53,24 @@ bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
-codex-app-server-protocol = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-arg0 = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-config = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-login = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-model-provider-info = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-protocol = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-tui = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
-codex-utils-absolute-path = { git = "https://github.com/openai/codex", rev = "c4e53d103c102f8d5201247adbc60bbddd47c88d" }
 # defradb.rs v0.17.4. Its iterative parent-DAG replay remains required on iOS:
 # a deep collection history otherwise exhausts even a 32 MiB Tokio worker stack.
-acp = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
-crypto = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
-defra-core = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
 gents-protocol = { path = "crates/gents-protocol" }
+gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
+gents-codex-protocol = { path = "crates/gents-codex-protocol" }
 gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
-defra-node = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
-defra-p2p-adapter = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216", default-features = false }
+defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
 dirs = "5"
-events = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+events = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
 hostname = "0.4"
-identity = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+identity = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
 # Must stay version-aligned with the iroh used by the defradb.rs `p2p` crate;
 # the CLI uses it to inspect the default relay set at startup (#588).
 iroh = "1"
@@ -80,8 +78,8 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"] }
-p2p = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
-query = { git = "ssh://git@github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+p2p = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
+query = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "f9e21c682c93fd64e85434b7804b7a4112c51216" }
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rig-core = "0.35.0"
@@ -125,12 +123,6 @@ split-debuginfo = "off"
 incremental = false
 
 [patch.crates-io]
-# crossterm/ratatui forks mirror codex-rs's [patch.crates-io]: codex-tui needs
-# them, and cargo does not carry patch sections across git dependencies.
-crossterm = { git = "https://github.com/nornagon/crossterm", rev = "87db8bfa6dc99427fd3b071681b07fc31c6ce995" }
-ratatui = { git = "https://github.com/nornagon/ratatui", rev = "9b2ad1298408c45918ee9f8241a6f95498cdbed2" }
-tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 # rig-core fork: upstream rig's OpenAI provider drops reasoning from vLLM-style
 # servers. The Responses streaming decoder only handles OpenAI's hosted
 # `response.reasoning_summary_text.delta`; vLLM streams the raw chain-of-thought
@@ -143,6 +135,5 @@ rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "1ebeeaee3b569b
 # aborting the process when an earlier driver panic poisons their mutex.
 # See third_party/README.md, defradb.rs#1090, and gents#634.
 noq = { path = "third_party/noq" }
-
-[patch."ssh://git@github.com/openai-oss-forks/tungstenite-rs.git"]
-tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
+[patch."ssh://git@github.com/sourcenetwork/backbone.git"]
+acp-light-client = { git = "https://github.com/sourcenetwork/backbone.git", rev = "086ddadc98bc55183920aa0fe6bc4d3719e0e5e7" }

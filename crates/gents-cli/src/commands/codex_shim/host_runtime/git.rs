@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use codex_app_server_protocol as codex;
+use gents_codex_protocol as codex;
 use tokio::process::Command;
 
 use crate::commands::codex_shim::{ShimState, JSONRPC_INTERNAL_ERROR};

@@ -16,11 +16,13 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_TARGET_ROOT: ${{ vars.CARGO_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   RUSTC_WRAPPER: sccache
   RUST_BACKTRACE: "1"
-  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '60G' }}
+  SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '120G' }}
+  SCCACHE_BASEDIRS: ${{ vars.SCCACHE_BASEDIRS }}
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
   GENTS_CLI_E2E_MODEL_ENDPOINT: ${{ github.event.inputs.inference_endpoint }}
   GENTS_CLI_E2E_MODEL_NAME: ${{ github.event.inputs.model_name }}
@@ -35,65 +37,20 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.1
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Run live CLI smoke test
         run: cargo test -p gents-cli --test cli_live standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
 
       - name: Show Rust build cache stats
         if: always()
@@ -103,57 +60,20 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+      - uses: dtolnay/rust-toolchain@1.97.1
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
@@ -185,14 +105,6 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run test:live:replication
 
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
@@ -201,57 +113,20 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, studio]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Rewrite Git SSH dependencies to HTTPS
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${PRIVATE_REPO_PAT}" ]]; then
-            echo "::error::Missing PRIVATE_REPO_PAT; required to fetch private Source Network git dependencies."
-            exit 1
-          fi
-          auth_url="https://x-access-token:${PRIVATE_REPO_PAT}@github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "https://github.com/sourcenetwork/"
-          git config --global --add url."${auth_url}".insteadOf "ssh://git@github.com/sourcenetwork/"
+      - uses: dtolnay/rust-toolchain@1.97.1
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package-lock.json
 
       - name: Install protobuf compiler
-        run: |
-          set -euo pipefail
-
-          protoc_path=""
-          if [[ -x "/opt/homebrew/bin/protoc" ]]; then
-            protoc_path="/opt/homebrew/bin/protoc"
-          elif command -v protoc >/dev/null 2>&1; then
-            protoc_path="$(command -v protoc)"
-          else
-            if ! command -v brew >/dev/null 2>&1; then
-              echo "::error::protoc is missing and Homebrew is not available to install protobuf."
-              exit 1
-            fi
-            brew install protobuf
-            protoc_path="$(brew --prefix protobuf)/bin/protoc"
-          fi
-
-          if [[ ! -x "${protoc_path}" ]]; then
-            echo "::error::protoc was not found at ${protoc_path}."
-            exit 1
-          fi
-
-          echo "$(dirname "${protoc_path}")" >> "${GITHUB_PATH}"
-          echo "PROTOC=${protoc_path}" >> "${GITHUB_ENV}"
-          "${protoc_path}" --version
+        run: .github/scripts/setup-protoc.sh
 
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
@@ -269,21 +144,13 @@ jobs:
 
       - name: Upload live desktop browser artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-live-browser-artifacts
           if-no-files-found: ignore
           path: |
             apps/gents-desktop/test-results/playwright-live
             apps/gents-desktop/playwright-live-report
-
-      - name: Cleanup git auth
-        if: always()
-        env:
-          PRIVATE_REPO_PAT: ${{ secrets.PRIVATE_REPO_PAT }}
-        run: |
-          git config --global --remove-section "url.https://x-access-token:${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
-          git config --global --remove-section "url.https://${PRIVATE_REPO_PAT:-}@github.com/sourcenetwork/" 2>/dev/null || true
 
       - name: Show Rust build cache stats
         if: always()

@@ -14,6 +14,7 @@ pub enum Collection {
     AgentPrincipal,
     AgentBehavior,
     Skill,
+    WorkspaceRoot,
     ToolSelection,
     InferenceBackend,
     InferenceProfile,
@@ -26,6 +27,13 @@ pub enum Collection {
 }
 
 impl Collection {
+    // NOTE: `WorkspaceRoot` is intentionally NOT a member of `ALL`. `ALL`
+    // drives the full desired-state config CRUD surface (CONFIG_APPLY_ORDER,
+    // DesiredStateManifest diff/load/write) — WorkspaceRoot's schema lands in
+    // this task, but that CLI surface is built in a follow-up task. The
+    // variant still exists on the enum (with real graphql_type/unique_field/
+    // apply_order/dir_name) so exhaustive matches over `Collection` account
+    // for it; it's just excluded from the CRUD-driving `ALL` set for now.
     pub const ALL: [Collection; 12] = [
         Collection::AgentPrincipal,
         Collection::AgentBehavior,
@@ -53,6 +61,7 @@ impl Collection {
             Collection::AgentPrincipal => None,
             Collection::AgentBehavior => Some("agent-behaviors"),
             Collection::Skill => Some("skills"),
+            Collection::WorkspaceRoot => Some("workspace-roots"),
             Collection::ToolSelection => Some("tool-selections"),
             Collection::InferenceBackend => Some("inference-backends"),
             Collection::InferenceProfile => Some("inference-profiles"),
@@ -70,6 +79,7 @@ impl Collection {
             Collection::AgentPrincipal => "AgentPrincipal",
             Collection::AgentBehavior => "AgentBehavior",
             Collection::Skill => "Skill",
+            Collection::WorkspaceRoot => "WorkspaceRoot",
             Collection::ToolSelection => "ToolSelection",
             Collection::InferenceBackend => "InferenceBackend",
             Collection::InferenceProfile => "InferenceProfile",
@@ -87,6 +97,7 @@ impl Collection {
             Collection::AgentPrincipal => "agent_did",
             Collection::AgentBehavior => "behavior_id",
             Collection::Skill => "skill_id",
+            Collection::WorkspaceRoot => "root_path",
             Collection::ToolSelection => "selection_id",
             Collection::InferenceBackend => "backend_id",
             Collection::InferenceProfile => "profile_id",
@@ -109,6 +120,7 @@ impl Collection {
             | Collection::InferenceProfile
             | Collection::ToolServiceRegistry
             | Collection::Skill
+            | Collection::WorkspaceRoot
             | Collection::PeerPairingDesired => 0,
             Collection::AgentBehavior => 1,
             Collection::ProjectionAcpBinding => 2,
@@ -130,6 +142,7 @@ impl fmt::Display for Collection {
             Collection::AgentPrincipal => "agent_principal",
             Collection::AgentBehavior => "agent_behaviors",
             Collection::Skill => "skills",
+            Collection::WorkspaceRoot => "workspace_roots",
             Collection::ToolSelection => "tool_selections",
             Collection::InferenceBackend => "inference_backends",
             Collection::InferenceProfile => "inference_profiles",
