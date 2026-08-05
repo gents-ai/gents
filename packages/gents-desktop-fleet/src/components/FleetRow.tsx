@@ -25,6 +25,7 @@ import {
   formatRelativeTime,
   inferenceBackendTitle,
   isLocalRuntimeSource,
+  needsInferenceSetup,
   toolCeilingIcons,
   type ToolIcon,
 } from "../fleetMetrics.js";
@@ -46,6 +47,7 @@ export type FleetRowProps = {
   onOpenConfig: (agentDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
+  onSetupInference?: (deployment: DeploymentView) => void;
 };
 
 export function FleetRow({
@@ -56,6 +58,7 @@ export function FleetRow({
   onOpenConfig,
   onRemovePeer,
   onRenamePeer,
+  onSetupInference,
 }: FleetRowProps) {
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -78,6 +81,7 @@ export function FleetRow({
   const backendCount = deployment.inferenceBackends.filter(
     (backend) => backend.enabled !== false,
   ).length;
+  const inferenceSetupNeeded = needsInferenceSetup(deployment);
   const openWorkCount = deployment.conversations.filter(
     (conversation) =>
       conversation.turnState && !isTerminalTurnState(conversation.turnState),
@@ -202,11 +206,28 @@ export function FleetRow({
         <Metric value={enabledTaskCount} label="enabled" />
       </td>
       <td>
-        <Metric
-          label={backendCount === 1 ? "backend" : "backends"}
-          title={inferenceBackendTitle(deployment)}
-          value={backendCount}
-        />
+        <div className="fleet-inference-cell">
+          <Metric
+            label={backendCount === 1 ? "backend" : "backends"}
+            title={inferenceBackendTitle(deployment)}
+            value={backendCount}
+          />
+          {inferenceSetupNeeded ? (
+            onSetupInference ? (
+              <button
+                className="ghost-button fleet-inference-needed"
+                data-testid={`fleet-inference-setup-${deployment.peerId}`}
+                onClick={() => onSetupInference(deployment)}
+                title={`Configure inference for ${deployment.label}`}
+                type="button"
+              >
+                Setup needed
+              </button>
+            ) : (
+              <span className="fleet-inference-needed">Setup needed</span>
+            )
+          ) : null}
+        </div>
       </td>
       <td>
         <ToolIconStrip icons={toolIcons} />

@@ -78,6 +78,15 @@ describe("FleetRow", () => {
     expect(screen.getByTitle(/Last runtime state change/)).toHaveTextContent("unknown");
   });
 
+  it("shows inference setup status only on the affected deployment row", () => {
+    const onSetupInference = vi.fn();
+    const missingInference = { ...deployment, inferenceBackends: [] };
+    renderRow({ onSetupInference }, missingInference);
+
+    fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
+    expect(onSetupInference).toHaveBeenCalledWith(missingInference);
+  });
+
   it("claims the local init.json tool ceiling only for local-runtime rows", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(

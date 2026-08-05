@@ -4,9 +4,9 @@ use gents_protocol::row::InferenceBackendRow;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    graphql_optional_bool_field, graphql_optional_int_field, graphql_string_field,
-    graphql_string_list_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_int_field, graphql_string_field, graphql_string_list_field, join_fields,
+    normalize_required,
 };
 
 pub async fn upsert_inference_backend(
@@ -130,21 +130,6 @@ pub async fn delete_inference_backend(node: &EmbeddedNode, backend_id: &str) -> 
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
-}
-
-pub async fn delete_inference_backend_from_graphql(
-    graphql: &str,
-    backend_id: &str,
-) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_inference_backend_mutation(backend_id)?;
-    execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "delete_inference_backend",
-        "delete_InferenceBackend",
-    )
-    .await
 }
 
 fn build_delete_inference_backend_mutation(backend_id: &str) -> Result<String> {

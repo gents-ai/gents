@@ -88,7 +88,10 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
-    setMobileChatPane("conversation");
+    // Fleet selects an agent instance first. On narrow screens the sidebar is
+    // that instance view (behaviors + conversations); opening the conversation
+    // pane here made it impossible to reach that navigation from Fleet.
+    setMobileChatPane("navigation");
     setWorkspaceView("chat");
   }
 

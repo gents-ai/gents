@@ -121,12 +121,24 @@ theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
           else k.field = "requester_did")) = true := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
-theorem conversation_filters_declared_collections (peerDid localDid : Did) :
+theorem conversation_filters_exactly_transcript_collections (peerDid localDid : Did) :
     ((scopeFilter conversationTemplate.scope [] peerDid localDid).map
         (fun k => k.collection)).toFinset
-      = conversationTemplate.collections := by
+      = conversationTranscriptCollections.toFinset := by
   simp [scopeFilter, conversationTemplate, conversationRules,
-    conversationCollections]
+    conversationTranscriptCollections]
+
+theorem conversation_config_is_unfiltered (peerDid localDid : Did) :
+    agentConfigCollections.all (fun collection =>
+      (scopeFilter conversationTemplate.scope [] peerDid localDid).all
+        (fun filter => filter.collection ≠ collection)) = true := by
+  simp [scopeFilter, conversationTemplate, conversationRules,
+    agentConfigCollections]
+
+theorem conversation_grants_agent_config :
+    agentConfigCollections.toFinset ⊆ conversationTemplate.collections := by
+  simp only [conversationTemplate, conversationCollections, List.toFinset_append]
+  exact Finset.subset_union_right
 
 theorem conversation_request_crossing_is_peer_scoped (peerDid localDid : Did) :
     (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
@@ -148,12 +160,12 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
           , value := homeDid } ] := by
   simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
 
-theorem machine_filters_declared_collections (peerDid homeDid : Did) :
+theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
-      = machineTemplate.collections := by
+      = (conversationTranscriptCollections ++ ["AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
-    conversationRules, conversationCollections]
+    conversationRules, conversationCollections, conversationTranscriptCollections]
 
 theorem machine_directory_crossing_is_home_scoped (peerDid homeDid : Did) :
     (scopeFilter machineTemplate.scope [] peerDid homeDid).find?

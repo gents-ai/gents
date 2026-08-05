@@ -189,6 +189,21 @@
     font-weight: 600;
   }
 
+  .fleet-inference-cell {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-1);
+  }
+
+  .fleet-inference-needed {
+    min-height: 0;
+    padding: 0;
+    color: var(--color-warning-soft);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .fleet-tool-icons {
     gap: var(--space-2);
   }

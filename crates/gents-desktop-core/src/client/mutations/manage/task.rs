@@ -38,9 +38,8 @@ use gents_protocol::row::{EventTriggerRow, ScheduleRow, TaskRow};
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    graphql_optional_bool_field, graphql_optional_int_field, graphql_string_field, join_fields,
-    normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_int_field, graphql_string_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_task(node: &EmbeddedNode, row: &TaskRow) -> Result<()> {
@@ -452,12 +451,6 @@ pub async fn delete_task(node: &EmbeddedNode, task_id: &str) -> Result<usize> {
         .unwrap_or(0))
 }
 
-pub async fn delete_task_from_graphql(graphql: &str, task_id: &str) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_task_mutation(task_id)?;
-    execute_remote_delete_mutation(graphql, &mutation, "delete_task", "delete_Task").await
-}
-
 fn build_delete_task_mutation(task_id: &str) -> Result<String> {
     let task_id = normalize_required("task_id", task_id)?;
     let task_id = escape_graphql_string(task_id);
@@ -493,12 +486,6 @@ pub async fn delete_schedule(node: &EmbeddedNode, schedule_id: &str) -> Result<u
         .unwrap_or(0))
 }
 
-pub async fn delete_schedule_from_graphql(graphql: &str, schedule_id: &str) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_schedule_mutation(schedule_id)?;
-    execute_remote_delete_mutation(graphql, &mutation, "delete_schedule", "delete_Schedule").await
-}
-
 fn build_delete_schedule_mutation(schedule_id: &str) -> Result<String> {
     let schedule_id = normalize_required("schedule_id", schedule_id)?;
     let schedule_id = escape_graphql_string(schedule_id);
@@ -532,18 +519,6 @@ pub async fn delete_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> Resu
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
-}
-
-pub async fn delete_event_trigger_from_graphql(graphql: &str, trigger_id: &str) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_event_trigger_mutation(trigger_id)?;
-    execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "delete_event_trigger",
-        "delete_EventTrigger",
-    )
-    .await
 }
 
 fn build_delete_event_trigger_mutation(trigger_id: &str) -> Result<String> {

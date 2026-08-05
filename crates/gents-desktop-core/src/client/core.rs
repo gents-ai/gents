@@ -26,8 +26,7 @@ use super::paths::DesktopPaths;
 use super::peer_directory::{PeerDirectory, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
-    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_from_graphql,
-    load_full_snapshot_with_peer_records,
+    load_agent_scoped_snapshot_with_peer_records, load_full_snapshot_with_peer_records,
 };
 use crate::remote_admin::PairingErrorClass;
 
@@ -420,17 +419,6 @@ impl ClientCore {
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_agent_did();
         let records = self.peer_directory.read().await.records().to_vec();
-        if let Some(record) = scoped.as_deref().and_then(|did| {
-            records.iter().find(|record| {
-                record.agent_did == did
-                    && record
-                        .graphql
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty())
-            })
-        }) {
-            return self.refresh_remote_peer_record(record).await;
-        }
         let snapshot = match scoped.as_deref() {
             Some(did) => {
                 load_agent_scoped_snapshot_with_peer_records(
@@ -465,61 +453,29 @@ impl ClientCore {
         Ok(version)
     }
 
-    pub async fn refresh_remote_agent(&self, agent_did: &str) -> Result<Option<u64>> {
+    pub async fn refresh_agent(&self, agent_did: &str) -> Result<Option<u64>> {
         let agent_did = agent_did.trim();
         if agent_did.is_empty() {
             return Ok(None);
         }
-
-        let record = {
-            let peer_directory = self.peer_directory.read().await;
-            peer_directory
-                .records()
-                .iter()
-                .find(|record| record.agent_did == agent_did)
-                .cloned()
-        };
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        if record
-            .graphql
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            return Ok(None);
-        }
-
-        self.refresh_remote_peer_record(&record).await.map(Some)
-    }
-
-    pub async fn refresh_remote_peer_record(&self, record: &PeerRecord) -> Result<u64> {
-        let graphql = record
-            .graphql
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("peer {} has no GraphQL endpoint", record.label))?;
-
-        let mut snapshot = load_full_snapshot_from_graphql(graphql, &record.agent_did).await?;
-        snapshot.stamp_source_agent_did(&record.agent_did);
+        let records = self.peer_directory.read().await.records().to_vec();
+        let snapshot = load_agent_scoped_snapshot_with_peer_records(
+            self.node.as_ref(),
+            agent_did,
+            &records,
+            self.principal.did(),
+        )
+        .await?;
         let rows = snapshot.row_count();
-        let version = self
-            .store
-            .replace_remote_agent_snapshot(&record.agent_did, snapshot);
-        tracing::info!(
+        let version = self.store.replace_agent_snapshot(agent_did, snapshot);
+        tracing::debug!(
             target: "gents_desktop_core::replication",
-            peer_id = %record.peer_id,
-            label = %record.label,
-            agent_did = %record.agent_did,
-            graphql,
+            agent_did,
             version,
             rows,
-            "desktop remote peer snapshot merged (peer is single-agent scoped)"
+            "desktop refreshed agent projection from local replica"
         );
-        Ok(version)
+        Ok(Some(version))
     }
 
     const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -533,17 +489,6 @@ impl ClientCore {
             }
         }
         let records = self.peer_directory.read().await.records().to_vec();
-        if let Some(record) = records.iter().find(|record| {
-            record.agent_did == agent_did
-                && record
-                    .graphql
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-        }) {
-            self.refresh_remote_peer_record(record).await?;
-            map.insert(agent_did.to_string(), now);
-            return Ok(true);
-        }
         let snapshot = load_agent_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             agent_did,

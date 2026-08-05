@@ -73,6 +73,26 @@ function makeBridge(overrides: Partial<DesktopApiAdapter>): TauriDriverBridge {
 }
 
 describe("App shell command sad paths", () => {
+  it("opens the agent navigation pane when Fleet selects a deployment", async () => {
+    const driver = renderTauriAppDriverWithBridge(makeBridge({}), deployment.peerId);
+
+    try {
+      await driver.ready();
+      await driver.user.click(driver.chatButton());
+
+      await waitFor(() => {
+        expect(document.querySelector(".workspace")).toHaveAttribute(
+          "data-mobile-chat-pane",
+          "navigation",
+        );
+      });
+      expect(screen.getByRole("heading", { name: "Behavior" })).toBeInTheDocument();
+      expect(screen.getByText("Conversations")).toBeInTheDocument();
+    } finally {
+      await driver.dispose();
+    }
+  });
+
   it("surfaces rejected backend saves and keeps the editor usable", async () => {
     const saveBackendConfig = vi.fn(async () => {
       throw new Error("backend save rejected");

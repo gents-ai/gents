@@ -4,20 +4,14 @@ use gents_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    execute_remote_mutation, graphql_optional_bool_field, graphql_optional_int_field,
-    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_int_field, graphql_string_field, graphql_string_list_field, join_fields,
+    normalize_required,
 };
 
 pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) -> Result<()> {
     let mutation = build_upsert_tool_selection_mutation(row)?;
     execute_mutation(node, &mutation, "upsert_tool_selection").await
-}
-
-pub async fn upsert_tool_selection_to_graphql(graphql: &str, row: &ToolSelectionRow) -> Result<()> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_upsert_tool_selection_mutation(row)?;
-    execute_remote_mutation(graphql, &mutation, "upsert_tool_selection").await
 }
 
 fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String> {
@@ -413,22 +407,6 @@ pub async fn delete_tool_selection(
         .unwrap_or(0))
 }
 
-pub async fn delete_tool_selection_from_graphql(
-    graphql: &str,
-    agent_did: &str,
-    selection_id: &str,
-) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_tool_selection_mutation(agent_did, selection_id)?;
-    execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "delete_tool_selection",
-        "delete_ToolSelection",
-    )
-    .await
-}
-
 fn build_delete_tool_selection_mutation(agent_did: &str, selection_id: &str) -> Result<String> {
     let agent_did = normalize_required("agent_did", agent_did)?;
     let selection_id = normalize_required("selection_id", selection_id)?;
@@ -469,21 +447,6 @@ pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str)
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
-}
-
-pub async fn delete_tool_service_registry_from_graphql(
-    graphql: &str,
-    service_id: &str,
-) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_tool_service_registry_mutation(service_id)?;
-    execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "delete_tool_service_registry",
-        "delete_ToolServiceRegistry",
-    )
-    .await
 }
 
 fn build_delete_tool_service_registry_mutation(service_id: &str) -> Result<String> {
