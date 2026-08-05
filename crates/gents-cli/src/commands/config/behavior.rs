@@ -551,7 +551,7 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
 mod tests {
     use std::sync::Arc;
 
-    use defra_node::EmbeddedNode;
+    use defra_node::{EmbeddedNode, StorageBackend};
     use gents::agent::persona_ops::{
         apply_persona_request, PersonaCatalogView, PersonaOp, PersonaRequestDoc,
     };
@@ -579,6 +579,11 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let node = EmbeddedNode::builder()
             .data_path(tempdir.path().join("data"))
+            // Explicit backend, matching this crate's convention
+            // (`persistent_node_builder`): the builder's default is Redb,
+            // whose defra-node feature is only transitively enabled — the CI
+            // cli shard builds without it.
+            .with_storage_backend(StorageBackend::RocksDb)
             .build()
             .await
             .expect("embedded node boots");
