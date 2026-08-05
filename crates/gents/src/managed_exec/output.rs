@@ -12,7 +12,11 @@ pub(crate) enum ManagedExecOutcome {
         code: Option<i32>,
         stdout: Vec<u8>,
         stderr: Vec<u8>,
+        /// True when the byte cap, a read failure, or the post-exit drain
+        /// deadline prevented observing the complete stream.
         stdout_truncated: bool,
+        /// True when the byte cap, a read failure, or the post-exit drain
+        /// deadline prevented observing the complete stream.
         stderr_truncated: bool,
     },
     TimedOut {

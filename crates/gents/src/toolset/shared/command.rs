@@ -200,21 +200,49 @@ pub(crate) async fn run_command(
     })
     .await;
     let duration_ms = elapsed_ms(started);
-    let (exit_code, timed_out, stdout_bytes, stderr_bytes) = match outcome {
+    let (
+        exit_code,
+        timed_out,
+        stdout_bytes,
+        stderr_bytes,
+        stdout_capture_incomplete,
+        stderr_capture_incomplete,
+    ) = match outcome {
         ManagedExecOutcome::Exited {
             code,
             stdout,
             stderr,
+            stdout_truncated,
+            stderr_truncated,
+        } => (
+            code,
+            false,
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
+        ),
+        ManagedExecOutcome::TimedOut {
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
             ..
-        } => (code, false, stdout, stderr),
-        ManagedExecOutcome::TimedOut { stdout, stderr, .. } => {
+        } => {
             if request_deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline) {
                 // Never model-facing: the dispatcher's envelope shares this
                 // deadline and its `biased` select resolves the call to
                 // `ToolOutcome::TimedOut` before this text can thread.
                 return Ok("command was stopped at the request deadline".to_string());
             }
-            (None, true, stdout, stderr)
+            (
+                None,
+                true,
+                stdout,
+                stderr,
+                stdout_truncated,
+                stderr_truncated,
+            )
         }
         // Never model-facing: the envelope's (fired) cancellation branch is
         // polled first and resolves the call to `ToolOutcome::Cancelled`.
@@ -248,6 +276,8 @@ pub(crate) async fn run_command(
         execution_mode: policy.mode,
         network_mode: policy.network_mode,
         sandbox,
+        stdout_capture_incomplete,
+        stderr_capture_incomplete,
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
     };
@@ -966,6 +996,8 @@ struct CommandMetadata {
     execution_mode: CommandExecutionMode,
     network_mode: CommandNetworkMode,
     sandbox: &'static str,
+    stdout_capture_incomplete: bool,
+    stderr_capture_incomplete: bool,
     stdout_truncation: StreamTruncationMetadata,
     stderr_truncation: StreamTruncationMetadata,
 }

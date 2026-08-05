@@ -1623,10 +1623,42 @@ async fn unrestricted_bash_runs_shell_command_strings() {
     assert_eq!(meta["ok"], true);
     assert_eq!(meta["exit_code"], 0);
     assert_eq!(meta["timed_out"], false);
+    assert_eq!(meta["stdout_capture_incomplete"], false);
+    assert_eq!(meta["stderr_capture_incomplete"], false);
     assert_eq!(meta["argv"][0], "/bin/sh");
     assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
     assert_eq!(meta["stderr_truncation"]["total_bytes"], 3);
     assert!(output.contains("stdout:\nOK"));
+    assert!(output.contains("stderr:\nERR"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_reports_descendant_bounded_capture() {
+    let root = temp_root("gents-unrestricted-capture-drain");
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+
+    let output = crate::llm::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "printf ERR >&2; sleep 2 >/dev/null & exit 0".to_string(),
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["ok"], true);
+    assert_eq!(meta["exit_code"], 0);
+    assert_eq!(meta["stdout_capture_incomplete"], false);
+    assert_eq!(meta["stderr_capture_incomplete"], true);
     assert!(output.contains("stderr:\nERR"));
 }
 
