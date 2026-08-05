@@ -23,6 +23,16 @@ pub(crate) fn diff_manifests(
         agent_principal,
         agent_behaviors: diff_manifest_collection(&desired.agent_behaviors, &live.agent_behaviors),
         skills: diff_manifest_collection(&desired.skills, &live.skills),
+        // WorkspaceRoot isn't tracked in DesiredStateManifest yet (see the
+        // field doc on DesiredStateDiffCollections::workspace_roots) — an
+        // empty diff until that CRUD surface lands.
+        workspace_roots: DesiredStateCollectionDiff {
+            create: Vec::new(),
+            update: Vec::new(),
+            delete: Vec::new(),
+            unchanged: Vec::new(),
+            live_only: Vec::new(),
+        },
         tool_selections: diff_manifest_collection(&desired.tool_selections, &live.tool_selections),
         inference_backends: diff_manifest_collection(
             &desired.inference_backends,

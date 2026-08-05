@@ -25,7 +25,7 @@ pub use gents_schemas::{
     PEER_PAIRING_DESIRED_NAME, PEER_REGISTRY, PEER_REGISTRY_NAME, PROJECTION_ACP_BINDING,
     PROJECTION_ACP_BINDING_NAME, RECIPROCAL_CONVERSATION_INTENT,
     RECIPROCAL_CONVERSATION_INTENT_NAME, SCHEDULE, SCHEDULE_NAME, SKILL, SKILL_NAME, TASK,
-    TASK_NAME, TOOL_SELECTION, TOOL_SELECTION_NAME,
+    TASK_NAME, TOOL_SELECTION, TOOL_SELECTION_NAME, WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
 };
 
 // inference domain
@@ -61,6 +61,7 @@ pub const ALL: &[&str] = &[
     AGENT_MEMORY,
     TOOL_SELECTION,
     SKILL,
+    WORKSPACE_ROOT,
     OAUTH_CREDENTIAL,
     INFERENCE_PROFILE,
     INFERENCE_CALL,
@@ -101,6 +102,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,
     SKILL_NAME,
+    WORKSPACE_ROOT_NAME,
     OAUTH_CREDENTIAL_NAME,
     INFERENCE_PROFILE_NAME,
     INFERENCE_CALL_NAME,
@@ -146,7 +148,7 @@ mod tests {
     fn all_contains_every_schema() {
         assert_eq!(
             ALL.len(),
-            38,
+            39,
             "ALL should enumerate every non-runtime schema"
         );
     }
