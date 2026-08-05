@@ -54,10 +54,11 @@ pub(super) async fn load_response_state(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<Option<PersistedResponseState>> {
+    let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
             AgentResponse(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
             ) {{
                 _docID
@@ -98,10 +99,11 @@ pub(super) async fn load_response_state_by_key(
     node: &EmbeddedNode,
     response_key: &str,
 ) -> Result<Option<PersistedResponseState>> {
+    let escaped_response_key = crate::graphql::escape_graphql_string(response_key);
     let query = format!(
         r#"{{
             AgentResponse(
-                filter: {{ response_key: {{ _eq: "{response_key}" }} }},
+                filter: {{ response_key: {{ _eq: "{escaped_response_key}" }} }},
                 limit: 1
             ) {{
                 _docID

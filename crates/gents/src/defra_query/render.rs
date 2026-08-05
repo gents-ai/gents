@@ -40,15 +40,7 @@ fn render_value(value: &Value) -> Result<String> {
 }
 
 pub(crate) fn validate_identifier(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => bail!("invalid identifier {name:?}: must start with a letter or underscore"),
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        bail!("invalid identifier {name:?}: only letters, digits, and underscore are allowed");
-    }
-    Ok(())
+    crate::graphql::validate_graphql_name(name)
 }
 
 #[cfg(test)]

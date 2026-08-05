@@ -1212,6 +1212,81 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     );
 }
 
+/// `source_collection` is interpolated into GraphQL identifier positions by
+/// the event source, where escaping cannot apply. A trigger document whose
+/// `source_collection` is not a valid GraphQL Name (query injection) or is
+/// `__`-prefixed (introspection-reserved) must be quarantined at resolve
+/// time, never activated. This covers documents that bypass self-config
+/// validation entirely (e.g. replicated from a peer).
+#[tokio::test]
+async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-resolve-trigger-injection"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-resolve-trigger-injection",
+        "http://127.0.0.1:8131/v1",
+    )
+    .await;
+
+    let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
+    create_task_bound(
+        node.as_ref(),
+        "task-trigger-injection",
+        &default_behavior_id,
+        "enabled task",
+        true,
+    )
+    .await;
+    create_event_trigger(
+        node.as_ref(),
+        "trigger-injection",
+        "task-trigger-injection",
+        "Msg(limit: 1) { _docID } Foo",
+        "created",
+        "serial",
+    )
+    .await;
+    create_event_trigger(
+        node.as_ref(),
+        "trigger-introspection",
+        "task-trigger-injection",
+        "__Type",
+        "created",
+        "serial",
+    )
+    .await;
+
+    let resolve_context = DocumentResolveContext {
+        identity: identity.clone(),
+        tool_ceiling: ToolCeiling::readonly(),
+        backend_health: crate::backend_health::BackendHealthMap::new(),
+    };
+    let view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+
+    let snapshot =
+        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+            .await
+            .expect("resolve should succeed");
+
+    assert!(
+        snapshot.active_event_triggers.is_empty(),
+        "no injection-shaped trigger may activate, got {:?}",
+        snapshot.active_event_triggers.keys().collect::<Vec<_>>()
+    );
+    for trigger_id in ["trigger-injection", "trigger-introspection"] {
+        assert!(
+            snapshot.unavailable_event_triggers.contains(trigger_id),
+            "{trigger_id} should be quarantined in unavailable_event_triggers: {:?}",
+            snapshot.unavailable_event_triggers
+        );
+    }
+}
+
 #[tokio::test]
 async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let node = test_node().await;

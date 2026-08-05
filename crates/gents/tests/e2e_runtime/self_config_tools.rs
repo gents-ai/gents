@@ -363,6 +363,74 @@ async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     assert!(error.contains("protected"), "{error}");
 }
 
+/// `source_collection` is agent-writable and later interpolated into GraphQL
+/// identifier positions by the trigger engine, where escaping cannot apply.
+/// The self-config apply path is the trust boundary: it must reject any
+/// value that is not a valid GraphQL collection identifier, so a principal
+/// cannot shape the queries the runtime issues.
+#[tokio::test]
+async fn configure_automation_rejects_injection_shaped_source_collection() {
+    let db = test_db("self-config-trigger-injection").await;
+    seed_config(&db.node).await;
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.to_string(),
+        &tool_config(&["automation"], false, false),
+    );
+
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "task", "id": "watcher-task", "patch": {
+            "name": "Watcher",
+            "prompt_template": "React to new docs",
+        }}),
+    )
+    .await
+    .expect("task create commits");
+
+    for hostile in [
+        "Msg(limit: 1) { _docID } Foo",
+        "AgentResponse { content } #",
+        "__Type",
+        "a b",
+        "naïve",
+    ] {
+        let Err(error) = call_tool(
+            &tools,
+            "configure_automation",
+            json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
+                "task_id": "watcher-task",
+                "source_collection": hostile,
+                "event_kind": "created",
+                "concurrency": "serial",
+            }}),
+        )
+        .await
+        else {
+            panic!("injection-shaped source_collection {hostile:?} must be rejected");
+        };
+        assert!(
+            error.contains("identifier") || error.contains("collection"),
+            "rejection for {hostile:?} should name the identifier rule: {error}"
+        );
+    }
+
+    let output = call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "event_trigger", "id": "watcher-trigger", "patch": {
+            "task_id": "watcher-task",
+            "source_collection": "CustomerSignup",
+            "event_kind": "created",
+            "concurrency": "serial",
+        }}),
+    )
+    .await
+    .expect("a grammar-valid source_collection commits");
+    assert!(output.contains("\"created\": true"), "{output}");
+}
+
 #[tokio::test]
 async fn writes_carry_the_agent_identity() {
     let db = test_db("self-config-identity").await;

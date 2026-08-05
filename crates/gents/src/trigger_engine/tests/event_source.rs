@@ -1197,3 +1197,50 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
 
     cancel.cancel();
 }
+
+/// Defense-in-depth at the query-build boundary: even if a snapshot arrives
+/// carrying a trigger whose `source_collection` is not a valid GraphQL
+/// collection identifier (resolve-time quarantine bypassed — e.g. a snapshot
+/// assembled by a different code path), `reconcile_subscriptions` must
+/// refuse to admit the collection into the desired set, so no seed / rescan
+/// / probe query is ever built from it.
+#[tokio::test]
+async fn event_source_reconcile_excludes_invalid_source_collection_identifiers() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let task = resolved_task("ignored");
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([
+            (
+                "trigger-injection".to_string(),
+                resolved_event_trigger(
+                    "trigger-injection",
+                    "Msg(limit: 1) { _docID } Foo",
+                    task.clone(),
+                ),
+            ),
+            (
+                "trigger-introspection".to_string(),
+                resolved_event_trigger("trigger-introspection", "__Type", task.clone()),
+            ),
+            (
+                "trigger-clean".to_string(),
+                resolved_event_trigger("trigger-clean", "CollectionClean", task),
+            ),
+        ]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+
+    let cancel = CancellationToken::new();
+    let mut source = EventSource::new(rx, node.clone(), cancel.clone());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    assert_eq!(
+        source.subscribed_collections(),
+        vec!["CollectionClean".to_string()],
+        "only the grammar-valid, non-reserved collection may enter the \
+         desired set; identifier-invalid names must be excluded",
+    );
+}

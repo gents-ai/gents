@@ -592,6 +592,22 @@ fn resolve_event_triggers(
             unavailable_event_triggers.insert(trigger_id);
             continue;
         }
+        // Self-config rejects invalid names at write time, but trigger
+        // documents can also arrive without passing that boundary (e.g.
+        // replicated from a peer). `source_collection` lands in GraphQL
+        // identifier positions where escaping cannot apply, so a
+        // non-conforming name is quarantined here rather than activated.
+        if let Err(error) = crate::graphql::validate_collection_identifier(&source_collection) {
+            tracing::warn!(
+                trigger_id = %trigger_id,
+                source_collection = %source_collection,
+                %error,
+                "event trigger quarantined: source_collection is not a valid \
+                 GraphQL collection identifier",
+            );
+            unavailable_event_triggers.insert(trigger_id);
+            continue;
+        }
 
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),
