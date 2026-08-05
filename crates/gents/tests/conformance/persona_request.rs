@@ -62,6 +62,7 @@ fn base_catalog() -> PersonaCatalogView {
         &[
             ("existing-enabled", true, "sel-existing-enabled"),
             ("existing-disabled", false, "sel-existing-disabled"),
+            ("existing-selectionless", true, ""),
         ],
     )
 }
@@ -194,6 +195,20 @@ fn admission_matrix_mirrors_lean_admits() {
     });
     disabled_clone.preset = None;
     rejects.push(disabled_clone);
+    // cloneOk (folded below the model's abstraction): the source must carry
+    // a tool selection to copy, else an admitted clone would wedge in apply.
+    let mut selectionless_clone = create_doc(PersonaOp::Create {
+        clone_from: Some("existing-selectionless".to_string()),
+    });
+    selectionless_clone.preset = None;
+    rejects.push(selectionless_clone);
+    // editPresetOk (folded below the model's abstraction): keeping the
+    // current selection requires the target to actually have one.
+    let mut selectionless_edit = create_doc(PersonaOp::Edit);
+    selectionless_edit.op_raw = "edit".to_string();
+    selectionless_edit.behavior_id = Some("existing-selectionless".to_string());
+    selectionless_edit.preset = None;
+    rejects.push(selectionless_edit);
     // presetCreateOk: unknown preset name (folded conjunct).
     let mut unknown_preset = create_doc(PersonaOp::Create { clone_from: None });
     unknown_preset.preset = Some("bogus".to_string());

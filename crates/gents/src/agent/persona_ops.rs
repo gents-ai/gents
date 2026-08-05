@@ -245,6 +245,14 @@ pub fn decide_persona_request(
                                 r#"clone_from "{source_id}" is disabled — pick an enabled behavior_id"#
                             ));
                         }
+                        // Without this conjunct an admitted clone would fail
+                        // in `apply_create` (nothing to copy) and the row
+                        // would retry as pending on every sweep, forever.
+                        Some(source) if source.tool_selection_id.trim().is_empty() => {
+                            return PersonaVerdict::Reject(format!(
+                                r#"clone_from "{source_id}" has no tool selection to copy — pick a behavior with a tool_selection_id, or create with a preset instead"#
+                            ));
+                        }
                         Some(_) => {}
                     }
                 }
@@ -264,11 +272,11 @@ pub fn decide_persona_request(
         }
         PersonaOp::Edit => {
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
-            if !catalog.behaviors.contains_key(behavior_id) {
+            let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
                     r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors"#
                 ));
-            }
+            };
             if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
                 return PersonaVerdict::Reject(msg);
             }
@@ -286,6 +294,14 @@ pub fn decide_persona_request(
                 if let Some(msg) = validate_preset_name(preset) {
                     return PersonaVerdict::Reject(msg);
                 }
+            } else if target.tool_selection_id.trim().is_empty() {
+                // An empty preset means "keep the current selection", but this
+                // behavior has none to keep — an admitted edit would fail in
+                // `apply_edit` and the row would retry as pending on every
+                // sweep, forever. Rejecting names the remedy instead.
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior "{behavior_id}" has no tool selection to keep — name a preset to mint one"#
+                ));
             }
             PersonaVerdict::Admit
         }
@@ -624,7 +640,7 @@ async fn apply_edit(
         let current_selection_id = behavior
             .tool_selection_id
             .clone()
-            .context("behavior missing tool_selection_id during edit")?;
+            .context("behavior missing tool_selection_id during edit (admission guaranteed)")?;
         let mut selection = load_tool_selection(node, &current_selection_id)
             .await?
             .with_context(|| {
@@ -741,6 +757,7 @@ mod tests {
             &[
                 ("existing-enabled", true, "sel-existing-enabled"),
                 ("existing-disabled", false, "sel-existing-disabled"),
+                ("existing-selectionless", true, ""),
             ],
         )
     }
@@ -916,6 +933,52 @@ mod tests {
                 r#"clone_from "existing-disabled" is disabled — pick an enabled behavior_id"#
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn rejects_clone_from_without_selection() {
+        let mut doc = create_doc(PersonaOp::Create {
+            clone_from: Some("existing-selectionless".to_string()),
+        });
+        doc.preset = None;
+        let verdict = decide_persona_request(&doc, &base_catalog());
+        assert_eq!(
+            verdict,
+            PersonaVerdict::Reject(
+                r#"clone_from "existing-selectionless" has no tool selection to copy — pick a behavior with a tool_selection_id, or create with a preset instead"#
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_empty_preset_edit_of_selectionless_behavior() {
+        let mut doc = create_doc(PersonaOp::Edit);
+        doc.op_raw = "edit".to_string();
+        doc.behavior_id = Some("existing-selectionless".to_string());
+        doc.preset = None;
+        let verdict = decide_persona_request(&doc, &base_catalog());
+        assert_eq!(
+            verdict,
+            PersonaVerdict::Reject(
+                r#"behavior "existing-selectionless" has no tool selection to keep — name a preset to mint one"#
+                    .to_string()
+            )
+        );
+    }
+
+    /// The remedy the rejection above names must itself be admissible: a
+    /// named-preset edit mints a fresh selection, so it needs no existing one.
+    #[test]
+    fn admits_preset_edit_of_selectionless_behavior() {
+        let mut doc = create_doc(PersonaOp::Edit);
+        doc.op_raw = "edit".to_string();
+        doc.behavior_id = Some("existing-selectionless".to_string());
+        doc.preset = Some(persona_presets::PRESET_READONLY.to_string());
+        assert_eq!(
+            decide_persona_request(&doc, &base_catalog()),
+            PersonaVerdict::Admit
         );
     }
 

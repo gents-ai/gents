@@ -101,7 +101,11 @@ abbrev profileOk (cat : Catalog) (r : Request) : Prop := r.profile ∈ cat.profi
 abbrev presetCreateOk (r : Request) : Prop := r.preset ≠ "" ∧ presetKnown r
 
 /-- A cloning create must omit `preset` and name an existing ENABLED
-behavior (`clone_from` admission). -/
+behavior (`clone_from` admission). Folded below this abstraction (the
+`State` does not track behavior→selection references): the Rust conjunct
+additionally requires the source behavior to carry a non-empty
+`tool_selection_id`, else an admitted clone would have nothing to copy and
+wedge in apply. -/
 abbrev cloneOk (st : State) (r : Request) : Prop :=
   r.preset = "" ∧ (r.cloneFrom, true) ∈ st.behaviors
 
@@ -114,7 +118,10 @@ abbrev createModeOk (st : State) (r : Request) : Prop :=
 abbrev behaviorPresent (st : State) (id : String) : Prop :=
   (id, true) ∈ st.behaviors ∨ (id, false) ∈ st.behaviors
 
-/-- Edit may keep the current selection (empty preset) or name a known one. -/
+/-- Edit may keep the current selection (empty preset) or name a known one.
+Folded below this abstraction: the Rust conjunct additionally requires the
+target behavior to carry a non-empty `tool_selection_id` when the preset is
+empty — "keep the current selection" needs one to keep. -/
 abbrev editPresetOk (r : Request) : Prop := r.preset = "" ∨ presetKnown r
 
 /-- The request's `agent_did` names a known (enabled) principal on this
