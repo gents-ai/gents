@@ -28,6 +28,8 @@ export type SidebarProps = {
     title: string,
   ) => void | Promise<void>;
   onStartNewConversation: (behaviorId: string) => void;
+  onSyncConversations?: () => Promise<unknown> | void;
+  syncingConversations?: boolean;
 };
 
 export function Sidebar({
@@ -46,6 +48,8 @@ export function Sidebar({
   onSelectAgent,
   onRenameConversationTitle,
   onStartNewConversation,
+  onSyncConversations,
+  syncingConversations,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
@@ -75,6 +79,8 @@ export function Sidebar({
         onSelectSession={onSelectSession}
         onOpenSession={onOpenSession}
         onRenameConversationTitle={onRenameConversationTitle}
+        onSyncConversations={onSyncConversations}
+        syncingConversations={syncingConversations}
       />
     </aside>
   );

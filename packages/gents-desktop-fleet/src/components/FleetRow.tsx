@@ -123,7 +123,11 @@ export function FleetRow({
     >
       <td>
         <div className="fleet-agent-cell">
-          <span className={`fleet-status ${status.tone}`} title={status.title}>
+          <span
+            aria-label={status.label}
+            className={`fleet-status ${status.tone}`}
+            title={status.title}
+          >
             <span
               aria-hidden="true"
               className={`fleet-status-dot ${status.tone}`}

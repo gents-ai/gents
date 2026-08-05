@@ -21,6 +21,8 @@ export type ConversationListSectionProps = {
     sessionId: string,
     title: string,
   ) => void | Promise<void>;
+  onSyncConversations?: () => Promise<unknown> | void;
+  syncingConversations?: boolean;
 };
 
 export function ConversationListSection({
@@ -32,6 +34,8 @@ export function ConversationListSection({
   onSelectSession,
   onOpenSession,
   onRenameConversationTitle,
+  onSyncConversations,
+  syncingConversations = false,
 }: ConversationListSectionProps) {
   const [query, setQuery] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -109,6 +113,27 @@ export function ConversationListSection({
         <div>
           <p className="eyebrow">Conversations</p>
           <h2>{selectedDeploymentLabel}</h2>
+        </div>
+        <div className="sidebar-section-controls">
+          {behaviorConversations.length > 1 ? (
+            <span className="sidebar-scroll-hint">
+              {behaviorConversations.length} · swipe
+            </span>
+          ) : null}
+          {onSyncConversations ? (
+            <button
+              className="ghost-button conversation-sync"
+              data-testid="conversation-sync-p2p"
+              disabled={!selectedAgentDid || syncingConversations}
+              onClick={() => {
+                void Promise.resolve(onSyncConversations()).catch(() => {});
+              }}
+              title="Reconnect the signed P2P replica and sync conversations"
+              type="button"
+            >
+              {syncingConversations ? "Syncing…" : "Sync P2P"}
+            </button>
+          ) : null}
         </div>
       </div>
       {selectedAgentDid && behaviorConversations.length > 0 ? (

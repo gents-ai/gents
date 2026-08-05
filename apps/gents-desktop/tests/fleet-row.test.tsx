@@ -27,7 +27,7 @@ function renderRow(
 }
 
 describe("FleetRow", () => {
-  it("renders the chat and config action buttons keyed by peerId", () => {
+  it("keeps desktop actions available while the responsive layout hides them", () => {
     renderRow();
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();

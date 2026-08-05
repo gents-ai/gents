@@ -86,7 +86,7 @@ describe("App shell command sad paths", () => {
           "navigation",
         );
       });
-      expect(screen.getByRole("heading", { name: "Behavior" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Behaviors" })).toBeInTheDocument();
       expect(
         document.querySelector(".conversation-section .eyebrow"),
       ).toHaveTextContent("Conversations");

@@ -24,6 +24,8 @@ function conv(overrides: Partial<ConversationSummary>): ConversationSummary {
 function renderList(
   conversations: ConversationSummary[],
   onRenameConversationTitle = vi.fn(),
+  onSyncConversations?: () => Promise<unknown> | void,
+  syncingConversations = false,
 ) {
   render(
     <ConversationListSection
@@ -45,6 +47,8 @@ function renderList(
       selectedSessionId={null}
       onSelectSession={vi.fn()}
       onRenameConversationTitle={onRenameConversationTitle}
+      onSyncConversations={onSyncConversations}
+      syncingConversations={syncingConversations}
     />,
   );
   return onRenameConversationTitle;
@@ -100,6 +104,31 @@ describe("conversation list", () => {
     expect(screen.getByTestId("conversation-s-task")).toBeInTheDocument();
     expect(screen.getByTestId("conversation-s-manual")).toBeInTheDocument();
     expect(screen.getByText("Daily review")).toBeInTheDocument();
+  });
+
+  it("manually restarts signed P2P conversation sync", () => {
+    const onSyncConversations = vi.fn().mockResolvedValue(undefined);
+    renderList([conv({ sessionId: "s-1" })], vi.fn(), onSyncConversations);
+
+    fireEvent.click(screen.getByTestId("conversation-sync-p2p"));
+
+    expect(onSyncConversations).toHaveBeenCalledOnce();
+  });
+
+  it("shows P2P sync progress and prevents duplicate requests", () => {
+    const onSyncConversations = vi.fn();
+    renderList(
+      [conv({ sessionId: "s-1" })],
+      vi.fn(),
+      onSyncConversations,
+      true,
+    );
+
+    const sync = screen.getByTestId("conversation-sync-p2p");
+    expect(sync).toBeDisabled();
+    expect(sync).toHaveTextContent("Syncing…");
+    fireEvent.click(sync);
+    expect(onSyncConversations).not.toHaveBeenCalled();
   });
 
   it("renames inline and cancels on Escape", async () => {

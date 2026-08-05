@@ -202,6 +202,8 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               setMobileChatPane("conversation");
             }}
             onRenameConversationTitle={shell.onRenameConversationTitle}
+            onSyncConversations={shell.onRepairP2P}
+            syncingConversations={shell.repairingP2P}
             onStartNewConversation={(behaviorId) => {
               shell.onStartNewConversation(behaviorId);
               setMobileChatPane("conversation");
