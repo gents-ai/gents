@@ -451,6 +451,20 @@ fn automation_request(
                     {
                         bail!("event_trigger.source_collection: {error}");
                     }
+                    // `filter` is spliced into the trigger engine's probe as
+                    // a whole object fragment, which escaping cannot protect
+                    // and identifier validation does not cover (#1038).
+                    if let Some(filter) = merged
+                        .get("filter")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|filter| !filter.is_empty())
+                    {
+                        if let Err(error) = crate::graphql::validate_graphql_filter_fragment(filter)
+                        {
+                            bail!("event_trigger.filter: {error}");
+                        }
+                    }
                 }
                 _ => unreachable!("automation targets only"),
             }

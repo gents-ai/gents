@@ -381,6 +381,67 @@ async fn configure_rejects_non_scalar_patch_values() {
     );
 }
 
+/// `filter` is spliced into the trigger engine's probe as a whole object
+/// fragment. The confirmed #1038 payload closes the enclosing `_and: [ ... ]`
+/// and appends its own selections; it must not be writable.
+#[tokio::test]
+async fn configure_automation_rejects_break_out_filter_fragments() {
+    let db = test_db("self-config-filter-injection").await;
+    seed_config(&db.node).await;
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.to_string(),
+        &tool_config(&["automation"], false, false),
+    );
+
+    call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "task", "id": "filter-task", "patch": { "enabled": true } }),
+    )
+    .await
+    .expect("task create commits");
+
+    for hostile in [
+        r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { system_prompt } X(filter: { _and: [ {}"#,
+        "{ a: 1 } # ",
+        "{ a: 1 }) { x } (",
+    ] {
+        let Err(error) = call_tool(
+            &tools,
+            "configure_automation",
+            json!({ "kind": "event_trigger", "id": "filter-trigger", "patch": {
+                "task_id": "filter-task",
+                "source_collection": "CustomerSignup",
+                "event_kind": "created",
+                "filter": hostile,
+            }}),
+        )
+        .await
+        else {
+            panic!("break-out filter {hostile:?} must be rejected");
+        };
+        assert!(
+            error.contains("filter"),
+            "rejection should name the filter rule: {error}"
+        );
+    }
+
+    let output = call_tool(
+        &tools,
+        "configure_automation",
+        json!({ "kind": "event_trigger", "id": "filter-trigger", "patch": {
+            "task_id": "filter-task",
+            "source_collection": "CustomerSignup",
+            "event_kind": "created",
+            "filter": r#"{ kind: { _eq: "signup" } }"#,
+        }}),
+    )
+    .await
+    .expect("a well-formed filter still commits");
+    assert!(output.contains("\"created\": true"), "{output}");
+}
+
 #[tokio::test]
 async fn configure_automation_creates_owned_chain_and_rejects_foreign_tasks() {
     let db = test_db("self-config-automation").await;

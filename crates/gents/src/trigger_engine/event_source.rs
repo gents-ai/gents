@@ -407,18 +407,16 @@ impl EventSource {
     /// itself errored — the caller treats errors as "skip this fire" so a
     /// transient GraphQL failure doesn't brick the source.
     ///
-    /// Trust boundary: `source_collection` is validated as a collection
-    /// identifier above, and the `_docID` from the event payload is escaped.
+    /// Trust boundary, one defense per interpolation position:
+    /// `source_collection` is validated as a collection identifier, the
+    /// `_docID` from the event payload is escaped, and `trigger.filter` —
+    /// spliced in whole as an object fragment, where escaping would break
+    /// the syntax — is checked as a balanced filter object. A break-out has
+    /// to close an `]`, `}` or `)` it never opened, which is what that
+    /// check rejects.
     ///
-    /// `trigger.filter` is neither. It is spliced in as a filter-object
-    /// fragment — a position where escaping would break the object syntax
-    /// and identifier validation does not apply — and it is agent-writable
-    /// via self-config with nothing on that path checking it. A crafted
-    /// value can close the enclosing `_and: [ ... ] }` and append its own
-    /// selections here. The CLI apply probe is not a check either: it
-    /// executes the filter rather than validating it, in a different
-    /// embedding than this one. Tracked in #1038 — this is an open hole,
-    /// not a closed boundary.
+    /// Note the CLI apply probe is not a substitute: it executes the filter
+    /// rather than validating it, in a different embedding than this one.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
@@ -430,6 +428,9 @@ impl EventSource {
             .as_deref()
             .map(str::trim)
             .filter(|f| !f.is_empty());
+        if let Some(filter) = user_filter {
+            crate::graphql::validate_graphql_filter_fragment(filter)?;
+        }
         let filter_literal = match user_filter {
             Some(f) => format!(
                 r#"{{ _docID: {{ _eq: "{id}" }}, _and: [ {user_filter} ] }}"#,

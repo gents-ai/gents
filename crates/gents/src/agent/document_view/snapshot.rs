@@ -608,6 +608,26 @@ fn resolve_event_triggers(
             unavailable_event_triggers.insert(trigger_id);
             continue;
         }
+        // Same reasoning for the filter fragment: a trigger can reach the
+        // snapshot without passing self-config (replicated from a peer), and
+        // the fragment is spliced whole into the probe query.
+        if let Some(filter) = trigger
+            .filter
+            .as_deref()
+            .map(str::trim)
+            .filter(|filter| !filter.is_empty())
+        {
+            if let Err(error) = crate::graphql::validate_graphql_filter_fragment(filter) {
+                tracing::warn!(
+                    trigger_id = %trigger_id,
+                    %error,
+                    "event trigger quarantined: filter is not a well-formed \
+                     GraphQL filter object",
+                );
+                unavailable_event_triggers.insert(trigger_id);
+                continue;
+            }
+        }
 
         let resolved_task = ResolvedTask {
             task_id: task.task_id.clone(),

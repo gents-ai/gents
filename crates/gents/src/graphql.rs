@@ -16,7 +16,9 @@
 //! `EventTrigger.filter` is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
-pub use gents_protocol::graphql::{validate_collection_identifier, validate_graphql_name};
+pub use gents_protocol::graphql::{
+    validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
+};
 
 pub fn escape_graphql_string(s: &str) -> String {
     s.replace('\\', "\\\\")

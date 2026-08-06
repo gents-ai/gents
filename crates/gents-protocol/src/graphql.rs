@@ -142,6 +142,90 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a caller-supplied GraphQL **filter-object fragment** — a value
+/// spliced into a query whole, as `EventTrigger.filter` is.
+///
+/// This is the third interpolation position, and neither of the other two
+/// defenses reaches it: escaping would destroy the object syntax, and the
+/// value is not an identifier. What makes it checkable is that a break-out
+/// must unbalance the fragment — to escape it has to close a `]`, `}` or
+/// `)` it never opened. So: require one balanced object literal, built only
+/// from the tokens a filter legitimately needs.
+///
+/// Deliberately strict. `(`, `)` and `#` never appear in a filter object,
+/// but each is load-bearing for an attack (`)` closes the enclosing field's
+/// argument list, `#` comments out the query's own tail), so they are
+/// rejected outright rather than balance-tracked.
+pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
+    let trimmed = filter.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("invalid filter: empty"));
+    }
+    if !trimmed.starts_with('{') {
+        return Err(anyhow!("invalid filter: must be an object literal"));
+    }
+
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut closed_at: Option<usize> = None;
+
+    for (index, ch) in trimmed.char_indices() {
+        if in_string {
+            match ch {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        // A depth-0 token after the object already closed means the value is
+        // not a single fragment — trailing text is someone else's query.
+        if closed_at.is_some() && !ch.is_whitespace() {
+            return Err(anyhow!(
+                "invalid filter: trailing content after the object literal"
+            ));
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => stack.push(ch),
+            '}' | ']' => {
+                let opener = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("invalid filter: unbalanced {ch:?} at byte {index}"))?;
+                let expected = if ch == '}' { '{' } else { '[' };
+                if opener != expected {
+                    return Err(anyhow!(
+                        "invalid filter: mismatched {opener:?} closed by {ch:?} at byte {index}"
+                    ));
+                }
+                if stack.is_empty() {
+                    closed_at = Some(index);
+                }
+            }
+            ':' | ',' => {}
+            c if c.is_ascii_alphanumeric() || c == '_' => {}
+            // Numeric literals: -1, 1.5, 1e9, 1e+9.
+            '-' | '+' | '.' => {}
+            c if c.is_whitespace() => {}
+            c => {
+                return Err(anyhow!(
+                "invalid filter: character {c:?} at byte {index} is not allowed in a filter object"
+            ))
+            }
+        }
+    }
+
+    if in_string {
+        return Err(anyhow!("invalid filter: unterminated string literal"));
+    }
+    if !stack.is_empty() {
+        return Err(anyhow!("invalid filter: unclosed {:?}", stack.last()));
+    }
+    Ok(())
+}
+
 pub fn escape_graphql_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -1063,6 +1147,50 @@ mod tests {
         assert!(rendered.contains("enabled: true"));
         assert!(rendered.contains(r#"name: "alpha""#));
         assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+
+    #[test]
+    fn validate_graphql_filter_fragment_accepts_real_filters() {
+        for filter in [
+            r#"{ kind: { _eq: "signup" } }"#,
+            r#"{ status: { _in: ["a", "b"] } }"#,
+            r#"{ _and: [ { a: { _eq: 1 } }, { b: { _gt: -2.5 } } ] }"#,
+            r#"{ name: { _like: "%needs \"quotes\"%" } }"#,
+            "{ enabled: { _eq: true } }",
+        ] {
+            assert!(
+                validate_graphql_filter_fragment(filter).is_ok(),
+                "{filter:?} is a legitimate filter and must pass"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_graphql_filter_fragment_rejects_break_outs() {
+        for filter in [
+            // The confirmed #1038 payload: closes the enclosing _and array,
+            // object and paren, then appends its own selection.
+            r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
+            // Unbalanced / stray delimiters.
+            "{ a: 1 } }",
+            "{ a: 1 ]",
+            "{ a: 1 }) { x } (",
+            // Two top-level values.
+            "{ a: 1 } { b: 2 }",
+            // A comment can hide the rest of a line.
+            "{ a: 1 } # trailing",
+            // Not an object at all.
+            "kind",
+            "",
+            "   ",
+            // Unterminated string literal.
+            r#"{ a: { _eq: "open } }"#,
+        ] {
+            assert!(
+                validate_graphql_filter_fragment(filter).is_err(),
+                "{filter:?} must be rejected"
+            );
+        }
     }
 
     #[test]
