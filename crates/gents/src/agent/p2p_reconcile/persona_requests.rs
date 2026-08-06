@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(rejected[0].0, "req-invalid");
         assert_eq!(
             rejected[0].1,
-            r#"unknown model "nope|nope" — pick from the published available_models"#
+            r#"unknown model "nope|nope" — pick from the published available_models: [openai|gpt-5]"#
         );
         Ok(())
     }

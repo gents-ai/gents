@@ -145,11 +145,39 @@ fn validate_persona_name(name: Option<&str>) -> Option<String> {
     None
 }
 
+/// The most entries an enumerated rejection lists before summarizing the
+/// remainder — enough to usually settle the question in one round trip
+/// without dumping an unbounded catalog into `status_detail` (which renders
+/// on phone cards and CLI errors, and must stay one line).
+const ENUMERATION_LIMIT: usize = 10;
+
+/// Render a catalog set as `[a, b, c]`, bounded to [`ENUMERATION_LIMIT`]
+/// entries with `… and N more` appended when there are more. Iterates a
+/// `BTreeSet`, so the shown entries (and thus the message) are deterministic.
+fn enumerate_bounded(values: &BTreeSet<String>) -> String {
+    let total = values.len();
+    let shown: Vec<&str> = values
+        .iter()
+        .take(ENUMERATION_LIMIT)
+        .map(String::as_str)
+        .collect();
+    if total > ENUMERATION_LIMIT {
+        format!(
+            "[{}] … and {} more",
+            shown.join(", "),
+            total - ENUMERATION_LIMIT
+        )
+    } else {
+        format!("[{}]", shown.join(", "))
+    }
+}
+
 fn validate_backend_model(value: Option<&str>, catalog: &PersonaCatalogView) -> Option<String> {
     let value = value.unwrap_or("");
     if !catalog.available_models.contains(value) {
         return Some(format!(
-            r#"unknown model "{value}" — pick from the published available_models"#
+            r#"unknown model "{value}" — pick from the published available_models: {}"#,
+            enumerate_bounded(&catalog.available_models)
         ));
     }
     None
@@ -162,7 +190,8 @@ fn validate_root(root: Option<&str>, catalog: &PersonaCatalogView) -> Option<Str
     }
     if !catalog.allowed_roots.contains(root) {
         return Some(format!(
-            r#"root "{root}" is not allowed — pick from the published allowed_roots"#
+            r#"root "{root}" is not allowed — pick from the published allowed_roots: {}"#,
+            enumerate_bounded(&catalog.allowed_roots)
         ));
     }
     None
@@ -172,7 +201,8 @@ fn validate_profile(profile_id: Option<&str>, catalog: &PersonaCatalogView) -> O
     let profile_id = profile_id.unwrap_or("");
     if !catalog.available_profile_ids.contains(profile_id) {
         return Some(format!(
-            r#"unknown profile "{profile_id}" — pick from the published available_profile_ids"#
+            r#"unknown profile "{profile_id}" — pick from the published available_profile_ids: {}"#,
+            enumerate_bounded(&catalog.available_profile_ids)
         ));
     }
     None
@@ -819,9 +849,32 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"unknown model "nope|nope" — pick from the published available_models"#
+                r#"unknown model "nope|nope" — pick from the published available_models: [openai|gpt-5]"#
                     .to_string()
             )
+        );
+    }
+
+    /// Enumerated rejections bound the listed values to
+    /// [`ENUMERATION_LIMIT`] and summarize the remainder — otherwise an
+    /// unbounded catalog defeats the point (`status_detail` must stay one
+    /// line) while still forcing a second round-trip past the bound.
+    #[test]
+    fn rejects_unknown_model_enumerates_bounded_list() {
+        let mut cat = base_catalog();
+        cat.available_models = (1..=13).map(|n| format!("backend|model-{n:02}")).collect();
+        let mut doc = create_doc(PersonaOp::Create { clone_from: None });
+        doc.backend_model = Some("nope|nope".to_string());
+        let verdict = decide_persona_request(&doc, &cat);
+        let expected_shown = (1..=10)
+            .map(|n| format!("backend|model-{n:02}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(
+            verdict,
+            PersonaVerdict::Reject(format!(
+                r#"unknown model "nope|nope" — pick from the published available_models: [{expected_shown}] … and 3 more"#
+            ))
         );
     }
 
@@ -833,7 +886,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"root "/not/allowed" is not allowed — pick from the published allowed_roots"#
+                r#"root "/not/allowed" is not allowed — pick from the published allowed_roots: [/workspace/root]"#
                     .to_string()
             )
         );
@@ -855,7 +908,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"unknown profile "no-such-profile" — pick from the published available_profile_ids"#
+                r#"unknown profile "no-such-profile" — pick from the published available_profile_ids: [profile-1]"#
                     .to_string()
             )
         );
