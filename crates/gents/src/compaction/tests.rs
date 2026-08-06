@@ -765,9 +765,14 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         .unwrap()
         .clone()
         .expect("summary request");
-    assert_eq!(
-        request.max_tokens,
-        Some(crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64)
+    let effective_max = request
+        .max_tokens
+        .expect("summary request must retain an output allowance");
+    assert!(
+        effective_max > 0
+            && effective_max
+                <= crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64,
+        "the hard summary ceiling may be lowered to fit the assembled input, never bypassed: {effective_max}"
     );
 
     let summary = result.summary.expect("summary");
