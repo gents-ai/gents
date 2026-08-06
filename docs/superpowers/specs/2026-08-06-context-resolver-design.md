@@ -32,6 +32,29 @@ seam, but `rendered_request_capture_factory` defaults to `None` and the only
 setter (`agent/builder.rs:112`) has no production caller. A trace without its
 rendered input is a log, not a training example.
 
+## Organizing principle
+
+Make the fact record complete and time-travelable, then derive everything from
+it.
+
+Today the conversation side of the record is versioned and the configuration
+side is not, so the facts are incomplete and no projection off them can be
+verified. Making the render-contributing config collections `@branchable` and
+stamping commit CIDs at render time completes the record. Hash-verified
+reconstruction is then the proof that a projection is faithful rather than
+merely plausible.
+
+The tool resolver is the first projection, exposed to the model as a tool. The
+run timeline, adapter projections, and eventual training samples are further
+projections over the same facts. An outcome or reward is not a separate
+feature under this principle — it is one more fact written next to the trace,
+and a training sample is a projection over both, made verifiable by the
+reconstruction hash.
+
+Build order follows from this: complete the facts first (Part 2), then expose a
+projection over them (Part 1). The parts are presented below in issue order,
+not build order.
+
 ## Scope
 
 In scope:
