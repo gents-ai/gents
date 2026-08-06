@@ -145,6 +145,9 @@ fn derivation_projects_exactly_the_principals() {
         allowed_roots: vec!["/repo/a".to_string()],
         permission_presets: vec!["readonly".to_string(), "write".to_string()],
         available_profiles: vec!["profile-fast|Fast".to_string()],
+        // Index-aligned with `available_profiles` (#1050): one entry per
+        // profile, `params[i]` describing `profiles[i]`.
+        available_profile_params: vec![r#"{"context_window":128000,"temperature":0.2}"#.to_string()],
     };
 
     let derived = derive_directory_entries(
@@ -208,7 +211,16 @@ fn derivation_projects_exactly_the_principals() {
 
     assert_eq!(
         a.options, options,
-        "the four option lists must pass through verbatim on every entry"
+        "the five option lists must pass through verbatim on every entry"
+    );
+    assert_eq!(
+        a.options.available_profile_params.len(),
+        a.options.available_profiles.len(),
+        "available_profile_params must stay index-aligned with available_profiles"
+    );
+    assert_eq!(
+        a.options.available_profile_params[0], r#"{"context_window":128000,"temperature":0.2}"#,
+        "available_profile_params[0] must describe available_profiles[0] (profile-fast)"
     );
 
     let b = &derived["did:key:b"];
