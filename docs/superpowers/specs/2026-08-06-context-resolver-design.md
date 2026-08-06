@@ -9,8 +9,8 @@ Cluster: `context-memory`
 Two reference markers already exist in the transcript, and nothing can follow
 either of them.
 
-1. Every tool result in loaded history is unconditionally replaced with a stub
-   (`crates/gents/src/compaction/history.rs:272-279`):
+1. Every tool result in the provider view is unconditionally replaced with a
+   stub (`compaction::history::strip_tool_result`):
 
    ```
    [tool: read, call_id: call-1, 5000 bytes — see DefraDB AgentToolCall for full output]
@@ -19,15 +19,15 @@ either of them.
 2. Oversized output spills to a document and appends
    `[Full output: DefraDB doc {id}]` (`crates/gents/src/truncation/spill.rs:119`).
 
-Neither is executable. `AgentToolResult.output_text` is never queried from
-`crates/gents/src/**`; `conversation_doc_id` is written and never read;
-`read_tool_output` refuses non-background rows
-(`background_tools.rs:993-999`). The canonical evidence is durable and
-replicated, and the model cannot reach it. Trimming is durable but
-model-irreversible.
+Neither is executable. `AgentToolResult.output_text` is copied by session
+forking but is not exposed through a model tool; `conversation_doc_id` is not a
+model-readable resolver; and `read_tool_output` deliberately rejects
+non-background rows (`background_tools::handle_read_tool_output`). The
+canonical evidence is durable and replicated, and the model cannot reach it.
+Trimming is durable but model-irreversible.
 
 The same gap appears one level up. The bytes actually sent to the provider are
-never persisted. `rendered_request.rs` defines a complete DTO and a capture
+never persisted. `rendered_request.rs` defines an exact-request DTO and a capture
 seam, but `rendered_request_capture_factory` defaults to `None` and the only
 setter (`agent/builder.rs:112`) has no production caller. A trace without its
 rendered input is a log, not a training example.
@@ -35,6 +35,18 @@ rendered input is a log, not a training example.
 ## Organizing principle
 
 Make the fact record complete before asking a projection to reproduce it.
+
+### Fidelity contract
+
+This design uses **canonical JSON value equality**: it can replay the same
+provider input semantically and detect any changed field, array element, or
+value. It does not by itself prove the literal HTTP body bytes, because object
+key order and serializer formatting may differ. #523's current issue text asks
+for "the exact bytes that were sent." Before the issue is closed, either amend
+that wording to canonical-JSON fidelity or add exact body capture after all
+provider-specific HTTP rewrites and before transport send, with a test that the
+captured bytes are the bytes forwarded. Re-serializing `request_json` later is
+not equivalent evidence.
 
 There are two different deliverables here and neither substitutes for the
 other:
@@ -44,8 +56,8 @@ other:
    #840 and by a reproducible provider harness.
 2. **Time-travel reconstruction is a verified projection.** Pin every durable
    source version, persist the genuinely runtime-only leak set, replay prompt
-   assembly, and compare the result with the captured request hash. This is
-   #523.
+   assembly, and compare the complete canonical value with the captured
+   `request_json`. This is #523.
 
 The earlier constant-size-envelope proposal conflated those deliverables. It
 was not complete: resolved tool definitions are computed dynamically from the
@@ -61,7 +73,7 @@ run timeline, adapter projections, and eventual training samples are further
 projections over the same facts. An outcome or reward is not a separate
 feature under this principle — it is one more fact written next to the trace,
 and a training sample is a projection over both, made verifiable by the
-reconstruction hash.
+exact reconstruction comparison.
 
 Build order follows from this: complete the facts first (Part 2), then expose a
 projection over them (Part 1). The parts are presented below in issue order,
@@ -74,7 +86,7 @@ In scope:
 - A bounded, model-executable resolver for trimmed tool results (#722).
 - Exact, encrypted, default-on rendered-provider-request capture (#840).
 - Surfacing captured requests in run timelines and adapter projections.
-- Hash-verified reconstruction as a second path (#523), using capture as the
+- Capture-verified reconstruction as a second path (#523), using capture as the
   conformance oracle.
 - Making every durable render-contributing config collection `@branchable` and
   carrying its document id into the resolved runtime.
@@ -97,11 +109,14 @@ Out of scope, filed separately:
 
 ### Data model
 
-`tool_call_key` is already composite: `hook/persistence/helpers.rs:162` builds
-it as `"{session_id}:{tool_call_id}"`. The session id is a prefix of the key,
-so a key minted in one session structurally cannot match a row in another.
-Cross-session linkage integrity is therefore a property of the key format, not
-a runtime check, and needs no proof.
+`tool_call_key` is already composite: `hook/persistence/helpers.rs` builds it as
+`"{session_id}:{tool_call_id}"`. That delimiter encoding is **not** structurally
+collision-free: `("a:b", "c")` and `("a", "b:c")` produce the same string.
+The key is an indexed join aid, not an authorization boundary. Resolution must
+also filter the `AgentToolCall` by the separately stored `session_id` and
+`tool_call_id`, and must require the linked `AgentToolResult.session_id` to
+match. A future key-format migration may use a versioned canonical tuple, but
+this slice must be safe with existing rows.
 
 One nullable indexed field:
 
@@ -124,7 +139,7 @@ identity. Threading `tool_call_id` into the truncator is the one non-trivial
 refactor in this part, and it changes the `Truncator` trait signature.
 
 Naming hazard: two different things are called `tool_call_key` today. The
-persisted one is composite; `compaction/history.rs:318` returns bare
+persisted one is composite; `compaction::history::tool_call_key` returns bare
 `call_id.unwrap_or(id)`. This work touches both files. Rename the
 compaction-local one to `correlation_key`.
 
@@ -140,17 +155,19 @@ line 176, validated at 252-255):
 ```
 
 The model never supplies a key or a document id. The runtime composes
-`tool_call_key` from `session_id` and `tool_call_id`, which makes a
-cross-session read unreachable rather than merely rejected.
+`tool_call_key` from `session_id` and `tool_call_id`, but still applies the
+explicit session/call filters above. Cross-session reads are rejected by those
+structured fields and principal filters, not by delimiter folklore.
 
-Resolution: compose key → look up `AgentToolCall` by unique index, filtered on
-`agent_did` / `requester_did` → if an `AgentToolResult` carries that key,
-source is `spilled` and the bytes come from `output_text`; otherwise source is
-`inline` and they come from `AgentToolCall.result` → slice.
+Resolution: compose key → look up `AgentToolCall` by key **and** exact
+`session_id` / `tool_call_id`, filtered on `agent_did` / `requester_did` → if
+an `AgentToolResult` carries that key and the same `session_id`, source is
+`spilled` and the bytes come from `output_text`; otherwise source is `inline`
+and they come from `AgentToolCall.result` → slice.
 
 ### Paging
 
-Reuse `read_retained_output_slice` (`background_tools.rs:1094-1137`), the Rust
+Reuse `background_tools::read_retained_output_slice`, the Rust
 mirror of the `readSlice` model proven in
 `proofs/Proofs/Background/ToolOutput.lean`. Persisted output is the degenerate
 `RetainedWindow` that model already describes (`ToolOutput.lean:44-46`):
@@ -178,12 +195,12 @@ over already-stubbed history must not re-wrap or double-annotate.
 
 ### Truncation detection
 
-`tool_result_was_truncated` (`history.rs:297-304`) currently decides whether
-output was truncated by sniffing text for `"[Full output: DefraDB doc"`,
-`"Showing lines"`, or the bare word `"truncated"`. A tool result whose content
-merely contains the word "truncated" — a compiler warning, a log line, a diff —
-is misclassified as truncated and stubbed as though full output existed
-elsewhere. Once `tool_call_key` exists, ask the database instead of guessing.
+`tool_result_was_truncated` still infers recoverability from presentation text,
+currently the `"[Full output: DefraDB doc"` and `"[Showing lines"` markers.
+#988 removed the old bare-word `"truncated"` false positive, so Plan 2 must not
+claim or re-fix that bug. The remaining design problem is semantic: a marker is
+not a durable relationship and a failed spill can leave no recoverable full
+output. Once `tool_call_key` exists, ask the database instead of guessing.
 
 ### Error handling
 
@@ -203,7 +220,7 @@ is returned, no marker is appended, and nothing records that the full bytes
 were lost. Spill failure must be recorded so `unavailable` can be reported
 truthfully.
 
-## Part 2 — Durable capture and hash-verified reconstruction (#840 / #523)
+## Part 2 — Durable capture and capture-verified reconstruction (#840 / #523)
 
 ### Why the payload is stored first
 
@@ -212,7 +229,7 @@ turns 1–49 again, multiplied by retry attempts. That cost is real, but it is a
 optimization problem rather than permission to weaken the fact record.
 
 The owned loop already has the exact provider request immediately before
-`model.stream`. Persist its canonical JSON and hash there. Later work may
+`model.stream`. Persist its canonical JSON there. Later work may
 content-address or delta-compress payloads, but the initial implementation must
 remain lossless and self-contained. In particular, it must capture every retry
 attempt: a repair attempt can differ from the canonical transcript even when
@@ -242,22 +259,33 @@ the effective skill set/tool ceiling, provider normalization choice, and any
 retry repair applied to the assembled input. These are the projection leak
 set and must be captured explicitly.
 
+#988 adds another member to that leak set. `build_budgeted_request` can run a
+model-backed per-turn compaction after ordinary prompt assembly and inject its
+continuation checkpoint directly into provider history. That result is not
+saved as an `AgentCompactionEntry`; the capture callback currently receives
+only the final `CompletionRequest`. Re-running the summarizer is not
+deterministic reconstruction. The capture seam must therefore also retain the
+effective per-turn compaction result and budget decisions, or the compaction
+result must become a first-class durable fact before send.
+
 ### Design
 
 **Persist the exact request first.** A `RenderedRequest` row is keyed uniquely
 by `(agent_did, session_id, request_id, turn_index, attempt)` and contains the
-canonical `request_json`, its hash, the existing component hashes, source/model
+canonical `request_json`, the existing component hashes, source/model
 metadata, requester identity, capture format version, and provenance manifest.
 It is written before the provider call. Duplicate delivery idempotently reuses
 the row only when the canonical payload is identical; otherwise it fails as an
 integrity violation.
 
 **Encrypt and authorize it like participant data.** The create mutation uses
-DefraDB document encryption. The collection is ACP-bound, with the agent
+DefraDB encryption for at least `request_json` and `provenance_json`; routing
+metadata may remain plaintext if whole-document encryption prevents the indexed
+idempotency/timeline lookups. The collection is ACP-bound, with the agent
 principal as owner and the non-empty `requester_did` granted the participant
-reader relation. This is tested with owner, requester, unrelated DID, and
-anonymous reads; merely adding `agent_did`/`requester_did` fields is not an
-authorization boundary.
+reader relation. This is tested with owner, requester, unrelated DID, anonymous,
+exact-CID, and `_commits` reads; merely adding `agent_did`/`requester_did`
+fields is not an authorization boundary.
 
 **Make all render-contributing config collections `@branchable`:**
 `AgentBehavior`, `ToolSelection`, `Skill`, `InferenceProfile`, and
@@ -273,8 +301,10 @@ document.
 
 **Persist a provenance manifest beside the payload.** It contains pinned CIDs,
 session transcript/compaction boundaries, resolved-runtime fingerprint, and a
-versioned leak set sufficient for replay. `prompt_hash`, `tools_hash`, and the
-new whole-request hash use the existing canonical-JSON hasher.
+versioned leak set sufficient for replay, including #988's effective per-turn
+compaction result and output-token clamp. `prompt_hash` and `tools_hash` remain
+query indexes produced by the existing canonical-JSON hasher; they are not a
+whole-request integrity mechanism.
 
 **Install the capture sink by default.** `rendered_request_capture_factory`
 stops defaulting to `None`.
@@ -283,13 +313,22 @@ stops defaulting to `None`.
 CID → load only transcript and compaction rows within the captured boundaries
 at their pinned versions → replay the same production assembly and provider
 converter with the captured leak set → compare the complete canonical request
-hash with the captured hash.
+value with the captured `request_json`.
 
 A match is canonical-JSON-exact provenance. Do not call it byte-exact unless the
-actual serialized HTTP body bytes are captured and hashed; JSON object hashing
-does not preserve whitespace or serializer formatting. A mismatch is a real
+actual serialized HTTP body bytes are captured; canonical JSON values do not
+preserve transport whitespace or serializer formatting. A mismatch is a real
 finding: either assembly/conversion changed, a contributing input was not
 pinned, or the manifest version is no longer supported.
+
+`RenderedRequest` is branchable, so DefraDB also supplies a per-field commit CID
+for the stored `request_json`. That CID is the durable version/content anchor;
+do not duplicate it with a self-attested `request_hash` column. Commit
+signatures are separate: the pinned DefraDB exposes a nullable signature with
+multiple possible algorithms, and Gents' ordinary embedded-node builders leave
+block signing disabled. Report and verify a signature when one exists, but do
+not claim authenticated authorship unless the write path explicitly requires
+and validates one.
 
 **Surface the fact record.** `RunTimelineRows`, timeline events, adapter
 projections, and CLI `trace timeline|project` load the rendered rows. Redaction
@@ -343,14 +382,15 @@ retry, and repair-retry requests.
 ### Reconstruction
 
 - Capture round-trip: every request body observed by the mock provider has
-  exactly one equal decrypted `request_json` row and matching `request_hash`.
+  exactly one equal decrypted `request_json` row, anchored by its field-commit
+  CID.
 - Projection round-trip: reconstruct the complete provider request and compare
-  `request_hash`, not only `prompt_hash`.
+  canonical values directly, not only `prompt_hash`.
 - Config drift: mutate behavior, backend, profile, tool selection, and skill
   documents after capture; reconstruction uses the pinned versions.
-- Compaction and retries: reconstruct a compacted session, an unchanged
-  transport retry, and a repair retry whose input differs without a transcript
-  write.
+- Compaction and retries: reconstruct a durable-compaction-entry session,
+  #988's ephemeral per-turn compaction result, an unchanged transport retry,
+  and a repair retry whose input differs without a transcript write.
 - Epoch: a payload with no supported manifest is `CapturedOnly`; a request
   before the collection migration is `Unavailable`.
 
@@ -368,15 +408,15 @@ Paging reuses the proven `readSlice` model unchanged. Authorization remains an
 external DefraDB/ACP assumption fenced by negative integration tests.
 
 Rendered capture adds a legal-order invariant: a provider send is permitted
-only after the matching `(capture_key, request_hash)` is durable, and the same
-key cannot name different bytes. Model and prove that transition before the
-sink. Extend PromptAssembly with projection fidelity before reporting a
-reconstruction as `Verified`.
+only after the matching `(capture_key, canonical_request)` is durable, and the
+same key cannot name a different canonical request. Model and prove that
+transition before the sink. Extend PromptAssembly with projection fidelity
+before reporting a reconstruction as `Verified`.
 
 The resolver's structured linkage and idempotent stub behavior require
-conformance/property coverage even if the composite-key encoding makes the
-cross-session argument straightforward. Any change to the modeled transcript
-or tool-call lifecycles still begins in Lean.
+conformance/property coverage. Include adversarial delimiter-collision cases;
+the composite-key encoding does not prove session isolation. Any change to the
+modeled transcript or tool-call lifecycles still begins in Lean.
 
 ## Acceptance criteria
 
@@ -393,17 +433,18 @@ or tool-call lifecycles still begins in Lean.
 - Every provider attempt has exactly one encrypted, participant-authorized,
   default-on `RenderedRequest` row written before send.
 - Parsed captured `request_json` equals the complete request observed by the
-  provider and its canonical `request_hash` matches.
-- Capture is idempotent for equal bytes and rejects a reused key with different
-  bytes.
+  provider; its per-field commit CID anchors the compared stored version.
+- Capture is idempotent for equal canonical values and rejects a reused key with
+  a different canonical value.
 - The collection is installed through the migration registry and replicated
   with the conversation fact record.
 - Run timelines, adapter projections, and CLI traces surface rendered requests
   with authorization and redaction enforced at read time.
 - Config collections feeding reconstruction are branchable through real
   migration steps, and source document ids survive resolved-runtime assembly.
-- Complete reconstruction matches `request_hash` after later config edits,
-  compaction, multi-turn tool use, transport retry, and repair retry.
+- Complete reconstruction equals captured canonical `request_json` after later
+  config edits, compaction, multi-turn tool use, transport retry, and repair
+  retry.
 - Canonical `AgentMessage`, `AgentToolCall`, and `AgentToolResult` documents are
   never destructively rewritten by retrieval.
 - `sessions(action="list")` remains compatible.
@@ -411,6 +452,10 @@ or tool-call lifecycles still begins in Lean.
 
 ## Execution gates
 
+- Resolve canonical-JSON fidelity versus literal HTTP-body equality for #523.
+  If literal bytes remain required, the capture location must move or extend to
+  the transport boundary after provider-specific rewrites, while retaining the
+  same fail-closed persist-before-send invariant.
 - Prove the participant ACP policy can be installed before the collection SDL
   on fresh and upgraded nodes, and that encrypted key delivery follows the
   reader relationship.

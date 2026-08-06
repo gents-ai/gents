@@ -41,11 +41,19 @@ following decisions explicit:
   all matter.
 - "Canonical-JSON exact" is the promised fidelity. Do not say "byte exact"
   unless the serialized HTTP body bytes are captured and hashed too.
+- #523's issue text currently says "the exact bytes that were sent." That is a
+  stronger contract than this plan's canonical-JSON equality. Before claiming
+  #523 complete, either amend the issue/acceptance language to semantic JSON
+  fidelity or add transport-body capture after every provider-specific body
+  rewrite and before the HTTP send. The latter must persist the exact UTF-8
+  body (or bytes) and prove the transport forwarded those same bytes; merely
+  serializing `request_json` a second time is not that proof.
 - Retry attempts are separate facts. Repair can rewrite assembled input without
   changing the transcript, so attempt 0 and attempt 1 may legitimately differ.
 - The record is unique by
   `(agent_did, session_id, request_id, turn_index, attempt)` and idempotent.
-  Reusing that key with different bytes is an integrity error, never an update.
+  Reusing that key with a different canonical value is an integrity error,
+  never an update.
 - Capture is fail-closed and occurs before `model.stream`: no provider call is
   allowed without its durable fact record.
 - #840's encryption requirement is not weakened. `AgentMessage` is not an
@@ -60,7 +68,7 @@ following decisions explicit:
   document ids survive runtime resolution and all required collections have a
   real upgrade path to branchability.
 - An empty CID map is not a validity signal. Reconstruction reports explicit
-  `CapturedOnly`, `Unavailable`, `UnsupportedManifest`, and `HashMismatch`
+  `CapturedOnly`, `Unavailable`, `UnsupportedManifest`, and `ValueMismatch`
   outcomes.
 - The first end-to-end test is multi-turn and retry-aware. A one-turn `READY`
   test cannot establish reproducibility.
@@ -78,9 +86,10 @@ following decisions explicit:
   use `validate_graphql_filter_fragment` for filter fragments. These landed on
   main in #1034 (`crates/gents/src/graphql.rs:6-20`, re-exported from
   `gents-protocol`). `escape_graphql_string` cannot defend an identifier
-  position; validation is the only defense there. This applies directly to the
-  `_commits(docID:, fieldName:)` provenance queries and to any reconstructor
-  query that selects across collections by name.
+  position; validation is the only defense there. This applies directly to any
+  reconstructor query that selects across collections or fields by name.
+  `_commits` takes `fieldName` inside a filter, where it is a string literal and
+  must be escaped, not treated as an identifier.
 - Never emit `[]` in a DefraDB mutation; use `null` for an absent list.
 - Treat GraphQL response errors as errors. A missing `data` field is not the
   same as "no rows".
@@ -108,7 +117,7 @@ assembled request
       v
 encrypted durable RenderedRequest(capture_key, request_json)
       |
-      v  DefraDB writes a signed field commit for request_json
+      v  DefraDB writes a content-addressed field commit for request_json
       v
 provider call
 ```
@@ -125,13 +134,17 @@ that agrees with whatever bytes it chose to persist. It proves nothing an
 auditor could not have been lied to about.
 
 Branchable collections produce collection, composite, **and per-field** commit
-blocks, and every commit is signed — ES256K under secp256k1, carrying the
-writing identity. So `request_json` already has a content address computed by
-DefraDB over the stored block, bound to a DID:
+blocks. `request_json` therefore already has a content address computed by
+DefraDB over the field block that was actually stored:
 
 ```graphql
 query {
-  _commits(docID: "<rendered-request-doc>", fieldName: "request_json") {
+  _commits(
+    docID: ["<rendered-request-doc>"]
+    filter: { fieldName: { _eq: "request_json" } }
+    order: [{ height: DESC }]
+    limit: 1
+  ) {
     cid
     height
     signature { type identity value }
@@ -139,15 +152,27 @@ query {
 }
 ```
 
-That CID is the integrity witness. It replicates with the document instead of
-being a column that can drift from the value it describes, and it is the
-artifact forthcoming Merkle-DAG proofs will attest over — a stored SHA-256
-column would be a dead end those proofs cannot reach.
+That CID is the content-integrity and version witness. It replicates with the
+document instead of being a column that can drift from the value it describes,
+and it is the artifact forthcoming Merkle-DAG proofs will attest over — a
+stored SHA-256 column would be a dead end those proofs cannot reach.
+
+Do **not** assume the commit is signed. In the pinned DefraDB,
+`Commit.signature` is nullable and may report ES256K, ES256, EdDSA, or BLS.
+Gents' normal embedded-node builders currently leave node block signing
+disabled. The runtime's `AgentIdentity` signs other protocol artifacts, but the
+current `EmbeddedNode::execute` path does not by itself make every document
+commit an agent-signed commit. A signature, when present and verified, adds
+authenticity; it is not required for canonical-request equality. If #840 is
+intended to require authenticated authorship as well as reproducibility, add an
+explicit execution gate to configure principal-bound commit signing and reject
+missing or invalid signatures. Do not silently infer that property from a CID.
 
 Verification therefore needs no hash in the loop at all. Reconstruction
 canonicalizes its output and compares it to the stored `request_json`
-directly. Equality is the check; the field CID and its signature are what make
-the stored side trustworthy.
+directly. Equality is the reproducibility check; the field CID anchors the
+stored version, and a verified optional signature may additionally authenticate
+its writer.
 
 ## Target schema
 
@@ -183,9 +208,9 @@ values do not need duplicate columns because they are derivable from
 every capture sharing a tool surface, dedup, and prefix-stability analysis for
 #723. They are explicitly *not* the integrity mechanism; see the section above.
 Anything that treats them as proof of content is a bug. There is deliberately
-no `request_hash`: the signed field commit for `request_json` is the content
-address, and duplicating it in a column would create a second source of truth
-that can silently disagree with the first.
+no `request_hash`: the field commit for `request_json` is the content address,
+and duplicating it in a column would create a second source of truth that can
+silently disagree with the first.
 
 `provenance_json` is a versioned object, never an overloaded empty-map signal.
 
@@ -213,7 +238,7 @@ that can silently disagree with the first.
   digest. The model does not need a hash function: the property is that one
   capture key is bound to at most one canonical request, which is what
   idempotency and integrity both rest on. DefraDB supplies the content address
-  for the persisted value as a signed field commit, so introducing a modeled
+  for the persisted value as a field commit, so introducing a modeled
   hash column would add an unmodeled trust assumption — that the writer
   computed it honestly — to a theorem that does not need one.
 - [ ] Emit positive and negative transition cases through the existing contract
@@ -256,6 +281,12 @@ not sufficient.
   readable/decryptable by its owner, becomes readable by the requester after a
   `reader` relationship is granted, and remains invisible to an unrelated DID
   and anonymous access.
+- [ ] Prove the intended lookup paths still work: authorized equality lookup by
+  `capture_key` and authorized session/turn timeline scan. If whole-document
+  encryption makes ordinary indexed lookup unusable, leave only routing/index
+  metadata plaintext and field-encrypt `request_json` plus `provenance_json`,
+  or deliberately add DefraDB searchable-encryption indexes. Do not discover
+  this incompatibility after making capture default-on.
 - [ ] Prove requester revocation removes both read authorization and decryption
   ability.
 - [ ] Define the empty-requester rule: only the agent owner is a participant;
@@ -329,14 +360,24 @@ task: doing so would invalidate the migration baseline pins.
   and do not assume `AgentRequest.request_id` is globally unique (its schema
   index is not unique).
 - [ ] Keep `request_json` in the DTO. Do not remove it after calculating the
-  hash.
+  component query hashes.
 - [ ] Make one canonical JSON encoder the source of both persisted bytes and
   hashes. Expose it as `pub(crate)`; do not maintain a second implementation in
   the sink or reconstructor.
 - [ ] Retain component hashes for messages/input and tools as query indexes
-  only. Do not compute a whole-request digest: the signed field commit for
+  only. Do not compute a whole-request digest: the field commit for
   `request_json` is the content address, and a second one would create a
   source of truth that can disagree with it.
+- [ ] Extend the capture seam to carry an `AssemblyTrace` (or equivalent typed
+  data) alongside the final `CompletionRequest`. After #988,
+  `build_budgeted_request` may invoke the model-backed `turn_compactor` and
+  inject an in-memory continuation checkpoint that is **not** saved as an
+  `AgentCompactionEntry`. The callback currently sees only the final request,
+  which is enough for #840 capture but not enough to explain #523 provenance.
+  Record whether dynamic output clamping and per-turn compaction occurred, the
+  effective compacted provider messages/checkpoint, and the pre/post budget
+  estimates. Never re-run the summarizer during reconstruction and expect the
+  same words.
 - [ ] Include `requester_did` in `RenderedRequestContext::for_request`.
 - [ ] Define `capture_version = 1` and a typed, versioned provenance manifest.
   Version 1 may begin as `CapturedOnly`; it must not serialize missing fields as
@@ -362,9 +403,10 @@ Run: `cargo test -p gents rendered_request`
 - Add sink unit tests and fault-injection integration tests.
 
 - [ ] Build GraphQL with the shared escape helper for every string.
-- [ ] Encrypt the whole document on create. If DefraDB requires field-level
-  encryption for indexed metadata, encrypt at least `request_json` and
-  `provenance_json` and document precisely which metadata remains visible.
+- [ ] Apply the encryption mode proven in Task 2. Encrypt at least
+  `request_json` and `provenance_json`; encrypt the whole document only if the
+  required idempotency and timeline lookups were proven to work. Document
+  precisely which routing/index metadata remains visible.
 - [ ] Create/register the ACP object as the agent principal, then grant the
   requester `reader` when present. A partially completed owner-only row is
   recoverable: retry relationship creation before permitting send.
@@ -411,11 +453,13 @@ the established helpers in neighboring E2E tests.
   assert ordered `(turn_index, attempt)` rows and equality with every observed
   provider request.
 - [ ] Transport retry case: two attempt rows exist even when their request
-  hashes are equal.
-- [ ] Repair retry case: the repaired attempt has a different request hash and
+  JSON values are equal.
+- [ ] Repair retry case: the repaired attempt has a different request JSON and
   both persisted JSON values equal the two actually observed requests.
-- [ ] Compacted-session case: capture still equals the provider request after a
-  compaction entry changes the assembled history.
+- [ ] Compacted-session cases: capture still equals the provider request after
+  a durable compaction entry changes assembled history **and** after #988's
+  per-turn budget guard performs ephemeral model-backed compaction. Assert the
+  latter's effective checkpoint/messages are present in the provenance trace.
 - [ ] Request-context case: the current `<context>` message is captured and old
   per-request context messages are absent exactly as production filtering
   requires.
@@ -424,7 +468,7 @@ the established helpers in neighboring E2E tests.
 - [ ] ACP/encryption matrix: owner and requester can read/decrypt; stranger and
   anonymous readers receive no row, including exact-CID and `_commits` paths.
 - [ ] Restart/idempotence case: re-driving capture does not create a duplicate
-  or change the original hash.
+  or change the original canonical value.
 
 Run the full package suite after this task: `cargo test -p gents`.
 
@@ -453,9 +497,12 @@ view in Tasks 8-9 is not.
 - [ ] Include decrypted `request_json` only in an explicitly authorized full
   projection. Apply redaction after the authorized read; never persist a
   redacted replacement over the canonical row.
-- [ ] Add rendered requests to OpenAI-Codex, LangGraph, ATIF, and multi-agent adapter
-  shapes where their contracts allow it; otherwise expose a documented
-  extension field.
+- [ ] Add rendered requests to OpenAI-Codex, LangGraph, ATIF, and multi-agent
+  adapter shapes where their contracts allow it; otherwise expose a documented
+  extension field. ATIF v1.7 has explicit `extra` maps: use those rather than
+  inventing a non-ATIF top-level field, and keep decrypted payloads out of the
+  default Harbor/native export unless the caller requested an authorized full
+  projection.
 - [ ] Test unauthorized CLI/adapter reads fail closed and do not leak whether a
   capture key exists.
 - [ ] Test an older database with no `RenderedRequest` collection reports
@@ -530,7 +577,11 @@ This task starts #523. It must not mutate frozen schema roots in place.
 - [ ] Capture the runtime-only leak set needed by projection: resolved tool
   definitions (including prompt-sensitive/MCP schemas), active subagent target
   descriptions, effective skill/tool-ceiling manifest, provider wire/normalizer
-  choice, and retry input transform.
+  choice, retry input transform, effective output-token clamp, and #988's
+  per-turn compaction result. The per-turn continuation checkpoint is
+  model-generated and currently ephemeral; either persist it as a first-class
+  fact before send or carry the exact effective result in the versioned
+  provenance manifest.
 - [ ] Version the provenance manifest and test stable serialization.
 
 Run migration tests, the DefraDB time-travel E2E, `cargo test -p gents`, and
@@ -551,9 +602,13 @@ Use explicit outcomes:
 
 ```rust
 pub enum ReconstructionOutcome {
-    Verified { request_json: serde_json::Value },
+    Verified {
+        request_json: serde_json::Value,
+        request_json_commit_cid: String,
+        commit_signature: Option<CommitSignature>,
+    },
     CapturedOnly { request_json: serde_json::Value, reason: String },
-    HashMismatch { expected: String, actual: String },
+    ValueMismatch { differing_paths: Vec<String> },
     UnsupportedManifest { version: u32 },
     Unavailable { reason: String },
 }
@@ -575,21 +630,27 @@ pub enum ReconstructionOutcome {
   5. selected skill reminders;
   6. old request-context filtering and current context placement;
   7. preamble construction with effective tool/target manifest;
-  8. retry repair transform when applicable;
-  9. Rig/provider wire conversion and normalization;
-  10. canonical serialization of the complete request.
+  8. #988 budget enforcement, including the captured effective per-turn
+     compaction result and output-token clamp (never a fresh model summary);
+  9. retry repair transform when applicable — matching the current production
+     repair path, which rebuilds with `build_request` rather than re-entering
+     `build_budgeted_request`;
+  10. Rig/provider wire conversion and normalization;
+  11. canonical serialization of the complete request.
 
 - [ ] Share production functions or extract pure helpers. Do not copy the
   sanitizer, preamble builder, canonical encoder, or provider converter.
 - [ ] Compare the reconstructed canonical `request_json` against the stored
   one directly, as values — not `prompt_hash`, and not a recomputed digest.
   Return `Verified` only on complete equality. Report the stored value's
-  field-commit CID and signature alongside the verdict so a caller can see
-  which durable version was compared against.
+  field-commit CID and optional signature alongside the verdict so a caller can
+  see which durable version was compared against. Never label an absent or
+  unverified signature as authenticated. Bound mismatch diagnostics to JSON
+  paths; do not duplicate or log the encrypted request contents in an error.
 - [ ] Test: first turn, multi-request session, multi-turn tools, compaction,
   later behavior/profile/backend/tool-selection/skill edits, selected skills,
   request context, transport retry, repair retry, and both provider wire APIs.
-- [ ] Tamper each provenance component in turn and require `HashMismatch` or
+- [ ] Tamper each provenance component in turn and require `ValueMismatch` or
   `CapturedOnly`, never false `Verified`.
 - [ ] Update timeline/projection status to show `Verified`, `CapturedOnly`, or
   the precise failure.
@@ -600,6 +661,12 @@ Run: `cargo test -p gents rendered_request_reconstruct`
 
 ## Final verification
 
+- [ ] Resolve #523's fidelity contract. Canonical-JSON replay and literal
+  HTTP-body byte equality are distinct deliverables; the implementation and
+  issue acceptance criteria name one consistently. If literal bytes remain
+  required, transport interception proves the captured bytes are exactly those
+  forwarded for Responses normalization, Chat Completions, ChatGPT Codex, and
+  xAI.
 - [ ] `cd crates/gents/proofs && lake build`
 - [ ] `cargo test -p gents-schemas`
 - [ ] `cargo test -p gents-protocol`
