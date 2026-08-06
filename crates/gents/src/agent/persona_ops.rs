@@ -154,6 +154,11 @@ const ENUMERATION_LIMIT: usize = 10;
 /// Render a catalog set as `[a, b, c]`, bounded to [`ENUMERATION_LIMIT`]
 /// entries with `… and N more` appended when there are more. Iterates a
 /// `BTreeSet`, so the shown entries (and thus the message) are deterministic.
+fn enumerate_behavior_ids(behaviors: &BTreeMap<String, BehaviorRef>) -> String {
+    let ids: BTreeSet<String> = behaviors.keys().cloned().collect();
+    enumerate_bounded(&ids)
+}
+
 fn enumerate_bounded(values: &BTreeSet<String>) -> String {
     let total = values.len();
     let shown: Vec<&str> = values
@@ -267,7 +272,8 @@ pub fn decide_persona_request(
                     match catalog.behaviors.get(source_id) {
                         None => {
                             return PersonaVerdict::Reject(format!(
-                                r#"unknown clone_from "{source_id}" — pick from this agent's behaviors"#
+                                r#"unknown clone_from "{source_id}" — pick from this agent's behaviors: {}"#,
+                                enumerate_behavior_ids(&catalog.behaviors)
                             ));
                         }
                         Some(source) if !source.enabled => {
@@ -304,7 +310,8 @@ pub fn decide_persona_request(
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
             let Some(target) = catalog.behaviors.get(behavior_id) else {
                 return PersonaVerdict::Reject(format!(
-                    r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors"#
+                    r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
+                    enumerate_behavior_ids(&catalog.behaviors)
                 ));
             };
             if let Some(msg) = validate_persona_name(doc.persona_name.as_deref()) {
@@ -339,7 +346,8 @@ pub fn decide_persona_request(
             let behavior_id = doc.behavior_id.as_deref().unwrap_or("");
             if !catalog.behaviors.contains_key(behavior_id) {
                 return PersonaVerdict::Reject(format!(
-                    r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors"#
+                    r#"unknown behavior_id "{behavior_id}" — pick from this agent's behaviors: {}"#,
+                    enumerate_behavior_ids(&catalog.behaviors)
                 ));
             }
             PersonaVerdict::Admit
@@ -967,7 +975,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"unknown clone_from "no-such-behavior" — pick from this agent's behaviors"#
+                r#"unknown clone_from "no-such-behavior" — pick from this agent's behaviors: [existing-disabled, existing-enabled, existing-selectionless]"#
                     .to_string()
             )
         );
@@ -1043,7 +1051,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"unknown behavior_id "no-such-behavior" — pick from this agent's behaviors"#
+                r#"unknown behavior_id "no-such-behavior" — pick from this agent's behaviors: [existing-disabled, existing-enabled, existing-selectionless]"#
                     .to_string()
             )
         );
@@ -1062,7 +1070,7 @@ mod tests {
         assert_eq!(
             verdict,
             PersonaVerdict::Reject(
-                r#"unknown behavior_id "no-such-behavior" — pick from this agent's behaviors"#
+                r#"unknown behavior_id "no-such-behavior" — pick from this agent's behaviors: [existing-disabled, existing-enabled, existing-selectionless]"#
                     .to_string()
             )
         );
