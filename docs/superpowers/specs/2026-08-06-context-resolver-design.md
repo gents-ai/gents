@@ -34,15 +34,27 @@ rendered input is a log, not a training example.
 
 ## Organizing principle
 
-Make the fact record complete and time-travelable, then derive everything from
-it.
+Make the fact record complete before asking a projection to reproduce it.
 
-Today the conversation side of the record is versioned and the configuration
-side is not, so the facts are incomplete and no projection off them can be
-verified. Making the render-contributing config collections `@branchable` and
-stamping commit CIDs at render time completes the record. Hash-verified
-reconstruction is then the proof that a projection is faithful rather than
-merely plausible.
+There are two different deliverables here and neither substitutes for the
+other:
+
+1. **Durable capture is the correctness floor.** Persist the exact rendered
+   provider request before the network call. This is the oracle required by
+   #840 and by a reproducible provider harness.
+2. **Time-travel reconstruction is a verified projection.** Pin every durable
+   source version, persist the genuinely runtime-only leak set, replay prompt
+   assembly, and compare the result with the captured request hash. This is
+   #523.
+
+The earlier constant-size-envelope proposal conflated those deliverables. It
+was not complete: resolved tool definitions are computed dynamically from the
+assembled prompt; retry repair can rewrite provider input without rewriting
+the transcript; the effective preamble includes the resolved tool surface and
+active subagent targets; and the current transcript has no single multi-row
+snapshot CID. Hashes detect those omissions but cannot reconstruct their
+bytes. A hash-only envelope is therefore an integrity witness, not a durable
+rendered input.
 
 The tool resolver is the first projection, exposed to the model as a tool. The
 run timeline, adapter projections, and eventual training samples are further
@@ -60,9 +72,15 @@ not build order.
 In scope:
 
 - A bounded, model-executable resolver for trimmed tool results (#722).
-- Durable, reconstructible provider inputs via hash-verified reconstruction
-  (#840), which resolves #523's open design question.
-- Making the config collections that determine the preamble `@branchable`.
+- Exact, encrypted, default-on rendered-provider-request capture (#840).
+- Surfacing captured requests in run timelines and adapter projections.
+- Hash-verified reconstruction as a second path (#523), using capture as the
+  conformance oracle.
+- Making every durable render-contributing config collection `@branchable` and
+  carrying its document id into the resolved runtime.
+- The schema migration and replication plumbing required for the new
+  collection. A collection that only exists as an `include_str!` constant is
+  not a runtime collection.
 
 Out of scope, filed separately:
 
@@ -72,7 +90,6 @@ Out of scope, filed separately:
 - The `training_safe` redaction fix (#842). It currently masks every non-empty
   string, so exports through it are useless; that is a separate defect.
 - Any reward or outcome document.
-- Schema migration mechanics. Explicitly deferred.
 - The generic `defra_query` escape hatch. It exists; this resolver is
   purpose-built and does not use or extend it.
 
@@ -186,39 +203,67 @@ is returned, no marker is appended, and nothing records that the full bytes
 were lost. Spill failure must be recorded so `unavailable` can be reported
 truthfully.
 
-## Part 2 — Hash-verified reconstruction (#840, resolving #523)
+## Part 2 — Durable capture and hash-verified reconstruction (#840 / #523)
 
-### Why not store the payload
+### Why the payload is stored first
 
-Storing the full rendered payload every turn is quadratic: turn 50's
-`messages_json` contains turns 1–49, multiplied by every retry attempt. The
-canonical messages are already persisted. The rendered input is a deterministic
-function of them, and `PromptAssembly.render_determined` already proves the
-render depends only on the variables actually read. Storing the output of a
-proven-deterministic function alongside its inputs is duplication.
+Storing the full rendered payload every turn is quadratic: turn 50 contains
+turns 1–49 again, multiplied by retry attempts. That cost is real, but it is an
+optimization problem rather than permission to weaken the fact record.
+
+The owned loop already has the exact provider request immediately before
+`model.stream`. Persist its canonical JSON and hash there. Later work may
+content-address or delta-compress payloads, but the initial implementation must
+remain lossless and self-contained. In particular, it must capture every retry
+attempt: a repair attempt can differ from the canonical transcript even when
+no new document was written.
 
 ### The blocker
 
-22 collections are `@branchable` — `AgentMessage`, `AgentToolCall`,
-`AgentToolResult`, `AgentRequest`, `CompactionEntry`, `AgentSession`, the
-entire conversation side. Time-travel reads are available for every row that
-carries a turn.
+The conversation collections are branchable, but that alone is not a snapshot:
+one render reads many `AgentMessage` and `CompactionEntry` documents, and no
+single session CID identifies all of those row versions. The runtime treats
+message rows as append-only, but the schema does not make their payload fields
+immutable. Reconstruction therefore needs explicit transcript and compaction
+high-water marks plus either pinned row CIDs or an enforced append-only
+contract.
 
-`AgentBehavior` is not, and it holds `system_prompt`, `model_name`,
-`tool_selection_id`, `inference_profile_id`, `skill_refs`, and
-`compaction_threshold` — everything determining the preamble. `tool_selection`
-and `skill` are likewise not branchable.
+The configuration side is also incomplete. `AgentBehavior`, `ToolSelection`,
+and `Skill` are not branchable. `InferenceProfile` supplies sampling, context,
+retry, and max-token values; `InferenceBackend` supplies provider kind and wire
+API. Both contribute to the request and are not branchable either. The resolved
+runtime currently discards the source document ids after snapshot assembly, so
+the capture site cannot pin them.
 
-So the conversation half of a render is reconstructible today and the
-configuration half is not. Editing a behavior's system prompt silently makes
-every historical rendered request unreconstructible, with no way to distinguish
-a capture bug from a legitimate config edit.
+Finally, several bytes are runtime-resolved rather than recoverable from a
+single config document: effective tool definitions (including prompt-sensitive
+definitions and MCP-resolved schemas), active subagent target descriptions,
+the effective skill set/tool ceiling, provider normalization choice, and any
+retry repair applied to the assembled input. These are the projection leak
+set and must be captured explicitly.
 
 ### Design
 
-**Make the render-contributing config collections `@branchable`:**
-`agent_behavior`, `tool_selection`, `skill`. Without this, reconstruction is
-unsound and no amount of hashing repairs it.
+**Persist the exact request first.** A `RenderedRequest` row is keyed uniquely
+by `(agent_did, session_id, request_id, turn_index, attempt)` and contains the
+canonical `request_json`, its hash, the existing component hashes, source/model
+metadata, requester identity, capture format version, and provenance manifest.
+It is written before the provider call. Duplicate delivery idempotently reuses
+the row only when the canonical payload is identical; otherwise it fails as an
+integrity violation.
+
+**Encrypt and authorize it like participant data.** The create mutation uses
+DefraDB document encryption. The collection is ACP-bound, with the agent
+principal as owner and the non-empty `requester_did` granted the participant
+reader relation. This is tested with owner, requester, unrelated DID, and
+anonymous reads; merely adding `agent_did`/`requester_did` fields is not an
+authorization boundary.
+
+**Make all render-contributing config collections `@branchable`:**
+`AgentBehavior`, `ToolSelection`, `Skill`, `InferenceProfile`, and
+`InferenceBackend`. Preserve their source document ids in the resolved runtime
+so the capture path can pin the exact versions actually loaded, rather than
+re-querying by logical id and racing reconcile.
 
 **Stamp CIDs at render; do not time-correlate.** This resolves #523's open
 question. Time-correlation races concurrent config edits and yields a
@@ -226,48 +271,46 @@ plausible-but-wrong reconstruction, which is strictly worse than a failed one.
 At render time the envelope records the commit CID of every contributing config
 document.
 
-**Persist a constant-size envelope**, not the payload: `prompt_hash`,
-`tools_hash`, `sampling_json`, `tool_choice_json`, `model_name`, `source`,
-`turn_index`, `attempt`, and the pinned CID set. `prompt_hash` and `tools_hash`
-are SHA-256 over canonical JSON with sorted keys, already implemented at
-`rendered_request.rs:140-159`.
-
-#840 calls for this collection to be encrypted to session participants. Because
-the envelope is hashes and identifiers rather than prompt text, it carries far
-less sensitive content than the payload would have — the confidentiality
-requirement is correspondingly weaker, and the reconstruction inputs
-(`AgentMessage`, config documents) retain whatever protection they already
-have. The implementation plan selects the concrete mechanism; this design
-requires only that the envelope be no more widely readable than the documents
-it references.
+**Persist a provenance manifest beside the payload.** It contains pinned CIDs,
+session transcript/compaction boundaries, resolved-runtime fingerprint, and a
+versioned leak set sufficient for replay. `prompt_hash`, `tools_hash`, and the
+new whole-request hash use the existing canonical-JSON hasher.
 
 **Install the capture sink by default.** `rendered_request_capture_factory`
 stops defaulting to `None`.
 
 **Reconstruct on demand:** time-travel read each config document at its pinned
-CID → replay PromptAssembly over canonical messages bounded by the
-`CompactionEntry` state → hash the result → compare against `prompt_hash`.
+CID → load only transcript and compaction rows within the captured boundaries
+at their pinned versions → replay the same production assembly and provider
+converter with the captured leak set → compare the complete canonical request
+hash with the captured hash.
 
-A match is byte-exact provenance. A mismatch is a real finding: either the
-sanitizer is nondeterministic or a contributing input was not pinned. The
-verification is self-checking — `render_determined` says that if reconstruction
-and capture disagree, something outside the model is wrong.
+A match is canonical-JSON-exact provenance. Do not call it byte-exact unless the
+actual serialized HTTP body bytes are captured and hashed; JSON object hashing
+does not preserve whitespace or serializer formatting. A mismatch is a real
+finding: either assembly/conversion changed, a contributing input was not
+pinned, or the manifest version is no longer supported.
+
+**Surface the fact record.** `RunTimelineRows`, timeline events, adapter
+projections, and CLI `trace timeline|project` load the rendered rows. Redaction
+is applied at projection time; the encrypted canonical row remains lossless.
 
 ### Epoch boundary
 
-Rendered requests captured before the config collections became branchable
-cannot be reconstructed. Report that honestly, the same way `unavailable` is
-reported for pre-migration tool results. Do not imply recoverability.
+Rows without a full payload are not #840-complete. Rows with a payload but no
+supported provenance manifest are `CapturedOnly`, not `Verified`. Requests
+created before the collection migration are `Unavailable`. These states are
+explicit in projections; no empty-map convention may silently stand in for
+missing required provenance.
 
 ### Run timeline
 
 #840 requires surfacing rendered inputs in the run timeline and adapter
-projections. `run_timeline_fetch.rs:347-370` does not select
-`prompt_tokens` / `completion_tokens` / `cached_input_tokens` from
-`InferenceCall`, and the `AgentRequest` selection omits `caused_by_trigger_id`,
-`caused_by_trigger_kind`, and `execution_origin`. Since this work is already in
-that fetch layer, add those fields. This unblocks part of #991 and #841 at
-near-zero marginal cost.
+projections. Add captured rows, ordered by completion `turn_index` and
+`attempt`, to `RunTimelineRows`, timeline events, adapter projections, and CLI
+trace output. The loop's completion attempt is not `InferenceCall.attempt`;
+keep the counters distinct. Token usage and trigger lineage are useful but do
+not establish rendered-input durability and remain separate work.
 
 ## Testing
 
@@ -282,7 +325,7 @@ plus an env assertion, per `goal_continuation_live.rs:61-65`):
    spills.
 2. Turns 2–N — drive enough turns to trigger compaction, so
    `strip_tool_results` replaces that observation with a stub.
-3. Inspect what the model sees. Assert against captured `messages_json` that
+3. Inspect what the model sees. Parse captured `request_json` and assert that
    the marker is **absent** and the executable stub is **present**.
 4. Recovery turn — instruct the model to retrieve the earlier result. Assert it
    calls `sessions(action="read_tool_result")` and that the marker appears in
@@ -292,20 +335,24 @@ plus an env assertion, per `goal_continuation_live.rs:61-65`):
    `next_offset`, and assert the pages are gap-free and reassemble to the
    original bytes.
 
-Step 3 is possible because capture is on by default under Part 2.
-`rendered_request` is already consumed by `compaction/tests.rs` and
-`loop_stream/tests.rs`, so the mechanism is proven at unit scope; this is its
-first end-to-end use.
+Step 3 is possible because capture is on by default under Part 2. The live test
+is Plan 2's final acceptance test; Part 2 first establishes the same equality
+against the deterministic mock streaming backend for multi-turn, transport
+retry, and repair-retry requests.
 
 ### Reconstruction
 
-- Round-trip: capture a rendered request, reconstruct it, assert
-  `prompt_hash` matches.
-- Config drift: capture, mutate the behavior's `system_prompt`, reconstruct at
-  the pinned CID, assert the hash still matches — the edit must not corrupt
-  history.
-- Epoch: a pre-branchable capture reports unreconstructible rather than
-  mismatching.
+- Capture round-trip: every request body observed by the mock provider has
+  exactly one equal decrypted `request_json` row and matching `request_hash`.
+- Projection round-trip: reconstruct the complete provider request and compare
+  `request_hash`, not only `prompt_hash`.
+- Config drift: mutate behavior, backend, profile, tool selection, and skill
+  documents after capture; reconstruction uses the pinned versions.
+- Compaction and retries: reconstruct a compacted session, an unchanged
+  transport retry, and a repair retry whose input differs without a transcript
+  write.
+- Epoch: a payload with no supported manifest is `CapturedOnly`; a request
+  before the collection migration is `Unavailable`.
 
 ### Non-live
 
@@ -317,16 +364,19 @@ first end-to-end use.
 
 ## Formal model
 
-No new Lean is required for authorization; that is enforced by filtering today
-and by ACP later, and neither is a theorem. Cross-session linkage needs no
-proof either, because the composite key format makes it structural.
+Paging reuses the proven `readSlice` model unchanged. Authorization remains an
+external DefraDB/ACP assumption fenced by negative integration tests.
 
-Paging reuses the proven `readSlice` model unchanged.
+Rendered capture adds a legal-order invariant: a provider send is permitted
+only after the matching `(capture_key, request_hash)` is durable, and the same
+key cannot name different bytes. Model and prove that transition before the
+sink. Extend PromptAssembly with projection fidelity before reporting a
+reconstruction as `Verified`.
 
-If threading `tool_call_id` into the truncator or making config collections
-branchable changes a modeled transcript or tool-call invariant, update Lean
-first per the foundation flow. Otherwise record why the existing read-only
-tool-policy model suffices.
+The resolver's structured linkage and idempotent stub behavior require
+conformance/property coverage even if the composite-key encoding makes the
+cross-session argument straightforward. Any change to the modeled transcript
+or tool-call lifecycles still begins in Lean.
 
 ## Acceptance criteria
 
@@ -340,19 +390,32 @@ tool-policy model suffices.
   repeated stripping idempotently.
 - Truncation detection consults the database rather than sniffing text.
 - Failed spills report `unavailable` rather than implying recoverability.
-- Config collections feeding the render are `@branchable`.
-- Rendered-request capture is on by default and persists a constant-size
-  envelope with pinned CIDs.
-- A captured rendered request reconstructs to a matching `prompt_hash`, and a
-  later config edit does not corrupt that.
-- Run timeline includes `InferenceCall` token fields and request trigger
-  lineage.
+- Every provider attempt has exactly one encrypted, participant-authorized,
+  default-on `RenderedRequest` row written before send.
+- Parsed captured `request_json` equals the complete request observed by the
+  provider and its canonical `request_hash` matches.
+- Capture is idempotent for equal bytes and rejects a reused key with different
+  bytes.
+- The collection is installed through the migration registry and replicated
+  with the conversation fact record.
+- Run timelines, adapter projections, and CLI traces surface rendered requests
+  with authorization and redaction enforced at read time.
+- Config collections feeding reconstruction are branchable through real
+  migration steps, and source document ids survive resolved-runtime assembly.
+- Complete reconstruction matches `request_hash` after later config edits,
+  compaction, multi-turn tool use, transport retry, and repair retry.
 - Canonical `AgentMessage`, `AgentToolCall`, and `AgentToolResult` documents are
   never destructively rewritten by retrieval.
 - `sessions(action="list")` remains compatible.
 - `cargo test -p gents` and `cargo check --workspace --all-targets` pass.
 
-## Open questions
+## Execution gates
 
-None blocking. Migration mechanics are deferred by decision; ACP policy for the
-`sessions` tool is a tracked follow-up.
+- Prove the participant ACP policy can be installed before the collection SDL
+  on fresh and upgraded nodes, and that encrypted key delivery follows the
+  reader relationship.
+- Prove whether a non-branchable collection can become branchable through the
+  existing migration engine. If DefraDB cannot patch that property, use an
+  explicit successor/backfill design; never rewrite frozen baseline SDL.
+- ACP policy for the `sessions` tool remains a tracked follow-up, but the new
+  rendered-request collection itself must satisfy #840's participant boundary.
