@@ -83,16 +83,48 @@ capture_key = "rendered:v1:" + sha256(canonical_json([
 assembled request
       |
       v
-encrypted durable RenderedRequest(capture_key, request_json, request_hash)
+encrypted durable RenderedRequest(capture_key, request_json)
       |
+      v  DefraDB writes a signed field commit for request_json
       v
 provider call
 ```
 
 The persisted JSON is the conformance oracle. The later materialized-view path
-must reproduce the same canonical JSON and hash, but capture remains readable
-even when a future runtime no longer supports an old provenance-manifest
-version.
+must reproduce the same canonical JSON, but capture remains readable even when
+a future runtime no longer supports an old provenance-manifest version.
+
+### Integrity comes from the database, not from a column
+
+Do not store a `request_hash`. A stored digest is self-attested: the runtime
+computes it and writes it, so a buggy or dishonest writer produces a column
+that agrees with whatever bytes it chose to persist. It proves nothing an
+auditor could not have been lied to about.
+
+Branchable collections produce collection, composite, **and per-field** commit
+blocks, and every commit is signed — ES256K under secp256k1, carrying the
+writing identity. So `request_json` already has a content address computed by
+DefraDB over the stored block, bound to a DID:
+
+```graphql
+query {
+  _commits(docID: "<rendered-request-doc>", fieldName: "request_json") {
+    cid
+    height
+    signature { type identity value }
+  }
+}
+```
+
+That CID is the integrity witness. It replicates with the document instead of
+being a column that can drift from the value it describes, and it is the
+artifact forthcoming Merkle-DAG proofs will attest over — a stored SHA-256
+column would be a dead end those proofs cannot reach.
+
+Verification therefore needs no hash in the loop at all. Reconstruction
+canonicalizes its output and compares it to the stored `request_json`
+directly. Equality is the check; the field CID and its signature are what make
+the stored side trustworthy.
 
 ## Target schema
 
@@ -112,7 +144,6 @@ type RenderedRequest @branchable @policy(id: "<pinned-policy-id>", resource: "Re
     model_name: String @immutable
     source: String @immutable
     request_json: String @immutable
-    request_hash: String @index @immutable
     prompt_hash: String @index @immutable
     tools_hash: String @index @immutable
     provenance_json: String @immutable
@@ -123,7 +154,16 @@ type RenderedRequest @branchable @policy(id: "<pinned-policy-id>", resource: "Re
 `request_json` contains the exact `Value` produced by
 `llm::rig_compat::provider_request_json`, serialized canonically. Component
 values do not need duplicate columns because they are derivable from
-`request_json`; keeping `prompt_hash` and `tools_hash` is useful for diagnosis.
+`request_json`.
+
+`prompt_hash` and `tools_hash` are retained **only as query indexes** — finding
+every capture sharing a tool surface, dedup, and prefix-stability analysis for
+#723. They are explicitly *not* the integrity mechanism; see the section above.
+Anything that treats them as proof of content is a bug. There is deliberately
+no `request_hash`: the signed field commit for `request_json` is the content
+address, and duplicating it in a column would create a second source of truth
+that can silently disagree with the first.
+
 `provenance_json` is a versioned object, never an overloaded empty-map signal.
 
 ---
@@ -138,13 +178,21 @@ values do not need duplicate columns because they are derivable from
 - Create: `crates/gents/tests/conformance/rendered_capture.rs`
 - Modify: `crates/gents/tests/conformance/structure.rs`
 
-- [ ] Model a capture key, canonical request hash, and three stages:
+- [ ] Model a capture key, an opaque canonical request value, and three stages:
   `Assembled`, `DurablyCaptured`, `Sent`.
 - [ ] Make `capture` the only legal predecessor of `send`.
-- [ ] Model idempotent recapture of the same `(key, hash)` and rejection of the
-  same key with a different hash.
+- [ ] Model idempotent recapture of the same `(key, request)` and rejection of
+  the same key bound to a different request.
 - [ ] Prove `sent_implies_durably_captured` and
-  `capture_key_determines_request_hash` with zero `sorry`s.
+  `capture_key_determines_request` with zero `sorry`s.
+
+  State the second theorem over the request **value**, not over a stored
+  digest. The model does not need a hash function: the property is that one
+  capture key is bound to at most one canonical request, which is what
+  idempotency and integrity both rest on. DefraDB supplies the content address
+  for the persisted value as a signed field commit, so introducing a modeled
+  hash column would add an unmodeled trust assumption — that the writer
+  computed it honestly — to a theorem that does not need one.
 - [ ] Emit positive and negative transition cases through the existing contract
   JSON and consume them from Rust.
 - [ ] Add the domain to the coverage ledger and structure test.
