@@ -695,3 +695,116 @@ After Task 6 is green, write/execute Plan 2 for #722:
 - honest failed-spill state;
 - live multi-turn test that trims a result, resolves it, continues, and asserts
   every provider request against the durable captures introduced here.
+
+---
+
+# Post-workflow-1 corrections and locked scope (2026-08-06)
+
+Task 1 is committed (`8180bf67`). Recon plus adversarial verification produced
+the following binding decisions. Where this section conflicts with anything
+above, this section wins.
+
+## Scope DROPPED
+
+- **ACP / `@policy`.** Blocked on
+  [defradb.rs#1318](https://github.com/sourcenetwork/defradb.rs/issues/1318):
+  `EmbeddedNode` exposes no policy or relationship API, `create_document_acp`
+  is `pub(crate)`, and the constructed `LocalDocumentACP` is never retained on
+  the node. Worse, a `@policy` id that is never installed deploys cleanly and
+  leaves rows anonymously readable — unregistered documents are public. **Do
+  not put `@policy` in the shipped SDL.** #840's participant-boundary criterion
+  is explicitly NOT met by this work; say so in the PR.
+- **At-rest encryption.** `encrypt: true` / `encryptFields` protect the
+  replicated CRDT block deltas only. The local node writes plaintext into the
+  datastore and builds indexes from it, so on a single-node install the payload
+  is readable by anyone who can query the node. The only local mechanism is
+  `NodeBuilder::with_at_rest_encryption_key`, which gents does not use. Do not
+  ship a green `encrypt: true` test as evidence of confidentiality.
+- **Branchability workstream (former Task 8) — DELETE ENTIRELY.** Two
+  independent reasons. It is unnecessary: per-field and composite commit blocks
+  are written unconditionally (`db-blocks/src/write.rs:59`, composite at `:268`),
+  `is_branchable` gates only the collection-level block
+  (`db/src/doc_mutator.rs:259`), and it appears exactly once in `crates/query/`
+  — as an ACP-scope argument at `runner/commits.rs:195`. And it is impossible:
+  `validate_branchable_not_mutated` rejects every patch shape, and populated
+  collections cannot be deleted and recreated.
+- **The encryption/index compatibility fork.** A non-problem. Indexes are built
+  from the plaintext document after the block write, so encrypted fields remain
+  indexable and filterable; upstream proves it end-to-end by filtering an
+  `@index`ed `encryptFields` column on a replica.
+
+## Scope LOCKED IN
+
+- **Capture at the transport seam**, not pre-transport. The ChatGPT-Codex
+  transport rewrites the body after rig serializes it — hoists system text into
+  `instructions` and strips it from `input`, sets `store:false`/`stream:true`,
+  deletes `max_output_tokens`/`temperature`/`top_p`, and forces `strict:false`
+  on every tool (`chatgpt_codex.rs:358-401`). Grok injects `store:false`
+  (`xai_grok_oauth.rs:312`). Capturing pre-transport makes the equality claim
+  false for two of four provider kinds.
+- **Widen the sink to every provider call site.** `completion_factory::loop_config`
+  hardcodes `on_rendered_request: None` (`completion_factory.rs:56`), leaving
+  the compaction summarizer, title generation, and the one-shot runner
+  uncaptured. The compaction summarizer is the one that produces the ephemeral
+  checkpoint this design exists to explain.
+- **`RenderedRequest` registers as a `DEFAULT_BASELINE` entry**, not via
+  `AddCollection`. The two are mutually exclusive under `baseline_ensure.rs:83-86`
+  (set equality) and `:30-40` (ordered pairwise equality); no pin-authoring
+  workflow exists for steps (`phase_b_steps.rs:304-341` iterates baseline only);
+  and `Registry::managed_names()` excludes AddCollection collections from eager
+  materialization.
+- **AssemblyTrace carries the four genuinely unrecoverable leaks:**
+  1. the provider assistant `message_id` — stamped into in-memory history
+     (`loop_stream.rs:802-806`), persisted as `id: None`
+     (`stream_processor.rs:305`);
+  2. the exact threaded tool-result text per call id — the loop threads
+     `truncate_text(model_facing_text, tool_result_truncation_mode(name), …)`
+     while persistence re-derives from `AgentToolCall.result` with
+     `TruncationMode::Head`, different limits, and
+     `model_observation_for_tool_result`;
+  3. the full effective post-compaction message list — per-turn compaction is a
+     STICKY mutation (`*history = compacted; *new_messages = vec![…]`,
+     `loop_stream.rs:1274-1275`), so one turn's summary governs every later turn;
+  4. the `build_path` discriminator — repair calls `build_request` directly
+     (`loop_stream.rs:353,447`) and never applies the output clamp, so a
+     repaired attempt carries raw `max_tokens` while the original carries the
+     clamped one.
+
+  The clamp VALUE is not needed: it is a pure function of the assembled request
+  plus durable config, and `completion_request_input_estimate` does not read
+  `max_tokens`, so one pass reproduces it exactly.
+
+## Required test the current fence lacks
+
+`attempt_distinguishes_facts` is proven in Lean with no Rust fence behind it. A
+mutation probe during verification replaced the loop's `attempt` with a literal
+`0` at `loop_stream.rs:298`; `cargo check` passed and **no test failed**.
+`loop_stream/tests.rs:638` binds `|_turn_index, _attempt, _request|` and rebuilds
+the key from the Lean case; `tests.rs:534` only ever observes attempt 0.
+
+Add a multi-attempt test asserting the sink receives DISTINCT `attempt` values
+across a retry, sourced from the loop's own arguments and not reconstructed.
+
+## Citation fixes
+
+- The bare-word `truncated` false positive was fixed by **#998** (`061a3a34`,
+  2026-08-02), not #988.
+- `tool_call_key` WRITE sites are `tool_call_lifecycle/transition/native.rs:47,
+  319, 457, 519` and `session/fork.rs:581` (fork re-keys to the child session).
+  `hook/persistence/helpers.rs:160-166` is a read path.
+- `tool_call_id` is rig's locally minted nanoid or a uuid v4 — never model- or
+  provider-supplied. The realizable collision direction is via `session_id`,
+  which is caller-controlled and unvalidated (`ChatArgs::session_id` has no
+  `value_parser`).
+- `_commits` accepts exactly ONE docID; two or more is a parse error. Its
+  `fieldName` filter is evaluated in memory with
+  `filter.matches(…).unwrap_or(true)`, so a malformed filter silently degrades
+  to no filter — assert the returned `fieldName` in Rust. Treat `[]` as an
+  explicit `Unavailable`.
+- `SessionHistoryTool` carries only `{ node, agent_did }`; there is no requester
+  filter, and three of its four sub-queries have no `agent_did` filter at all.
+- Trace redaction defaults to `Full` (none); ACP filtering is skipped unless a
+  `ProjectionAcpBinding` row exists; Harbor invokes `trace project` with neither
+  `--redaction` nor `--actor-did`; and ATIF `extra` maps bypass redaction
+  entirely. Excluding captured inputs from default exports must therefore be a
+  positive default, not an opt-out.
