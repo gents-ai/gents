@@ -3,7 +3,7 @@ use support::*;
 
 use std::fs;
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -61,19 +61,6 @@ fn wait_port_free(port: u16, timeout: Duration) -> bool {
             return false;
         }
         std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-fn allocate_demo_base_port() -> Result<u16> {
-    loop {
-        let port = allocate_port()?;
-        let Some(worker_port) = port.checked_add(1) else {
-            continue;
-        };
-        if let Ok(listener) = TcpListener::bind(("127.0.0.1", worker_port)) {
-            drop(listener);
-            return Ok(port);
-        }
     }
 }
 
@@ -431,8 +418,7 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
             ChatAction::Sse(completion_text_sse("demo fallback"))
         })
     })?;
-    let port = allocate_demo_base_port()?;
-    let worker_port = port + 1;
+    let port = allocate_port()?;
 
     let input = format!("pair\ndelegate\nchat\n{parent_prompt}\n/back\ndown\n");
     let output = run_demo(
@@ -450,10 +436,16 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         &input,
     )?;
     let stdout = require_success(&output)?;
-    assert!(
-        stdout.contains("paired. Node B (worker) is live"),
-        "demo pair did not converge:\n{stdout}"
-    );
+    if !stdout.contains("paired. Node B (worker) is live") {
+        // The demo's server logs live inside the tempdir and vanish with it;
+        // dump both nodes' logs so a pair failure is diagnosable (#1041 pattern).
+        let node_a_log = std::fs::read_to_string(home.join("server.log")).unwrap_or_default();
+        let node_b_log =
+            std::fs::read_to_string(home.join("node-b").join("server.log")).unwrap_or_default();
+        panic!(
+            "demo pair did not converge:\n{stdout}\n--- node A server.log ---\n{node_a_log}\n--- node B server.log ---\n{node_b_log}"
+        );
+    }
     assert!(
         stdout.contains("cross-node delegation enabled"),
         "demo delegate did not configure the fleet:\n{stdout}"
@@ -462,6 +454,19 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
         stdout.contains(&parent_reply),
         "parent did not finish after live background-child inspection:\n{stdout}"
     );
+    // Node B allocates its port at pair time; recover it from the paired
+    // banner so the leak check covers the port actually bound.
+    let worker_port = stdout
+        .lines()
+        .find_map(|line| {
+            line.split_once("(worker) is live at http://127.0.0.1:")?
+                .1
+                .split('/')
+                .next()?
+                .parse::<u16>()
+                .ok()
+        })
+        .expect("paired banner names node B's endpoint");
     assert!(
         wait_port_free(port, Duration::from_secs(15))
             && wait_port_free(worker_port, Duration::from_secs(15)),

@@ -457,6 +457,34 @@ fn automation_request(
                             bail!("event_trigger.{field} is required");
                         }
                     }
+                    // `source_collection` is interpolated into GraphQL
+                    // identifier positions by the trigger engine, where
+                    // escaping cannot apply — the value must BE a valid
+                    // collection identifier or the write is rejected here,
+                    // at the privilege boundary.
+                    let source_collection = merged
+                        .get("source_collection")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if let Err(error) =
+                        crate::graphql::validate_collection_identifier(source_collection)
+                    {
+                        bail!("event_trigger.source_collection: {error}");
+                    }
+                    // `filter` is spliced into the trigger engine's probe as
+                    // a whole object fragment, which escaping cannot protect
+                    // and identifier validation does not cover (#1038).
+                    if let Some(filter) = merged
+                        .get("filter")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|filter| !filter.is_empty())
+                    {
+                        if let Err(error) = crate::graphql::validate_graphql_filter_fragment(filter)
+                        {
+                            bail!("event_trigger.filter: {error}");
+                        }
+                    }
                 }
                 _ => unreachable!("automation targets only"),
             }

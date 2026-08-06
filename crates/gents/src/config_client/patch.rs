@@ -435,9 +435,20 @@ impl SelfConfigTarget {
 pub type SelfConfigPatch = Vec<(String, Option<Value>)>;
 
 /// Admissibility (Lean `admissible`): the typed surface rejects — rather than
-/// silently drops — any patch naming a field outside the writable set.
+/// silently drops — any patch naming a field outside the writable set, or
+/// carrying a value that is not a scalar.
+///
+/// The value-shape rule restores the model: Lean's `FieldValue` is a
+/// `String` (`proofs/Proofs/SelfConfig/Apply.lean`), while the tool schema
+/// is `additionalProperties: true` and accepts arbitrary JSON. Every
+/// writable column across all six targets is a scalar or a list of scalars,
+/// so nothing legitimate is refused here — and an object value would reach
+/// the mutation renderer, where its keys land in identifier position.
 pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> Result<()> {
-    for (field, _) in patch {
+    for (field, value) in patch {
+        if let Some(value) = value {
+            ensure_scalar_patch_value(target, field, value)?;
+        }
         if !target.is_writable(field) {
             if target.all_fields().contains(&field.as_str()) {
                 bail!(
@@ -454,6 +465,24 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
         }
     }
     Ok(())
+}
+
+fn ensure_scalar_patch_value(target: SelfConfigTarget, field: &str, value: &Value) -> Result<()> {
+    let shape = match value {
+        Value::Object(_) => "an object",
+        Value::Array(items)
+            if items
+                .iter()
+                .any(|item| !item.is_string() && !item.is_number() && !item.is_boolean()) =>
+        {
+            "a list with a non-scalar element"
+        }
+        _ => return Ok(()),
+    };
+    bail!(
+        "field {field} on {collection} must be a scalar or a list of scalars, got {shape}",
+        collection = target.collection_name(),
+    )
 }
 
 /// In-memory partial merge (Lean `applyPatch`): only writable fields change;

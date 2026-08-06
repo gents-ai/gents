@@ -101,6 +101,131 @@ pub struct GraphqlSessionShape {
     pub tool_results: Vec<AgentToolResultRow>,
 }
 
+/// Validate `name` against the GraphQL `Name` grammar:
+/// `[_A-Za-z][_0-9A-Za-z]*` (ASCII only). Anything interpolated into a
+/// GraphQL document in identifier position MUST pass this check first —
+/// escaping does not exist for identifiers.
+pub fn validate_graphql_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        Some(c) => {
+            return Err(anyhow!(
+                "invalid identifier {name:?}: must start with a letter or underscore, got {c:?}"
+            ))
+        }
+        None => return Err(anyhow!("invalid identifier: empty string")),
+    }
+    if let Some(c) = name
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
+    {
+        return Err(anyhow!(
+            "invalid identifier {name:?}: only ASCII letters, digits, and underscore are allowed, got {c:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a value used as a **collection name** in identifier position
+/// (e.g. `EventTrigger.source_collection`). On top of the Name grammar this
+/// rejects the `__` prefix, which the GraphQL spec reserves for
+/// introspection — a "collection" of `__Type` or `__schema` would aim a
+/// query at the introspection surface instead of a document collection.
+pub fn validate_collection_identifier(name: &str) -> Result<()> {
+    validate_graphql_name(name)?;
+    if name.starts_with("__") {
+        return Err(anyhow!(
+            "invalid collection name {name:?}: the __ prefix is reserved for GraphQL introspection"
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a caller-supplied GraphQL **filter-object fragment** — a value
+/// spliced into a query whole, as `EventTrigger.filter` is.
+///
+/// This is the third interpolation position, and neither of the other two
+/// defenses reaches it: escaping would destroy the object syntax, and the
+/// value is not an identifier. What makes it checkable is that a break-out
+/// must unbalance the fragment — to escape it has to close a `]`, `}` or
+/// `)` it never opened. So: require one balanced object literal, built only
+/// from the tokens a filter legitimately needs.
+///
+/// Deliberately strict. `(`, `)` and `#` never appear in a filter object,
+/// but each is load-bearing for an attack (`)` closes the enclosing field's
+/// argument list, `#` comments out the query's own tail), so they are
+/// rejected outright rather than balance-tracked.
+pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
+    let trimmed = filter.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("invalid filter: empty"));
+    }
+    if !trimmed.starts_with('{') {
+        return Err(anyhow!("invalid filter: must be an object literal"));
+    }
+
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut closed_at: Option<usize> = None;
+
+    for (index, ch) in trimmed.char_indices() {
+        if in_string {
+            match ch {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        // A depth-0 token after the object already closed means the value is
+        // not a single fragment — trailing text is someone else's query.
+        if closed_at.is_some() && !ch.is_whitespace() {
+            return Err(anyhow!(
+                "invalid filter: trailing content after the object literal"
+            ));
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => stack.push(ch),
+            '}' | ']' => {
+                let opener = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("invalid filter: unbalanced {ch:?} at byte {index}"))?;
+                let expected = if ch == '}' { '{' } else { '[' };
+                if opener != expected {
+                    return Err(anyhow!(
+                        "invalid filter: mismatched {opener:?} closed by {ch:?} at byte {index}"
+                    ));
+                }
+                if stack.is_empty() {
+                    closed_at = Some(index);
+                }
+            }
+            ':' | ',' => {}
+            c if c.is_ascii_alphanumeric() || c == '_' => {}
+            // Numeric literals: -1, 1.5, 1e9, 1e+9.
+            '-' | '+' | '.' => {}
+            c if c.is_whitespace() => {}
+            c => {
+                return Err(anyhow!(
+                "invalid filter: character {c:?} at byte {index} is not allowed in a filter object"
+            ))
+            }
+        }
+    }
+
+    if in_string {
+        return Err(anyhow!("invalid filter: unterminated string literal"));
+    }
+    if !stack.is_empty() {
+        return Err(anyhow!("invalid filter: unclosed {:?}", stack.last()));
+    }
+    Ok(())
+}
+
 pub fn escape_graphql_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -585,7 +710,14 @@ pub fn graphql_input_literal(value: &Value) -> Result<String> {
         Value::Object(map) => {
             let rendered = map
                 .iter()
-                .map(|(key, value)| Ok(format!("{key}: {}", graphql_input_literal(value)?)))
+                .map(|(key, value)| {
+                    // Keys render in identifier position, where escaping
+                    // cannot apply. Values reaching here are caller-supplied
+                    // (self-config patches are agent-authored), so an
+                    // unvalidated key is an injection into the mutation.
+                    validate_graphql_name(key)?;
+                    Ok(format!("{key}: {}", graphql_input_literal(value)?))
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(format!("{{ {} }}", rendered.join(", ")))
         }
@@ -1015,6 +1147,74 @@ mod tests {
         assert!(rendered.contains("enabled: true"));
         assert!(rendered.contains(r#"name: "alpha""#));
         assert!(rendered.contains(r#"tags: ["a", "b"]"#));
+    }
+
+    #[test]
+    fn validate_graphql_filter_fragment_accepts_real_filters() {
+        for filter in [
+            r#"{ kind: { _eq: "signup" } }"#,
+            r#"{ status: { _in: ["a", "b"] } }"#,
+            r#"{ _and: [ { a: { _eq: 1 } }, { b: { _gt: -2.5 } } ] }"#,
+            r#"{ name: { _like: "%needs \"quotes\"%" } }"#,
+            "{ enabled: { _eq: true } }",
+        ] {
+            assert!(
+                validate_graphql_filter_fragment(filter).is_ok(),
+                "{filter:?} is a legitimate filter and must pass"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_graphql_filter_fragment_rejects_break_outs() {
+        for filter in [
+            // The confirmed #1038 payload: closes the enclosing _and array,
+            // object and paren, then appends its own selection.
+            r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { system_prompt } PocEvent(filter: { _and: [ {}"#,
+            // Unbalanced / stray delimiters.
+            "{ a: 1 } }",
+            "{ a: 1 ]",
+            "{ a: 1 }) { x } (",
+            // Two top-level values.
+            "{ a: 1 } { b: 2 }",
+            // A comment can hide the rest of a line.
+            "{ a: 1 } # trailing",
+            // Not an object at all.
+            "kind",
+            "",
+            "   ",
+            // Unterminated string literal.
+            r#"{ a: { _eq: "open } }"#,
+        ] {
+            assert!(
+                validate_graphql_filter_fragment(filter).is_err(),
+                "{filter:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn graphql_input_literal_rejects_object_keys_that_are_not_graphql_names() {
+        // Object keys land in identifier position in the rendered literal,
+        // where escaping does not apply. A self-config patch value is
+        // agent-controlled, so a non-Name key is an injection, not a typo.
+        let hostile = serde_json::json!({
+            "endpoint": {
+                r#"x: 1 }, api_key: "leaked" }) { _docID } #"#: 1
+            }
+        });
+        let err = graphql_input_literal(&hostile)
+            .expect_err("a non-Name object key must be rejected, not spliced");
+        assert!(
+            err.to_string().contains("identifier"),
+            "error should name the identifier rule: {err}"
+        );
+
+        // Well-formed nested keys still render.
+        let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
+        assert!(graphql_input_literal(&ok)
+            .expect("valid Name keys render")
+            .contains("inner_1: \"v\""));
     }
 
     #[test]

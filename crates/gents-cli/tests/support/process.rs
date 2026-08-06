@@ -51,6 +51,28 @@ impl ServeProcess {
             read_captured_log(self.stderr_log.as_ref())?,
         ))
     }
+
+    /// Run a fallible future and, on failure, attach the server's captured
+    /// stdout/stderr to the error chain (the original failure stays as the
+    /// cause) so mid-test connection failures are diagnosable (#1041). A
+    /// failure to read the capture files is reported in place of the logs
+    /// rather than silently rendering as an empty (silent-looking) server.
+    pub async fn capturing<T>(
+        &self,
+        fut: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        match fut.await {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let (stdout, stderr) = self
+                    .captured_output()
+                    .unwrap_or_else(|error| (format!("<capture failed: {error}>"), String::new()));
+                Err(error.context(format!(
+                    "server stdout:\n{stdout}\nserver stderr:\n{stderr}"
+                )))
+            }
+        }
+    }
 }
 
 pub fn cli_bin() -> &'static str {
