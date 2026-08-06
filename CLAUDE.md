@@ -43,4 +43,5 @@ The few things you can't discover until they bite:
 - **Gate with the full package suite** (`cargo test -p gents`), not `--lib` — integration tests are separate compile units and `--lib` will happily pass while they don't build.
 - **Compile the whole workspace before pushing** (`cargo check --workspace --all-targets`) — the test gate above still skips examples, the desktop crates, and many test targets, so a new required struct field breaks their construction sites silently until CI (or the next unrelated PR). CI enforces this in `rust-and-cli`; run it locally first.
 - **Flaky tests are defects.** The formal-verification investment exists to eliminate that class; capture, file, and fix — never shrug.
+- **Create worktrees with `make worktree BRANCH=<branch>`**, not bare `git worktree add`. It clones `target/` and `proofs/.lake` from the current checkout via APFS clonefile; a cold worktree costs ~40 min of recompilation (sccache can't cache build scripts, proc-macro expansion, or linking) and hours of Mathlib. Note `cargo check` artifacts don't warm `cargo test` — warm with `cargo build --tests -p <crate>` if tests are the goal.
 - `tracing`, never `println`.

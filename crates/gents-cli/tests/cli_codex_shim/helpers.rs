@@ -1796,7 +1796,14 @@ pub(super) async fn read_terminal_child_without_reasoning_replay(
             codex::JSONRPCMessage::Response(_) => {}
         }
 
-        if child_status.is_some() && thread_status.is_some() && agent_completed_at_ms.is_some() {
+        // A CollabAgentToolCall update can still carry the child's
+        // intermediate Running status after its thread has gone Idle; keep
+        // reading until the collab projection reports a settled (non-Running)
+        // status instead of asserting the first snapshot observed.
+        let child_settled = child_status
+            .as_ref()
+            .is_some_and(|status| *status != codex::CollabAgentStatus::Running);
+        if child_settled && thread_status.is_some() && agent_completed_at_ms.is_some() {
             return Ok((
                 child_status.take().expect("checked child status"),
                 thread_status.take().expect("checked thread status"),

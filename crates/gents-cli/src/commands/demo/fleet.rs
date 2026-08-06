@@ -71,9 +71,47 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
     cmd.spawn().context("spawning demo server")
 }
 
+/// `/healthz` answering only proves the node HTTP server is up; the runtime
+/// (and the schemas the p2p subcommands query, e.g. AgentNetwork before a
+/// pairings join) is ready strictly later. Gate on AgentRuntime reaching
+/// `ready` before driving CLI subcommands at this node (#990 — the pattern
+/// from #935/#926).
+pub(super) async fn wait_runtime_ready(
+    graphql: &str,
+    agent_did: &str,
+    server: &mut Child,
+) -> Result<()> {
+    let query = format!(
+        r#"{{ AgentRuntime(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 1) {{ process_state }} }}"#,
+        escape_graphql_string(agent_did)
+    );
+    // 180s: a second node cold-starts a full DefraDB + runtime process, and on
+    // a contended host (parallel test suites, sibling builds) that can take
+    // minutes. Bounded and explicit — on expiry the error names the node.
+    for _ in 0..360 {
+        if let Ok(resp) = post_graphql(graphql, &query).await {
+            if resp
+                .pointer("/data/AgentRuntime/0/process_state")
+                .and_then(Value::as_str)
+                == Some("ready")
+            {
+                return Ok(());
+            }
+        }
+        if let Ok(Some(status)) = server.try_wait() {
+            bail!("demo server exited before its runtime became ready ({status})");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    bail!("timed out waiting for the demo runtime at {graphql} to become ready")
+}
+
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
     let client = reqwest::Client::new();
-    for _ in 0..300 {
+    // 120s: /healthz reports 200 only once the runtime row exists, so this is
+    // already a coarse readiness gate; give a cold second node headroom on a
+    // contended host. Bounded — server death is still detected immediately.
+    for _ in 0..600 {
         if client
             .get(url)
             .timeout(Duration::from_millis(500))
@@ -99,22 +137,42 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     }
     let bin = fleet.bin.clone();
     let home_a = fleet.home_a.clone();
+    let graphql_a = fleet.graphql_a.clone();
     let backend = fleet.backend.clone();
     let home_b = home_a.join("node-b");
     let work_b = home_b.join("work");
-    let port_b = fleet.base_port + 1;
-    let graphql_b = format!("http://127.0.0.1:{port_b}/api/v0/graphql");
 
     println!("  initializing node B (worker)…");
     let did_b = init_agent(&bin, &home_b, &work_b, &backend, "worker").await?;
     std::fs::create_dir_all(&work_b)?;
 
     println!("  starting node B…");
-    let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
-    wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await?;
+    // Allocate node B's port at spawn time, not fleet-start time: a reserved
+    // but unbound port sits exposed to the OS ephemeral allocator (poll
+    // sockets take source ports from the same range), and a stolen bind kills
+    // the node's HTTP listener while the process stays alive. Keeping the
+    // window at milliseconds plus one respawn retry removes the class.
+    let mut attempt = 0;
+    let (mut server_b, graphql_b) = loop {
+        attempt += 1;
+        let port_b = allocate_ephemeral_port()?;
+        let graphql_b = format!("http://127.0.0.1:{port_b}/api/v0/graphql");
+        let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
+        match wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await {
+            Ok(()) => break (server_b, graphql_b),
+            Err(error) if attempt < 3 => {
+                // kill() waits for exit so the replacement cannot race the old
+                // process's RocksDB lock on the shared node B home.
+                let _ = server_b.kill().await;
+                println!("  node B did not come up ({error}); retrying with a fresh port…");
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    wait_runtime_ready(&graphql_b, &did_b, &mut server_b).await?;
 
-    let (peer_a, addr_a) = p2p_identity(&bin, &home_a).await?;
-    let (peer_b, addr_b) = p2p_identity(&bin, &home_b).await?;
+    let (peer_a, addr_a) = p2p_identity(&bin, &home_a, &graphql_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&bin, &home_b, &graphql_b).await?;
 
     println!("  creating the network and enrolling node B…");
     run_cli_text(
@@ -125,6 +183,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "create",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             "--name",
             "Demo Fleet",
             "--output",
@@ -140,6 +200,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "grant",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             &did_b,
             "--output",
             "json",
@@ -154,6 +216,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "invite",
             "--home",
             &path_arg(&home_a),
+            "--graphql",
+            &graphql_a,
             "--member-did",
             &did_b,
             "--template",
@@ -173,6 +237,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             "join",
             "--home",
             &path_arg(&home_b),
+            "--graphql",
+            &graphql_b,
             &token,
         ]),
     )
@@ -200,13 +266,45 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
         server: server_b,
     });
     println!(
-        "  ✓ paired. Node B (worker) is live; run `delegate` to enable cross-node delegation."
+        "  ✓ paired. Node B (worker) is live at {}; run `delegate` to enable cross-node delegation.",
+        fleet
+            .node_b
+            .as_ref()
+            .map(|worker| worker.graphql.as_str())
+            .unwrap_or_default()
     );
     Ok(())
 }
 
-async fn p2p_identity(bin: &Path, home: &Path) -> Result<(String, String)> {
-    let status = run_cli_json(bin, &cli(&["p2p", "status", "--home", &path_arg(home)])).await?;
+fn allocate_ephemeral_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .context("allocating an ephemeral port for node B")?;
+    let port = listener
+        .local_addr()
+        .context("reading allocated node B port")?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+/// The fleet always knows each node's admin endpoint, so pass it explicitly:
+/// `--home`-only invocations resolve the endpoint from the node's persisted
+/// `runtime_state.json`, which the server only writes once its runtime reaches
+/// Ready — later than `/healthz` starts answering — and the fallback is the
+/// hardcoded default port 9191 (#990).
+async fn p2p_identity(bin: &Path, home: &Path, graphql: &str) -> Result<(String, String)> {
+    let status = run_cli_json(
+        bin,
+        &cli(&[
+            "p2p",
+            "status",
+            "--home",
+            &path_arg(home),
+            "--graphql",
+            graphql,
+        ]),
+    )
+    .await?;
     let peer = status
         .get("p2p_peer_id")
         .and_then(Value::as_str)
@@ -355,8 +453,8 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         bail!("not paired — run `pair` first");
     };
     println!("  configuring cross-node delegation…");
-    let (peer_a, addr_a) = p2p_identity(&fleet.bin, &fleet.home_a).await?;
-    let (peer_b, addr_b) = p2p_identity(&fleet.bin, &worker.home).await?;
+    let (peer_a, addr_a) = p2p_identity(&fleet.bin, &fleet.home_a, &fleet.graphql_a).await?;
+    let (peer_b, addr_b) = p2p_identity(&fleet.bin, &worker.home, &worker.graphql).await?;
 
     println!("  switching the data plane to subagent delegation templates…");
     upsert_data_plane(

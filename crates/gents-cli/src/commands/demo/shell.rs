@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use crate::commands::chat::submit_chat_turn;
 
 use super::backend::{pick_backend, write_backend_args};
-use super::fleet::{delegate, desktop, pair, spawn_server, wait_http, Fleet};
+use super::fleet::{delegate, desktop, pair, spawn_server, wait_http, wait_runtime_ready, Fleet};
 use super::setup::{init_agent, seed_demo_skills};
 use super::util::{prompt, short, StdinLines};
 use super::NODE_A_NAME;
@@ -146,6 +146,7 @@ async fn reconfigure(fleet: &mut Fleet, reader: &mut StdinLines) -> Result<()> {
         &mut server,
     )
     .await?;
+    wait_runtime_ready(&fleet.graphql_a, &did, &mut server).await?;
     seed_demo_skills(&fleet.bin, &fleet.graphql_a, &did).await;
 
     fleet.server_a = server;

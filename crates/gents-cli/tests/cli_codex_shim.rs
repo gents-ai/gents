@@ -160,7 +160,13 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let mut serve = spawn_server_with_env(&home_dir, server_port, &server_args, &[])?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
@@ -186,7 +192,13 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let mut restarted = spawn_server_with_env(&home_dir, server_port, &server_args, &[])?;
     wait_for_port(server_port, &mut restarted)?;
     wait_for_port(shim_port, &mut restarted)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    restarted
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/")).await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     send_client_request(
@@ -207,10 +219,11 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     assert_eq!(goal.token_budget, Some(12_345));
 
     let foreign_thread_id = format!("foreign-goal-{}", Uuid::new_v4().simple());
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+    restarted
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_Goal(input: {{
                     goal_id: "foreign-goal",
                     session_id: "{}",
@@ -220,11 +233,11 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
                     created_at: "2026-07-16T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&foreign_thread_id),
-            escape_graphql_string(&agent_did),
-        ),
-    )
-    .await?;
+                escape_graphql_string(&foreign_thread_id),
+                escape_graphql_string(&agent_did),
+            ),
+        ))
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadGoalGet {
@@ -251,14 +264,15 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let foreign_clear: codex::ThreadGoalClearResponse =
         read_typed_response(&mut ws, request_id(123)).await?;
     assert!(!foreign_clear.cleared);
-    let foreign_rows = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
-            escape_graphql_string(&foreign_thread_id)
-        ),
-    )
-    .await?;
+    let foreign_rows = restarted
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
+                escape_graphql_string(&foreign_thread_id)
+            ),
+        ))
+        .await?;
     assert_eq!(
         foreign_rows
             .pointer("/data/Goal")
@@ -267,10 +281,11 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
         Some(1)
     );
 
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+    restarted
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_Goal(input: {{
                     goal_id: "duplicate-goal",
                     session_id: "{}",
@@ -280,11 +295,11 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
                     created_at: "2026-07-16T00:00:01Z"
                 }}) {{ _docID }}
             }}"#,
-            escape_graphql_string(&thread_id),
-            escape_graphql_string(&agent_did),
-        ),
-    )
-    .await?;
+                escape_graphql_string(&thread_id),
+                escape_graphql_string(&agent_did),
+            ),
+        ))
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::ThreadGoalClear {
@@ -298,14 +313,15 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
     let cleared: codex::ThreadGoalClearResponse =
         read_typed_response(&mut ws, request_id(124)).await?;
     assert!(cleared.cleared);
-    let cleared_rows = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
-            escape_graphql_string(&thread_id)
-        ),
-    )
-    .await?;
+    let cleared_rows = restarted
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
+                escape_graphql_string(&thread_id)
+            ),
+        ))
+        .await?;
     assert_eq!(
         cleared_rows
             .pointer("/data/Goal")
@@ -349,7 +365,13 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
     assert_eq!(
         readiness
@@ -413,11 +435,21 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
 
     send_client_request(
         &mut ws,
@@ -477,10 +509,11 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     Uuid::parse_str(&thread_id)
         .with_context(|| format!("Codex TUI requires UUID thread ids, got {thread_id}"))?;
 
-    let session_response = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+    let session_response = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
                     agent_did
@@ -489,10 +522,10 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
                     started
                 }}
             }}"#,
-            escape_graphql_string(&thread_id),
-        ),
-    )
-    .await?;
+                escape_graphql_string(&thread_id),
+            ),
+        ))
+        .await?;
     let session = first_graphql_row(&session_response, "AgentSession")?;
     assert_eq!(
         session.get("session_id").and_then(Value::as_str),
@@ -1059,7 +1092,13 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
     let turned_session_id = Uuid::new_v4().to_string();
     for mutation in [
@@ -1094,27 +1133,32 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             agent_did = escape_graphql_string(&agent_did),
         ),
     ] {
-        graphql_query(&graphql, &mutation).await?;
+        serve.capturing(graphql_query(&graphql, &mutation)).await?;
     }
 
     let zero_turn_session_id = Uuid::new_v4().to_string();
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{ create_AgentSession(input: {{
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
                 behavior_id: "{behavior_id}", started: "2026-01-01T00:00:00Z", status: "active"
             }}) {{ _docID }} }}"#,
-            s = escape_graphql_string(&zero_turn_session_id),
-            behavior_id = escape_graphql_string(&behavior_id),
-            agent_did = escape_graphql_string(&agent_did),
-        ),
-    )
-    .await?;
+                s = escape_graphql_string(&zero_turn_session_id),
+                behavior_id = escape_graphql_string(&behavior_id),
+                agent_did = escape_graphql_string(&agent_did),
+            ),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -1224,11 +1268,21 @@ async fn codex_shim_derives_git_info_and_persists_early_rename() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -1387,13 +1441,20 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
     let foreign_session_id = Uuid::new_v4().to_string();
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session}",
                     agent_name: "{agent_name}",
@@ -1403,17 +1464,18 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
                     status: "active"
                 }}) {{ _docID }}
             }}"#,
-            session = escape_graphql_string(&foreign_session_id),
-            agent_name = escape_graphql_string(&agent_name),
-            agent_did = escape_graphql_string(&agent_did),
-            behavior_id = escape_graphql_string(&behavior_id),
-        ),
-    )
-    .await?;
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+                session = escape_graphql_string(&foreign_session_id),
+                agent_name = escape_graphql_string(&agent_name),
+                agent_did = escape_graphql_string(&agent_did),
+                behavior_id = escape_graphql_string(&behavior_id),
+            ),
+        ))
+        .await?;
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request}",
                     agent_did: "{agent_did}",
@@ -1424,17 +1486,21 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
                     created_at: "2026-01-01T00:00:00Z"
                 }}) {{ _docID }}
             }}"#,
-            request = escape_graphql_string(&Uuid::new_v4().to_string()),
-            agent_did = escape_graphql_string(&agent_did),
-            behavior_id = escape_graphql_string(&behavior_id),
-            session = escape_graphql_string(&foreign_session_id),
-        ),
-    )
-    .await?;
+                request = escape_graphql_string(&Uuid::new_v4().to_string()),
+                agent_did = escape_graphql_string(&agent_did),
+                behavior_id = escape_graphql_string(&behavior_id),
+                session = escape_graphql_string(&foreign_session_id),
+            ),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -1548,11 +1614,21 @@ async fn codex_shim_completes_blank_materialized_terminal_message() -> Result<()
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
@@ -1620,11 +1696,21 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
@@ -1659,20 +1745,21 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
     assert_turn_has_user_text(&forked.thread.turns[0], &prompt);
     assert_turn_has_agent_text(&forked.thread.turns[0], &expected_reply);
 
-    let forked_conversation = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+    let forked_conversation = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
                     forked_from_session_id
                     fork_at_user_turn
                 }}
             }}"#,
-            escape_graphql_string(&forked_id),
-        ),
-    )
-    .await?;
+                escape_graphql_string(&forked_id),
+            ),
+        ))
+        .await?;
     let child = first_graphql_row(&forked_conversation, "AgentConversation")?;
     assert_eq!(
         child.get("forked_from_session_id").and_then(Value::as_str),
@@ -1789,11 +1876,21 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
 
     for (idx, method, params) in [
@@ -1919,11 +2016,21 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
 
     send_raw_client_request(
@@ -2121,11 +2228,21 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
@@ -2317,11 +2434,21 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
@@ -2467,11 +2594,21 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let parent_thread_id = start_thread(&mut ws, &home_dir).await?;
     let prompt = format!("hold subagent projection {}", Uuid::new_v4().simple());
@@ -2490,8 +2627,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let turn_start: codex::TurnStartResponse =
-        read_typed_response(&mut ws, request_id(230)).await?;
+    let turn_start: codex::TurnStartResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(230)))
+        .await?;
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
     let parent_active = read_thread_status_changed(&mut ws, &parent_thread_id).await?;
@@ -2551,8 +2689,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let subagent_list: codex::ThreadListResponse =
-        read_typed_response(&mut ws, request_id(239)).await?;
+    let subagent_list: codex::ThreadListResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(239)))
+        .await?;
     assert_eq!(subagent_list.data.len(), 1, "{subagent_list:?}");
     assert_eq!(subagent_list.data[0].id, child_thread_id);
     assert!(matches!(
@@ -2571,8 +2710,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let child_read: codex::ThreadReadResponse =
-        read_typed_response(&mut ws, request_id(231)).await?;
+    let child_read: codex::ThreadReadResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(231)))
+        .await?;
     assert_eq!(child_read.thread.id, child_thread_id);
     assert!(matches!(
         child_read.thread.status,
@@ -2602,8 +2742,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let child_resume: codex::ThreadResumeResponse =
-        read_typed_response(&mut ws, request_id(232)).await?;
+    let child_resume: codex::ThreadResumeResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(232)))
+        .await?;
     assert_eq!(child_resume.thread.id, child_thread_id);
     assert_eq!(child_resume.model, child_model_selection);
 
@@ -2620,8 +2761,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let child_resume_without_behavior: codex::ThreadResumeResponse =
-        read_typed_response(&mut ws, request_id(241)).await?;
+    let child_resume_without_behavior: codex::ThreadResumeResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(241)))
+        .await?;
     assert_eq!(child_resume_without_behavior.thread.id, child_thread_id);
     assert_eq!(child_resume_without_behavior.model, root_model_selection);
 
@@ -2717,8 +2859,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let completed_child: codex::ThreadReadResponse =
-        read_typed_response(&mut ws, request_id(240)).await?;
+    let completed_child: codex::ThreadReadResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(240)))
+        .await?;
     assert!(completed_child.thread.turns.iter().any(|turn| {
         turn.items.iter().any(|item| {
             matches!(
@@ -2822,8 +2965,9 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         },
     )
     .await?;
-    let failed_parent: codex::ThreadReadResponse =
-        read_typed_response(&mut ws, request_id(242)).await?;
+    let failed_parent: codex::ThreadReadResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(242)))
+        .await?;
     assert_eq!(
         failed_parent.thread.status,
         codex::ThreadStatus::SystemError
@@ -2885,11 +3029,21 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
@@ -3692,7 +3846,13 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
     let expected_shim_home = home_dir.join(".gents").join("codex-ui");
     let (_stdout, stderr) = serve.captured_output()?;
@@ -3717,9 +3877,13 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         "server guidance must not depend on or rewrite a user's local Codex home; stderr:\n{stderr}"
     );
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -3996,7 +4160,13 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
     assert_eq!(
         readiness
@@ -4080,7 +4250,13 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_extra_backend = format!(
@@ -4111,11 +4287,17 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
         escape_graphql_string(extra_endpoint.endpoint()),
         escape_graphql_string(extra_endpoint.endpoint())
     );
-    graphql_query(&graphql, &create_extra_backend).await?;
+    serve
+        .capturing(graphql_query(&graphql, &create_extra_backend))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
 
     send_client_request(
         &mut ws,
@@ -4233,7 +4415,13 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let switch_behavior = format!(
@@ -4244,11 +4432,17 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
             ) {{ _docID }}
         }}"#
     );
-    graphql_query(&graphql, &switch_behavior).await?;
+    serve
+        .capturing(graphql_query(&graphql, &switch_behavior))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4327,7 +4521,13 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let create_alt_backend = format!(
@@ -4346,11 +4546,17 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         }}"#,
         escape_graphql_string(alt_endpoint.endpoint())
     );
-    graphql_query(&graphql, &create_alt_backend).await?;
+    serve
+        .capturing(graphql_query(&graphql, &create_alt_backend))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4366,8 +4572,9 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse =
-        read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(1)))
+        .await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
 
     send_client_request(
@@ -4384,20 +4591,23 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
         },
     )
     .await?;
-    let _write: codex::ConfigWriteResponse = read_typed_response(&mut ws, request_id(2)).await?;
+    let _write: codex::ConfigWriteResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(2)))
+        .await?;
 
-    let resp = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+    let resp = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
                 ) {{ backend_id model_name inference_profile_id }}
             }}"#
-        ),
-    )
-    .await?;
+            ),
+        ))
+        .await?;
     let stored_backend = resp
         .pointer("/data/AgentBehavior/0/backend_id")
         .and_then(|v| v.as_str())
@@ -4464,11 +4674,21 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4509,18 +4729,19 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
         error.message
     );
 
-    let resp = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+    let resp = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentBehavior(
                     filter: {{ behavior_id: {{ _eq: "{default_behavior_id}" }} }},
                     limit: 1
                 ) {{ backend_id model_name inference_profile_id }}
             }}"#
-        ),
-    )
-    .await?;
+            ),
+        ))
+        .await?;
     let stored_backend = resp
         .pointer("/data/AgentBehavior/0/backend_id")
         .and_then(|v| v.as_str())
@@ -4586,12 +4807,19 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
                     agent_name: "preexisting",
@@ -4599,13 +4827,17 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
                     status: "active"
                 }}) {{ _docID }}
             }}"#
-        ),
-    )
-    .await?;
+            ),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4621,8 +4853,9 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
         },
     )
     .await?;
-    let _initialize: codex::InitializeResponse =
-        read_typed_response(&mut ws, request_id(1)).await?;
+    let _initialize: codex::InitializeResponse = serve
+        .capturing(read_typed_response(&mut ws, request_id(1)))
+        .await?;
     send_client_notification(&mut ws, codex::ClientNotification::Initialized).await?;
     send_client_request(
         &mut ws,
@@ -4636,20 +4869,21 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
         },
     )
     .await?;
-    let _ = read_jsonrpc(&mut ws).await?;
+    let _ = serve.capturing(read_jsonrpc(&mut ws)).await?;
 
-    let resp = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+    let resp = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentSession(
                     filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                     limit: 1
                 ) {{ agent_name behavior_id }}
             }}"#
-        ),
-    )
-    .await?;
+            ),
+        ))
+        .await?;
     let preserved_agent_name = resp
         .pointer("/data/AgentSession/0/agent_name")
         .and_then(|v| v.as_str())
@@ -4706,12 +4940,19 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
 
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
+    serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"mutation {{
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
                     agent_name: "foreign",
@@ -4719,13 +4960,17 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
                     status: "active"
                 }}) {{ _docID }}
             }}"#
-        ),
-    )
-    .await?;
+            ),
+        ))
+        .await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4812,7 +5057,13 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let added = run_cli_json(
@@ -4842,9 +5093,13 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         Some("research")
     );
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -4966,7 +5221,13 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let catalog_phrase = format!("cite-sources-{}", Uuid::new_v4().simple());
@@ -4994,9 +5255,13 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
     )?;
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -5107,7 +5372,13 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let body_phrase = format!("INJECTED-BODY-{}", Uuid::new_v4().simple());
@@ -5135,9 +5406,13 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
     )?;
     wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -5248,7 +5523,13 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let body_phrase = format!("UNSCOPED-BODY-{}", Uuid::new_v4().simple());
@@ -5275,9 +5556,13 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
         ],
     )?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -5396,7 +5681,13 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     let gen0 = wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let catalog_phrase = format!("toggle-cite-{}", Uuid::new_v4().simple());
@@ -5425,9 +5716,13 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
     let gen1 =
         wait_for_runtime_quiescence(&graphql, &agent_did, gen0 + 1, Duration::from_secs(2)).await?;
 
-    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{shim_port}/"))
-        .await
-        .context("connecting to codex-shim websocket")?;
+    let (mut ws, _) = serve
+        .capturing(async {
+            connect_async(format!("ws://127.0.0.1:{shim_port}/"))
+                .await
+                .context("connecting to codex-shim websocket")
+        })
+        .await?;
     send_client_request(
         &mut ws,
         codex::ClientRequest::Initialize {
@@ -5572,7 +5867,13 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
 
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     run_cli_json(
@@ -5774,7 +6075,13 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
 
     let mut serve = spawn_server_with_env(&home_dir, server_port, &[], &[])?;
     wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
     let imported = run_cli_json(
@@ -5917,7 +6224,13 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
     wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_secs(2)).await?;
 
