@@ -8,6 +8,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 0.8: additive — managed-server tray event inventory.
 // 0.7: additive — retry eligibility projection and agent-scoped conversation rename.
 // 0.6: additive — predecessor-aware desktop_request_retry command.
 // 0.5: additive — inference onboarding (probe endpoint, Codex login/cancel in
@@ -16,7 +17,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "0.7";
+pub const CONTRACT_VERSION: &str = "0.8";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,6 +54,8 @@ pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 
 /// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
+pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
+pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-stop";
 
 /// One-shot auth URL emission during the guided Grok login flow.
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
@@ -75,6 +78,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_set_selected_agent", "client-lifecycle"),
         // runtime-admin
         ("desktop_init_local_standard", "runtime-admin"),
+        ("desktop_managed_server_status", "runtime-admin"),
+        ("desktop_managed_server_start", "runtime-admin"),
+        ("desktop_managed_server_stop", "runtime-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         // trace-read
@@ -221,6 +227,8 @@ pub fn current_contract() -> BridgeContract {
             CLIENT_UPDATED_EVENT.to_string(),
             CODEX_LOGIN_URL_EVENT.to_string(),
             GROK_LOGIN_URL_EVENT.to_string(),
+            MANAGED_SERVER_UPDATED_EVENT.to_string(),
+            MANAGED_SERVER_TRAY_STOP_EVENT.to_string(),
         ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),
@@ -495,6 +503,9 @@ mod tests {
             ("desktop_client_shutdown", "mutate"),
             ("desktop_set_selected_agent", "mutate"),
             ("desktop_init_local_standard", "mutate"),
+            ("desktop_managed_server_status", "mutate"),
+            ("desktop_managed_server_start", "mutate"),
+            ("desktop_managed_server_stop", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),

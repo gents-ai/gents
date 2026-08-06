@@ -49,6 +49,7 @@ export type DesktopStartupPhase =
 
 export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
   const autostartAttempted = useRef(false);
+  const localServerAvailable = useRef<boolean | null>(null);
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
@@ -334,6 +335,7 @@ export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge) {
     lastObservedP2PHealth,
     lastP2PAutoRestartAt,
     localWorkflow,
+    localServerAvailable,
     listenToUpdates,
     newConversationAgentRef,
     onStartClient,

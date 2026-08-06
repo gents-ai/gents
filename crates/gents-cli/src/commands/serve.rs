@@ -222,7 +222,15 @@ fn normalize_codex_shim_public_url(raw: &str) -> Result<String> {
     Ok(format!("wss://{authority}/"))
 }
 
-pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
+pub(crate) async fn serve(args: ServeArgs) -> Result<()> {
+    serve_with_control(args, None, None).await
+}
+
+pub(crate) async fn serve_with_control(
+    mut args: ServeArgs,
+    external_shutdown: Option<watch::Receiver<bool>>,
+    ready: Option<tokio::sync::oneshot::Sender<Value>>,
+) -> Result<()> {
     args.codex_shim_public_url = args
         .codex_shim_public_url
         .as_deref()
@@ -420,12 +428,18 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
     };
     let background_execution_registry = agent.background_execution_registry();
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = shutdown_tx.send(true);
+    let shutdown_rx = match external_shutdown {
+        Some(shutdown_rx) => shutdown_rx,
+        None => {
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    let _ = shutdown_tx.send(true);
+                }
+            });
+            shutdown_rx
         }
-    });
+    };
 
     let mut run_handle = tokio::spawn(agent.run(shutdown_rx));
     loop {
@@ -589,6 +603,9 @@ pub(crate) async fn serve(mut args: ServeArgs) -> Result<()> {
         "p2p_admission": p2p_status.get("p2p_admission").cloned().unwrap_or(Value::Null),
         "codex_shim": codex_shim_output,
     });
+    if let Some(ready) = ready {
+        let _ = ready.send(output.clone());
+    }
     print_json(&output)?;
     if args.p2p_transport == P2pTransportArg::Iroh {
         if let Some(admission) = output.get("p2p_admission") {

@@ -7,6 +7,10 @@ repository.workspace = true
 description = "Command-line interface for the Gents runtime"
 autobins = false
 
+[lib]
+name = "gents_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "gents"
 path = "src/main.rs"

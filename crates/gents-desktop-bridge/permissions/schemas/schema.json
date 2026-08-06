@@ -607,6 +607,42 @@
           "markdownDescription": "Denies the desktop_list_tool_call_holds command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_managed_server_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-managed-server-start",
+          "markdownDescription": "Enables the desktop_managed_server_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_managed_server_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-managed-server-start",
+          "markdownDescription": "Denies the desktop_managed_server_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_managed_server_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-managed-server-status",
+          "markdownDescription": "Enables the desktop_managed_server_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_managed_server_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-managed-server-status",
+          "markdownDescription": "Denies the desktop_managed_server_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_managed_server_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-managed-server-stop",
+          "markdownDescription": "Enables the desktop_managed_server_stop command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_managed_server_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-managed-server-stop",
+          "markdownDescription": "Denies the desktop_managed_server_stop command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_native_e2e_config command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-native-e2e-config",
@@ -1147,10 +1183,10 @@
           "markdownDescription": "Resolve tool-call holds\n#### This permission set includes:\n\n- `allow-desktop-resolve-tool-call-hold`"
         },
         {
-          "description": "Local runtime provisioning\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`",
+          "description": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`",
           "type": "string",
           "const": "runtime-admin",
-          "markdownDescription": "Local runtime provisioning\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`"
+          "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`"
         },
         {
           "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`",

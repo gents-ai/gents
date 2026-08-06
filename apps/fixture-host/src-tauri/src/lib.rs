@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use fixture_domain_plugin::DomainConfig;
 use gents_desktop_bridge::{
     init as init_bridge, init_tracing as install_tracing, install_runtime, AppMeta,
-    BootstrapPolicy, BridgeConfig, HomePolicy, SnapshotGrants, TracingConfig,
+    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
 };
 
 fn bridge_config() -> BridgeConfig {
@@ -23,6 +23,7 @@ fn bridge_config() -> BridgeConfig {
             operations_read: true,
             runtime_admin: false,
         },
+        managed_server: ManagedServerPolicy::Disabled,
     }
 }
 

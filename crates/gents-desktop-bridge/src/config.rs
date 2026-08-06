@@ -8,6 +8,7 @@ pub struct BridgeConfig {
     pub bootstrap: BootstrapPolicy,
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
+    pub managed_server: ManagedServerPolicy,
 }
 
 impl Default for BridgeConfig {
@@ -22,8 +23,15 @@ impl Default for BridgeConfig {
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
             snapshot_grants: SnapshotGrants::core_only(),
+            managed_server: ManagedServerPolicy::Disabled,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedServerPolicy {
+    Disabled,
+    Allowed,
 }
 
 #[derive(Debug, Clone)]

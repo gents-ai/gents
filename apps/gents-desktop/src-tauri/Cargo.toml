@@ -19,11 +19,12 @@ anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
 gents = { path = "../../../crates/gents" }
+gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
 gents-protocol = { path = "../../../crates/gents-protocol" }
 reqwest.workspace = true
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 serde.workspace = true
 serde_json.workspace = true

@@ -33,10 +33,15 @@ export function createDesktopShellPeerActions({
   setStarting,
 }: PeerActionParams) {
   async function onInitLocalRuntime(label?: string | null) {
+    const clientWasRunning = Boolean(snapshot?.client);
     setAddingPeer(true);
     setStarting(true);
     setError(null);
     try {
+      if (snapshot?.client) {
+        const stopped = await api.shutdownDesktopClient();
+        setSnapshot(stopped);
+      }
       const summary = await api.initLocalStandardRuntime({
         label: label?.trim() || "Local Agent",
         dangerouslyOverwrite: false,
@@ -60,6 +65,13 @@ export function createDesktopShellPeerActions({
       setSelectedAgentDid(summary.agentDid);
       return summary;
     } catch (err) {
+      if (clientWasRunning) {
+        try {
+          setSnapshot(await api.startDesktopClient());
+        } catch {
+          // Preserve the provisioning error that caused the rollback.
+        }
+      }
       const message = formatPeerConnectionError(err, "local-runtime");
       setError(message);
       throw new Error(message);

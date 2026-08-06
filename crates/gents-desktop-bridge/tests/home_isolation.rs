@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gents_desktop_bridge::{
     resolve_policy, AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy,
-    SnapshotGrants,
+    ManagedServerPolicy, SnapshotGrants,
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use tempfile::tempdir;
@@ -24,6 +24,7 @@ async fn fixed_root_homes_do_not_collide() {
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
             snapshot_grants: SnapshotGrants::chat_package(),
+            managed_server: ManagedServerPolicy::Disabled,
         },
         None,
     )
@@ -87,6 +88,7 @@ async fn local_runtime_allowed_binds_fixed_agent_home() {
                 app_version: env!("CARGO_PKG_VERSION").into(),
             },
             snapshot_grants: SnapshotGrants::all(),
+            managed_server: ManagedServerPolicy::Allowed,
         },
         None,
     )
@@ -103,4 +105,5 @@ fn bridge_config_default_is_fail_closed_core_only() {
     assert!(!cfg.snapshot_grants.session_read);
     assert!(!cfg.snapshot_grants.config_read);
     assert!(!cfg.snapshot_grants.runtime_admin);
+    assert_eq!(cfg.managed_server, ManagedServerPolicy::Disabled);
 }

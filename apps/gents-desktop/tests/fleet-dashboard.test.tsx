@@ -38,6 +38,8 @@ const bootstrap: BootstrapSummary = {
 describe("FleetHostDashboard add connection flow", () => {
   it("connects the local runtime from the fleet empty state", async () => {
     const onInitLocalRuntime = vi.fn(async () => undefined);
+    const onStartManagedServer = vi.fn(async () => undefined);
+    const onCommitManagedServerAutoStart = vi.fn(async () => undefined);
 
     render(
       <FleetHostDashboard
@@ -52,6 +54,8 @@ describe("FleetHostDashboard add connection flow", () => {
         onPairBearer={vi.fn()}
         onProbePeerAddress={vi.fn()}
         onInitLocalRuntime={onInitLocalRuntime}
+        onStartManagedServer={onStartManagedServer}
+        onCommitManagedServerAutoStart={onCommitManagedServerAutoStart}
         onOpenChat={vi.fn()}
         onOpenConfig={vi.fn()}
         onRepairP2P={vi.fn()}
@@ -62,7 +66,16 @@ describe("FleetHostDashboard add connection flow", () => {
     fireEvent.click(screen.getByTestId("fleet-connect-local"));
 
     await waitFor(() => {
+      expect(onStartManagedServer).toHaveBeenCalledOnce();
+      expect(onStartManagedServer).toHaveBeenCalledWith("local-agent");
+      expect(onCommitManagedServerAutoStart).toHaveBeenCalledWith("local-agent");
       expect(onInitLocalRuntime).toHaveBeenCalledWith("local-agent");
+      expect(onStartManagedServer.mock.invocationCallOrder[0]!).toBeLessThan(
+        onInitLocalRuntime.mock.invocationCallOrder[0]!,
+      );
+      expect(onInitLocalRuntime.mock.invocationCallOrder[0]!).toBeLessThan(
+        onCommitManagedServerAutoStart.mock.invocationCallOrder[0]!,
+      );
     });
   });
 
@@ -387,5 +400,24 @@ describe("FleetHostDashboard per-deployment inference status", () => {
     fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
     expect(screen.getByTestId("inference-wizard")).toBeInTheDocument();
     expect(screen.getByTestId("inference-option-codex")).toBeInTheDocument();
+  });
+
+  it("accepts the documented seeded local backend as configured", () => {
+    renderFleet([
+      {
+        ...deployment,
+        source: "local-standard",
+        inferenceBackends: [
+          {
+            ...deployment.inferenceBackends[0]!,
+            endpoint: "http://127.0.0.1:8080/v1",
+            models: ["google/gemma-4-12B-it-qat-q4_0-gguf"],
+          },
+        ],
+      },
+    ]);
+
+    expect(screen.queryByTestId("fleet-inference-callout")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inference-wizard")).not.toBeInTheDocument();
   });
 });

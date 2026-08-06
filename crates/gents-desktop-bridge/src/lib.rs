@@ -24,7 +24,8 @@ pub mod tauri_commands;
 pub mod types;
 
 pub use config::{
-    AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, TracingConfig,
+    AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
+    TracingConfig,
 };
 pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_VERSION};
 pub use error::{BridgeError, BridgeErrorCode};

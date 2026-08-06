@@ -700,6 +700,84 @@ Denies the desktop_list_tool_call_holds command without any pre-configured scope
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-start`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-start`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-managed-server-status`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-status`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-managed-server-stop`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-stop`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-native-e2e-config`
 
 </td>
@@ -1862,7 +1940,7 @@ Resolve tool-call holds
 </td>
 <td>
 
-Local runtime provisioning
+Local runtime provisioning and managed server lifecycle
 
 </td>
 </tr>

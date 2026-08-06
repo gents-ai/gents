@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   BearerPairingRequest,
@@ -12,6 +12,7 @@ import type {
 import type { FleetCopy } from "../copy.js";
 import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import { validateAgentDid } from "../peerConnectionImport.js";
+import { needsInferenceSetup } from "../fleetMetrics.js";
 import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
@@ -83,7 +84,10 @@ export function FleetDashboard({
   const [wizardDeployment, setWizardDeployment] =
     useState<DeploymentView | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+  const autoPromptedInference = useRef(new Set<string>());
   const hasDeployments = deployments.length > 0;
+  const deploymentNeedingInference =
+    deployments.find(needsInferenceSetup) ?? null;
   const activeWizardDeployment = wizardDeployment
     ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
       wizardDeployment)
@@ -96,6 +100,19 @@ export function FleetDashboard({
     (p2pHealth
       ? p2pHealth.consecutiveFailures > 0 || Boolean(p2pHealth.lastError)
       : false);
+
+  useEffect(() => {
+    if (
+      !renderInferenceSetup ||
+      !deploymentNeedingInference ||
+      deploymentNeedingInference.source !== "local-standard" ||
+      autoPromptedInference.current.has(deploymentNeedingInference.peerId)
+    ) {
+      return;
+    }
+    autoPromptedInference.current.add(deploymentNeedingInference.peerId);
+    setWizardDeployment(deploymentNeedingInference);
+  }, [deploymentNeedingInference, renderInferenceSetup]);
 
   async function submitPeer(request: PeerAddRequest) {
     setPeerFormError(null);
@@ -127,22 +144,21 @@ export function FleetDashboard({
         <div className="fleet-empty-card panel">
           {brand}
           <div className="fleet-empty-copy">
-            <h2>Connect your agent</h2>
+            <h2>{localRuntimeSetup ? "Set up Gents" : "Connect your agent"}</h2>
             <p className="muted">
               {localRuntimeSetup
-                ? "Start with the agent on this machine — one click, no configuration."
+                ? "Optionally create an agent on this machine, or skip local setup and connect a remote agent."
                 : "Pair with a remote agent using its signed connection details."}
             </p>
           </div>
           {localRuntimeSetup}
-          {}
           <details
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
           >
             <summary aria-label="Connect a remote agent">
               {localRuntimeSetup
-                ? "Connect a remote agent instead…"
+                ? "Skip local setup and connect a remote agent…"
                 : "Connect agent"}
             </summary>
             <AddPeerForm

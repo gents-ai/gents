@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
@@ -10,6 +11,13 @@ use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
+static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Declare that the current host executable implements the hidden
+/// `__native-fs-runner` command.
+pub fn enable_self_runner() {
+    SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
+}
 
 fn effective_deadline(
     request_deadline: Option<chrono::DateTime<chrono::Utc>>,
@@ -227,7 +235,7 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
 fn self_runner_binary() -> Option<PathBuf> {
     let current = std::env::current_exe().ok()?;
     let stem = current.file_stem()?.to_str()?;
-    if stem == "gents" {
+    if stem == "gents" || SELF_RUNNER_ENABLED.load(Ordering::Relaxed) {
         Some(current)
     } else {
         None

@@ -16,6 +16,7 @@ mod goal;
 #[cfg(feature = "agent-memory")]
 mod memory;
 mod native_runner;
+pub use native_runner::enable_self_runner;
 mod orchestration;
 mod session_history;
 mod shared;
