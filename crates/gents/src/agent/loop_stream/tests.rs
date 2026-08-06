@@ -531,16 +531,17 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     let captures = Arc::new(Mutex::new(Vec::new()));
     let captures_for_sink = captures.clone();
     let mut loop_config = config(0);
-    loop_config.on_rendered_request = Some(Arc::new(move |turn_index, attempt, request| {
-        let captures = captures_for_sink.clone();
-        Box::pin(async move {
-            captures
-                .lock()
-                .await
-                .push((turn_index, attempt, request.chat_history.len()));
-            Err(anyhow::anyhow!("capture failed"))
-        })
-    }));
+    loop_config.on_rendered_request =
+        Some(Arc::new(move |turn_index, attempt, request, _trace| {
+            let captures = captures_for_sink.clone();
+            Box::pin(async move {
+                captures
+                    .lock()
+                    .await
+                    .push((turn_index, attempt, request.chat_history.len()));
+                Err(anyhow::anyhow!("capture failed"))
+            })
+        }));
 
     let stream = run_loop_stream(
         model.clone(),
@@ -635,21 +636,22 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         let outcomes_for_sink = outcomes.clone();
         let request_value = case.request;
         let mut loop_config = config(0);
-        loop_config.on_rendered_request = Some(Arc::new(move |_turn_index, _attempt, _request| {
-            let store = store_for_sink.clone();
-            let outcomes = outcomes_for_sink.clone();
-            Box::pin(async move {
-                let outcome = mirror_capture(&mut *store.lock().await, key, request_value);
-                outcomes.lock().await.push(outcome);
-                if outcome == "rejected" {
-                    Err(anyhow::anyhow!(
-                        "capture key already names a different canonical request"
-                    ))
-                } else {
-                    Ok(())
-                }
-            })
-        }));
+        loop_config.on_rendered_request =
+            Some(Arc::new(move |_turn_index, _attempt, _request, _trace| {
+                let store = store_for_sink.clone();
+                let outcomes = outcomes_for_sink.clone();
+                Box::pin(async move {
+                    let outcome = mirror_capture(&mut *store.lock().await, key, request_value);
+                    outcomes.lock().await.push(outcome);
+                    if outcome == "rejected" {
+                        Err(anyhow::anyhow!(
+                            "capture key already names a different canonical request"
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+            }));
 
         let model = ScriptedModel::new(vec![
             RawStreamingChoice::Message("ok".to_string()),
@@ -1055,6 +1057,167 @@ async fn parse_400_resamples_once_then_repairs_on_identical_error() {
         histories[3]
     );
     assert_provider_request_invariants(4, &histories[3]);
+}
+
+/// The capture seam must hand the sink the loop's own `attempt` counter and its
+/// own build path, one row per provider attempt.
+///
+/// Two things are fenced here that nothing else fences:
+///
+/// * `attempt` is part of the capture key. `RenderedCapture.attempt_distinguishes_facts`
+///   is proven in Lean, but a mutation probe that replaced the loop's `attempt`
+///   with a literal `0` compiled and failed no test — the existing sink tests
+///   either rebuild the key from the Lean case or only ever observe attempt 0.
+///   Retries here must arrive as distinct attempts within one turn.
+/// * `AssemblyBuildPath` must flip to `Repair` exactly on the attempt that the
+///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. That
+///   attempt skips `clamp_request_output_budget`, so a reconstructor that
+///   assumes the budgeted path would produce a different `max_tokens` and a
+///   false mismatch.
+#[tokio::test(start_paused = true)]
+async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
+    let poison = format!("bad{}value", '\u{0007}');
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({ "note": poison }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath, AssemblyTrace)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let captures_for_sink = captures.clone();
+    let mut loop_config = config(4);
+    loop_config.on_rendered_request =
+        Some(Arc::new(move |turn_index, attempt, _request, trace| {
+            let captures = captures_for_sink.clone();
+            Box::pin(async move {
+                captures
+                    .lock()
+                    .await
+                    .push((turn_index, attempt, trace.build_path, trace));
+                Ok(())
+            })
+        }));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
+
+    let captures = captures.lock().await;
+    let observed = captures
+        .iter()
+        .map(|(turn, attempt, path, _)| (*turn, *attempt, *path))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed,
+        vec![
+            (0, 0, AssemblyBuildPath::Budgeted),
+            (1, 0, AssemblyBuildPath::Budgeted),
+            (1, 1, AssemblyBuildPath::Budgeted),
+            (1, 2, AssemblyBuildPath::Repair),
+        ],
+        "one capture per provider attempt, with the loop's own attempt counter"
+    );
+    assert_eq!(
+        captures.len(),
+        model.seen_histories().await.len(),
+        "every provider request must have exactly one capture"
+    );
+
+    // Leak 2: the exact tool-result content threaded to the model. Persistence
+    // re-derives this text from `AgentToolCall.result` through a different
+    // truncation mode and limit set, so the trace is the only place the bytes
+    // the model actually saw survive.
+    let repaired_trace = &captures.last().expect("a repaired capture").3;
+    let threaded = repaired_trace
+        .threaded_tool_results
+        .iter()
+        .find(|result| result.tool_call_id == "call-1")
+        .expect("the echo call's threaded result");
+    assert_eq!(
+        threaded.content,
+        vec![ToolResultContent::text("ECHOED")],
+        "the trace must carry the threaded tool-result content verbatim"
+    );
+    assert!(matches!(
+        repaired_trace.effective_messages[threaded.message_index],
+        Message::User { .. }
+    ));
+}
+
+/// The sibling of the test above for the *other* repair branch.
+///
+/// `PreStreamDirective::Repair` is handled in two places: once where
+/// `model.stream` itself returns `Err`, and once where the first poll of the
+/// returned stream fails. Both rebuild with `build_request` and both must
+/// report `Repair`. `ScriptedCall::FailStream` only reaches the first;
+/// `TurnWithMidStreamError(vec![], …)` reaches the second.
+#[tokio::test(start_paused = true)]
+async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let captures_for_sink = captures.clone();
+    let mut loop_config = config(0);
+    loop_config.on_rendered_request =
+        Some(Arc::new(move |turn_index, attempt, _request, trace| {
+            let captures = captures_for_sink.clone();
+            Box::pin(async move {
+                captures
+                    .lock()
+                    .await
+                    .push((turn_index, attempt, trace.build_path));
+                Ok(())
+            })
+        }));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
+
+    assert_eq!(
+        captures.lock().await.as_slice(),
+        &[
+            (0, 0, AssemblyBuildPath::Budgeted),
+            (0, 1, AssemblyBuildPath::Budgeted),
+            (0, 2, AssemblyBuildPath::Repair),
+        ]
+    );
 }
 
 #[tokio::test(start_paused = true)]

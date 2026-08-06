@@ -27,6 +27,7 @@ pub(crate) fn rendered_completion_request(
     context: &crate::rendered_request::RenderedRequestContext,
     turn_index: usize,
     attempt: u32,
+    assembly_trace: crate::rendered_request::AssemblyTrace,
     request: &rig::completion::CompletionRequest,
 ) -> Result<crate::rendered_request::RenderedCompletionRequest> {
     let request_json = provider_request_json(
@@ -54,11 +55,14 @@ pub(crate) fn rendered_completion_request(
         context,
         turn_index,
         attempt,
-        request_json,
-        messages_json,
-        tools_json,
-        tool_choice_json,
-        sampling_json,
+        assembly_trace,
+        crate::rendered_request::RenderedRequestComponents {
+            request_json,
+            messages_json,
+            tools_json,
+            tool_choice_json,
+            sampling_json,
+        },
     )
 }
 
@@ -628,12 +632,22 @@ mod tests {
         crate::rendered_request::RenderedRequestContext {
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
+            requester_did: "did:key:requester".to_string(),
             behavior_id: "behavior".to_string(),
             session_id: "session".to_string(),
             model_name: "test-model".to_string(),
             source: crate::rendered_request::RenderedRequestSource::OpenAiResponses,
             normalize_responses_wire,
         }
+    }
+
+    /// An empty trace: these tests exercise provider wire rendering, which the
+    /// trace does not participate in.
+    fn empty_trace() -> crate::rendered_request::AssemblyTrace {
+        crate::rendered_request::AssemblyTrace::from_effective_messages(
+            crate::rendered_request::AssemblyBuildPath::Budgeted,
+            Vec::new(),
+        )
     }
 
     /// TA-2 (#566 review): the rendered-request capture must match the bytes the
@@ -646,10 +660,12 @@ mod tests {
     #[test]
     fn responses_capture_normalizes_prior_assistant_items_only_when_enabled() {
         let request = sample_request_with_assistant_turn();
-        let rendered_on = rendered_completion_request(&responses_context(true), 0, 0, &request)
-            .expect("render normalized");
-        let rendered_off = rendered_completion_request(&responses_context(false), 0, 0, &request)
-            .expect("render raw");
+        let rendered_on =
+            rendered_completion_request(&responses_context(true), 0, 0, empty_trace(), &request)
+                .expect("render normalized");
+        let rendered_off =
+            rendered_completion_request(&responses_context(false), 0, 0, empty_trace(), &request)
+                .expect("render raw");
 
         // The gating boolean must have an observable effect on the captured body.
         assert_ne!(
@@ -706,8 +722,9 @@ mod tests {
             "required": ["path"]
         });
 
-        let rendered = rendered_completion_request(&responses_context(false), 0, 0, &request)
-            .expect("render Responses request");
+        let rendered =
+            rendered_completion_request(&responses_context(false), 0, 0, empty_trace(), &request)
+                .expect("render Responses request");
         let tool = &rendered.tools_json[0];
 
         assert_eq!(tool["parameters"]["required"], json!(["path"]));
@@ -824,6 +841,7 @@ mod tests {
         let context = crate::rendered_request::RenderedRequestContext {
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
+            requester_did: "did:key:requester".to_string(),
             behavior_id: "behavior".to_string(),
             session_id: "session".to_string(),
             model_name: "test-model".to_string(),
@@ -832,7 +850,8 @@ mod tests {
         };
 
         let rendered =
-            rendered_completion_request(&context, 0, 0, &sample_request()).expect("render request");
+            rendered_completion_request(&context, 0, 0, empty_trace(), &sample_request())
+                .expect("render request");
 
         assert_eq!(rendered.request_id, "req-1");
         assert_eq!(rendered.turn_index, 0);

@@ -38,6 +38,7 @@ use crate::llm::message::{
 };
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
+use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
@@ -60,11 +61,20 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 #[cfg(test)]
 mod tests;
 
+/// `(turn_index, attempt, request, assembly_trace)`.
+///
+/// The trace rides alongside the request because the assembled
+/// `CompletionRequest` is the *output* of prompt assembly and cannot explain
+/// its own inputs: the provider-assigned assistant message ids, the exact
+/// threaded tool-result content, the post-compaction message list, and which
+/// builder produced it are all in-memory facts that die with the loop. See
+/// `crate::rendered_request::AssemblyTrace`.
 pub(crate) type RenderedRequestSink = Arc<
     dyn Fn(
             usize,
             u32,
             CompletionRequest,
+            AssemblyTrace,
         ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
@@ -292,10 +302,23 @@ where
             }
 
             let mut attempt = 0_u32;
+            // Which builder produced the `request` currently in hand. Flipped
+            // by the Repair directive below, which calls `build_request`
+            // directly and therefore never applies the output clamp. This is
+            // not recoverable from the transcript, so it rides in the trace.
+            let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let mut stream = loop {
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                        on_rendered_request(turn_index, attempt, request.clone())
+                        // `history ++ new_messages` is the effective provider
+                        // message list: post sanitization, post request-context
+                        // filtering, and post any per-turn compaction (which
+                        // rewrote both vectors in place).
+                        let assembly_trace = AssemblyTrace::from_effective_messages(
+                            build_path,
+                            history.iter().chain(new_messages.iter()).cloned().collect(),
+                        );
+                        on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -350,6 +373,9 @@ where
                                         .cloned()
                                         .expect("new_messages remains non-empty after repair");
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    // `build_request`, not `build_budgeted_request`:
+                                    // no output clamp is applied to a repaired
+                                    // attempt.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -359,6 +385,7 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    build_path = AssemblyBuildPath::Repair;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Fail { reason } => {
@@ -444,6 +471,9 @@ where
                                         "new_messages remains non-empty after repair",
                                     );
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    // `build_request`, not `build_budgeted_request`:
+                                    // no output clamp is applied to a repaired
+                                    // attempt.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -453,6 +483,7 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    build_path = AssemblyBuildPath::Repair;
                                     attempt += 1;
                                     continue 'attempts;
                                 }

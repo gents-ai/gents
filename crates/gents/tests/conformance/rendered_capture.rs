@@ -27,13 +27,21 @@
 //!
 //! * `boundary.rendered-capture.assembled-request-artifact` — the modeled
 //!   canonical request is the assembled request at the capture seam
-//!   (`agent/loop_stream.rs:297`), not the serialized HTTP body. The
+//!   (`agent/loop_stream.rs:312`), not the serialized HTTP body. The
 //!   ChatGPT-Codex and xAI Grok transports rewrite the body after that point.
+//!   Still open.
 //! * `boundary.rendered-capture.key-encoding-injectivity` — the model's key is
 //!   a tuple with componentwise equality; the durable column is a string, and
-//!   the model does not prove the encoder is injective on the tuple.
+//!   the model does not prove the encoder is injective on the tuple. Lean still
+//!   does not, but the Rust half is now fenced below: every generated row
+//!   asserts the derived `capture_key` string agrees with tuple equality, and
+//!   `rendered_request::tests::capture_key_does_not_collide_across_component_boundaries`
+//!   covers the delimiter-collision shapes the generated rows do not reach.
 
-use gents::rendered_request::{RenderedCompletionRequest, RenderedRequestSource};
+use gents::rendered_request::{
+    capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
+    RenderedCompletionRequest, RenderedRequestSource, CAPTURE_VERSION,
+};
 use serde_json::{json, Value};
 
 use crate::lean_vocab_test::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
@@ -67,13 +75,23 @@ fn rendered(
     attempt: u32,
     request_json: Value,
 ) -> RenderedCompletionRequest {
+    let agent_did = agent_did(agent);
+    let session_id = session_id(session);
+    let request_id = request_id(request);
+    let assembly_trace =
+        AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
+
     RenderedCompletionRequest {
-        request_id: request_id(request),
+        capture_key: derive_capture_key(&agent_did, &session_id, &request_id, turn_index, attempt)
+            .expect("capture key"),
+        capture_version: CAPTURE_VERSION,
+        request_id,
         turn_index,
         attempt,
-        agent_did: agent_did(agent),
+        agent_did,
+        requester_did: "did:key:z6Mk-requester".to_string(),
         behavior_id: "behavior-1".to_string(),
-        session_id: session_id(session),
+        session_id,
         model_name: "test-model".to_string(),
         source: RenderedRequestSource::OpenAiChatCompletions,
         request_json,
@@ -83,6 +101,11 @@ fn rendered(
         sampling_json: Value::Null,
         prompt_hash: String::new(),
         tools_hash: String::new(),
+        provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
+            assembly_trace.clone(),
+        ))
+        .expect("provenance manifest"),
+        assembly_trace,
     }
 }
 
@@ -130,6 +153,21 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
             case.same_fact,
             "{}: the production capture-key projection disagrees with the Lean \
              model about whether these two provider attempts are one fact",
+            case.name
+        );
+
+        // `boundary.rendered-capture.key-encoding-injectivity`: the model's key
+        // is a tuple with componentwise equality, the durable column is a
+        // string, and Lean does not prove the encoder injective. This is the
+        // Rust half of that boundary — the derived `capture_key` column must
+        // agree with tuple equality on every generated row, so a delimited or
+        // otherwise lossy encoding fails here rather than merging two provider
+        // attempts into one durable fact.
+        assert_eq!(
+            left.capture_key == right.capture_key,
+            case.same_fact,
+            "{}: the derived capture_key column disagrees with componentwise \
+             tuple equality",
             case.name
         );
 
