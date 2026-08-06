@@ -230,6 +230,7 @@ async fn seed_live_behavior_documents(
         frequency_penalty: None,
         presence_penalty: None,
         repetition_penalty: None,
+        reasoning_effort: None,
     })
     .await?;
     core.save_behavior(&AgentBehaviorRow {

@@ -159,13 +159,36 @@ impl CompletionRetryPolicy {
     }
 
     /// No retry at all: an empty transport ladder, no resample, no repair. For
-    /// internal sub-completions (compaction, title generation) that are not a
-    /// user execution origin — they fail fast and are re-driven, if at all, by
-    /// their own caller, and must not inherit the scheduled ladder's
-    /// minutes-scale, deadline-less backoff (#648).
+    /// internal sub-completions that must not inherit the scheduled ladder's
+    /// minutes-scale, deadline-less backoff (#648): title generation, which
+    /// already retries at its own layer via `generate_title_with_fallback`, and
+    /// compaction's non-guided JSON fallback, which is a last resort reached
+    /// only after guided decoding exhausted its own recovery ladder.
     pub fn no_retry() -> Self {
         Self {
             transport_backoff: Vec::new(),
+            max_resample: 0,
+            allow_repair: false,
+        }
+    }
+
+    /// Small, fixed, immediate, deadline-aware recovery budget for internal
+    /// tool-free sub-completions with no caller-level retry (compaction). Like
+    /// [`Self::no_retry`] it never inherits an execution origin's ladder
+    /// (#648), but it keeps the already-modelled retract-and-resample
+    /// recovery available: an empty-output turn, invalid structured-output
+    /// turn, or transient transport failure gets three attempts on the
+    /// crate-conventional three-slot
+    /// ladder — the first immediate (jitter floors it at 100ms) — before
+    /// failing deterministically (#1016). No resample or repair: those are
+    /// parse-400 remedies for tool-calling requests.
+    pub fn internal_immediate() -> Self {
+        Self {
+            transport_backoff: vec![
+                Duration::ZERO,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+            ],
             max_resample: 0,
             allow_repair: false,
         }

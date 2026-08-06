@@ -312,9 +312,18 @@ pub(crate) async fn serve_with_control(
         ),
     };
     tool_ceiling = tool_ceiling.with_command_timeout_secs(args.command_timeout_secs);
+    if let Some(max_secs) = args.command_timeout_max_secs {
+        tool_ceiling = tool_ceiling.with_command_timeout_max_secs(max_secs);
+    }
+    let effective_command_timeout_max_secs = args
+        .command_timeout_max_secs
+        .unwrap_or(args.command_timeout_secs)
+        .max(args.command_timeout_secs)
+        .max(1);
     tracing::info!(
         command_timeout_secs = args.command_timeout_secs.max(1),
-        "configured foreground command timeout ceiling"
+        command_timeout_max_secs = effective_command_timeout_max_secs,
+        "configured foreground command timeout default and ceiling"
     );
     for cli_tool_arg in &args.cli_tools {
         tool_ceiling = tool_ceiling.with_cli_tool(parse_cli_tool_arg(cli_tool_arg)?);

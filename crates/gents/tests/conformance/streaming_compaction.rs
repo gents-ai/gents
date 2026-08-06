@@ -1108,7 +1108,7 @@ impl<'de> Deserialize<'de> for DocIdRow {
 
 pub(super) fn generated_compaction_reducer_cases_pin_contract() {
     let cases = lean_compaction_reducer_cases();
-    assert_eq!(cases.len(), 16);
+    assert_eq!(cases.len(), 17);
 
     let expected_names = [
         "identity_reducer_is_no_op",
@@ -1123,6 +1123,7 @@ pub(super) fn generated_compaction_reducer_cases_pin_contract() {
         "reapply_preserves_view_coherent",
         "summarize_retains_straddling_turn",
         "summarize_drops_whole_turns",
+        "summarize_oversized_complete_turn",
         "summarize_blocked_when_response_streaming",
         "summarize_cannot_split_a_leading_turn",
         "provider_view_is_idempotent",
@@ -1304,6 +1305,14 @@ fn drive_summarize(
                 case.name
             );
         }
+    }
+
+    if case.name == "summarize_oversized_complete_turn" {
+        let (_, recent) = gents::compaction::split_for_summary(input.clone(), 0);
+        assert!(
+            recent.is_empty(),
+            "an oversized complete tail must be summarized rather than over-retained"
+        );
     }
 
     if !gate_open || boundary == 0 {

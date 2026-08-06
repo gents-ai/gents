@@ -33,29 +33,48 @@ fn request() -> AgentRequest {
 }
 
 #[test]
-fn local_chat_completions_default_enables_reasoning_capture() {
-    let value = thinking_default_params(
+fn absent_profile_effort_does_not_inject_reasoning() {
+    assert!(reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,
+        None,
     )
-    .expect("local thinking default must be present");
-
-    assert_eq!(value["chat_template_kwargs"]["enable_thinking"], true);
-    assert!(value.get("reasoning").is_none());
-}
-
-#[test]
-fn generic_responses_default_does_not_assume_reasoning_support() {
-    assert!(thinking_default_params(
+    .is_none());
+    assert!(reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::Responses,
+        None,
     )
     .is_none());
-    assert!(thinking_default_params(
+    assert!(reasoning_profile_params(
         BackendProviderKind::OpenRouter,
         crate::OpenAiWireApi::ChatCompletions,
+        None,
     )
     .is_none());
+}
+
+/// Codex is the one backend whose reasoning default predates profile
+/// configuration: it has a known Responses contract and shipped a hardcoded
+/// `medium`. Profile plumbing may override that, never silently drop it (#540).
+#[test]
+fn absent_profile_effort_keeps_the_codex_medium_default() {
+    assert_eq!(
+        reasoning_profile_params(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+            None,
+        ),
+        Some(serde_json::json!({ "reasoning": { "effort": "medium" } })),
+    );
+    assert_eq!(
+        reasoning_profile_params(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+            Some(ReasoningEffort::High),
+        ),
+        Some(serde_json::json!({ "reasoning": { "effort": "high" } })),
+    );
 }
 
 #[test]
@@ -76,9 +95,10 @@ fn generic_responses_request_does_not_force_reasoning() {
         temperature: Some(0.0),
         max_tokens: None,
         tool_choice: None,
-        additional_params: thinking_default_params(
+        additional_params: reasoning_profile_params(
             BackendProviderKind::OpenAiCompatible,
             crate::OpenAiWireApi::Responses,
+            None,
         ),
         output_schema: None,
     };
@@ -96,32 +116,45 @@ fn generic_responses_request_does_not_force_reasoning() {
 }
 
 #[test]
-fn chatgpt_codex_keeps_medium_reasoning_default() {
-    let value = thinking_default_params(
+fn responses_and_openrouter_use_profile_reasoning_effort() {
+    let codex = reasoning_profile_params(
         BackendProviderKind::ChatGptCodex,
         crate::OpenAiWireApi::Responses,
+        Some(crate::config::ReasoningEffort::Ultra),
     )
-    .expect("ChatGPT Codex reasoning default must be present");
+    .expect("profile reasoning effort must be present");
+    let responses = reasoning_profile_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::Responses,
+        Some(crate::config::ReasoningEffort::XHigh),
+    )
+    .expect("profile reasoning effort must be present");
+    let openrouter = reasoning_profile_params(
+        BackendProviderKind::OpenRouter,
+        crate::OpenAiWireApi::ChatCompletions,
+        Some(crate::config::ReasoningEffort::Medium),
+    )
+    .expect("profile reasoning effort must be present");
 
-    assert_eq!(value["reasoning"]["effort"], "medium");
-    assert!(value.get("chat_template_kwargs").is_none());
+    assert_eq!(codex["reasoning"]["effort"], "ultra");
+    assert_eq!(responses["reasoning"]["effort"], "xhigh");
+    assert_eq!(openrouter["reasoning"]["effort"], "medium");
+    assert!(codex.get("chat_template_kwargs").is_none());
 }
 
 #[test]
-fn caller_can_override_thinking_default_off() {
-    let caller_override =
-        Some(serde_json::json!({ "chat_template_kwargs": { "enable_thinking": false } }));
-
-    let value = merge_optional_params(
-        thinking_default_params(
-            BackendProviderKind::OpenAiCompatible,
-            crate::OpenAiWireApi::ChatCompletions,
-        ),
-        caller_override,
+fn profile_none_disables_local_thinking() {
+    let value = reasoning_profile_params(
+        BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+        Some(crate::config::ReasoningEffort::None),
     )
-    .expect("merged params should be present");
+    .expect("explicit none must be present");
 
     assert_eq!(value["chat_template_kwargs"]["enable_thinking"], false);
+    assert!(value["chat_template_kwargs"]
+        .get("reasoning_effort")
+        .is_none());
 }
 
 /// End-to-end wire-shape proof: the `additional_params` we attach by default in
@@ -132,17 +165,17 @@ fn caller_can_override_thinking_default_off() {
 /// `CompletionsClient` uses for the d4f backend) and asserts the flattened body,
 /// so it proves the kwarg reaches the server without needing a live endpoint.
 #[test]
-fn thinking_default_serializes_top_level_into_openai_body() {
+fn profile_reasoning_serializes_top_level_into_openai_body() {
     use rig::completion::message::{Message, Text, UserContent};
     use rig::one_or_many::OneOrMany;
 
-    // The default additional_params loop_config attaches for an OpenAI-compatible
-    // backend with no sampling overrides: just the thinking-on base.
+    // The profile-derived additional params for a DeepSeek-compatible backend.
     let additional_params = merge_optional_params(
         merge_optional_params(
-            thinking_default_params(
+            reasoning_profile_params(
                 BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
+                Some(crate::config::ReasoningEffort::Max),
             ),
             provider_additional_params(BackendProviderKind::OpenAiCompatible),
         ),
@@ -179,6 +212,7 @@ fn thinking_default_serializes_top_level_into_openai_body() {
         body["chat_template_kwargs"]["enable_thinking"], true,
         "request body must carry top-level chat_template_kwargs.enable_thinking=true; body was {body}"
     );
+    assert_eq!(body["chat_template_kwargs"]["reasoning_effort"], "max");
 }
 
 #[test]
@@ -393,6 +427,7 @@ fn every_profile_sampling_knob_reaches_the_provider_body() {
         presence_penalty: Some(-0.25),
         repetition_penalty: Some(1.1),
         max_tokens: Some(1024),
+        reasoning_effort: None,
     };
 
     let value = sampling

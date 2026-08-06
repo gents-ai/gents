@@ -149,8 +149,10 @@ impl ToolSurface {
         if self.enable_defra_query {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
-        names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
-        names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
+        if self.include_meta_tools {
+            names.push(crate::goal::GET_GOAL_TOOL_NAME.to_string());
+            names.push(crate::goal::UPDATE_GOAL_TOOL_NAME.to_string());
+        }
         names.extend(crate::self_config::self_config_tool_names(
             &self.self_config,
         ));
@@ -209,7 +211,9 @@ impl ToolSurface {
                 self.defra_query_scope.clone(),
             ));
         }
-        tools.extend(build_goal_tools());
+        if self.include_meta_tools {
+            tools.extend(build_goal_tools());
+        }
         tools.extend(crate::self_config::build_self_config_tools(
             runtime.node.clone(),
             runtime.agent_did.clone(),

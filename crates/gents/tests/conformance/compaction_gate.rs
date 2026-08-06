@@ -26,7 +26,7 @@ const GATE_BACKEND_ID: &str = "backend-compaction-gate";
 const GATE_MARKER: &str = "compaction-gate-request";
 /// A distinctive slice of `compaction::summary::compaction_prompt()`. It only
 /// ever appears in a body the compactor sent.
-const COMPACTION_MARKER: &str = "Return JSON only with keys";
+const COMPACTION_MARKER: &str = "supplied structured-output schema";
 
 /// Roughly 30k estimated tokens of history — above the 20k `keep_recent_tokens`
 /// default, so `split_messages_for_summary` yields a non-empty prefix to
@@ -47,7 +47,7 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
         vec![
             StreamScript::completes(
                 COMPACTION_MARKER,
-                [r#"{"summary": "earlier turns inspected files", "files_read": [], "files_modified": [], "key_decisions": [], "pending_questions": []}"#],
+                [r#"{"goal": "continue the task", "completed_work": ["earlier turns inspected files"]}"#],
             ),
             StreamScript::completes(GATE_MARKER, ["ok"]),
         ],

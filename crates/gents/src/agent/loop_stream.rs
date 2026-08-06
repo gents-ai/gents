@@ -27,6 +27,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 
 use crate::agent::completion_retry::{
     CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
@@ -69,6 +70,59 @@ pub(crate) type RenderedRequestSink = Arc<
         + Sync,
 >;
 
+pub(crate) type TurnCompactor = Arc<
+    dyn Fn(
+            Vec<Message>,
+            usize,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<Message>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// A typed-output contract carried through the owned completion loop.
+///
+/// Rig owns the provider schema transport. Gents keeps ownership of the loop
+/// so schema validation participates in its deadline-aware, formally modelled
+/// retract-and-resample lifecycle instead of bypassing persistence and hooks
+/// through `rig::Agent::prompt_typed`.
+#[derive(Clone)]
+pub(crate) struct StructuredOutputConfig {
+    schema: schemars::Schema,
+    validate: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+}
+
+impl StructuredOutputConfig {
+    fn for_type<T>() -> Self
+    where
+        T: DeserializeOwned + schemars::JsonSchema + 'static,
+    {
+        Self {
+            schema: schemars::schema_for!(T),
+            validate: Arc::new(|raw| {
+                serde_json::from_str::<T>(raw)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        format!(
+                            "{error}; raw_output_preview={}; finish_metadata=unavailable_at_rig_streaming_boundary",
+                            bounded_structured_output_preview(raw)
+                        )
+                    })
+            }),
+        }
+    }
+}
+
+fn bounded_structured_output_preview(raw: &str) -> String {
+    const MAX_PREVIEW_BYTES: usize = 192;
+    let mut cut = raw.len().min(MAX_PREVIEW_BYTES);
+    while !raw.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let suffix = if cut < raw.len() { "…" } else { "" };
+    serde_json::to_string(&format!("{}{suffix}", &raw[..cut]))
+        .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum LoopStreamItem<R> {
@@ -98,8 +152,15 @@ pub(crate) struct LoopConfig {
     pub(crate) temperature: Option<f64>,
     pub(crate) max_tokens: Option<u64>,
     pub(crate) additional_params: Option<serde_json::Value>,
+    pub(crate) structured_output: Option<StructuredOutputConfig>,
     pub(crate) tool_choice: Option<ToolChoice>,
     pub(crate) on_rendered_request: Option<RenderedRequestSink>,
+    /// Ephemeral provider-view compaction used between completion turns. The
+    /// durable transcript remains permissive; this callback only narrows the
+    /// in-memory input immediately before provider dispatch.
+    pub(crate) turn_compactor: Option<TurnCompactor>,
+    pub(crate) context_window: usize,
+    pub(crate) compaction_threshold: f64,
     pub(crate) retry_policy: CompletionRetryPolicy,
     pub(crate) deadline: Option<DateTime<Utc>>,
     pub(crate) max_turns: usize,
@@ -191,6 +252,17 @@ where
             }
             current_turn += 1;
 
+            let turn_index = current_turn - 1;
+            let mut request = build_budgeted_request(
+                &model,
+                &mut history,
+                &mut new_messages,
+                tools.as_slice(),
+                &config,
+                turn_index,
+            )
+            .await?;
+
             let current_prompt = new_messages
                 .last()
                 .cloned()
@@ -219,9 +291,7 @@ where
                 }
             }
 
-            let turn_index = current_turn - 1;
             let mut attempt = 0_u32;
-            let mut request = build_request(&model, current_prompt, &history, prior, tools.as_slice(), &config).await?;
             'attempts: loop {
                 let mut stream = loop {
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
@@ -603,6 +673,101 @@ where
                 }
             }
 
+            if pending_results.is_empty() && turn_text.trim().is_empty() {
+                // A provider can finish a turn after emitting only reasoning.
+                // Known DeepSeek V4 Flash failure shapes include stopping
+                // without closing the reasoning block and exhausting the
+                // output-token allowance. Rig does not currently retain the
+                // provider finish reason, so classify only the invariant we
+                // can observe here: this is not a usable terminal answer, and
+                // no tool effect has run. Model it as the existing no-effect
+                // mid-stream failure: retract the streamed reasoning and
+                // resample the same provider request, bounded by the configured
+                // transport retry ladder. This is exactly
+                // CompletionRetry.retract, so no durable side effect is replayed.
+                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                    MidStreamDirective::RetractAndResample { delay } => {
+                        yield LoopStreamItem::TurnRetracted {
+                            turn: turn_index,
+                            attempt,
+                            backoff: delay,
+                        };
+                        tracing::warn!(
+                            turn = turn_index,
+                            attempt,
+                            delay_ms = delay.as_millis() as u64,
+                            "retracting completion turn with no visible output"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue 'attempts;
+                    }
+                    MidStreamDirective::CloseAndContinue { .. } => {
+                        unreachable!(
+                            "no-output completion without tool effects cannot close and continue"
+                        );
+                    }
+                    MidStreamDirective::Fail { reason } => {
+                        Err(StreamingError::Completion(
+                            CompletionError::ProviderError(format!(
+                                "completion produced no visible output: {reason}; \
+                                 raw_output_preview=\"\"; \
+                                 finish_metadata=unavailable_at_rig_streaming_boundary"
+                            )),
+                        ))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                }
+            }
+
+            let structured_output_error = if pending_results.is_empty() {
+                config
+                    .structured_output
+                    .as_ref()
+                    .and_then(|output| (output.validate)(&turn_text).err())
+            } else {
+                None
+            };
+            if let Some(error) = structured_output_error {
+                // The provider completed normally, but the result does not
+                // satisfy the typed contract Rig sent. No tool effect has run,
+                // so this is the same proven CompletionRetry.retract transition
+                // as an interrupted or empty no-effect turn: discard all
+                // streamed content and resample the identical request.
+                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                    MidStreamDirective::RetractAndResample { delay } => {
+                        yield LoopStreamItem::TurnRetracted {
+                            turn: turn_index,
+                            attempt,
+                            backoff: delay,
+                        };
+                        tracing::warn!(
+                            turn = turn_index,
+                            attempt,
+                            delay_ms = delay.as_millis() as u64,
+                            error = %error,
+                            "retracting completion turn after structured-output validation failure"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue 'attempts;
+                    }
+                    MidStreamDirective::CloseAndContinue { .. } => {
+                        unreachable!(
+                            "invalid structured output without tool effects cannot close and continue"
+                        );
+                    }
+                    MidStreamDirective::Fail { reason } => {
+                        Err(StreamingError::Completion(
+                            CompletionError::ProviderError(format!(
+                                "structured-output validation failed: {error}; {reason}"
+                            )),
+                        ))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                }
+            }
+
             if pending_results.is_empty() {
                 yield LoopStreamItem::Item(MultiTurnStreamItem::final_response(&turn_text, aggregated_usage));
                 break 'turns;
@@ -868,6 +1033,33 @@ where
     Ok(final_text)
 }
 
+/// Runs a typed completion without surrendering the runtime's owned-loop
+/// chokepoint to Rig's `Agent` orchestration. Rig's schema is attached to every
+/// provider request, while the owned loop validates before accepting a final
+/// turn and applies its normal bounded recovery policy on malformed output.
+pub(crate) async fn run_loop_to_typed<M, T>(
+    model: M,
+    hook: Option<DefraSessionHook>,
+    prompt: Message,
+    history: Vec<Message>,
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    mut config: LoopConfig,
+) -> anyhow::Result<T>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: 'static,
+    T: DeserializeOwned + schemars::JsonSchema + 'static,
+{
+    config.structured_output = Some(StructuredOutputConfig::for_type::<T>());
+    let raw = run_loop_to_text(model, hook, prompt, history, tools, config).await?;
+    serde_json::from_str(&raw).map_err(|error| {
+        anyhow::anyhow!(
+            "decoding validated structured output as {} failed: {error}",
+            std::any::type_name::<T>()
+        )
+    })
+}
+
 fn error_chat_history(history: &[Message], new_messages: &[Message]) -> Vec<Message> {
     history.iter().chain(new_messages.iter()).cloned().collect()
 }
@@ -940,6 +1132,181 @@ pub(crate) async fn dispatch_tool(
     }
 }
 
+fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
+    serde_json::to_string(value)
+        .map(|json| crate::compaction::estimate_tokens(&json))
+        .unwrap_or_default()
+}
+
+/// Estimate the complete provider input represented by Rig's rendered request,
+/// including static tool schemas. The production profile deliberately leaves
+/// tokenizer headroom because this estimator is approximate; its job here is to
+/// apply that conservative profile to every turn's assembled request, in
+/// `build_budgeted_request`. A mid-turn `Repair` rebuild is not re-estimated:
+/// repair only normalizes tool arguments and drops orphaned pairs, so it cannot
+/// grow the input past the budget already cleared for that turn.
+fn completion_request_input_estimate(request: &CompletionRequest) -> usize {
+    serialized_token_estimate(&request.chat_history)
+        .saturating_add(serialized_token_estimate(&request.documents))
+        .saturating_add(serialized_token_estimate(&request.tools))
+        .saturating_add(serialized_token_estimate(&request.additional_params))
+        .saturating_add(serialized_token_estimate(&request.output_schema))
+}
+
+/// Treat the configured output value as a ceiling and fit each completion to
+/// the context remaining after its fully assembled provider input. Compaction
+/// protects the configured input threshold; this clamp independently preserves
+/// `input + output <= context` on every dispatch.
+fn clamp_request_output_budget(request: &mut CompletionRequest, config: &LoopConfig) {
+    let Some(configured_max) = request.max_tokens else {
+        return;
+    };
+    let input_tokens = completion_request_input_estimate(request);
+    let configured_max = usize::try_from(configured_max).unwrap_or(usize::MAX);
+    let effective_max = crate::compaction::effective_output_budget(
+        input_tokens,
+        config.context_window,
+        configured_max,
+    );
+    if effective_max < configured_max {
+        tracing::debug!(
+            input_tokens,
+            context_window = config.context_window,
+            configured_max_output_tokens = configured_max,
+            effective_max_output_tokens = effective_max,
+            "clamped completion output to remaining provider context"
+        );
+    }
+    request.max_tokens = u64::try_from(effective_max).ok();
+}
+
+fn compactable_message_estimate(messages: &[Message]) -> usize {
+    let rig_messages = messages
+        .iter()
+        .map(rig_compat::to_rig_message)
+        .collect::<Vec<_>>();
+    serialized_token_estimate(&rig_messages)
+}
+
+/// Keep enough room for both the non-compactable request layers (preamble,
+/// tool schemas, provider parameters) and the summary inserted by the
+/// compactor. The post-compaction dispatch guard remains authoritative if a
+/// pathological summary or a single oversized current prompt still does not
+/// fit.
+fn turn_keep_recent_target(
+    request: &CompletionRequest,
+    provider_messages: &[Message],
+    config: &LoopConfig,
+) -> usize {
+    let effective_budget = crate::compaction::effective_input_budget(
+        config.context_window,
+        config
+            .max_tokens
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .unwrap_or_default(),
+        config.compaction_threshold,
+    );
+    let total_input = completion_request_input_estimate(request);
+    let compactable_input = compactable_message_estimate(provider_messages);
+    let static_input = total_input.saturating_sub(compactable_input);
+    let message_budget = effective_budget.saturating_sub(static_input);
+
+    // Summaries vary with the model and history. Reserve one quarter of the
+    // compactable-message budget for the summary and serialization drift.
+    message_budget.saturating_mul(3) / 4
+}
+
+fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopConfig) -> bool {
+    let max_output_tokens = config
+        .max_tokens
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .unwrap_or_default();
+    crate::compaction::input_exceeds_budget(
+        completion_request_input_estimate(request),
+        config.context_window,
+        max_output_tokens,
+        config.compaction_threshold,
+    )
+}
+
+async fn build_budgeted_request<M: CompletionModel>(
+    model: &M,
+    history: &mut Vec<Message>,
+    new_messages: &mut Vec<Message>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    turn_index: usize,
+) -> Result<CompletionRequest, StreamingError> {
+    let current_prompt = new_messages
+        .last()
+        .cloned()
+        .expect("new_messages always retains at least the initial prompt");
+    let prior = &new_messages[..new_messages.len() - 1];
+    let mut request = build_request(model, current_prompt, history, prior, tools, config).await?;
+    clamp_request_output_budget(&mut request, config);
+
+    let Some(compactor) = config.turn_compactor.as_ref() else {
+        return Ok(request);
+    };
+    if !completion_request_exceeds_budget(&request, config) {
+        return Ok(request);
+    }
+
+    let provider_messages = history
+        .iter()
+        .chain(new_messages.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let before_tokens = completion_request_input_estimate(&request);
+    let keep_recent_target = turn_keep_recent_target(&request, &provider_messages, config);
+    let mut compacted = compactor(provider_messages, keep_recent_target)
+        .await
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "per-turn provider-input compaction failed: {error:#}"
+            )))
+        })?;
+    let compacted_prompt = compacted.pop().ok_or_else(|| {
+        StreamingError::Completion(CompletionError::ProviderError(
+            "per-turn provider-input compaction returned no prompt".to_string(),
+        ))
+    })?;
+    *history = compacted;
+    *new_messages = vec![compacted_prompt.clone()];
+
+    let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    clamp_request_output_budget(&mut rebuilt, config);
+    let after_tokens = completion_request_input_estimate(&rebuilt);
+    tracing::info!(
+        turn = turn_index,
+        before_tokens,
+        after_tokens,
+        keep_recent_target,
+        context_window = config.context_window,
+        max_output_tokens = config.max_tokens.unwrap_or_default(),
+        "compacted provider input before completion dispatch"
+    );
+
+    if completion_request_exceeds_budget(&rebuilt, config) {
+        let effective_budget = crate::compaction::effective_input_budget(
+            config.context_window,
+            config
+                .max_tokens
+                .and_then(|tokens| usize::try_from(tokens).ok())
+                .unwrap_or_default(),
+            config.compaction_threshold,
+        );
+        return Err(StreamingError::Completion(CompletionError::ProviderError(
+            format!(
+                "per-turn provider input remains over budget after compaction: \
+                 estimated_input_tokens={after_tokens}, effective_input_budget={effective_budget}"
+            ),
+        )));
+    }
+
+    Ok(rebuilt)
+}
+
 async fn build_request<M: CompletionModel>(
     model: &M,
     prompt: Message,
@@ -970,6 +1337,12 @@ async fn build_request<M: CompletionModel>(
         .temperature_opt(config.temperature)
         .max_tokens_opt(config.max_tokens)
         .additional_params_opt(config.additional_params.clone())
+        .output_schema_opt(
+            config
+                .structured_output
+                .as_ref()
+                .map(|output| output.schema.clone()),
+        )
         .tools(tool_defs);
 
     if let Some(tool_choice) = &config.tool_choice {

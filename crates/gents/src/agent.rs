@@ -358,6 +358,15 @@ pub(crate) fn behavior_config_from_documents(
             frequency_penalty: inference_profile.frequency_penalty,
             presence_penalty: inference_profile.presence_penalty,
             repetition_penalty: inference_profile.repetition_penalty,
+            reasoning_effort: inference_profile
+                .reasoning_effort
+                .as_deref()
+                // Older/default Defra rows may materialize nullable strings as
+                // an empty value. That is the wire equivalent of an unset
+                // profile field, not an invalid reasoning level.
+                .filter(|value| !value.trim().is_empty())
+                .map(crate::config::ReasoningEffort::parse)
+                .transpose()?,
             max_tokens: profile_max_tokens,
         },
         skills,

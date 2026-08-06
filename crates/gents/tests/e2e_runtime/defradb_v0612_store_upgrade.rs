@@ -65,8 +65,10 @@ async fn populated_v0612_store_opens_but_rejects_pre_baseline_lineage() -> Resul
             || msg.contains("UnknownLineage")
             || msg.contains("foreign version")
             || msg.contains("ForeignVersion")
+            || msg.contains("version pin mismatch")
+            || msg.contains("VersionPinMismatch")
             || msg.contains("export/import"),
-        "expected UnknownLineage/ForeignVersion diagnostic, got: {msg}"
+        "expected pre-baseline lineage/version-pin diagnostic, got: {msg}"
     );
 
     node.shutdown().await;

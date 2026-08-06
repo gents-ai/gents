@@ -63,6 +63,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_f64_field("frequency_penalty", args.frequency_penalty),
         optional_f64_field("presence_penalty", args.presence_penalty),
         optional_f64_field("repetition_penalty", args.repetition_penalty),
+        optional_string_field("reasoning_effort", args.reasoning_effort.as_deref()),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
         optional_i64_field(
             "stream_liveness_timeout_secs",
@@ -95,6 +96,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         optional_f64_field("frequency_penalty", args.frequency_penalty),
         optional_f64_field("presence_penalty", args.presence_penalty),
         optional_f64_field("repetition_penalty", args.repetition_penalty),
+        optional_string_field("reasoning_effort", args.reasoning_effort.as_deref()),
         optional_i64_field("stream_batch_ms", args.stream_batch_ms),
         optional_i64_field(
             "stream_liveness_timeout_secs",
@@ -143,6 +145,7 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         "frequency_penalty": args.frequency_penalty,
         "presence_penalty": args.presence_penalty,
         "repetition_penalty": args.repetition_penalty,
+        "reasoning_effort": args.reasoning_effort,
         "stream_batch_ms": args.stream_batch_ms,
         "stream_liveness_timeout_secs": args.stream_liveness_timeout_secs,
         "deadline_duration_secs": args.deadline_duration_secs,

@@ -10,7 +10,10 @@ mod summary;
 mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
-use summary::{compaction_prompt, dedupe_paths, format_summary, parse_summary_response};
+use summary::{
+    bounded_error_diagnostic, compaction_json_fallback_prompt, compaction_prompt,
+    compaction_request_prompt, format_summary, parse_fallback_checkpoint, ContinuationCheckpoint,
+};
 
 #[derive(Debug, Clone)]
 pub struct CompactionOptions {
@@ -18,9 +21,20 @@ pub struct CompactionOptions {
     pub tool_result_max_chars: usize,
     pub keep_recent_tokens: usize,
     pub strategy: CompactionStrategy,
+    /// Output budget for the internal summary completion. Deliberately
+    /// independent of the user turn's max_output_tokens (#1017).
+    pub summary_max_output_tokens: usize,
+    /// Most file paths rendered per list in the formatted summary.
+    pub summary_file_list_max: usize,
     /// The caller has already established that the complete provider input is
     /// over budget. Skip the history-only threshold recheck and summarize.
     pub force_summarize: bool,
+    /// The claimed deadline of the request this compaction serves. The
+    /// compactor's stored config is daemon-lifetime and carries no deadline,
+    /// so this is the only path by which the internal retry ladder's
+    /// deadline fail-fast can engage (#1016); `None` leaves recovery bounded
+    /// only by the ladder itself.
+    pub deadline: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for CompactionOptions {
@@ -30,7 +44,10 @@ impl Default for CompactionOptions {
             tool_result_max_chars: 2000,
             keep_recent_tokens: 20000,
             strategy: CompactionStrategy::StripThenSummarize,
+            summary_max_output_tokens: crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            summary_file_list_max: crate::config::DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX,
             force_summarize: false,
+            deadline: None,
         }
     }
 }
@@ -86,8 +103,11 @@ impl<M: CompletionModel> DefraCompactor<M> {
         // Compaction is an internal, non-persisting sub-completion, not a user
         // execution origin; it must not inherit the parent's retry ladder (which
         // for scheduled origins is a deadline-less 5s/30s/120s backoff that would
-        // block inline compaction for minutes). Fail fast instead (#648).
-        config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+        // block inline compaction for minutes) (#648). But it has no caller-level
+        // retry either, so zero recovery made one empty provider turn abort the
+        // whole user request: use the bounded immediate internal budget (#1016).
+        config.retry_policy =
+            crate::agent::completion_retry::CompletionRetryPolicy::internal_immediate();
         Self { model, config }
     }
 }
@@ -172,33 +192,115 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         let old_activity = extract_file_activity(&old_messages);
         let prepared_history =
             pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
-        let raw_summary = crate::agent::loop_stream::run_loop_to_text(
+        // The transcript is untrusted source material. Put the summarization
+        // contract in the system layer so an unfinished user/tool workflow in
+        // `prepared_history` cannot outrank it and turn the internal completion
+        // into a continuation of the old task. The final user message is
+        // deliberately neutral; it carries no executable transcript content.
+        let mut summary_config = self.config.clone();
+        summary_config.preamble = Some(compaction_prompt().to_string());
+        summary_config.context_message = None;
+        summary_config.tool_choice = None;
+        summary_config.turn_compactor = None;
+        summary_config.max_turns = 0;
+        // The summary completion has its own output budget, deliberately
+        // independent of the user turn's max_output_tokens (#1017): a large
+        // turn budget must not let the model balloon the internal summary.
+        let summary_max_output_tokens = options
+            .summary_max_output_tokens
+            .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS);
+        summary_config.max_tokens = Some(summary_max_output_tokens as u64);
+        // Both deadlines are hard stops when present; recovery must respect
+        // the earlier one.
+        summary_config.deadline = match (options.deadline, summary_config.deadline) {
+            (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
+            (from_options, from_config) => from_options.or(from_config),
+        };
+        let guided_result = crate::agent::loop_stream::run_loop_to_typed(
             (*self.model).clone(),
             None,
-            crate::llm::message::Message::user(compaction_prompt()),
+            crate::llm::message::Message::user(compaction_request_prompt()),
             prepared_history.clone(),
             std::sync::Arc::new(Vec::new()),
-            self.config.clone(),
+            summary_config.clone(),
         )
-        .await
-        .map_err(|error| anyhow::anyhow!("compaction summary inference failed: {error}"))?;
-        let parsed_summary = parse_summary_response(&raw_summary)?;
+        .await;
+        let checkpoint: ContinuationCheckpoint = match guided_result {
+            Ok(checkpoint) => checkpoint,
+            Err(guided_error)
+                if is_guided_output_failure(&guided_error)
+                    && !deadline_elapsed(summary_config.deadline) =>
+            {
+                tracing::warn!(
+                    error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
+                    "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
+                );
+                let mut fallback_config = summary_config;
+                fallback_config.structured_output = None;
+                fallback_config.retry_policy =
+                    crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+                fallback_config.preamble = Some(format!(
+                    "{}\n\n{}",
+                    compaction_prompt(),
+                    compaction_json_fallback_prompt()
+                ));
+                let raw = crate::agent::loop_stream::run_loop_to_text(
+                    (*self.model).clone(),
+                    None,
+                    crate::llm::message::Message::user(compaction_request_prompt()),
+                    prepared_history,
+                    std::sync::Arc::new(Vec::new()),
+                    fallback_config,
+                )
+                .await
+                .map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "compaction_provider_failure: guided structured output failed: {}; \
+                         non-guided JSON fallback failed: {}",
+                        bounded_error_diagnostic(&format!("{guided_error:#}")),
+                        bounded_error_diagnostic(&format!("{fallback_error:#}"))
+                    )
+                })?;
+                parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "compaction_provider_failure: guided structured output failed: {}; \
+                         non-guided JSON fallback failed: {}",
+                        bounded_error_diagnostic(&format!("{guided_error:#}")),
+                        bounded_error_diagnostic(&fallback_error)
+                    )
+                })?
+            }
+            Err(error) => {
+                let deadline_context = if deadline_elapsed(summary_config.deadline) {
+                    "compaction deadline elapsed after "
+                } else {
+                    ""
+                };
+                return Err(anyhow::anyhow!(
+                    "compaction_provider_failure: {deadline_context}{}",
+                    bounded_error_diagnostic(&format!("{error:#}"))
+                ));
+            }
+        };
 
-        let mut files_read = old_activity.files_read;
-        files_read.extend(parsed_summary.files_read);
-        dedupe_paths(&mut files_read);
+        // Structural extraction is the sole source of file activity (#1017):
+        // the model no longer returns lists, so it can neither balloon the
+        // summary nor inject paths the run never touched.
+        let FileActivity {
+            files_read,
+            files_modified,
+        } = old_activity;
 
-        let mut files_modified = old_activity.files_modified;
-        files_modified.extend(parsed_summary.files_modified);
-        dedupe_paths(&mut files_modified);
-
-        let summary = format_summary(
-            &parsed_summary.summary,
+        // Bounded at creation so both consumers — the persisted compaction
+        // entry and per-turn provider-view injection — see the same bound.
+        let summary = bounded_summary(format_summary(
+            &checkpoint,
             &files_read,
             &files_modified,
-            &parsed_summary.key_decisions,
-            &parsed_summary.pending_questions,
-        );
+            options
+                .summary_file_list_max
+                .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX),
+        ));
         let compacted_token_estimate =
             estimate_message_tokens(&recent_messages) + estimate_tokens(&summary);
 
@@ -213,6 +315,16 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             compaction_count: 1,
         })
     }
+}
+
+fn is_guided_output_failure(error: &anyhow::Error) -> bool {
+    let diagnostic = format!("{error:#}");
+    diagnostic.contains("structured-output validation failed")
+        || diagnostic.contains("completion produced no visible output")
+}
+
+fn deadline_elapsed(deadline: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+    deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline)
 }
 
 pub fn estimate_tokens(text: &str) -> usize {
@@ -425,6 +537,42 @@ pub fn threshold_basis_points(threshold: f64) -> u64 {
 pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
     let basis_points = u128::from(threshold_basis_points(threshold));
     ((context_window as u128 * basis_points) / 10_000) as usize
+}
+
+/// Provider input available before compaction. The configured output value is
+/// a ceiling, not a reservation: each completion dispatch clamps that ceiling
+/// with [`effective_output_budget`]. Mirrors Lean
+/// `PromptAssembly.Budget.effectiveInputBudget`.
+pub fn effective_input_budget(
+    context_window: usize,
+    _max_output_tokens: usize,
+    threshold: f64,
+) -> usize {
+    threshold_budget(context_window, threshold).min(context_window)
+}
+
+/// Per-turn output allowance after the assembled provider input is known.
+/// This preserves a large configured ceiling for short prompts without forcing
+/// every turn to reserve it in advance. Mirrors Lean
+/// `PromptAssembly.Budget.effectiveOutputBudget`.
+pub fn effective_output_budget(
+    input_tokens: usize,
+    context_window: usize,
+    configured_max_output_tokens: usize,
+) -> usize {
+    configured_max_output_tokens.min(context_window.saturating_sub(input_tokens))
+}
+
+/// The shared provider-dispatch gate. It is deliberately expressed over an
+/// already-assembled input estimate so callers at request entry and inside the
+/// owned completion loop apply exactly the same threshold rule.
+pub fn input_exceeds_budget(
+    input_tokens: usize,
+    context_window: usize,
+    max_output_tokens: usize,
+    threshold: f64,
+) -> bool {
+    input_tokens > effective_input_budget(context_window, max_output_tokens, threshold)
 }
 
 pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {

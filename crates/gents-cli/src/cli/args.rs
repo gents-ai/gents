@@ -549,9 +549,14 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         default_value_t = 120,
-        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs and also the foreground cap (backgrounded runs use the built-in background lifetime budget)"
+        help = "Foreground Bash command timeout in seconds: applied when a call omits timeout_secs, and the foreground cap unless --command-timeout-max-secs raises it (backgrounded runs use the built-in background lifetime budget)"
     )]
     pub(crate) command_timeout_secs: u64,
+    #[arg(
+        long,
+        help = "Foreground cap in seconds for explicit Bash timeout_secs requests. Defaults to --command-timeout-secs; values below it are raised to it (#1018)"
+    )]
+    pub(crate) command_timeout_max_secs: Option<u64>,
     #[arg(long = "cli-tool")]
     pub(crate) cli_tools: Vec<String>,
     #[arg(
@@ -1124,7 +1129,7 @@ pub(crate) struct TraceProjectArgs {
         long,
         value_enum,
         default_value_t = TraceProjectionFormatArg::Json,
-        help = "Adapter projection output format"
+        help = "Adapter projection output format; native-json omits the Gents envelope"
     )]
     pub(crate) format: TraceProjectionFormatArg,
     #[arg(
@@ -1142,7 +1147,7 @@ pub(crate) struct TraceProjectSchemaArgs {
         long,
         value_enum,
         default_value_t = TraceProjectionFormatArg::Json,
-        help = "Output schema for a JSON projection envelope or JSONL record"
+        help = "Output schema for a projection envelope, native projection, or JSONL record"
     )]
     pub(crate) format: TraceProjectionFormatArg,
     #[arg(
@@ -1154,6 +1159,7 @@ pub(crate) struct TraceProjectSchemaArgs {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum TraceProjectionArg {
+    Atif,
     OpenaiCodex,
     Langgraph,
     MultiAgent,
@@ -1169,6 +1175,7 @@ pub(crate) enum TraceProjectionRedactionArg {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum TraceProjectionFormatArg {
     Json,
+    NativeJson,
     Jsonl,
     EvalJsonl,
 }
@@ -2004,6 +2011,11 @@ pub(crate) struct InferenceProfileUpsertArgs {
     pub(crate) presence_penalty: Option<f64>,
     #[arg(long)]
     pub(crate) repetition_penalty: Option<f64>,
+    #[arg(
+        long,
+        value_parser = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    )]
+    pub(crate) reasoning_effort: Option<String>,
     #[arg(long)]
     pub(crate) stream_batch_ms: Option<i64>,
     #[arg(long)]

@@ -480,7 +480,7 @@ fn provider_invocations_are_confined_to_the_owned_loop_seam() {
 #[test]
 fn owned_loop_entry_points_are_registered() {
     let expected = BTreeSet::from([
-        // `run_loop_to_text` wraps `run_loop_stream`.
+        // Text and typed helpers wrap `run_loop_stream`.
         "crates/gents/src/agent/loop_stream.rs".to_string(),
         // Daemon request execution — the main path.
         "crates/gents/src/agent/daemon/inference.rs".to_string(),
@@ -491,7 +491,11 @@ fn owned_loop_entry_points_are_registered() {
         // One-shot CLI runs.
         "crates/gents/src/oneshot.rs".to_string(),
     ]);
-    let found = files_containing(&["run_loop_stream(", "run_loop_to_text("]);
+    let found = files_containing(&[
+        "run_loop_stream(",
+        "run_loop_to_text(",
+        "run_loop_to_typed(",
+    ]);
     assert_eq!(
         found, expected,
         "the set of owned-loop entry points changed; a new completion path must be \

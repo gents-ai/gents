@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use gents::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, build_adapter_projection,
+    adapter_projection_jsonl_records, adapter_projection_native_json,
+    adapter_projection_native_json_schema, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
@@ -100,6 +101,14 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
                 print_json(&value)?;
             }
         }
+        TraceProjectionFormatArg::NativeJson => {
+            let value = adapter_projection_native_json(&projection);
+            if let Some(path) = args.output_file.as_deref() {
+                write_json_output_file(path, &value)?;
+            } else {
+                print_json(&value)?;
+            }
+        }
         TraceProjectionFormatArg::Jsonl => {
             let records = adapter_projection_jsonl_records(&projection);
             write_jsonl(args.output_file.as_deref(), &records)?;
@@ -116,6 +125,7 @@ fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
     let kind = adapter_projection_kind(args.projection);
     let schema = match args.format {
         TraceProjectionFormatArg::Json => adapter_projection_json_schema(kind),
+        TraceProjectionFormatArg::NativeJson => adapter_projection_native_json_schema(kind),
         TraceProjectionFormatArg::Jsonl => adapter_projection_jsonl_record_schema(kind),
         TraceProjectionFormatArg::EvalJsonl => adapter_projection_eval_jsonl_record_schema(kind),
     };
@@ -815,6 +825,7 @@ fn optional_scope_arg(field: &str, value: Option<String>) -> Result<Option<Strin
 
 fn adapter_projection_kind(arg: TraceProjectionArg) -> AdapterProjectionKind {
     match arg {
+        TraceProjectionArg::Atif => AdapterProjectionKind::AtifTrajectory,
         TraceProjectionArg::OpenaiCodex => AdapterProjectionKind::OpenAiCodexRunTrace,
         TraceProjectionArg::Langgraph => AdapterProjectionKind::LangGraphStateHistory,
         TraceProjectionArg::MultiAgent => AdapterProjectionKind::MultiAgentTask,

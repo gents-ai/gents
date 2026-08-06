@@ -165,12 +165,15 @@ const emptyPrimarySurfaceProblems = extract((state) => {
     .filter((surface) => surface.mounted && surface.textLength === 0);
 });
 
+// Startup and Bombadil's Reload action can be observed before React mounts the
+// shell and restores the route surface. Require both to settle promptly while
+// still rejecting a persistently blank shell or overlapping primary surfaces.
 export const desktop_shell_stays_mounted = always(
-  () => shellState.current.shellMounted,
+  eventually(() => shellState.current.shellMounted).within(5, "seconds"),
 );
 
 export const desktop_shell_has_one_primary_surface = always(
-  () => shellState.current.primarySurfaceCount === 1,
+  eventually(() => shellState.current.primarySurfaceCount === 1).within(5, "seconds"),
 );
 
 export const desktop_global_errors_are_actionable = always(() => {

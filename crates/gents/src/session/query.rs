@@ -62,6 +62,20 @@ pub(crate) async fn session_has_live_response(
     node: &EmbeddedNode,
     session_id: &str,
 ) -> Result<bool> {
+    session_has_other_live_response(node, session_id, None).await
+}
+
+/// Whether this session has a streaming response other than the current
+/// owned-loop request. At a completion-turn boundary the current response is
+/// necessarily still marked `streaming`, but every message the loop is about
+/// to compact has finished streaming and been yielded to persistence. A
+/// different live response can still be half-written and closes the modelled
+/// `safeToReduce` gate.
+pub(crate) async fn session_has_other_live_response(
+    node: &EmbeddedNode,
+    session_id: &str,
+    current_request_id: Option<&str>,
+) -> Result<bool> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -70,7 +84,7 @@ pub(crate) async fn session_has_live_response(
                     session_id: {{ _eq: "{escaped_session_id}" }},
                     status: {{ _eq: "streaming" }}
                 }},
-                limit: 1
+                limit: 2
             ) {{
                 response_key
             }}
@@ -86,12 +100,20 @@ pub(crate) async fn session_has_live_response(
         );
     }
 
-    Ok(resp
+    let rows = resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentResponse"))
         .and_then(|value| value.as_array())
-        .is_some_and(|rows| !rows.is_empty()))
+        .cloned()
+        .unwrap_or_default();
+    Ok(rows.iter().any(|row| {
+        let response_key = row.get("response_key").and_then(|value| value.as_str());
+        match current_request_id {
+            Some(current_request_id) => response_key != Some(current_request_id),
+            None => true,
+        }
+    }))
 }
 
 pub(crate) async fn load_session_behavior_id(

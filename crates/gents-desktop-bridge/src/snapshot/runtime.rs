@@ -186,6 +186,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     max_output_tokens: row.max_output_tokens,
                     max_turns: row.max_turns,
                     temperature: row.temperature,
+                    reasoning_effort: normalize_optional(row.reasoning_effort.as_deref()),
                     stream_batch_ms: row.stream_batch_ms,
                     stream_liveness_timeout_secs: row.stream_liveness_timeout_secs,
                     deadline_duration_secs: row.deadline_duration_secs,

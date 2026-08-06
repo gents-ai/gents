@@ -115,6 +115,24 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         }
     }
 
+    /// Request-scoped compaction options: the daemon-lifetime knobs plus the
+    /// claimed deadline of the request this compaction serves. The deadline is
+    /// a required argument so no call site can omit it — the compactor's
+    /// stored config is daemon-lifetime and carries no deadline, so this is
+    /// the only path by which compaction recovery becomes deadline-aware
+    /// (#1016). Both entry points force summarization: they fire only after
+    /// the caller has established the assembled input is over budget.
+    pub(super) fn compaction_options_for_request(
+        &self,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> CompactionOptions {
+        CompactionOptions {
+            force_summarize: true,
+            deadline,
+            ..self.compaction_options.clone()
+        }
+    }
+
     pub(super) fn with_approval_required_tools(mut self, tools: Vec<String>) -> Self {
         self.approval_required_tools = Arc::new(tools);
         self

@@ -7,7 +7,7 @@ use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::LoopConfig;
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{AgentBehavior, SamplingConfig};
+use crate::config::{AgentBehavior, ReasoningEffort, SamplingConfig};
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
 use crate::watcher::AgentRequest;
@@ -42,13 +42,21 @@ pub(crate) fn loop_config(
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
         additional_params: merge_optional_params(
             merge_optional_params(
-                thinking_default_params(behavior.backend_provider_kind, behavior.openai_wire_api),
+                reasoning_profile_params(
+                    behavior.backend_provider_kind,
+                    behavior.openai_wire_api,
+                    behavior.sampling.reasoning_effort,
+                ),
                 provider_additional_params(behavior.backend_provider_kind),
             ),
             behavior.sampling.additional_params(),
         ),
+        structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
         on_rendered_request: None,
+        turn_compactor: None,
+        context_window: behavior.context_window,
+        compaction_threshold: behavior.compaction_threshold,
         retry_policy: CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns: behavior.max_turns,
@@ -101,6 +109,7 @@ fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> Sam
         frequency_penalty: defaults.frequency_penalty,
         presence_penalty: defaults.presence_penalty,
         repetition_penalty: defaults.repetition_penalty,
+        reasoning_effort: defaults.reasoning_effort,
         max_tokens: request
             .max_tokens
             .and_then(|value| u64::try_from(value).ok())
@@ -135,8 +144,11 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
     }
 }
 
-/// Provider defaults that turn reasoning capture on where the wire contract
-/// supports it without assuming every OpenAI-compatible model can reason.
+/// Maps the inference profile's reasoning effort into each provider's wire
+/// contract. An absent profile setting injects no reasoning default, except for
+/// ChatGPT Codex: it has a known Responses contract and keeps the `medium`
+/// default it shipped before reasoning effort became profile configuration
+/// (#540).
 ///
 /// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
 /// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
@@ -144,31 +156,49 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
 /// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
 /// defaults thinking OFF and the `reasoning` field is empty, so our harvest
 /// trajectories lose the model's reasoning. That local-only toggle must not be
-/// sent to hosted Responses or OpenRouter endpoints, which reject unknown
-/// parameters. ChatGPT Codex has a known Responses contract and retains its
-/// current `medium` reasoning default; generic Responses models use their own
-/// default until reasoning effort becomes explicit profile configuration (#540).
+/// sent to Responses or OpenRouter endpoints, which use the standard
+/// `reasoning.effort` object instead.
 ///
 /// The key is serialized flat into the OpenAI completion body (rig flattens
 /// `additional_params`), so it reaches vLLM as a top-level `chat_template_kwargs`
 /// object — exactly where the server reads it.
-fn thinking_default_params(
+fn reasoning_profile_params(
     kind: BackendProviderKind,
     wire_api: OpenAiWireApi,
+    reasoning_effort: Option<ReasoningEffort>,
 ) -> Option<serde_json::Value> {
+    let Some(reasoning_effort) = reasoning_effort else {
+        // Codex predates profile-configured reasoning: it has a known Responses
+        // contract and shipped an unconditional `medium`. Profile plumbing may
+        // override that default, never silently drop it (#540). Every other
+        // backend waits for explicit configuration.
+        return matches!(kind, BackendProviderKind::ChatGptCodex).then(|| {
+            serde_json::json!({
+                "reasoning": { "effort": ReasoningEffort::Medium.as_str() }
+            })
+        });
+    };
     match (kind, wire_api) {
         (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions) => {
-            Some(serde_json::json!({
-                "chat_template_kwargs": { "enable_thinking": true }
-            }))
+            let mut kwargs = serde_json::Map::from_iter([(
+                "enable_thinking".to_string(),
+                serde_json::Value::Bool(reasoning_effort != ReasoningEffort::None),
+            )]);
+            if reasoning_effort != ReasoningEffort::None {
+                kwargs.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::Value::String(reasoning_effort.as_str().to_string()),
+                );
+            }
+            Some(serde_json::json!({ "chat_template_kwargs": kwargs }))
         }
-        (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
-            "reasoning": { "effort": "medium" }
+        (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
+        | (BackendProviderKind::OpenRouter, _)
+        | (BackendProviderKind::ChatGptCodex, _) => Some(serde_json::json!({
+            "reasoning": { "effort": reasoning_effort.as_str() }
         })),
         // Grok: do not force reasoning.effort — several grok models 400 on it.
-        (BackendProviderKind::XaiGrokOAuth, _)
-        | (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::Responses)
-        | (BackendProviderKind::OpenRouter, _) => None,
+        (BackendProviderKind::XaiGrokOAuth, _) => None,
     }
 }
 

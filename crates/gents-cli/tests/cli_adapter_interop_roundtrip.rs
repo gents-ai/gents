@@ -874,6 +874,7 @@ fn native_message_contents(capture: &ExternalAdapterCapture) -> Vec<String> {
 
 fn projection_cli_arg(projection: AdapterProjectionKind) -> &'static str {
     match projection {
+        AdapterProjectionKind::AtifTrajectory => "atif",
         AdapterProjectionKind::OpenAiCodexRunTrace => "openai-codex",
         AdapterProjectionKind::LangGraphStateHistory => "langgraph",
         AdapterProjectionKind::MultiAgentTask => "multi-agent",

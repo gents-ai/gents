@@ -402,8 +402,9 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
 #[tokio::test]
 async fn background_tool_execution_survives_parent_request_deadline() {
     let bash_tools = gents::ToolSet::builder()
-        .bash_read_only_with_policy_and_timeout(
+        .bash_read_only_with_policy_and_timeouts(
             gents::CommandExecutionPolicy::read_only(vec!["sleep".to_string()]),
+            std::time::Duration::from_secs(120),
             std::time::Duration::from_secs(120),
         )
         .build()

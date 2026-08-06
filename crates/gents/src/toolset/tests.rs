@@ -111,6 +111,30 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 }
 
+// #1018: when the operator raises the foreground cap above the default, the
+// model-visible schema advertises the default and the cap as distinct values.
+#[tokio::test]
+async fn bash_schema_advertises_decoupled_default_and_max() {
+    let root = temp_root("gents-decoupled-timeout");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(600),
+        Duration::from_secs(3_600),
+        CommandExecutionPolicy::write_capable(),
+    );
+    let def = crate::llm::tool::Tool::definition(&tool, String::new()).await;
+    assert_eq!(def.parameters["properties"]["timeout_secs"]["default"], 600);
+    assert_eq!(
+        def.parameters["properties"]["timeout_secs"]["maximum"],
+        3_600
+    );
+    let description = def.parameters["properties"]["timeout_secs"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(description.contains("600"), "{description}");
+    assert!(description.contains("3600"), "{description}");
+}
+
 #[test]
 fn subagent_tool_names_are_gated_by_spawn_and_targets() {
     let disabled = SubagentToolConfig {
@@ -1599,10 +1623,42 @@ async fn unrestricted_bash_runs_shell_command_strings() {
     assert_eq!(meta["ok"], true);
     assert_eq!(meta["exit_code"], 0);
     assert_eq!(meta["timed_out"], false);
+    assert_eq!(meta["stdout_capture_incomplete"], false);
+    assert_eq!(meta["stderr_capture_incomplete"], false);
     assert_eq!(meta["argv"][0], "/bin/sh");
     assert_eq!(meta["stdout_truncation"]["total_bytes"], 2);
     assert_eq!(meta["stderr_truncation"]["total_bytes"], 3);
     assert!(output.contains("stdout:\nOK"));
+    assert!(output.contains("stderr:\nERR"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_reports_descendant_bounded_capture() {
+    let root = temp_root("gents-unrestricted-capture-drain");
+    let tool = UnrestrictedBashTool::new(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+    );
+
+    let output = crate::llm::tool::Tool::call(
+        &tool,
+        BashArgs {
+            command: "printf ERR >&2; sleep 2 >/dev/null & exit 0".to_string(),
+            args: Vec::new(),
+            cwd: None,
+            timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
+            raw_json: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["ok"], true);
+    assert_eq!(meta["exit_code"], 0);
+    assert_eq!(meta["stdout_capture_incomplete"], false);
+    assert_eq!(meta["stderr_capture_incomplete"], true);
     assert!(output.contains("stderr:\nERR"));
 }
 
@@ -1613,6 +1669,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted);
     let tool = UnrestrictedBashTool::with_policy(
         ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         policy,
     );
@@ -1736,6 +1793,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let pid_file = root.join("descendant.pid");
     let tool = UnrestrictedBashTool::with_policy(
         ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
         Duration::from_secs(1),
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
@@ -2181,51 +2239,68 @@ fn mutation_lock_keys_resolve_symlinked_parents_for_new_files() {
     );
 }
 
-// #985: the timeout applied when the model omits timeout_secs must equal the
-// schema-advertised default, and backgrounded runs get their own lifetime
-// budget instead of the foreground ceiling.
+// #985/#1018: the timeout applied when the model omits timeout_secs must equal
+// the schema-advertised default; explicit foreground requests may raise it up
+// to the operator's foreground ceiling; backgrounded runs get their own
+// lifetime budget instead of either foreground value.
 #[test]
 fn command_timeout_resolution_matches_advertised_schema() {
     use super::shared::resolve_command_timeout;
 
     let foreground_default = Duration::from_secs(120);
+    let foreground_max = Duration::from_secs(3_600);
     assert_eq!(
-        resolve_command_timeout(None, foreground_default, false),
+        resolve_command_timeout(None, foreground_default, foreground_max, false),
         foreground_default,
-        "omission must apply the advertised default"
+        "omission must apply the advertised default, not the ceiling"
     );
     assert_eq!(
-        resolve_command_timeout(Some(600), foreground_default, false),
-        foreground_default,
+        resolve_command_timeout(Some(600), foreground_default, foreground_max, false),
+        Duration::from_secs(600),
+        "explicit foreground requests may exceed the default up to the ceiling"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(7_200), foreground_default, foreground_max, false),
+        foreground_max,
         "explicit foreground requests are capped at the ceiling"
     );
     assert_eq!(
-        resolve_command_timeout(Some(5), foreground_default, false),
+        resolve_command_timeout(Some(5), foreground_default, foreground_max, false),
         Duration::from_secs(5)
     );
     assert_eq!(
-        resolve_command_timeout(Some(0), foreground_default, false),
+        resolve_command_timeout(Some(0), foreground_default, foreground_max, false),
         Duration::from_secs(1)
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(600), foreground_default, foreground_default, false),
+        foreground_default,
+        "max equal to default reproduces the coupled #985 ceiling"
+    );
+    assert_eq!(
+        resolve_command_timeout(Some(600), foreground_default, Duration::from_secs(1), false),
+        foreground_default,
+        "a misconfigured max below the default is raised to the default"
     );
 
     let budget = Duration::from_secs(BACKGROUND_COMMAND_TIMEOUT_SECS);
     assert_eq!(
-        resolve_command_timeout(None, foreground_default, true),
+        resolve_command_timeout(None, foreground_default, foreground_max, true),
         budget,
         "background omission uses the background lifetime budget"
     );
     assert_eq!(
-        resolve_command_timeout(Some(7_200), foreground_default, true),
+        resolve_command_timeout(Some(7_200), foreground_default, foreground_max, true),
         Duration::from_secs(7_200),
         "background requests are exempt from the foreground ceiling"
     );
     assert_eq!(
-        resolve_command_timeout(Some(999_999), foreground_default, true),
+        resolve_command_timeout(Some(999_999), foreground_default, foreground_max, true),
         budget,
         "background requests are still capped at the background budget"
     );
     assert_eq!(
-        resolve_command_timeout(Some(0), foreground_default, true),
+        resolve_command_timeout(Some(0), foreground_default, foreground_max, true),
         Duration::from_secs(1)
     );
 }

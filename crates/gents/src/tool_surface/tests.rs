@@ -114,6 +114,48 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
 }
 
 #[test]
+fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
+    let operator_root = temp_root("gents-command-timeout-max-root");
+    let ceiling = ToolCeiling::readonly_at(&operator_root)
+        .with_command_timeout_secs(600)
+        .with_command_timeout_max_secs(3_600);
+    let config = BehaviorToolConfig::from_selection(
+        "classifier",
+        ToolSelection {
+            file_tools: FileToolMode::Off,
+            file_tool_root: None,
+            bash: BashMode::ReadOnly,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            enable_meta_tools: false,
+            allowed_mcp_service_ids: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
+            approval_required_tools: Vec::new(),
+            orchestration_enabled: false,
+            enable_memory: false,
+            enable_session_history_tool: false,
+            enable_context_budget: false,
+            enable_defra_query: false,
+            defra_query_collections: Vec::new(),
+            write_tools: Vec::new(),
+            enable_self_config: false,
+            self_config_categories: None,
+            self_config_no_lockout: false,
+            self_config_dry_run: false,
+        },
+        &ceiling,
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        config.host_tools().native_tools(),
+        [crate::toolset::NativeTool::BashReadOnly { timeout, timeout_max, .. }]
+            if timeout.as_secs() == 600 && timeout_max.as_secs() == 3_600
+    ));
+}
+
+#[test]
 fn selection_file_tool_root_rejects_escape_outside_operator_root() {
     let operator_root = temp_root("gents-operator-root");
     let outside_root = temp_root("gents-outside-root");
@@ -760,6 +802,40 @@ async fn write_tool_colliding_with_builtin_is_not_registered_twice() {
 fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_memory);
     assert!(!ToolSelection::default().enable_session_history_tool);
+}
+
+#[tokio::test]
+async fn disabling_meta_tools_removes_goal_tools_from_names_and_runtime() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let surface = BehaviorToolConfig::from_selection(
+        "benchmark",
+        ToolSelection {
+            enable_meta_tools: false,
+            enable_context_budget: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built_names = surface
+        .build_tools(&runtime)
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name())
+        .collect::<Vec<_>>();
+    assert!(!built_names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!built_names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
 }
 
 #[test]

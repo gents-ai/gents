@@ -130,7 +130,7 @@ pub fn import_external_adapter_capture_to_timeline_rows(
     match mapping.projection {
         AdapterProjectionKind::MultiAgentTask => import_multi_agent_capture(capture, mapping),
         AdapterProjectionKind::LangGraphStateHistory => import_langgraph_capture(capture, mapping),
-        AdapterProjectionKind::OpenAiCodexRunTrace => {
+        AdapterProjectionKind::AtifTrajectory | AdapterProjectionKind::OpenAiCodexRunTrace => {
             bail!(
                 "external adapter import for projection {} is not implemented",
                 mapping.projection.id()
@@ -169,7 +169,9 @@ fn validate_external_adapter_capture_mapping(
             validate_supported_source_system(capture, &["langgraph"])?;
             validate_langgraph_mapping(capture)
         }
-        AdapterProjectionKind::OpenAiCodexRunTrace => Ok(()),
+        AdapterProjectionKind::AtifTrajectory | AdapterProjectionKind::OpenAiCodexRunTrace => {
+            Ok(())
+        }
     }
 }
 

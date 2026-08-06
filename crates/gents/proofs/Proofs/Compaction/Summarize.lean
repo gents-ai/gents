@@ -15,9 +15,12 @@ the call.
 
 `summarize` is parameterised over the budget index rather than pinning a token
 function: what must be proven is that *whatever* index the budget picks, the
-reducer stays sound. It does, because `pairSafeBoundary` retreats the index to
-the nearest turn boundary. `raw_split_can_orphan` is the counterexample showing
-that retreat is load-bearing rather than decoration.
+reducer stays sound. It does, because `pairSafeBoundary` lands on a complete
+turn boundary. A normal straddling split retreats to retain the whole turn; if
+that atomic tail itself exceeds the budget, production instead selects the next
+complete boundary after it (possibly the end, summarizing every row).
+`raw_split_can_orphan` is the counterexample showing that a pair-safe boundary
+is load-bearing rather than decoration.
 -/
 
 namespace Compaction
@@ -55,16 +58,17 @@ theorem foldrMax_le (n : Nat) :
 
 /-! ## The pair-safe boundary -/
 
-/-- The token-budget index production computes in `split_messages_for_summary`. -/
+/-- The token-budget index production selects in `split_messages_for_summary`,
+after advancing past an oversized atomic tail when retaining it cannot fit. -/
 abbrev SplitPolicy := List MessageRow → Nat
 
 /-- The greatest `j ≤ limit` at which no tool call is awaiting its result.
 
 Production mirrors this in `compaction::history::pair_safe_boundary`: it walks
-the budget index back to the nearest turn boundary. Moving *earlier* over-retains
-by at most one turn and never loses context; moving later would summarize a turn
-the budget wanted kept. For provider-input assembly, over-retaining is the
-correct failure direction. -/
+a candidate index back to the nearest turn boundary. The token splitter first
+tries that conservative retreat. If the resulting atomic tail is itself over
+budget, it submits the boundary after that complete tail instead. Both choices
+enter this reducer only at a boundary where no call awaits its result. -/
 def pairSafeBoundary (msgs : List MessageRow) (limit : Nat) : Nat :=
   ((List.range (min limit msgs.length + 1)).filter
     (fun j => decide (pendingAfter ∅ (msgs.take j) = ∅))).foldr max 0

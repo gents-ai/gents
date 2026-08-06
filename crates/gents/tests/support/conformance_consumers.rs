@@ -624,11 +624,18 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_sanitize_cases_drive_the_production_sanitizer",
         },
         ConformanceConsumer::RustTest {
-            id: "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_output_reserved_compaction_trigger",
+            id: "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_dynamic_output_compaction_trigger",
             package: "gents",
             source_path: "crates/gents/src/agent/daemon/request.rs",
             module_path: "agent::daemon::request::budget_contract_tests",
-            function: "generated_budget_cases_drive_output_reserved_compaction_trigger",
+            function: "generated_budget_cases_drive_dynamic_output_compaction_trigger",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_turn_budget_cases_drive_every_completion_dispatch",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_turn_budget_cases_drive_every_completion_dispatch",
         },
         ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order",

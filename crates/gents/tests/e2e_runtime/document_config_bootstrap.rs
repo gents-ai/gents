@@ -122,6 +122,7 @@ async fn load_inference_profile_reads_document_fields() {
     assert_eq!(profile.frequency_penalty, Some(0.5));
     assert_eq!(profile.presence_penalty, Some(-0.25));
     assert_eq!(profile.repetition_penalty, Some(1.1));
+    assert_eq!(profile.reasoning_effort.as_deref(), Some("max"));
     assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
     assert_eq!(profile.deadline_duration_secs, Some(120));
 }
@@ -146,6 +147,12 @@ async fn profile_sampling_knobs_reach_the_behavior_and_provider_body() {
         presence_penalty: profile.presence_penalty,
         repetition_penalty: profile.repetition_penalty,
         max_tokens: None,
+        reasoning_effort: profile
+            .reasoning_effort
+            .as_deref()
+            .map(gents::ReasoningEffort::parse)
+            .transpose()
+            .expect("fixture reasoning effort must be valid"),
     };
     let params = sampling
         .additional_params()
@@ -301,6 +308,7 @@ async fn insert_inference_profile(node: &gents::defra_node::EmbeddedNode, profil
                 frequency_penalty: 0.5,
                 presence_penalty: -0.25,
                 repetition_penalty: 1.1,
+                reasoning_effort: "max",
                 stream_batch_ms: 500,
                 stream_liveness_timeout_secs: 45,
                 deadline_duration_secs: 120

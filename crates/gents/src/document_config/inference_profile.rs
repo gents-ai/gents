@@ -28,6 +28,7 @@ pub struct InferenceProfile {
     pub frequency_penalty: Option<f64>,
     pub presence_penalty: Option<f64>,
     pub repetition_penalty: Option<f64>,
+    pub reasoning_effort: Option<String>,
     pub stream_batch_ms: Option<i64>,
     pub stream_liveness_timeout_secs: Option<i64>,
     pub deadline_duration_secs: Option<i64>,
@@ -61,6 +62,7 @@ pub(super) fn default_inference_profile_for_behavior(behavior_id: &str) -> Infer
         frequency_penalty: None,
         presence_penalty: None,
         repetition_penalty: None,
+        reasoning_effort: None,
         stream_batch_ms: Some(DEFAULT_STREAM_BATCH_MS as i64),
         stream_liveness_timeout_secs: Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         deadline_duration_secs: Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
@@ -114,6 +116,7 @@ pub(crate) async fn load_inference_profile_record(
                 frequency_penalty
                 presence_penalty
                 repetition_penalty
+                reasoning_effort
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -161,6 +164,7 @@ pub(crate) async fn load_inference_profile_by_doc_id(
                 frequency_penalty
                 presence_penalty
                 repetition_penalty
+                reasoning_effort
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -202,6 +206,7 @@ pub async fn list_inference_profile_records(
                 frequency_penalty
                 presence_penalty
                 repetition_penalty
+                reasoning_effort
                 stream_batch_ms
                 stream_liveness_timeout_secs
                 deadline_duration_secs
@@ -260,6 +265,10 @@ pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> S
             "repetition_penalty",
             profile.repetition_penalty,
         ),
+        graphql_fields::graphql_string_field(
+            "reasoning_effort",
+            profile.reasoning_effort.as_deref(),
+        ),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
         graphql_fields::graphql_optional_int_field(
             "stream_liveness_timeout_secs",
@@ -316,6 +325,10 @@ pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> S
         graphql_fields::graphql_optional_float_field(
             "repetition_penalty",
             profile.repetition_penalty,
+        ),
+        graphql_fields::graphql_string_field(
+            "reasoning_effort",
+            profile.reasoning_effort.as_deref(),
         ),
         graphql_fields::graphql_optional_int_field("stream_batch_ms", profile.stream_batch_ms),
         graphql_fields::graphql_optional_int_field(

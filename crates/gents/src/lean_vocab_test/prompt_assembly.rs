@@ -67,6 +67,22 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) prompt_tokens: usize,
     pub(crate) request_tokens: usize,
     pub(crate) effective_input_budget: usize,
+    pub(crate) effective_output_tokens: usize,
     pub(crate) should_compact: bool,
     pub(crate) provider_safe: bool,
+}
+
+/// A multi-turn provider-input budget trace computed by
+/// `PromptAssembly.Budget`.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
+    pub(crate) name: String,
+    pub(crate) context_window: usize,
+    pub(crate) max_output_tokens: usize,
+    pub(crate) threshold_basis_points: usize,
+    pub(crate) configured_threshold_budget: usize,
+    pub(crate) effective_input_budget: usize,
+    pub(crate) turn_input_tokens: Vec<usize>,
+    pub(crate) turn_output_tokens: Vec<usize>,
+    pub(crate) turn_should_compact: Vec<bool>,
 }

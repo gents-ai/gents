@@ -9,7 +9,7 @@ use gents::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
     upsert_inference_profile, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
     DocumentRuntimeOptions, Gents, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
-    ToolSelectionDocument,
+    ToolSelectionDocument, DEFAULT_MAX_TURNS,
 };
 use tokio::sync::watch;
 
@@ -167,7 +167,7 @@ async fn seed_demo_documents(
             display_name: Some("Demo".to_string()),
             context_window: Some(131_072),
             max_output_tokens: Some(32_768),
-            max_turns: Some(50),
+            max_turns: Some(DEFAULT_MAX_TURNS as i64),
             temperature: None,
             stream_batch_ms: Some(1_000),
             stream_liveness_timeout_secs: None,

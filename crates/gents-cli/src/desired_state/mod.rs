@@ -329,6 +329,7 @@ pub(crate) struct DesiredInferenceProfile {
     pub(crate) frequency_penalty: Option<f64>,
     pub(crate) presence_penalty: Option<f64>,
     pub(crate) repetition_penalty: Option<f64>,
+    pub(crate) reasoning_effort: Option<String>,
     pub(crate) stream_batch_ms: Option<i64>,
     pub(crate) stream_liveness_timeout_secs: Option<i64>,
     pub(crate) deadline_duration_secs: Option<i64>,

@@ -19,7 +19,7 @@ mod job_object;
 mod process_group;
 mod registry;
 
-use capture::{join_capture, join_capture_with_timeout, read_optional_capped};
+use capture::{join_capture_with_timeout, spawn_optional_capped};
 #[cfg(windows)]
 use job_object::{terminate_job, ManagedChildJob};
 #[cfg(unix)]
@@ -28,7 +28,7 @@ use registry::ActiveExecGuard;
 
 pub(crate) use registry::active_executor_snapshots;
 
-const CAPTURE_DRAIN_AFTER_FAILED_REAP: Duration = Duration::from_millis(50);
+const CAPTURE_DRAIN_AFTER_CHILD_EXIT: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub(crate) struct ManagedExecRequest {
@@ -103,22 +103,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout = child.inner.stdout.take();
     let stderr = child.inner.stderr.take();
     let max_output_bytes = request.max_output_bytes;
-    let stdout_task = tokio::spawn(read_optional_capped(
+    let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
         request
             .live_output
             .clone()
             .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
-    ));
-    let stderr_task = tokio::spawn(read_optional_capped(
+    );
+    let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
         request
             .live_output
             .clone()
             .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
-    ));
+    );
 
     let child_pgid = child.pgid();
     let mut wait = Box::pin(child.inner.wait());
@@ -134,8 +134,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                 Ok(status) => {
                     drop(wait);
                     child.mark_finished(true);
-                    let stdout = join_capture(stdout_task).await;
-                    let stderr = join_capture(stderr_task).await;
+                    let (stdout, stderr) = tokio::join!(
+                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                    );
                     return ManagedExecOutcome::Exited {
                         code: status.code(),
                         stdout: stdout.bytes,
@@ -147,6 +149,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                 Err(error) => {
                     drop(wait);
                     child.mark_finished(true);
+                    let _ = tokio::join!(
+                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                    );
                     return ManagedExecOutcome::SpawnFailed {
                         error: format!("waiting for managed exec failed: {error}"),
                     };
@@ -158,9 +164,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let kill = terminate_process_group(child_pgid, &mut wait).await;
     drop(wait);
     child.mark_finished(kill.reaped);
-    let capture_timeout = (!kill.reaped).then_some(CAPTURE_DRAIN_AFTER_FAILED_REAP);
-    let stdout = join_capture_with_timeout(stdout_task, capture_timeout).await;
-    let stderr = join_capture_with_timeout(stderr_task, capture_timeout).await;
+    let (stdout, stderr) = tokio::join!(
+        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+    );
 
     match outcome_kind {
         OutcomeKind::TimedOut => ManagedExecOutcome::TimedOut {
@@ -229,22 +236,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout = child.inner.stdout.take();
     let stderr = child.inner.stderr.take();
     let max_output_bytes = request.max_output_bytes;
-    let stdout_task = tokio::spawn(read_optional_capped(
+    let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
         request
             .live_output
             .clone()
             .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
-    ));
-    let stderr_task = tokio::spawn(read_optional_capped(
+    );
+    let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
         request
             .live_output
             .clone()
             .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
-    ));
+    );
 
     let job = child.job();
     let mut wait = Box::pin(child.inner.wait());
@@ -260,8 +267,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                 Ok(status) => {
                     drop(wait);
                     child.mark_finished(true);
-                    let stdout = join_capture(stdout_task).await;
-                    let stderr = join_capture(stderr_task).await;
+                    let (stdout, stderr) = tokio::join!(
+                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                    );
                     return ManagedExecOutcome::Exited {
                         code: status.code(),
                         stdout: stdout.bytes,
@@ -273,6 +282,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                 Err(error) => {
                     drop(wait);
                     child.mark_finished(true);
+                    let _ = tokio::join!(
+                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                    );
                     return ManagedExecOutcome::SpawnFailed {
                         error: format!("waiting for managed exec failed: {error}"),
                     };
@@ -284,9 +297,10 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let kill = terminate_job(job, &mut wait).await;
     drop(wait);
     child.mark_finished(kill.reaped);
-    let capture_timeout = (!kill.reaped).then_some(CAPTURE_DRAIN_AFTER_FAILED_REAP);
-    let stdout = join_capture_with_timeout(stdout_task, capture_timeout).await;
-    let stderr = join_capture_with_timeout(stderr_task, capture_timeout).await;
+    let (stdout, stderr) = tokio::join!(
+        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+    );
 
     match outcome_kind {
         OutcomeKind::TimedOut => ManagedExecOutcome::TimedOut {

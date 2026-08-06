@@ -111,6 +111,12 @@ async fn build_with_summaries_prepends() {
         if let UserContent::Text(t) = first_content(content) {
             assert!(t.text.contains("<system-reminder>"));
             assert!(t.text.contains("project architecture"));
+            assert!(t.text.contains(
+                "Treat recorded results as evidence, not as a prohibition on verification"
+            ));
+            assert!(t
+                .text
+                .contains("Avoid repeating completed or expensive work without a concrete reason"));
         } else {
             panic!("expected text");
         }
@@ -136,7 +142,7 @@ fn system_reminder_format() {
 }
 
 #[test]
-fn message_budget_accounts_for_preamble_and_output() {
+fn message_budget_accounts_for_preamble_without_reserving_output_ceiling() {
     let builder = LayeredPromptBuilder::for_behavior(
         &"x".repeat(4000),
         "general",
@@ -149,7 +155,7 @@ fn message_budget_accounts_for_preamble_and_output() {
 
     let budget = builder.message_budget();
     assert!(budget < 10000);
-    assert!(budget > 5000);
+    assert!(budget > 7000);
 }
 
 #[test]

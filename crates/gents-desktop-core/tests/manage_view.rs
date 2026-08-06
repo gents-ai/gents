@@ -69,6 +69,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         frequency_penalty: None,
         presence_penalty: None,
         repetition_penalty: None,
+        reasoning_effort: None,
     })
     .await?;
 

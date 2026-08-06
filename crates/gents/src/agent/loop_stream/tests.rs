@@ -40,6 +40,8 @@ struct ScriptedModel {
     /// Advertised tool names (`request.tools`) of every request the loop sent,
     /// in order — lets a test assert the toolset is attached on every turn.
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    /// Effective per-turn output caps after the provider-input budget clamp.
+    seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
     /// When set, every turn's stream yields its scripted chunks then hangs
     /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
@@ -59,6 +61,7 @@ impl ScriptedModel {
             calls: Arc::new(Mutex::new(calls.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
             seen_tools: Arc::new(Mutex::new(Vec::new())),
+            seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
         }
     }
@@ -76,6 +79,10 @@ impl ScriptedModel {
 
     async fn seen_tools(&self) -> Vec<Vec<String>> {
         self.seen_tools.lock().await.clone()
+    }
+
+    async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
+        self.seen_max_tokens.lock().await.clone()
     }
 }
 
@@ -116,6 +123,7 @@ impl CompletionModel for ScriptedModel {
                 .map(|tool| tool.name.clone())
                 .collect(),
         );
+        self.seen_max_tokens.lock().await.push(_request.max_tokens);
         let call = self
             .calls
             .lock()
@@ -294,8 +302,12 @@ fn config(max_turns: usize) -> LoopConfig {
         temperature: None,
         max_tokens: None,
         additional_params: None,
+        structured_output: None,
         tool_choice: None,
         on_rendered_request: None,
+        turn_compactor: None,
+        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         deadline: None,
         max_turns,
@@ -553,6 +565,173 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     assert!(
         model.seen_histories().await.is_empty(),
         "provider stream must not start after capture failure"
+    );
+}
+
+#[test]
+fn generated_turn_budget_cases_drive_every_completion_dispatch() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_turn_budget_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no owned-loop turn budget cases"
+    );
+
+    for case in cases {
+        let threshold = case.threshold_basis_points as f64 / 10_000.0;
+        assert_eq!(
+            crate::compaction::threshold_budget(case.context_window, threshold),
+            case.configured_threshold_budget,
+            "{}: configured threshold drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::compaction::effective_input_budget(
+                case.context_window,
+                case.max_output_tokens,
+                threshold,
+            ),
+            case.effective_input_budget,
+            "{}: effective input budget drifted from Lean",
+            case.name
+        );
+        let actual_output = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| {
+                crate::compaction::effective_output_budget(
+                    *tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_output, case.turn_output_tokens,
+            "{}: per-turn output clamp drifted from Lean",
+            case.name
+        );
+        let actual = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| {
+                crate::compaction::input_exceeds_budget(
+                    *tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                    threshold,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual, case.turn_should_compact,
+            "{}: a later completion turn bypassed the Lean dispatch gate",
+            case.name
+        );
+    }
+}
+
+#[tokio::test]
+async fn completion_output_ceiling_is_clamped_to_remaining_context() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let prompt = Message::user("fit the output dynamically");
+    let mut loop_config = config(0);
+    loop_config.max_tokens = Some(1_000);
+    loop_config.compaction_threshold = 1.0;
+
+    let request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
+        .await
+        .expect("request should build");
+    let input_tokens = completion_request_input_estimate(&request);
+    loop_config.context_window = input_tokens + 250;
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        prompt,
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(model.seen_max_tokens().await, vec![Some(250)]);
+}
+
+#[tokio::test]
+async fn later_completion_turn_is_compacted_before_provider_dispatch() {
+    let model = ScriptedModel::new_turns(vec![
+        echo_tool_turn(),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
+        name: "echo".to_string(),
+        output: "r".repeat(12_000),
+    })]);
+    let prompt = Message::user("p".repeat(20_000));
+    let mut loop_config = config(2);
+    loop_config.max_tokens = Some(100);
+    loop_config.compaction_threshold = 1.0;
+
+    let first_request = build_request(
+        &model,
+        prompt.clone(),
+        &[],
+        &[],
+        tools.as_slice(),
+        &loop_config,
+    )
+    .await
+    .expect("first request should build");
+    let first_tokens = completion_request_input_estimate(&first_request);
+    loop_config.context_window = first_tokens + 100 + 100;
+
+    let compactions = Arc::new(AtomicUsize::new(0));
+    let compactions_for_callback = compactions.clone();
+    let keep_recent_target = Arc::new(AtomicUsize::new(usize::MAX));
+    let keep_recent_target_for_callback = keep_recent_target.clone();
+    loop_config.turn_compactor = Some(Arc::new(move |messages, target| {
+        let compactions = compactions_for_callback.clone();
+        let keep_recent_target = keep_recent_target_for_callback.clone();
+        Box::pin(async move {
+            compactions.fetch_add(1, Ordering::SeqCst);
+            keep_recent_target.store(target, Ordering::SeqCst);
+            let keep_from = messages.len().saturating_sub(2);
+            let mut compacted = vec![Message::user(
+                "<system-reminder>compacted earlier turn</system-reminder>",
+            )];
+            compacted.extend(messages.into_iter().skip(keep_from));
+            Ok(compacted)
+        })
+    }));
+
+    let stream = run_loop_stream(model.clone(), None, prompt, Vec::new(), tools, loop_config);
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    assert_eq!(
+        compactions.load(Ordering::SeqCst),
+        1,
+        "the safe entry turn must dispatch directly and the grown second turn must compact"
+    );
+    assert!(
+        keep_recent_target.load(Ordering::SeqCst) < 20_000,
+        "the per-turn target must reserve room for static request layers and the summary"
+    );
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert!(
+        histories[1].iter().any(|message| message
+            .rag_text()
+            .is_some_and(|text| { text.contains("compacted earlier turn") })),
+        "the second provider request must use the compacted provider view"
     );
 }
 
@@ -924,6 +1103,42 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
     assert_eq!(
         histories[0], histories[1],
         "mid-stream retraction must reissue the same turn request"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn reasoning_only_completion_retracts_and_resamples() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ReasoningDelta {
+                id: None,
+                reasoning: "still thinking".to_string(),
+            },
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("finished answer".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("solve this"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.retractions, vec![(0, 0)]);
+    assert_eq!(collected.final_text.as_deref(), Some("finished answer"));
+    assert_eq!(collected.error, None);
+    assert_eq!(
+        model.seen_histories().await.len(),
+        2,
+        "the reasoning-only turn must be resampled as the same provider turn"
     );
 }
 
@@ -1316,6 +1531,15 @@ async fn exceeding_max_turns_terminates_with_error() {
     assert!(
         !crate::error::classify_completion_error(error).is_retryable(),
         "max-turns exhaustion must be non-retryable; got {last:?}"
+    );
+    // The Harbor adapter (scripts/harbor/run_gents.sh) classifies budget
+    // exhaustion by matching the persisted error message's exact prefix:
+    // `agent stream failed: ` (agent/daemon/inference.rs) followed by this
+    // display. If rig's wording changes, MaxTurn trials silently revert to
+    // Harbor infrastructure exceptions instead of verifier-scored attempts.
+    assert!(
+        error.to_string().starts_with("PromptError: MaxTurnError: "),
+        "max-turns error display must start with the anchored Harbor prefix; got {error}"
     );
 }
 
@@ -2490,7 +2714,7 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
     }
     let text = sole_user_text(message);
     if let Some(body) = text.strip_prefix("<system-reminder>\n") {
-        if body.starts_with("Previous conversation summary") {
+        if body.starts_with("Continuation checkpoints from earlier conversation") {
             return "summaryReminder".to_string();
         }
         if let Some(rest) = body.strip_prefix("skill-") {

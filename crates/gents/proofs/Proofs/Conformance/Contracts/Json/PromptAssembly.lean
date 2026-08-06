@@ -78,11 +78,33 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","
     ++ "\"request_tokens\":" ++ toString witness.requestTokens ++ ","
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
     ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
     ++ "\"provider_safe\":" ++ boolString witness.providerSafe
     ++ "}"
 
 def promptAssemblyBudgetCasesJson : String :=
   jsonArray (promptAssemblyBudgetCases.map promptAssemblyBudgetCaseJson)
+
+def promptAssemblyTurnBudgetCaseJson
+    (witness : PromptAssemblyTurnBudgetCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
+    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
+    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
+    ++ "\"configured_threshold_budget\":"
+      ++ toString witness.configuredThresholdBudget ++ ","
+    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"turn_input_tokens\":"
+      ++ jsonArray (witness.turnInputTokens.map toString) ++ ","
+    ++ "\"turn_output_tokens\":"
+      ++ jsonArray (witness.turnOutputTokens.map toString) ++ ","
+    ++ "\"turn_should_compact\":"
+      ++ jsonArray (witness.turnShouldCompact.map boolString)
+    ++ "}"
+
+def promptAssemblyTurnBudgetCasesJson : String :=
+  jsonArray (promptAssemblyTurnBudgetCases.map promptAssemblyTurnBudgetCaseJson)
 
 end Conformance.Contracts

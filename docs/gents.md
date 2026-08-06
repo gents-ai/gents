@@ -56,9 +56,19 @@ Two details make this trace path training-ready rather than merely observability
 
 Traces are only useful if you can get them out — and only safe if getting them out is governed. Gents treats both as projection problems over the durable record:
 
-- **Export in shapes training and eval stacks recognize.** A request's timeline projects into documented, versioned external-framework styles — OpenAI/Codex-style run traces, LangGraph-style state histories, multi-agent task records — for consumption by existing fine-tuning, evaluation, and observability tooling.
+- **Export in shapes training and eval stacks recognize.** A request's timeline projects into documented, versioned external-framework styles — ATIF v1.7 trajectories, OpenAI/Codex-style run traces, LangGraph-style state histories, multi-agent task records — for consumption by existing fine-tuning, evaluation, and observability tooling. The ATIF projection supports native JSON output for consumers such as Harbor that require the trajectory as the top-level document.
 - **Redaction lives in the export path, not the client.** Projections carry redaction modes — full, training-safe, public — applied inside the governed export path, and projection policy bindings let access control filter which rows an export may contain. Binding the redaction floor itself to policy — so a fine-tuning pipeline can be granted exactly the training-safe projection of exactly the collections it should learn from, and nothing else — is the completing step, and it is enforcement wiring on an existing surface, not new architecture.
 - **Provenance travels with the sample.** Every projected trace carries its lineage: which agent, which behavior, which trigger, which parent request. When a fine-tuned model behaves unexpectedly, you can walk backward from the weights' training set to the durable operational records it came from.
+
+Harbor expects an ATIF trajectory at `/logs/agent/trajectory.json`. Export the native document after a run while preserving the enveloped `json`, `jsonl`, and `eval-jsonl` formats for Gents-native consumers:
+
+```sh
+gents trace project \
+  --projection atif \
+  --format native-json \
+  --request-id "$REQUEST_ID" \
+  --output-file /logs/agent/trajectory.json
+```
 
 The result: fine-tune small, fast, specialized models on how *your* operation actually runs — your alert patterns, your runbooks, your tool-use conventions — using data whose filtering and release run through the same governed export path as everything else.
 
