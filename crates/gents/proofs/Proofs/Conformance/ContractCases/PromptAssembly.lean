@@ -77,6 +77,7 @@ structure PromptAssemblyBudgetCase where
   promptTokens : Nat
   requestTokens : Nat
   effectiveInputBudget : Nat
+  effectiveOutputTokens : Nat
   shouldCompact : Bool
   providerSafe : Bool
   deriving Repr
@@ -89,6 +90,7 @@ structure PromptAssemblyTurnBudgetCase where
   configuredThresholdBudget : Nat
   effectiveInputBudget : Nat
   turnInputTokens : List Nat
+  turnOutputTokens : List Nat
   turnShouldCompact : List Bool
   deriving Repr
 
@@ -374,12 +376,13 @@ def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
     , expectedTwice := argsName (PromptAssembly.repairArgs Payload.empty once)
     , payloadOnly := isPayloadOnly vector.2 }
 
-/-! ## Provider input budget
+/-! ## Provider input and dynamic output budgets
 
-The old daemon trigger used only `contextWindow × threshold`, allowing input to
-consume space already promised to the model's output. These cases are computed
-from `PromptAssembly.Budget`; the D4F witness is the observed 118,785 + 393,216
-= 512,001 rejection, not a synthetic approximation.
+The old daemon trigger reserved the full configured output ceiling on every
+turn, which reduced D4F's effective input to 65,536 tokens. These cases are
+computed from `PromptAssembly.Budget`; the observed 118,785 + 393,216 = 512,001
+provider rejection now demonstrates why the output ceiling must be clamped to
+the remaining context on each dispatch.
 -/
 
 private structure BudgetWitness where
@@ -399,16 +402,16 @@ private def budgetWitnesses : List BudgetWitness :=
     , promptTokens := 7501, requestTokens := 0 }
   , { name := "d4f-profile-safe-boundary"
     , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
-    , promptTokens := 117760, requestTokens := 0 }
+    , promptTokens := 383232, requestTokens := 0 }
   , { name := "d4f-profile-one-over"
     , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
-    , promptTokens := 117761, requestTokens := 0 }
+    , promptTokens := 383233, requestTokens := 0 }
   , { name := "d4f-observed-provider-rejection"
     , contextWindow := 512000, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 118785, requestTokens := 0 }
   , { name := "incoming-request-crosses-boundary"
     , contextWindow := 10000, maxOutputTokens := 4000, thresholdBasisPoints := 7500
-    , promptTokens := 5993, requestTokens := 8 }
+    , promptTokens := 7493, requestTokens := 8 }
   , { name := "output-reserves-entire-context-empty-input"
     , contextWindow := 1000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 0, requestTokens := 0 }
@@ -437,6 +440,9 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
   let effective := PromptAssembly.Budget.effectiveInputBudget configured
+    witness.contextWindow
+  let inputTokens := witness.promptTokens + witness.requestTokens
+  let outputTokens := PromptAssembly.Budget.effectiveOutputBudget inputTokens
     witness.contextWindow witness.maxOutputTokens
   { name := witness.name
   , contextWindow := witness.contextWindow
@@ -446,12 +452,11 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   , promptTokens := witness.promptTokens
   , requestTokens := witness.requestTokens
   , effectiveInputBudget := effective
+  , effectiveOutputTokens := outputTokens
   , shouldCompact := decide (PromptAssembly.Budget.ExceedsInputBudget
-      witness.promptTokens witness.requestTokens configured witness.contextWindow
-      witness.maxOutputTokens)
+      witness.promptTokens witness.requestTokens configured witness.contextWindow)
   , providerSafe := decide
-      (witness.promptTokens + witness.requestTokens + witness.maxOutputTokens ≤
-        witness.contextWindow) }
+      (inputTokens + outputTokens ≤ witness.contextWindow) }
 
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
@@ -472,7 +477,7 @@ private def turnBudgetWitnesses : List TurnBudgetWitness :=
     , contextWindow := 458752
     , maxOutputTokens := 393216
     , thresholdBasisPoints := 7500
-    , turnInputTokens := [48000, 65536, 65537, 22000] }
+    , turnInputTokens := [48000, 65536, 65537, 344064, 344065] }
   , { name := "owned-loop-every-turn-safe"
     , contextWindow := 10000
     , maxOutputTokens := 2000
@@ -485,7 +490,7 @@ private def turnBudgetCase
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
   let effective := PromptAssembly.Budget.effectiveInputBudget configured
-    witness.contextWindow witness.maxOutputTokens
+    witness.contextWindow
   { name := witness.name
   , contextWindow := witness.contextWindow
   , maxOutputTokens := witness.maxOutputTokens
@@ -493,9 +498,12 @@ private def turnBudgetCase
   , configuredThresholdBudget := configured
   , effectiveInputBudget := effective
   , turnInputTokens := witness.turnInputTokens
+  , turnOutputTokens := witness.turnInputTokens.map fun inputTokens =>
+      PromptAssembly.Budget.effectiveOutputBudget inputTokens witness.contextWindow
+        witness.maxOutputTokens
   , turnShouldCompact := witness.turnInputTokens.map fun inputTokens =>
       decide (PromptAssembly.Budget.ExceedsInputBudget inputTokens 0 configured
-        witness.contextWindow witness.maxOutputTokens) }
+        witness.contextWindow) }
 
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase

@@ -17,8 +17,10 @@ Run commands from the Gents repository root so Harbor can import
 - For a full Terminal-Bench run, a Bullseye glibc compatibility bundle matching
   the Linux binary architecture. Some task images are musl-based, so they cannot
   execute a dynamically linked glibc binary without its loader and libraries. Pass the bundle with
-  `GENTS_GLIBC_BUNDLE_PATH`; the adapter installs it only when the image lacks a
-  glibc loader.
+  `GENTS_GLIBC_BUNDLE_PATH`; when it is set the adapter always installs the
+  bundle and runs Gents through its loader. Leave it unset only when every task
+  image already ships a glibc loader — the adapter checks for one and fails the
+  trial if it is missing.
 - An OpenAI-compatible chat-completions endpoint reachable from task
   containers.
 
@@ -65,7 +67,7 @@ DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH="$PWD" \
   --ae GENTS_DOCKER_PLATFORM=linux/amd64 \
   --ae GENTS_CONTEXT_WINDOW=458752 \
   --ae GENTS_MAX_OUTPUT=393216 \
-  --ae GENTS_MAX_TURNS=250 \
+  --ae GENTS_MAX_TURNS=1000 \
   --ae GENTS_REQUEST_TIMEOUT_SECS=86400
 ```
 
@@ -109,10 +111,12 @@ cause with a connection error. Compaction failures that exhaust both guided
 decoding and the strict non-guided JSON fallback are classified separately as
 `compaction_provider_error` in `gents-outcome.json`.
 
-For task images that need the glibc compatibility loader, the adapter installs
-an explicit `gents-fs-runner` shim and verifies it during setup. This keeps the
-native filesystem tools available even though Linux reports the explicit glibc
-loader, rather than the wrapped Gents executable, as `/proc/self/exe`.
+The adapter installs an explicit `gents-fs-runner` shim on every trial and
+verifies it during setup. The shim exists for images that need the glibc
+compatibility loader: there, Linux reports the loader rather than the wrapped
+Gents executable as `/proc/self/exe`, so Gents cannot discover its embedded
+filesystem runner by basename. Installing it unconditionally keeps setup
+identical across image types.
 
 Harbor isolates agent-phase network access. Keep `--allow-agent-host` aligned
 with the inference host or the task container will not be able to reach the
@@ -135,9 +139,9 @@ Useful overrides:
 | `GENTS_MODEL` | Harbor `--model` | Model ID sent to the inference endpoint |
 | `GENTS_DOCKER_PLATFORM` | unset | Force task images/builds, e.g. `linux/amd64` |
 | `GENTS_GLIBC_BUNDLE_PATH` | unset | glibc loader/library bundle for musl task images |
-| `GENTS_MAX_OUTPUT` | `393216` | Per-turn output cap and prompt-builder output reserve, matching DeepSeek's 384K (384 × 1024) `high`/`max` recommendation. The name deliberately avoids Harbor's secret-key `TOKEN` heuristic. |
-| `GENTS_CONTEXT_WINDOW` | `458752` | Gents prompt/compaction budget. With the 393,216-token output cap, this keeps a conservative 65,536-token estimated input budget and leaves 53,248 tokens of tokenizer-accounting headroom below the 512K server limit. |
-| `GENTS_MAX_TURNS` | `250` | Agent completion-loop turn ceiling |
+| `GENTS_MAX_OUTPUT` | `393216` | Per-turn output ceiling, matching DeepSeek's 384K (384 × 1024) `high`/`max` recommendation. Each completion clamps this ceiling to the context remaining after its assembled input. The name deliberately avoids Harbor's secret-key `TOKEN` heuristic. |
+| `GENTS_CONTEXT_WINDOW` | `458752` | Gents prompt/compaction budget. The 75% compaction threshold admits up to 344,064 estimated input tokens; the per-turn output clamp preserves the combined-context invariant and the difference from D4F's 512K server limit leaves 53,248 tokens of tokenizer-accounting headroom. |
+| `GENTS_MAX_TURNS` | `1000` | Agent completion-loop turn ceiling |
 | `GENTS_RETRY_MAX_TRANSPORT` | `3` | Transient inference retry ceiling |
 | `GENTS_REQUEST_TIMEOUT_SECS` | `86400` | Durable request and Harbor exec timeout |
 | `GENTS_COMMAND_TIMEOUT_SECS` | `600` | Foreground command timeout applied when the model omits `timeout_secs` |
@@ -151,7 +155,8 @@ Each trial retains:
 
 - `trajectory.json` — Harbor-native ATIF v1.7 trajectory
 - `request.json`, `request.stdout.json`, and `response.json` — request and response
-- `gents-init.json`, `gents-profile.json`, `gents-status.json`, and
+- `gents-init.json`, `gents-profile.json`, `gents-tools.json`,
+  `gents-tools-explain.json`, `gents-status.json`, and
   `gents-server.log` — runtime evidence
 - On runner failure, `gents-diagnostic.json`, `gents-server-exit.json` when the
   server was reaped, `gents-server-tail.txt`, `process-tree.txt`, final status

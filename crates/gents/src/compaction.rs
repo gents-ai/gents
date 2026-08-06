@@ -539,21 +539,33 @@ pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
     ((context_window as u128 * basis_points) / 10_000) as usize
 }
 
-/// Provider input available after both the configured compaction threshold and
-/// the requested output reservation are applied. Mirrors Lean
+/// Provider input available before compaction. The configured output value is
+/// a ceiling, not a reservation: each completion dispatch clamps that ceiling
+/// with [`effective_output_budget`]. Mirrors Lean
 /// `PromptAssembly.Budget.effectiveInputBudget`.
 pub fn effective_input_budget(
     context_window: usize,
-    max_output_tokens: usize,
+    _max_output_tokens: usize,
     threshold: f64,
 ) -> usize {
-    threshold_budget(context_window, threshold)
-        .min(context_window.saturating_sub(max_output_tokens))
+    threshold_budget(context_window, threshold).min(context_window)
+}
+
+/// Per-turn output allowance after the assembled provider input is known.
+/// This preserves a large configured ceiling for short prompts without forcing
+/// every turn to reserve it in advance. Mirrors Lean
+/// `PromptAssembly.Budget.effectiveOutputBudget`.
+pub fn effective_output_budget(
+    input_tokens: usize,
+    context_window: usize,
+    configured_max_output_tokens: usize,
+) -> usize {
+    configured_max_output_tokens.min(context_window.saturating_sub(input_tokens))
 }
 
 /// The shared provider-dispatch gate. It is deliberately expressed over an
 /// already-assembled input estimate so callers at request entry and inside the
-/// owned completion loop apply exactly the same output-reserved rule.
+/// owned completion loop apply exactly the same threshold rule.
 pub fn input_exceeds_budget(
     input_tokens: usize,
     context_window: usize,

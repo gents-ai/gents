@@ -228,7 +228,7 @@ fi
 : "${GENTS_REASONING_EFFORT:=max}"
 : "${GENTS_MAX_OUTPUT:=393216}"
 : "${GENTS_CONTEXT_WINDOW:=458752}"
-: "${GENTS_MAX_TURNS:=250}"
+: "${GENTS_MAX_TURNS:=1000}"
 : "${GENTS_RETRY_MAX_TRANSPORT:=3}"
 : "${GENTS_REQUEST_TIMEOUT_SECS:=86400}"
 : "${GENTS_COMMAND_TIMEOUT_SECS:=600}"
@@ -260,6 +260,8 @@ trajectory_path="${logs_dir}/trajectory.json"
 outcome_log="${logs_dir}/gents-outcome.json"
 status_log="${logs_dir}/gents-status.json"
 profile_log="${logs_dir}/gents-profile.json"
+tools_log="${logs_dir}/gents-tools.json"
+tools_explain_log="${logs_dir}/gents-tools-explain.json"
 diagnostic_log="${logs_dir}/gents-diagnostic.json"
 server_exit_log="${logs_dir}/gents-server-exit.json"
 server_tail_log="${logs_dir}/gents-server-tail.txt"
@@ -314,7 +316,7 @@ esac
   --model-name "${GENTS_MODEL}" \
   --max-concurrent 1 \
   --max-queue-depth 1 \
-  --yolo \
+  --tool-package write \
   --tool-root "${GENTS_TOOL_ROOT}" \
   >"${init_log}"
 
@@ -500,6 +502,13 @@ if [ -z "${profile_id}" ]; then
   echo "Gents init output did not contain inference_profile_id" >&2
   exit 1
 fi
+agent_did=$(sed -n 's/^[[:space:]]*"agent_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+tool_selection_id=$(sed -n 's/^[[:space:]]*"tool_selection_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+behavior_id=$(sed -n 's/^[[:space:]]*"default_behavior_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+if [ -z "${agent_did}" ] || [ -z "${tool_selection_id}" ] || [ -z "${behavior_id}" ]; then
+  echo "Gents init output did not contain agent_did, default_behavior_id, and tool_selection_id" >&2
+  exit 1
+fi
 
 configure_profile() {
   profile_configured=0
@@ -512,6 +521,8 @@ configure_profile() {
       --context-window "${GENTS_CONTEXT_WINDOW}" \
       --max-output-tokens "${GENTS_MAX_OUTPUT}" \
       --max-turns "${GENTS_MAX_TURNS}" \
+      --temperature "${GENTS_TEMPERATURE}" \
+      --top-p "${GENTS_TOP_P}" \
       --reasoning-effort "${GENTS_REASONING_EFFORT}" \
       --stream-liveness-timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
       --deadline-duration-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
@@ -535,6 +546,31 @@ configure_profile() {
   fi
 }
 
+configure_tools() {
+  "${GENTS_BINARY}" config tools set \
+    --graphql http://127.0.0.1:9191/api/v0/graphql \
+    --agent-did "${agent_did}" \
+    --selection-id "${tool_selection_id}" \
+    --enable-file-tools true \
+    --file-tools-mode ReadWrite \
+    --file-tool-root "${GENTS_TOOL_ROOT}" \
+    --enable-bash true \
+    --bash-mode Unrestricted \
+    --command-execution-policy unrestricted \
+    --enable-meta-tools false \
+    --backgroundable-tool-name bash_unrestricted \
+    --enable-memory false \
+    --enable-session-history-tool false \
+    --enable-context-budget false \
+    --enable-defra-query false \
+    --subagent-spawn-enabled false \
+    --orchestration-enabled false \
+    --subagent-steering-enabled false \
+    --subagent-background-enabled false \
+    --subagent-allow-cross-deployment false \
+    >"${tools_log}"
+}
+
 start_server
 
 cleanup() {
@@ -556,6 +592,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 configure_profile
+configure_tools
 
 # Configure through GraphQL before requiring behavior readiness. This also
 # bootstraps binaries whose schema materializes an omitted nullable string as
@@ -565,6 +602,11 @@ kill "${server_pid}" >/dev/null 2>&1 || true
 wait "${server_pid}" || true
 start_server
 wait_for_server_ready
+
+"${GENTS_BINARY}" tools explain \
+  --home "${GENTS_HOME}" \
+  --behavior-id "${behavior_id}" \
+  >"${tools_explain_log}"
 
 metadata=$(printf '{"harness":"harbor","model_name":"%s"}' "${GENTS_MODEL}")
 set -- \

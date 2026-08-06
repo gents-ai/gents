@@ -67,6 +67,7 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) prompt_tokens: usize,
     pub(crate) request_tokens: usize,
     pub(crate) effective_input_budget: usize,
+    pub(crate) effective_output_tokens: usize,
     pub(crate) should_compact: bool,
     pub(crate) provider_safe: bool,
 }
@@ -82,5 +83,6 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) configured_threshold_budget: usize,
     pub(crate) effective_input_budget: usize,
     pub(crate) turn_input_tokens: Vec<usize>,
+    pub(crate) turn_output_tokens: Vec<usize>,
     pub(crate) turn_should_compact: Vec<bool>,
 }

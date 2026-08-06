@@ -223,6 +223,57 @@ class RunnerSupervisionTest(unittest.TestCase):
             trajectory = json.loads((logs / "trajectory.json").read_text())
             self.assertEqual(trajectory["trajectory_id"], "partial-trajectory")
 
+            invocations = [
+                json.loads(line)
+                for line in (home / "invocations.jsonl").read_text().splitlines()
+            ]
+            init = next(args for args in invocations if args[:1] == ["init"])
+            self.assertIn("--tool-package", init)
+            self.assertEqual(init[init.index("--tool-package") + 1], "write")
+            self.assertNotIn("--yolo", init)
+
+            profile = next(
+                args
+                for args in invocations
+                if args[:3] == ["config", "profile", "set"]
+            )
+            for option_name, expected in {
+                "--max-output-tokens": "393216",
+                "--max-turns": "1000",
+                "--temperature": "1.0",
+                "--top-p": "0.95",
+                "--reasoning-effort": "max",
+            }.items():
+                self.assertEqual(profile[profile.index(option_name) + 1], expected)
+
+            tools = next(
+                args
+                for args in invocations
+                if args[:3] == ["config", "tools", "set"]
+            )
+            for option_name, expected in {
+                "--enable-file-tools": "true",
+                "--file-tools-mode": "ReadWrite",
+                "--enable-bash": "true",
+                "--bash-mode": "Unrestricted",
+                "--command-execution-policy": "unrestricted",
+                "--enable-meta-tools": "false",
+                "--backgroundable-tool-name": "bash_unrestricted",
+                "--enable-memory": "false",
+                "--enable-session-history-tool": "false",
+                "--enable-context-budget": "false",
+                "--enable-defra-query": "false",
+                "--subagent-spawn-enabled": "false",
+                "--orchestration-enabled": "false",
+                "--subagent-steering-enabled": "false",
+                "--subagent-background-enabled": "false",
+                "--subagent-allow-cross-deployment": "false",
+            }.items():
+                self.assertEqual(tools[tools.index(option_name) + 1], expected)
+            self.assertTrue(
+                any(args[:2] == ["tools", "explain"] for args in invocations)
+            )
+
 
 _FAKE_GENTS = r'''#!/usr/bin/env python3
 import json
@@ -242,9 +293,16 @@ def option(name, default=None):
 home = Path(option("--home", os.environ.get("GENTS_HOME", "/tmp/fake-gents")))
 home.mkdir(parents=True, exist_ok=True)
 (home / "store-evidence.db").touch()
+with (home / "invocations.jsonl").open("a") as invocations:
+    invocations.write(json.dumps(args) + "\n")
 
 if args[:1] == ["init"]:
-    print(json.dumps({"inference_profile_id": "profile-1"}, indent=2))
+    print(json.dumps({
+        "agent_did": "did:key:fake",
+        "default_behavior_id": "did:key:fake:default",
+        "inference_profile_id": "profile-1",
+        "tool_selection_id": "did:key:fake:tools",
+    }, indent=2))
 elif args[:1] == ["server"]:
     count_file = home / "server-count"
     count = int(count_file.read_text()) + 1 if count_file.exists() else 1
@@ -260,6 +318,10 @@ elif args[:1] == ["server"]:
     os.kill(os.getpid(), signal.SIGTERM)
 elif args[:3] == ["config", "profile", "set"]:
     print("{}")
+elif args[:3] == ["config", "tools", "set"]:
+    print("{}")
+elif args[:2] == ["tools", "explain"]:
+    print(json.dumps({"behaviors": []}))
 elif args[:1] == ["status"]:
     if (home / "server-lost").exists():
         print("GraphQL connection refused", file=sys.stderr)

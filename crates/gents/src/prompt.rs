@@ -81,7 +81,6 @@ pub trait PromptBuilder: Send + Sync {
 pub struct LayeredPromptBuilder {
     preamble: String,
     context_window: usize,
-    max_output_tokens: usize,
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
 }
@@ -138,7 +137,7 @@ impl LayeredPromptBuilder {
         tool_names: &[&str],
         include_meta_tool_guidance: bool,
         context_window: usize,
-        max_output_tokens: usize,
+        _max_output_tokens: usize,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let preamble = build_preamble_with_targets(
@@ -151,7 +150,6 @@ impl LayeredPromptBuilder {
         Self {
             preamble,
             context_window,
-            max_output_tokens,
             skills: Vec::new(),
             skill_ceiling: crate::skills::SkillToolCeiling::default(),
         }
@@ -163,9 +161,7 @@ impl LayeredPromptBuilder {
 
     pub fn message_budget(&self) -> usize {
         let preamble_tokens = estimate_tokens(&self.preamble);
-        self.context_window
-            .saturating_sub(preamble_tokens)
-            .saturating_sub(self.max_output_tokens)
+        self.context_window.saturating_sub(preamble_tokens)
     }
 
     pub fn would_exceed_budget(&self, messages: &[Message]) -> bool {

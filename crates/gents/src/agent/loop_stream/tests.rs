@@ -40,6 +40,8 @@ struct ScriptedModel {
     /// Advertised tool names (`request.tools`) of every request the loop sent,
     /// in order — lets a test assert the toolset is attached on every turn.
     seen_tools: Arc<Mutex<Vec<Vec<String>>>>,
+    /// Effective per-turn output caps after the provider-input budget clamp.
+    seen_max_tokens: Arc<Mutex<Vec<Option<u64>>>>,
     /// When set, every turn's stream yields its scripted chunks then hangs
     /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
@@ -59,6 +61,7 @@ impl ScriptedModel {
             calls: Arc::new(Mutex::new(calls.into())),
             seen_histories: Arc::new(Mutex::new(Vec::new())),
             seen_tools: Arc::new(Mutex::new(Vec::new())),
+            seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
         }
     }
@@ -76,6 +79,10 @@ impl ScriptedModel {
 
     async fn seen_tools(&self) -> Vec<Vec<String>> {
         self.seen_tools.lock().await.clone()
+    }
+
+    async fn seen_max_tokens(&self) -> Vec<Option<u64>> {
+        self.seen_max_tokens.lock().await.clone()
     }
 }
 
@@ -116,6 +123,7 @@ impl CompletionModel for ScriptedModel {
                 .map(|tool| tool.name.clone())
                 .collect(),
         );
+        self.seen_max_tokens.lock().await.push(_request.max_tokens);
         let call = self
             .calls
             .lock()
@@ -586,6 +594,22 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             "{}: effective input budget drifted from Lean",
             case.name
         );
+        let actual_output = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| {
+                crate::compaction::effective_output_budget(
+                    *tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_output, case.turn_output_tokens,
+            "{}: per-turn output clamp drifted from Lean",
+            case.name
+        );
         let actual = case
             .turn_input_tokens
             .iter()
@@ -604,6 +628,37 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             case.name
         );
     }
+}
+
+#[tokio::test]
+async fn completion_output_ceiling_is_clamped_to_remaining_context() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let prompt = Message::user("fit the output dynamically");
+    let mut loop_config = config(0);
+    loop_config.max_tokens = Some(1_000);
+    loop_config.compaction_threshold = 1.0;
+
+    let request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
+        .await
+        .expect("request should build");
+    let input_tokens = completion_request_input_estimate(&request);
+    loop_config.context_window = input_tokens + 250;
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        prompt,
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(model.seen_max_tokens().await, vec![Some(250)]);
 }
 
 #[tokio::test]

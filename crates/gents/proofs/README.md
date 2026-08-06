@@ -28,11 +28,11 @@ The proofs are strongest where the runtime is a state machine:
   #448 / #992): soundness/fixpoint/idempotence/split-stability over the
   permissive transcript, loop-threading validity (the `run_loop_stream`
   chokepoint), the fixed layer order of the assembled request, and the
-  output-reserved provider-input budget checked before every owned-loop
-  completion dispatch. Later tool turns can grow beyond a safe entry input,
-  so `PromptAssembly/Budget.lean` proves the per-turn guard over the whole
-  dispatch trace and drives a generated regression where only a later turn
-  crosses the budget.
+  provider-input threshold and dynamic per-turn output clamp checked before
+  every owned-loop completion dispatch. Later tool turns can grow beyond a
+  safe entry input, so `PromptAssembly/Budget.lean` proves the per-turn guard
+  and `input + effectiveOutput ≤ context` over the whole dispatch trace and
+  drives a generated regression where only a later turn crosses the budget.
   `Provider.sanitizeForProvider` models the full three-stage composition
   production runs (`normalize_assistant_content_order ∘
   drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser

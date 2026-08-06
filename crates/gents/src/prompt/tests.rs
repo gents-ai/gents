@@ -142,7 +142,7 @@ fn system_reminder_format() {
 }
 
 #[test]
-fn message_budget_accounts_for_preamble_and_output() {
+fn message_budget_accounts_for_preamble_without_reserving_output_ceiling() {
     let builder = LayeredPromptBuilder::for_behavior(
         &"x".repeat(4000),
         "general",
@@ -155,7 +155,7 @@ fn message_budget_accounts_for_preamble_and_output() {
 
     let budget = builder.message_budget();
     assert!(budget < 10000);
-    assert!(budget > 5000);
+    assert!(budget > 7000);
 }
 
 #[test]

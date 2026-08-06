@@ -1140,14 +1140,44 @@ fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
 
 /// Estimate the complete provider input represented by Rig's rendered request,
 /// including static tool schemas. The production profile deliberately leaves
-/// tokenizer headroom because this estimator is approximate; its job here is
-/// to apply that conservative profile before *every* completion dispatch.
+/// tokenizer headroom because this estimator is approximate; its job here is to
+/// apply that conservative profile to every turn's assembled request, in
+/// `build_budgeted_request`. A mid-turn `Repair` rebuild is not re-estimated:
+/// repair only normalizes tool arguments and drops orphaned pairs, so it cannot
+/// grow the input past the budget already cleared for that turn.
 fn completion_request_input_estimate(request: &CompletionRequest) -> usize {
     serialized_token_estimate(&request.chat_history)
         .saturating_add(serialized_token_estimate(&request.documents))
         .saturating_add(serialized_token_estimate(&request.tools))
         .saturating_add(serialized_token_estimate(&request.additional_params))
         .saturating_add(serialized_token_estimate(&request.output_schema))
+}
+
+/// Treat the configured output value as a ceiling and fit each completion to
+/// the context remaining after its fully assembled provider input. Compaction
+/// protects the configured input threshold; this clamp independently preserves
+/// `input + output <= context` on every dispatch.
+fn clamp_request_output_budget(request: &mut CompletionRequest, config: &LoopConfig) {
+    let Some(configured_max) = request.max_tokens else {
+        return;
+    };
+    let input_tokens = completion_request_input_estimate(request);
+    let configured_max = usize::try_from(configured_max).unwrap_or(usize::MAX);
+    let effective_max = crate::compaction::effective_output_budget(
+        input_tokens,
+        config.context_window,
+        configured_max,
+    );
+    if effective_max < configured_max {
+        tracing::debug!(
+            input_tokens,
+            context_window = config.context_window,
+            configured_max_output_tokens = configured_max,
+            effective_max_output_tokens = effective_max,
+            "clamped completion output to remaining provider context"
+        );
+    }
+    request.max_tokens = u64::try_from(effective_max).ok();
 }
 
 fn compactable_message_estimate(messages: &[Message]) -> usize {
@@ -1212,7 +1242,8 @@ async fn build_budgeted_request<M: CompletionModel>(
         .cloned()
         .expect("new_messages always retains at least the initial prompt");
     let prior = &new_messages[..new_messages.len() - 1];
-    let request = build_request(model, current_prompt, history, prior, tools, config).await?;
+    let mut request = build_request(model, current_prompt, history, prior, tools, config).await?;
+    clamp_request_output_budget(&mut request, config);
 
     let Some(compactor) = config.turn_compactor.as_ref() else {
         return Ok(request);
@@ -1243,7 +1274,8 @@ async fn build_budgeted_request<M: CompletionModel>(
     *history = compacted;
     *new_messages = vec![compacted_prompt.clone()];
 
-    let rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    clamp_request_output_budget(&mut rebuilt, config);
     let after_tokens = completion_request_input_estimate(&rebuilt);
     tracing::info!(
         turn = turn_index,

@@ -804,6 +804,40 @@ fn memory_tool_defaults_disabled() {
     assert!(!ToolSelection::default().enable_session_history_tool);
 }
 
+#[tokio::test]
+async fn disabling_meta_tools_removes_goal_tools_from_names_and_runtime() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let surface = BehaviorToolConfig::from_selection(
+        "benchmark",
+        ToolSelection {
+            enable_meta_tools: false,
+            enable_context_budget: false,
+            ..Default::default()
+        },
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap()
+    .resolve(&node)
+    .await
+    .unwrap();
+
+    let names = surface.tool_names();
+    assert!(!names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+
+    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let built_names = surface
+        .build_tools(&runtime)
+        .unwrap()
+        .into_iter()
+        .map(|tool| tool.name())
+        .collect::<Vec<_>>();
+    assert!(!built_names.contains(&crate::goal::GET_GOAL_TOOL_NAME.to_string()));
+    assert!(!built_names.contains(&crate::goal::UPDATE_GOAL_TOOL_NAME.to_string()));
+}
+
 #[test]
 fn defra_query_deny_all_collection_scope_gates_tool_off() {
     use super::policy::{EndpointScope, ToolPolicySurface};

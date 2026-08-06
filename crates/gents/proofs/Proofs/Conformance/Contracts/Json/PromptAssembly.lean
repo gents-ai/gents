@@ -78,6 +78,7 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","
     ++ "\"request_tokens\":" ++ toString witness.requestTokens ++ ","
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
     ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
     ++ "\"provider_safe\":" ++ boolString witness.providerSafe
     ++ "}"
@@ -97,6 +98,8 @@ def promptAssemblyTurnBudgetCaseJson
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
     ++ "\"turn_input_tokens\":"
       ++ jsonArray (witness.turnInputTokens.map toString) ++ ","
+    ++ "\"turn_output_tokens\":"
+      ++ jsonArray (witness.turnOutputTokens.map toString) ++ ","
     ++ "\"turn_should_compact\":"
       ++ jsonArray (witness.turnShouldCompact.map boolString)
     ++ "}"
