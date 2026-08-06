@@ -333,6 +333,14 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             env=run_env,
             timeout_sec=request_timeout + 180,
         )
+        runner_error: BaseException | None = None
+        try:
+            # Classify the runner while GENTS_HOME still exists. The runner's
+            # failure trap projects partial traces and captures its bounded
+            # diagnostic bundle before returning a nonzero status.
+            self._require_success(self._REMOTE_RUNNER, result)
+        except BaseException as error:
+            runner_error = error
         cleanup_files = [
             self._REMOTE_BINARY,
             self._REMOTE_REAL_BINARY,
@@ -361,7 +369,8 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "Failed to remove temporary Gents runtime artifacts: %s",
                 (cleanup_result.stderr or cleanup_result.stdout or "").strip(),
             )
-        self._require_success(self._REMOTE_RUNNER, result)
+        if runner_error is not None:
+            raise runner_error
 
         context.metadata = {
             **(context.metadata or {}),
@@ -381,18 +390,27 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         trajectory_path = self.logs_dir / "trajectory.json"
+        trajectory: dict[str, Any] = {}
         if not trajectory_path.is_file():
             self.logger.warning("Gents did not emit %s", trajectory_path)
-            return
-        try:
-            trajectory = json.loads(trajectory_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            self.logger.exception("Failed to read Gents ATIF trajectory")
-            return
+        else:
+            try:
+                parsed_trajectory = json.loads(trajectory_path.read_text())
+                if isinstance(parsed_trajectory, dict):
+                    trajectory = parsed_trajectory
+            except (OSError, json.JSONDecodeError):
+                self.logger.exception("Failed to read Gents ATIF trajectory")
 
         request = self._read_json_object(self.logs_dir / "request.json")
         outcome = self._read_json_object(self.logs_dir / "gents-outcome.json")
         response = self._read_json_object(self.logs_dir / "response.json")
+        diagnostic = self._read_json_object(self.logs_dir / "gents-diagnostic.json")
+        server_exit = self._read_json_object(self.logs_dir / "gents-server-exit.json")
+        failure_origin = None
+        if diagnostic.get("reason") == "server_lost_during_request":
+            failure_origin = "gents_server"
+        elif outcome.get("outcome") == "compaction_provider_error":
+            failure_origin = "compaction_provider"
 
         context.metadata = {
             **(context.metadata or {}),
@@ -410,6 +428,10 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
                 "outcome": outcome.get("outcome"),
                 "budget_exhausted": outcome.get("outcome") == "max_turns_exhausted",
                 "terminal_error": response.get("error_message"),
+                "failure_origin": failure_origin,
+                "diagnostic_reason": diagnostic.get("reason"),
+                "diagnostic_graphql_available": diagnostic.get("graphql_available"),
+                "server_exit": server_exit or None,
             },
         }
 

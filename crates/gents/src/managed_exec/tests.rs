@@ -363,3 +363,84 @@ async fn managed_exec_caps_stdout() {
         other => panic!("expected exited outcome, got {other:?}"),
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_bounds_stdout_drain_after_direct_child_exit() {
+    assert_bounded_capture_drain("stdout").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_bounds_stderr_drain_after_direct_child_exit() {
+    assert_bounded_capture_drain("stderr").await;
+}
+
+#[cfg(unix)]
+async fn assert_bounded_capture_drain(retained_stream: &str) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp
+        .path()
+        .join(format!("{retained_stream}-descendant.pid"));
+    let script = match retained_stream {
+        "stdout" => format!(
+            "printf stdout-before; printf stderr-before >&2; sleep 30 2>/dev/null & echo $! > '{}'; exit 7",
+            pid_file.display()
+        ),
+        "stderr" => format!(
+            "printf stdout-before; printf stderr-before >&2; sleep 30 >/dev/null & echo $! > '{}'; exit 7",
+            pid_file.display()
+        ),
+        other => panic!("unexpected retained stream {other}"),
+    };
+    let tool_name = format!("retained-{retained_stream}-pipe");
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        run_managed_exec(ManagedExecRequest {
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            cwd: temp.path().to_path_buf(),
+            deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+            cancellation_token: CancellationToken::new(),
+            max_output_bytes: 1024,
+            stdin: Vec::new(),
+            environment: None,
+            tool_name: Some(tool_name.clone()),
+            live_output: None,
+        }),
+    )
+    .await
+    .expect("managed exec must not wait indefinitely for descendant-held pipes");
+
+    let descendant_pid = std::fs::read_to_string(&pid_file)
+        .expect("descendant pid file")
+        .trim()
+        .parse::<i32>()
+        .expect("descendant pid");
+    unsafe {
+        libc::kill(descendant_pid, libc::SIGKILL);
+    }
+
+    match outcome {
+        ManagedExecOutcome::Exited {
+            code,
+            stdout,
+            stderr,
+            stdout_truncated,
+            stderr_truncated,
+        } => {
+            assert_eq!(code, Some(7), "direct child status remains authoritative");
+            assert_eq!(stdout, b"stdout-before");
+            assert_eq!(stderr, b"stderr-before");
+            assert_eq!(stdout_truncated, retained_stream == "stdout");
+            assert_eq!(stderr_truncated, retained_stream == "stderr");
+        }
+        other => panic!("expected exited outcome, got {other:?}"),
+    }
+    assert!(
+        crate::active_native_executors()
+            .into_iter()
+            .all(|snapshot| snapshot.tool_name.as_deref() != Some(&tool_name)),
+        "direct-child exit must promptly clear the active executor"
+    );
+}

@@ -97,6 +97,18 @@ also checks the inference service every 15 seconds and stops Harbor after three
 consecutive failures; both values can be changed with
 `HARBOR_HEALTHCHECK_INTERVAL_SECS` and `HARBOR_HEALTHCHECK_FAILURE_LIMIT`.
 
+Within each trial, `run_gents.sh` supervises the Gents server and response
+waiter as one lifecycle. If the server exits during an active request, the
+waiter is cancelled and the runner reports whether `wait(2)` observed an exit
+code or a terminating signal. Before cleanup removes the UUID-scoped home, the
+runner attempts a bounded status query, partial response, timeline and ATIF
+projection, captures a server-log tail and process tree, inventories the local
+store, and archives the home only when it fits the configured size ceiling.
+GraphQL failure is retained explicitly rather than replacing the server-loss
+cause with a connection error. Compaction failures that exhaust both guided
+decoding and the strict non-guided JSON fallback are classified separately as
+`compaction_provider_error` in `gents-outcome.json`.
+
 For task images that need the glibc compatibility loader, the adapter installs
 an explicit `gents-fs-runner` shim and verifies it during setup. This keeps the
 native filesystem tools available even though Linux reports the explicit glibc
@@ -130,6 +142,9 @@ Useful overrides:
 | `GENTS_REQUEST_TIMEOUT_SECS` | `86400` | Durable request and Harbor exec timeout |
 | `GENTS_COMMAND_TIMEOUT_SECS` | `600` | Foreground command timeout applied when the model omits `timeout_secs` |
 | `GENTS_COMMAND_TIMEOUT_MAX_SECS` | `3600` | Foreground cap for explicit `timeout_secs` requests; kept far below `GENTS_REQUEST_TIMEOUT_SECS` so a pathological command returns control to the model (#1018) |
+| `GENTS_DIAGNOSTIC_TIMEOUT_SECS` | `10` | Per-command ceiling while capturing failure diagnostics |
+| `GENTS_DIAGNOSTIC_HOME_MAX_BYTES` | `67108864` | Maximum runtime-home size eligible for the diagnostic archive; larger homes retain an inventory and an archive-skipped note |
+| `GENTS_SUPERVISION_POLL_SECS` | `1` | Poll interval for the server/response-waiter lifecycle supervisor |
 | `GENTS_TOOL_ROOT` | `/app` | Filesystem and shell tool root |
 
 Each trial retains:
@@ -138,3 +153,8 @@ Each trial retains:
 - `request.json`, `request.stdout.json`, and `response.json` — request and response
 - `gents-init.json`, `gents-profile.json`, `gents-status.json`, and
   `gents-server.log` — runtime evidence
+- On runner failure, `gents-diagnostic.json`, `gents-server-exit.json` when the
+  server was reaped, `gents-server-tail.txt`, `process-tree.txt`, final status
+  or `graphql-unavailable.txt`, partial response/timeline/ATIF output, and
+  `gents-home-inventory.txt`. `gents-home.tar.gz` is also retained when the
+  home fits `GENTS_DIAGNOSTIC_HOME_MAX_BYTES`.

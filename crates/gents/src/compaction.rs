@@ -11,8 +11,8 @@ mod tests;
 
 use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
 use summary::{
-    bounded_error_diagnostic, compaction_prompt, compaction_request_prompt, format_summary,
-    ContinuationCheckpoint,
+    bounded_error_diagnostic, compaction_json_fallback_prompt, compaction_prompt,
+    compaction_request_prompt, format_summary, parse_fallback_checkpoint, ContinuationCheckpoint,
 };
 
 #[derive(Debug, Clone)]
@@ -216,21 +216,72 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
             (from_options, from_config) => from_options.or(from_config),
         };
-        let checkpoint: ContinuationCheckpoint = crate::agent::loop_stream::run_loop_to_typed(
+        let guided_result = crate::agent::loop_stream::run_loop_to_typed(
             (*self.model).clone(),
             None,
             crate::llm::message::Message::user(compaction_request_prompt()),
             prepared_history.clone(),
             std::sync::Arc::new(Vec::new()),
-            summary_config,
+            summary_config.clone(),
         )
-        .await
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "compaction summary inference failed: {}",
-                bounded_error_diagnostic(&format!("{error}"))
-            )
-        })?;
+        .await;
+        let checkpoint: ContinuationCheckpoint = match guided_result {
+            Ok(checkpoint) => checkpoint,
+            Err(guided_error)
+                if is_guided_output_failure(&guided_error)
+                    && !deadline_elapsed(summary_config.deadline) =>
+            {
+                tracing::warn!(
+                    error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
+                    "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
+                );
+                let mut fallback_config = summary_config;
+                fallback_config.structured_output = None;
+                fallback_config.retry_policy =
+                    crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+                fallback_config.preamble = Some(format!(
+                    "{}\n\n{}",
+                    compaction_prompt(),
+                    compaction_json_fallback_prompt()
+                ));
+                let raw = crate::agent::loop_stream::run_loop_to_text(
+                    (*self.model).clone(),
+                    None,
+                    crate::llm::message::Message::user(compaction_request_prompt()),
+                    prepared_history,
+                    std::sync::Arc::new(Vec::new()),
+                    fallback_config,
+                )
+                .await
+                .map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "compaction_provider_failure: guided structured output failed: {}; \
+                         non-guided JSON fallback failed: {}",
+                        bounded_error_diagnostic(&format!("{guided_error:#}")),
+                        bounded_error_diagnostic(&format!("{fallback_error:#}"))
+                    )
+                })?;
+                parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
+                    anyhow::anyhow!(
+                        "compaction_provider_failure: guided structured output failed: {}; \
+                         non-guided JSON fallback failed: {}",
+                        bounded_error_diagnostic(&format!("{guided_error:#}")),
+                        bounded_error_diagnostic(&fallback_error)
+                    )
+                })?
+            }
+            Err(error) => {
+                let deadline_context = if deadline_elapsed(summary_config.deadline) {
+                    "compaction deadline elapsed after "
+                } else {
+                    ""
+                };
+                return Err(anyhow::anyhow!(
+                    "compaction_provider_failure: {deadline_context}{}",
+                    bounded_error_diagnostic(&format!("{error:#}"))
+                ));
+            }
+        };
 
         // Structural extraction is the sole source of file activity (#1017):
         // the model no longer returns lists, so it can neither balloon the
@@ -264,6 +315,16 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             compaction_count: 1,
         })
     }
+}
+
+fn is_guided_output_failure(error: &anyhow::Error) -> bool {
+    let diagnostic = format!("{error:#}");
+    diagnostic.contains("structured-output validation failed")
+        || diagnostic.contains("completion produced no visible output")
+}
+
+fn deadline_elapsed(deadline: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+    deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline)
 }
 
 pub fn estimate_tokens(text: &str) -> usize {

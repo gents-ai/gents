@@ -44,6 +44,49 @@ pub(super) fn compaction_request_prompt() -> &'static str {
     "Produce the required structured continuation checkpoint now."
 }
 
+pub(super) fn compaction_json_fallback_prompt() -> &'static str {
+    "Guided structured decoding was unavailable. Return exactly one JSON object and no Markdown. \
+Use these keys: goal (string), constraints_and_preferences, completed_work, in_progress, \
+blockers, current_work, key_decisions, errors_and_fixes, verification, uncertainties, \
+next_actions, and critical_context (arrays of strings). Include every key. Preserve unfinished \
+work in next_actions in execution order; the first item must be the immediate continuation."
+}
+
+pub(super) fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, String> {
+    let checkpoint: ContinuationCheckpoint = serde_json::from_str(raw).map_err(|error| {
+        format!(
+            "strict JSON validation failed: {error}; raw_output_preview={}",
+            bounded_raw_output_preview(raw)
+        )
+    })?;
+    if checkpoint.goal.trim().is_empty() {
+        return Err(format!(
+            "checkpoint goal is empty; raw_output_preview={}",
+            bounded_raw_output_preview(raw)
+        ));
+    }
+    if checkpoint
+        .next_actions
+        .iter()
+        .all(|action| action.trim().is_empty())
+    {
+        return Err(format!(
+            "checkpoint has no pending next action; raw_output_preview={}",
+            bounded_raw_output_preview(raw)
+        ));
+    }
+    Ok(checkpoint)
+}
+
+fn bounded_raw_output_preview(raw: &str) -> String {
+    const RAW_OUTPUT_PREVIEW_MAX_BYTES: usize = 192;
+    let cut = floor_char_boundary(raw, raw.len().min(RAW_OUTPUT_PREVIEW_MAX_BYTES));
+    let preview = &raw[..cut];
+    let suffix = if cut < raw.len() { "…" } else { "" };
+    serde_json::to_string(&format!("{preview}{suffix}"))
+        .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
+}
+
 /// Byte bound for one rendered list item. Structural paths are copied verbatim
 /// from tool arguments; an item-count cap alone cannot bound bytes (#1017).
 const SUMMARY_ITEM_MAX_BYTES: usize = 512;

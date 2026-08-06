@@ -12,6 +12,15 @@ set -eu
 # key-plus-prefix is safe against model content: JSON escapes quotes inside
 # string values, so this byte sequence can only introduce the real field.
 _MAX_TURN_ERROR_PREFIX='"error_message": "agent stream failed: PromptError: MaxTurnError: '
+_COMPACTION_PROVIDER_ERROR='compaction_provider_failure:'
+
+response_error_has() {
+  response_file=$1
+  expected=$2
+  sed -n '/^[[:space:]]*"error_message":/p' "${response_file}" |
+    head -1 |
+    grep -qF "${expected}"
+}
 
 classify_response() {
   response_file=$1
@@ -23,6 +32,8 @@ classify_response() {
     error)
       if grep -qF "${_MAX_TURN_ERROR_PREFIX}" "${response_file}"; then
         printf 'max_turns_exhausted\n'
+      elif response_error_has "${response_file}" "${_COMPACTION_PROVIDER_ERROR}"; then
+        printf 'compaction_provider_error\n'
       else
         printf 'agent_error\n'
       fi
@@ -94,11 +105,27 @@ EOF
   "error_message": "compaction failed: summary request rejected by provider"
 }
 EOF
+  cat >"${self_test_dir}/compaction-provider-error.json" <<'EOF'
+{
+  "request_id": "req-12",
+  "status": "error",
+  "content": null,
+  "error_message": "agent stream failed: CompletionError: ProviderError: per-turn provider-input compaction failed: compaction_provider_failure: guided and fallback output failed"
+}
+EOF
   cat >"${self_test_dir}/content-mentions-max-turn.json" <<'EOF'
 {
   "request_id": "req-6",
   "status": "error",
   "content": "I hit MaxTurnError: in a log I was reading",
+  "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
+}
+EOF
+  cat >"${self_test_dir}/content-mentions-compaction-provider.json" <<'EOF'
+{
+  "request_id": "req-13",
+  "status": "error",
+  "content": "A log contained compaction_provider_failure: but it was not this request failure.",
   "error_message": "agent stream failed: CompletionError: ProviderError: connection reset"
 }
 EOF
@@ -167,7 +194,9 @@ EOF
   expect_outcome max-turns max_turns_exhausted
   expect_outcome provider-error agent_error
   expect_outcome compaction-error agent_error
+  expect_outcome compaction-provider-error compaction_provider_error
   expect_outcome content-mentions-max-turn agent_error
+  expect_outcome content-mentions-compaction-provider agent_error
   expect_outcome unexpected-status unexpected:interrupted
   expect_outcome missing-status unexpected:missing
   expect_outcome envelope-max-turns max_turns_exhausted
@@ -205,8 +234,23 @@ fi
 : "${GENTS_COMMAND_TIMEOUT_SECS:=600}"
 : "${GENTS_COMMAND_TIMEOUT_MAX_SECS:=3600}"
 : "${GENTS_SERVER_STARTUP_TIMEOUT_SECS:=300}"
+: "${GENTS_DIAGNOSTIC_TIMEOUT_SECS:=10}"
+: "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES:=67108864}"
+: "${GENTS_SUPERVISION_POLL_SECS:=1}"
+: "${GENTS_LOGS_DIR:=/logs/agent}"
 
-logs_dir=/logs/agent
+for numeric_value in \
+  "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+  "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}"; do
+  case "${numeric_value}" in
+    ''|*[!0-9]*|0)
+      echo "diagnostic bounds must be positive integers" >&2
+      exit 2
+      ;;
+  esac
+done
+
+logs_dir=${GENTS_LOGS_DIR}
 server_log="${logs_dir}/gents-server.log"
 init_log="${logs_dir}/gents-init.json"
 request_log="${logs_dir}/request.json"
@@ -216,7 +260,20 @@ trajectory_path="${logs_dir}/trajectory.json"
 outcome_log="${logs_dir}/gents-outcome.json"
 status_log="${logs_dir}/gents-status.json"
 profile_log="${logs_dir}/gents-profile.json"
+diagnostic_log="${logs_dir}/gents-diagnostic.json"
+server_exit_log="${logs_dir}/gents-server-exit.json"
+server_tail_log="${logs_dir}/gents-server-tail.txt"
+process_tree_log="${logs_dir}/process-tree.txt"
+final_status_log="${logs_dir}/gents-status-final.json"
+graphql_unavailable_log="${logs_dir}/graphql-unavailable.txt"
+timeline_log="${logs_dir}/partial-timeline.json"
+partial_response_log="${logs_dir}/response-partial.json"
+home_inventory_log="${logs_dir}/gents-home-inventory.txt"
+home_archive="${logs_dir}/gents-home.tar.gz"
 request_id=""
+server_pid=""
+waiter_pid=""
+diagnostics_captured=0
 
 mkdir -p "${logs_dir}"
 test -x "${GENTS_BINARY}"
@@ -272,6 +329,144 @@ start_server() {
     --command-timeout-max-secs "${GENTS_COMMAND_TIMEOUT_MAX_SECS}" \
     >>"${server_log}" 2>&1 &
   server_pid=$!
+}
+
+process_is_running() {
+  process_pid=$1
+  kill -0 "${process_pid}" >/dev/null 2>&1 || return 1
+  process_state=$(ps -o stat= -p "${process_pid}" 2>/dev/null || true)
+  case "${process_state}" in
+    Z*|*' Z'*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+run_bounded() {
+  bounded_output=$1
+  bounded_timeout=$2
+  shift 2
+  "$@" >"${bounded_output}" 2>&1 &
+  bounded_pid=$!
+  bounded_elapsed=0
+  while process_is_running "${bounded_pid}"; do
+    if [ "${bounded_elapsed}" -ge "${bounded_timeout}" ]; then
+      kill "${bounded_pid}" >/dev/null 2>&1 || true
+      sleep 1
+      kill -KILL "${bounded_pid}" >/dev/null 2>&1 || true
+      wait "${bounded_pid}" >/dev/null 2>&1 || true
+      printf '\ndiagnostic command exceeded %ss and was terminated\n' "${bounded_timeout}" >>"${bounded_output}"
+      return 124
+    fi
+    sleep 1
+    bounded_elapsed=$((bounded_elapsed + 1))
+  done
+  bounded_status=0
+  wait "${bounded_pid}" || bounded_status=$?
+  return "${bounded_status}"
+}
+
+stop_waiter() {
+  if [ -z "${waiter_pid}" ]; then
+    return
+  fi
+  if process_is_running "${waiter_pid}"; then
+    kill "${waiter_pid}" >/dev/null 2>&1 || true
+    waiter_stop_attempt=0
+    while process_is_running "${waiter_pid}" && [ "${waiter_stop_attempt}" -lt 20 ]; do
+      sleep 0.1
+      waiter_stop_attempt=$((waiter_stop_attempt + 1))
+    done
+    if process_is_running "${waiter_pid}"; then
+      kill -KILL "${waiter_pid}" >/dev/null 2>&1 || true
+    fi
+  fi
+  wait "${waiter_pid}" >/dev/null 2>&1 || true
+  waiter_pid=""
+}
+
+record_server_exit() {
+  server_wait_status=0
+  wait "${server_pid}" || server_wait_status=$?
+  if [ "${server_wait_status}" -gt 128 ]; then
+    server_signal=$((server_wait_status - 128))
+    printf '{\n  "status": "signal",\n  "signal": %s,\n  "wait_status": %s\n}\n' \
+      "${server_signal}" "${server_wait_status}" >"${server_exit_log}"
+    server_exit_description="signal ${server_signal}"
+  else
+    printf '{\n  "status": "exit",\n  "exit_code": %s,\n  "wait_status": %s\n}\n' \
+      "${server_wait_status}" "${server_wait_status}" >"${server_exit_log}"
+    server_exit_description="exit code ${server_wait_status}"
+  fi
+  if [ -n "${request_id}" ]; then
+    printf '{\n  "outcome": "runtime_server_lost",\n  "response_status": "unavailable",\n  "max_turns": %s,\n  "request_id": "%s"\n}\n' \
+      "${GENTS_MAX_TURNS}" "${request_id}" >"${outcome_log}"
+  fi
+  server_pid=""
+}
+
+capture_diagnostics() {
+  diagnostic_reason=$1
+  if [ "${diagnostics_captured}" = "1" ]; then
+    return
+  fi
+  diagnostics_captured=1
+
+  tail -200 "${server_log}" >"${server_tail_log}" 2>&1 || true
+  ps -ef >"${process_tree_log}" 2>&1 || printf 'process-tree snapshot unavailable\n' >"${process_tree_log}"
+
+  graphql_available=false
+  if run_bounded "${final_status_log}" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+    "${GENTS_BINARY}" status --home "${GENTS_HOME}"; then
+    graphql_available=true
+    rm -f "${graphql_unavailable_log}"
+  else
+    printf 'GraphQL unavailable while capturing diagnostics; see %s\n' "${final_status_log}" \
+      >"${graphql_unavailable_log}"
+  fi
+
+  if [ -n "${request_id}" ]; then
+    if run_bounded "${partial_response_log}" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+      "${GENTS_BINARY}" response show --home "${GENTS_HOME}" --request-id "${request_id}"; then
+      if [ ! -s "${response_log}" ]; then
+        cp "${partial_response_log}" "${response_log}"
+      fi
+    fi
+    run_bounded "${timeline_log}" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+      "${GENTS_BINARY}" trace timeline --home "${GENTS_HOME}" --request-id "${request_id}" || true
+    if [ ! -s "${trajectory_path}" ]; then
+      run_bounded "${logs_dir}/partial-atif-export.log" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+        "${GENTS_BINARY}" trace project \
+        --home "${GENTS_HOME}" \
+        --request-id "${request_id}" \
+        --projection atif \
+        --format native-json \
+        --output-file "${trajectory_path}" || true
+    fi
+  fi
+
+  if [ -d "${GENTS_HOME}" ]; then
+    find "${GENTS_HOME}" -type f -exec ls -ln {} \; 2>&1 |
+      sed -n '1,2000p' >"${home_inventory_log}" || true
+    home_kib=$(du -sk "${GENTS_HOME}" 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9][0-9]*\).*/\1/p' || true)
+    case "${home_kib}" in
+      ''|*[!0-9]*) home_kib=0 ;;
+    esac
+    home_archive_limit_kib=$(((GENTS_DIAGNOSTIC_HOME_MAX_BYTES + 1023) / 1024))
+    if [ "${home_kib}" -le "${home_archive_limit_kib}" ]; then
+      home_parent=$(dirname "${GENTS_HOME}")
+      home_name=$(basename "${GENTS_HOME}")
+      run_bounded "${logs_dir}/gents-home-archive.log" "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
+        tar -czf "${home_archive}" -C "${home_parent}" "${home_name}" || true
+    else
+      printf 'GENTS_HOME is %s KiB; archive limit is %s bytes\n' \
+        "${home_kib}" "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}" \
+        >"${logs_dir}/gents-home-archive-skipped.txt"
+    fi
+  fi
+
+  printf '{\n  "reason": "%s",\n  "request_id": "%s",\n  "graphql_available": %s,\n  "home_archive_limit_bytes": %s\n}\n' \
+    "${diagnostic_reason}" "${request_id}" "${graphql_available}" \
+    "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}" >"${diagnostic_log}"
 }
 
 wait_for_server_ready() {
@@ -345,18 +540,16 @@ start_server
 cleanup() {
   exit_code=$?
   trap - EXIT INT TERM
-  if [ -n "${request_id}" ] && [ ! -s "${trajectory_path}" ] && \
-    kill -0 "${server_pid}" >/dev/null 2>&1; then
-    "${GENTS_BINARY}" trace project \
-      --home "${GENTS_HOME}" \
-      --request-id "${request_id}" \
-      --projection atif \
-      --format native-json \
-      --output-file "${trajectory_path}" \
-      >/dev/null 2>&1 || true
+  stop_waiter
+  if [ "${exit_code}" -ne 0 ] && [ "${diagnostics_captured}" != "1" ]; then
+    capture_diagnostics "runner_exit"
+  elif [ -n "${request_id}" ] && [ ! -s "${trajectory_path}" ]; then
+    capture_diagnostics "partial_trace"
   fi
-  kill "${server_pid}" >/dev/null 2>&1 || true
-  wait "${server_pid}" >/dev/null 2>&1 || true
+  if [ -n "${server_pid}" ]; then
+    kill "${server_pid}" >/dev/null 2>&1 || true
+    wait "${server_pid}" >/dev/null 2>&1 || true
+  fi
   exit "${exit_code}"
 }
 trap cleanup EXIT
@@ -403,7 +596,33 @@ fi
   --request-id "${request_id}" \
   --timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
   --poll-secs 1 \
-  >"${response_log}"
+  >"${response_log}" 2>"${logs_dir}/response-wait.stderr.log" &
+waiter_pid=$!
+
+while process_is_running "${waiter_pid}"; do
+  if ! process_is_running "${server_pid}"; then
+    record_server_exit
+    stop_waiter
+    capture_diagnostics "server_lost_during_request"
+    echo "Gents server exited during active request (${server_exit_description}); waiter cancelled; diagnostics=${diagnostic_log}" >&2
+    exit 70
+  fi
+  sleep "${GENTS_SUPERVISION_POLL_SECS}"
+done
+
+waiter_status=0
+wait "${waiter_pid}" || waiter_status=$?
+waiter_pid=""
+if ! process_is_running "${server_pid}"; then
+  record_server_exit
+  capture_diagnostics "server_lost_during_request"
+  echo "Gents server exited during active request (${server_exit_description}); diagnostics=${diagnostic_log}" >&2
+  exit 70
+fi
+if [ "${waiter_status}" -ne 0 ]; then
+  echo "Gents response waiter exited with status ${waiter_status}" >&2
+  exit "${waiter_status}"
+fi
 
 "${GENTS_BINARY}" trace project \
   --home "${GENTS_HOME}" \
@@ -436,6 +655,11 @@ case "${outcome}" in
     sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
     printf 'gents request %s reached the %s-turn limit; trajectory=%s\n' \
       "${request_id}" "${GENTS_MAX_TURNS}" "${trajectory_path}"
+    ;;
+  compaction_provider_error)
+    echo "Gents request ${request_id} terminated because both guided and strict fallback compaction failed" >&2
+    sed -n '/^[[:space:]]*"error_message":/p' "${response_log}" >&2 || true
+    exit 1
     ;;
   agent_error)
     echo "Gents request ${request_id} terminated with an error response" >&2
