@@ -1,3 +1,6 @@
+use std::io::{Read, Write};
+use std::path::PathBuf;
+
 use anyhow::{anyhow, Result};
 
 pub mod protocol;
@@ -10,7 +13,65 @@ mod traversal;
 
 pub use tools::{execute_request, execute_request_with_base};
 
-use protocol::{GlobArgs, NativeFsRunnerRequest};
+use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
+
+/// Run the native filesystem runner's hidden command-line protocol.
+///
+/// Hosts that embed Gents can expose this from their own executable, allowing
+/// filesystem work to retain its killable process boundary without shipping a
+/// second sidecar binary.
+pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()> {
+    let mut args = args.into_iter();
+    let mut root = None;
+    let mut base = None;
+    let mut self_test_requested = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--self-test" => self_test_requested = true,
+            "--root" => root = args.next().map(PathBuf::from),
+            "--base" => base = args.next().map(PathBuf::from),
+            other => anyhow::bail!("unknown argument {other:?}"),
+        }
+    }
+
+    if self_test_requested {
+        self_test()?;
+        println!("self-test ok");
+        return Ok(());
+    }
+
+    let root = match root {
+        Some(root) => root,
+        None => std::env::current_dir()?,
+    };
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    let request: NativeFsRunnerRequest = serde_json::from_str(&input)?;
+    let output = execute_request_with_base(root, base, request)?;
+    serde_json::to_writer(
+        std::io::stdout(),
+        &NativeFsRunnerResponse {
+            ok: true,
+            output: Some(output),
+            error: None,
+        },
+    )?;
+    println!();
+    Ok(())
+}
+
+/// Write a protocol-shaped failure for a runner invocation.
+pub fn write_stdio_error(error: &anyhow::Error) {
+    let _ = serde_json::to_writer(
+        std::io::stdout(),
+        &NativeFsRunnerResponse {
+            ok: false,
+            output: None,
+            error: Some(format!("{error:#}")),
+        },
+    );
+    let _ = writeln!(std::io::stdout());
+}
 
 pub fn self_test() -> Result<()> {
     let root =

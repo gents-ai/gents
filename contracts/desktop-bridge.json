@@ -33,6 +33,18 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_managed_server_status",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_managed_server_start",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_managed_server_stop",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -253,7 +265,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.7",
+  "contractVersion": "0.8",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -277,7 +289,9 @@
   "events": [
     "desktop://client-updated",
     "desktop://codex-login-url",
-    "desktop://grok-login-url"
+    "desktop://grok-login-url",
+    "desktop://managed-server-updated",
+    "desktop://managed-server-tray-stop"
   ],
   "packageVersion": "0.10.1",
   "permissionSets": [

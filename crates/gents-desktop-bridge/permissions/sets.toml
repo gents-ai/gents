@@ -113,8 +113,13 @@ permissions = ["allow-desktop-resolve-tool-call-hold"]
 
 [[set]]
 identifier = "runtime-admin"
-description = "Local runtime provisioning"
-permissions = ["allow-desktop-init-local-standard"]
+description = "Local runtime provisioning and managed server lifecycle"
+permissions = [
+  "allow-desktop-init-local-standard",
+  "allow-desktop-managed-server-status",
+  "allow-desktop-managed-server-start",
+  "allow-desktop-managed-server-stop",
+]
 
 [[set]]
 identifier = "config-write"
