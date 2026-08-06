@@ -147,7 +147,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.inference_backend_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     )
                 })
                 .map(|(_index, row)| InferenceBackendView {
@@ -176,7 +176,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.inference_profile_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     )
                 })
                 .map(|(_index, row)| InferenceProfileView {
@@ -248,7 +248,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.tool_service_registry_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     )
                 })
                 .map(|(_index, row)| ToolServiceRegistryView {
@@ -276,7 +276,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.skill_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     ) && row.agent_did.as_deref() == Some(peer.agent_did.as_str())
                 })
                 .map(|(_index, row)| SkillView {
@@ -303,7 +303,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.task_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     ) && row
                         .behavior_id
                         .as_deref()
@@ -324,7 +324,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.schedule_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     ) && row
                         .task_id
                         .as_deref()
@@ -357,7 +357,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         &store.event_trigger_source_agent_dids,
                         *index,
                         &peer.agent_did,
-                        require_source_scope,
+                        false,
                     ) && row
                         .task_id
                         .as_deref()
@@ -652,5 +652,16 @@ mod inferred_peer_behavior_tests {
             ),
             vec!["default"]
         );
+    }
+
+    #[test]
+    fn p2p_config_without_legacy_source_tags_remains_visible() {
+        assert!(source_matches_agent(&[None], 0, "did:key:amy", false));
+        assert!(!source_matches_agent(
+            &[Some("did:key:other".to_string())],
+            0,
+            "did:key:amy",
+            false,
+        ));
     }
 }

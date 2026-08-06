@@ -1,7 +1,7 @@
 @layer sidebar {
   .sidebar {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 2fr) minmax(0, 3fr);
     gap: var(--space-6);
     min-height: 0;
     min-width: 0;
@@ -20,6 +20,35 @@
   .conversation-section {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .behavior-section {
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .behavior-section .compact-list,
+  .conversation-list {
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sidebar-section-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .sidebar-scroll-hint {
+    display: none;
+    color: var(--color-text-muted);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
 
   .sidebar .panel-header {
@@ -74,7 +103,7 @@
     }
 
     .sidebar {
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 2fr) minmax(0, 3fr);
       gap: var(--space-3);
       padding: 0;
     }
@@ -94,6 +123,10 @@
 
     .sidebar .panel-header h2 {
       font-size: var(--text-lg);
+    }
+
+    .sidebar-scroll-hint {
+      display: inline;
     }
   }
 }

@@ -407,12 +407,16 @@ async fn sweep_directory(store: &GraphqlDirectoryStore, source_did: &str) {
     }
 }
 
-struct GraphqlDirectoryStore {
+// `pub(crate)`: the persona-request reconciler's embedded-node integration
+// test constructs this directly to run a directory-projection tick over the
+// same node and prove the two reconcilers converge together (issue's PR 1+2
+// tie-in) — this is the only reason it needs to be more than module-private.
+pub(crate) struct GraphqlDirectoryStore {
     node: Arc<EmbeddedNode>,
 }
 
 impl GraphqlDirectoryStore {
-    fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
         Self { node }
     }
 }

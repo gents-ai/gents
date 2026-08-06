@@ -50,17 +50,20 @@ structure Template where
 
 abbrev Catalog := List Template
 
-def conversationCollections : List String :=
+def conversationTranscriptCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
    "AgentToolResult", "AgentSession", "AgentConversation", "CompactionEntry",
    "BearerPairingReady"]
 
-def machineCollections : List String :=
-  conversationCollections ++ ["AgentDirectoryEntry"]
-
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
    "ToolServiceRegistry", "Skill"]
+
+def conversationCollections : List String :=
+  conversationTranscriptCollections ++ agentConfigCollections
+
+def machineCollections : List String :=
+  conversationCollections ++ ["AgentDirectoryEntry"]
 
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
@@ -117,7 +120,7 @@ def agentConfigTemplate : Template :=
 
 def backupTemplate : Template :=
   { id := "backup"
-  , collections := conversationCollections.toFinset
+  , collections := conversationTranscriptCollections.toFinset
   , scope := .unscoped
   , delivery := .replicate }
 

@@ -55,7 +55,7 @@ def Target.category : Target → String
   | .eventTrigger => "automation"
 
 def selfConfigCategories : List String :=
-  ["behavior", "tools", "profile", "backend", "mcp_service", "automation"]
+  ["behavior", "tools", "profile", "backend", "mcp_service", "automation", "persona"]
 
 def defaultCategories : List String :=
   ["behavior", "tools", "profile"]

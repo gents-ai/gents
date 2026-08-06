@@ -430,6 +430,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NETWORK_JOIN_REQUEST,
         "bafyreib5ufwrdzy77qvfziodcdgevd44pqoix4jcrriir3arpyyjwhdjym"
     ),
+    baseline_entry!(
+        gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
+        gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
+        "bafyreihvhau2vf2wxh6jfbyfbwdndyfsrfamfvpceghflx4m7vdaangb5q"
+    ),
 ];
 
 /// Empty post-baseline chain at cutover. Real steps land when schema changes.

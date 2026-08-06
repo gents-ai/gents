@@ -6,8 +6,7 @@ use uuid::Uuid;
 use crate::client::store::ClientStore;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    normalize_optional_string, normalize_required,
+    escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
 };
 use super::binding::resolve_agent_binding;
 
@@ -74,29 +73,6 @@ pub async fn rename_conversation(
     let mutation =
         build_rename_conversation_mutation(store, agent_did, requester_did, session_id, title)?;
     execute_mutation(node, &mutation, "rename_conversation").await
-}
-
-pub async fn rename_conversation_to_graphql(
-    graphql: &str,
-    store: &ClientStore,
-    agent_did: &str,
-    requester_did: &str,
-    session_id: &str,
-    title: &str,
-) -> Result<()> {
-    let mutation =
-        build_rename_conversation_mutation(store, agent_did, requester_did, session_id, title)?;
-    let updated = execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "rename_conversation",
-        "update_AgentConversation",
-    )
-    .await?;
-    if updated == 0 {
-        anyhow::bail!("conversation {session_id} was not updated");
-    }
-    Ok(())
 }
 
 fn build_rename_conversation_mutation(

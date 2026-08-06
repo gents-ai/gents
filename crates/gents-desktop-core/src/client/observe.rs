@@ -11,7 +11,7 @@ use super::collection_resolver::CollectionResolver;
 use super::peer_directory::PeerDirectory;
 use super::query::{
     fetch_doc_patch, isolate_legacy_bearer_rows, load_agent_scoped_snapshot_with_peer_records,
-    load_full_snapshot_with_peer_records,
+    load_full_snapshot_with_peer_records, supports_doc_patch_collection,
 };
 use super::store::{ClientStore, SharedClientStore};
 
@@ -439,13 +439,19 @@ async fn accumulate_dirty(
     metrics: &ObserverMetrics,
 ) {
     match resolver.resolve(node, collection_id).await {
-        Ok(Some(name)) => {
+        Ok(Some(name)) if supports_doc_patch_collection(name) => {
             if !is_relay {
                 metrics
                     .local_write_redundant_fetches
                     .fetch_add(1, Ordering::Relaxed);
             }
             dirty.entry(name).or_default().insert(doc_id.to_string());
+        }
+        Ok(Some(name)) => {
+            tracing::trace!(
+                collection = name,
+                "ignoring update outside the desktop snapshot store"
+            );
         }
         Ok(None) => {
             tracing::trace!(collection_id, "ignoring update for unknown collection");

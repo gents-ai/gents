@@ -16,6 +16,14 @@ pub struct MaterializationStats {
     /// Always `0` with eager datastore materialization. Kept for report
     /// compatibility with the pre-#1232 GraphQL read-through path.
     pub read_through_scans: usize,
+    /// Human-readable details for collections whose eager materialization was
+    /// skipped because a P2P merge parked a unique-index-conflicting document
+    /// unindexed (#984). One entry per parked collection, naming the
+    /// collection, the offending unique index, and (best-effort) the winner
+    /// and parked docIDs. Boot proceeds: the pre-existing index state — the
+    /// merge-time deterministic winner — is preserved, and parked documents
+    /// remain readable by non-index scans.
+    pub parked_unique_conflicts: Vec<String>,
 }
 
 /// Summary returned by [`crate::ensure_migrations`].

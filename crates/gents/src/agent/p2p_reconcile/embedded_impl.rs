@@ -614,17 +614,16 @@ mod tests {
                     "unscoped template '{}' unexpectedly has filters",
                     template.id
                 ),
-                Scope::PerCollection(_) => {
+                Scope::PerCollection(rules) => {
                     let filter_collections =
                         filters.keys().map(String::as_str).collect::<BTreeSet<_>>();
-                    let template_collections = template
-                        .collections
+                    let scoped_collections = rules
                         .iter()
-                        .copied()
+                        .map(|rule| rule.collection)
                         .collect::<BTreeSet<_>>();
                     assert_eq!(
-                        filter_collections, template_collections,
-                        "per-collection template '{}' must filter every collection",
+                        filter_collections, scoped_collections,
+                        "per-collection template '{}' must filter every scoped collection",
                         template.id
                     );
                 }

@@ -7,12 +7,10 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Duration;
 
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::snapshot::{compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow};
 use crate::types::{
@@ -22,107 +20,30 @@ use crate::types::{
 
 /// Maximum descent depth to match the CLI walker's safety limit.
 const MAX_CASCADE_DEPTH: usize = 8;
-const REMOTE_GRAPHQL_TIMEOUT: Duration = Duration::from_secs(15);
 
-enum GraphqlAccess {
-    Local,
-    Remote {
-        graphql: String,
-        client: reqwest::Client,
-    },
-}
+struct GraphqlAccess;
 
 impl GraphqlAccess {
-    async fn for_agent(core: &Arc<ClientCore>, agent_did: Option<&str>) -> Result<Self, String> {
-        let Some(agent_did) = agent_did
-            .map(str::trim)
-            .filter(|agent_did| !agent_did.is_empty())
-        else {
-            return Ok(Self::Local);
-        };
-        let Some(graphql) = core.graphql_for_agent(agent_did).await else {
-            return Ok(Self::Local);
-        };
-        let client = reqwest::Client::builder()
-            .timeout(REMOTE_GRAPHQL_TIMEOUT)
-            .build()
-            .map_err(|error| format!("building remote GraphQL client: {error}"))?;
-        Ok(Self::Remote { graphql, client })
-    }
-
     async fn execute(
         &self,
         core: &Arc<ClientCore>,
         document: &str,
         operation: &str,
     ) -> Result<Value, String> {
-        match self {
-            Self::Local => {
-                let response = core.node().execute(document).await;
-                if response.has_errors() {
-                    return Err(format!(
-                        "{operation} failed: {}",
-                        response
-                            .errors
-                            .iter()
-                            .map(|error| error.message.as_str())
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    ));
-                }
-                Ok(response.data.unwrap_or(Value::Null))
-            }
-            Self::Remote { graphql, client } => {
-                let response = client
-                    .post(graphql)
-                    .json(&json!({ "query": document }))
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        format!("sending {operation} to remote GraphQL {graphql}: {error}")
-                    })?;
-                let status = response.status();
-                let body = response.bytes().await.map_err(|error| {
-                    format!("reading {operation} from remote GraphQL {graphql}: {error}")
-                })?;
-                if !status.is_success() {
-                    return Err(format!(
-                        "{operation} at remote GraphQL {graphql} failed with {status}: {}",
-                        String::from_utf8_lossy(&body)
-                    ));
-                }
-                let response: RemoteGraphqlResponse =
-                    serde_json::from_slice(&body).map_err(|error| {
-                        format!(
-                            "decoding {operation} response from remote GraphQL {graphql}: {error}"
-                        )
-                    })?;
-                if response
+        let response = core.node().execute(document).await;
+        if response.has_errors() {
+            return Err(format!(
+                "{operation} failed: {}",
+                response
                     .errors
-                    .as_ref()
-                    .is_some_and(|errors| !graphql_errors_are_empty(errors))
-                {
-                    return Err(format!(
-                        "{operation} at remote GraphQL {graphql} returned errors: {}",
-                        response.errors.unwrap_or(Value::Null)
-                    ));
-                }
-                Ok(response.data.unwrap_or(Value::Null))
-            }
+                    .iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
         }
+        Ok(response.data.unwrap_or(Value::Null))
     }
-}
-
-#[derive(Deserialize)]
-struct RemoteGraphqlResponse {
-    #[serde(default)]
-    data: Option<Value>,
-    #[serde(default)]
-    errors: Option<Value>,
-}
-
-fn graphql_errors_are_empty(errors: &Value) -> bool {
-    errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
 }
 
 /// Terminal lifecycle states — requests in these states are classified as
@@ -208,7 +129,7 @@ pub async fn walk(
     req: &CascadeWalkRequest,
 ) -> Result<CascadeWalkResult, String> {
     let agent_did = req.agent_did.as_deref();
-    let access = GraphqlAccess::for_agent(core, agent_did).await?;
+    let access = GraphqlAccess;
 
     // Load root request.
     let root = fetch_request(core, &access, &req.root_request_id, agent_did)
@@ -520,7 +441,7 @@ pub async fn latch_root_interrupt(
     request_id: &str,
     agent_did: Option<&str>,
 ) -> Result<LatchResult, String> {
-    let access = GraphqlAccess::for_agent(core, agent_did).await?;
+    let access = GraphqlAccess;
 
     // Scope the root lookup to the selected deployment. Descendant latches are
     // authorized separately by the persisted cascade edges.
@@ -670,7 +591,7 @@ pub async fn interrupt_request(
     // counterpart to Lean's bridge_cancel_cascade step: set
     // interrupt_requested_at on the child so the child daemon can lift
     // interrupt_processing to the interrupted terminal state.
-    let access = GraphqlAccess::for_agent(core, req.agent_did.as_deref()).await?;
+    let access = GraphqlAccess;
     let latched = latch_root_interrupt(core, &req.request_id, req.agent_did.as_deref()).await?;
     latch_cascade_descendants(core, &access, &preview).await?;
     Ok(InterruptRequestResult {
@@ -790,7 +711,7 @@ pub(crate) async fn latch_cascade_descendant_interrupt(
     core: &Arc<ClientCore>,
     request_id: &str,
 ) -> Result<Option<LatchResult>, String> {
-    let access = GraphqlAccess::for_agent(core, None).await?;
+    let access = GraphqlAccess;
     latch_descendant_interrupt_with_access(core, &access, request_id).await
 }
 

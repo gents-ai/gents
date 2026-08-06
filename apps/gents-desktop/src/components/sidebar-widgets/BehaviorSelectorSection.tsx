@@ -17,12 +17,15 @@ export function BehaviorSelectorSection({
   onStartNewConversation,
 }: BehaviorSelectorSectionProps) {
   return (
-    <section className="sidebar-section">
+    <section className="sidebar-section behavior-section">
       <div className="panel-header">
         <div>
           <p className="eyebrow">Chat</p>
-          <h2>Behavior</h2>
+          <h2>Behaviors</h2>
         </div>
+        {behaviorOptions.length > 1 ? (
+          <span className="sidebar-scroll-hint">{behaviorOptions.length} · swipe</span>
+        ) : null}
       </div>
       {!selectedAgentDid ? (
         <p className="muted">Select a deployment to choose behavior.</p>

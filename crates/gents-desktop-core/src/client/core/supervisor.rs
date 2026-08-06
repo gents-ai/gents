@@ -24,7 +24,7 @@ use super::bearer_pairing::{
 };
 use super::bootstrap::{
     add_replicator_with_retry, connect_peer_with_retry, force_connect_peer_with_retry,
-    is_connected_peer, p2p_pairing_enabled_for_graphql, REMOTE_P2P_PAIRING_ENV,
+    is_connected_peer,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
@@ -470,12 +470,7 @@ pub(super) async fn repair_saved_peer(
         match connect_result {
             Ok(()) => {
                 status.dial_succeeded = true;
-                let p2p_pairing_enabled = record
-                    .graphql
-                    .as_deref()
-                    .map(p2p_pairing_enabled_for_graphql)
-                    .unwrap_or(true);
-                if install_replicators_on_bootstrap && p2p_pairing_enabled {
+                if install_replicators_on_bootstrap {
                     let replicator_result = if is_bearer_peer(record) {
                         install_bearer_replicator_for_record(p2p, record, requester_did).await
                     } else {
@@ -497,14 +492,6 @@ pub(super) async fn repair_saved_peer(
                         ));
                         return status;
                     }
-                } else if record.graphql.is_some() && !p2p_pairing_enabled {
-                    tracing::debug!(
-                        target: "gents_desktop_core::peer_maintenance",
-                        peer_id = %record.peer_id,
-                        label = %record.label,
-                        env = REMOTE_P2P_PAIRING_ENV,
-                        "skipping automatic remote P2P replicator repair for GraphQL-managed peer"
-                    );
                 }
             }
             Err(error) => {

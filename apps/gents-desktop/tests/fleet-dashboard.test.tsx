@@ -366,7 +366,7 @@ describe("FleetHostDashboard fleet-level P2P repair", () => {
   });
 });
 
-describe("FleetHostDashboard guided inference callout", () => {
+describe("FleetHostDashboard per-deployment inference status", () => {
   function renderFleet(deployments: DeploymentView[]) {
     render(
       <FleetHostDashboard
@@ -387,15 +387,17 @@ describe("FleetHostDashboard guided inference callout", () => {
     );
   }
 
-  it("hides the callout when the agent already has a usable backend", () => {
+  it("hides setup status when the agent already has a usable backend", () => {
     renderFleet([deployment]);
-    expect(screen.queryByTestId("fleet-inference-callout")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("fleet-inference-setup-peer-1"),
+    ).not.toBeInTheDocument();
   });
 
-  it("prompts inference setup and opens the wizard when no backend exists", () => {
+  it("places setup status on the affected deployment and opens its wizard", () => {
     renderFleet([{ ...deployment, inferenceBackends: [] }]);
-    expect(screen.getByTestId("fleet-inference-callout")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("fleet-inference-setup"));
+    expect(screen.queryByText("Finish setting up")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
     expect(screen.getByTestId("inference-wizard")).toBeInTheDocument();
     expect(screen.getByTestId("inference-option-codex")).toBeInTheDocument();
   });

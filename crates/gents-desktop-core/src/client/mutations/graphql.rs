@@ -1,9 +1,5 @@
 use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
-use serde_json::{json, Value};
-
-const REMOTE_MUTATION_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub(super) async fn execute_mutation(
     node: &EmbeddedNode,
@@ -23,75 +19,6 @@ pub(super) async fn execute_mutation(
         );
     }
     Ok(())
-}
-
-pub(super) async fn execute_remote_mutation(
-    graphql: &str,
-    mutation: &str,
-    operation: &str,
-) -> Result<()> {
-    execute_remote_mutation_response(graphql, mutation, operation)
-        .await
-        .map(|_| ())
-}
-
-pub(super) async fn execute_remote_delete_mutation(
-    graphql: &str,
-    mutation: &str,
-    operation: &str,
-    response_field: &str,
-) -> Result<usize> {
-    let response = execute_remote_mutation_response(graphql, mutation, operation).await?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(response_field))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-async fn execute_remote_mutation_response(
-    graphql: &str,
-    mutation: &str,
-    operation: &str,
-) -> Result<RemoteGraphqlMutationResponse> {
-    let client = reqwest::Client::builder()
-        .timeout(REMOTE_MUTATION_HTTP_TIMEOUT)
-        .build()
-        .context("building remote GraphQL mutation HTTP client")?;
-    let response = client
-        .post(graphql)
-        .json(&json!({ "query": mutation }))
-        .send()
-        .await
-        .with_context(|| format!("sending {operation} mutation to {graphql}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading {operation} mutation response from {graphql}"))?;
-    if !status.is_success() {
-        bail!(
-            "{operation} mutation to {graphql} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-    let response: RemoteGraphqlMutationResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding {operation} mutation response from {graphql}"))?;
-    if let Some(errors) = response.errors.as_ref() {
-        if !errors.is_empty() {
-            bail!("{operation} mutation to {graphql} returned errors: {errors:?}");
-        }
-    }
-    Ok(response)
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteGraphqlMutationResponse {
-    #[allow(dead_code)]
-    data: Option<Value>,
-    errors: Option<Vec<Value>>,
 }
 
 pub(super) fn join_fields(fields: &[Option<String>]) -> String {

@@ -8,7 +8,6 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::{HttpRequestData, HttpResponse};
@@ -67,7 +66,6 @@ struct VersionResponse {
 }
 
 const RECENT_CALLS_PER_BACKEND: usize = 10;
-const SUBAGENT_TREE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) fn handle_request(
     runtime: &tokio::runtime::Handle,
@@ -134,19 +132,19 @@ pub(super) fn handle_request(
             let core = fixture.desktop_core();
             core.set_selected_agent_did(did.clone());
             if let Some(did) = did {
-                let loaded_remote = match runtime.block_on(core.refresh_remote_agent(&did)) {
+                let refreshed = match runtime.block_on(core.refresh_agent(&did)) {
                     Ok(Some(_version)) => true,
                     Ok(None) => false,
                     Err(error) => {
                         tracing::warn!(
                             error = %error,
                             agent_did = %did,
-                            "remote selection refresh failed"
+                            "local replica selection refresh failed"
                         );
                         false
                     }
                 };
-                if !loaded_remote {
+                if !refreshed {
                     runtime.block_on(core.ensure_agent_loaded(&did))?;
                 }
             }
@@ -594,79 +592,24 @@ async fn list_subagent_tree_response(
     if root_request_id.is_empty() {
         anyhow::bail!("rootRequestId is required");
     }
-    let agent_did = match request.agent_did.as_deref().map(str::trim) {
-        Some(value) if !value.is_empty() => value.to_string(),
-        _ => core
-            .selected_agent_did()
-            .ok_or_else(|| anyhow!("no agent selected; pass agentDid explicitly"))?,
-    };
-    let Some(graphql) = core.graphql_for_agent(&agent_did).await else {
-        return build_local_subagent_tree(
-            core.node_arc(),
-            root_request_id,
-            request.include_terminal.unwrap_or(false),
-            effective_subagent_tree_max_depth(request.max_depth),
-        )
-        .await
-        .context("local subagent tree query failed");
-    };
-    let url = subagent_tree_url(&graphql, root_request_id, &request)?;
-
-    let client = reqwest::Client::builder()
-        .timeout(SUBAGENT_TREE_TIMEOUT)
-        .build()
-        .context("build subagent tree http client")?;
-    let response = client
-        .get(url.clone())
-        .send()
-        .await
-        .with_context(|| format!("subagent tree fetch failed for {url}"))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("subagent tree fetch returned {status}: {}", body.trim());
+    if request
+        .agent_did
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && core.selected_agent_did().is_none()
+    {
+        anyhow::bail!("no agent selected; pass agentDid explicitly");
     }
-    response
-        .json::<SubagentTreeView>()
-        .await
-        .context("decode subagent tree response")
-}
-
-fn subagent_tree_url(
-    graphql: &str,
-    root_request_id: &str,
-    request: &DesktopListSubagentTreeRequest,
-) -> Result<Url> {
-    let trimmed = graphql.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("agent graphql URL is empty");
-    }
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
-    };
-    let mut url = Url::parse(&with_scheme)
-        .map_err(|error| anyhow!("agent graphql URL is not a valid URL: {error}"))?;
-    let path = url.path().trim_end_matches('/').to_string();
-    if path.is_empty() || path == "/api/v0" || path == "/api/v0/graphql" {
-        url.set_path("/subagents/tree");
-    } else if !path.ends_with("/subagents/tree") {
-        url.set_path(&format!("{path}/subagents/tree"));
-    }
-    url.set_query(None);
-    url.set_fragment(None);
-
-    let mut pairs = url.query_pairs_mut();
-    pairs.append_pair("root_request_id", root_request_id);
-    if let Some(include_terminal) = request.include_terminal {
-        pairs.append_pair("include_terminal", &include_terminal.to_string());
-    }
-    if let Some(max_depth) = request.max_depth {
-        pairs.append_pair("max_depth", &max_depth.to_string());
-    }
-    drop(pairs);
-    Ok(url)
+    build_local_subagent_tree(
+        core.node_arc(),
+        root_request_id,
+        request.include_terminal.unwrap_or(false),
+        effective_subagent_tree_max_depth(request.max_depth),
+    )
+    .await
+    .context("local subagent tree query failed")
 }
 
 async fn list_backends_with_health(core: Arc<ClientCore>) -> Result<Vec<BackendHealthView>> {

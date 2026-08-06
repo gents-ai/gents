@@ -41,9 +41,13 @@ describe("fleet health visibility", () => {
     expect(screen.getByTestId("fleet-error-peer-1")).toHaveTextContent("dial timeout");
   });
 
-  it("offers a DID copy affordance in the agent cell", () => {
+  it("shows useful document counts instead of transport identifiers", () => {
     renderRow({ ...deployment, dialSucceeded: true, lastError: null });
-    expect(screen.getByRole("button", { name: "Copy DID" })).toBeInTheDocument();
+    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+      "2 behaviors · 0 conversations · 2 tasks",
+    );
+    expect(screen.queryByRole("button", { name: "Copy DID" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/GraphQL/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("fleet-error-peer-1")).not.toBeInTheDocument();
   });
 

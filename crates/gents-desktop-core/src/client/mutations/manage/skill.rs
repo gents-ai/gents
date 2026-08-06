@@ -19,9 +19,8 @@ use gents_protocol::row::SkillRow;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    graphql_optional_bool_field, graphql_string_field, graphql_string_list_field, join_fields,
-    normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
+    graphql_string_list_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
@@ -139,16 +138,6 @@ pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) 
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
-}
-
-pub async fn delete_skill_from_graphql(
-    graphql: &str,
-    agent_did: &str,
-    skill_id: &str,
-) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_skill_mutation(agent_did, skill_id)?;
-    execute_remote_delete_mutation(graphql, &mutation, "delete_skill", "delete_Skill").await
 }
 
 fn build_delete_skill_mutation(agent_did: &str, skill_id: &str) -> Result<String> {

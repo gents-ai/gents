@@ -615,8 +615,16 @@ fn bearer_template_is_safely_scoped(template: &gents::agent::p2p_reconcile::Scop
     let Scope::PerCollection(rules) = &template.scope else {
         return false;
     };
-    rules.len() == template.collections.len()
-        && template.collections.iter().all(|collection| {
+    let Some(config_template) = resolve_template("agent-config") else {
+        return false;
+    };
+    let filtered_collections = template
+        .collections
+        .iter()
+        .filter(|collection| !config_template.collections.contains(collection))
+        .collect::<Vec<_>>();
+    rules.len() == filtered_collections.len()
+        && filtered_collections.into_iter().all(|collection| {
             let (expected_field, expected_source) = if *collection == "BearerPairingReady" {
                 ("claimant_did", DidSource::PeerDid)
             } else if *collection == AGENT_DIRECTORY_COLLECTION {
@@ -1206,28 +1214,45 @@ mod tests {
         let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
         assert!(collections.contains(&"AgentRequest".to_string()));
         assert!(collections.contains(&"AgentResponse".to_string()));
-        assert!(!collections.contains(&"AgentBehavior".to_string()));
+        assert!(collections.contains(&"AgentBehavior".to_string()));
         assert!(collections.contains(&"PairingBearerClaim".to_string()));
         assert!(collections.contains(&"PeerEndpoint".to_string()));
         assert!(collections.contains(&"BearerPairingReady".to_string()));
         assert!(!collections.contains(&"ReciprocalConversationIntent".to_string()));
         assert_eq!(filters.len(), 11);
-        for collection in resolve_template("conversation")
-            .expect("conversation template")
-            .collections
-        {
-            let field = if *collection == "BearerPairingReady" {
+        for collection in [
+            "AgentRequest",
+            "AgentResponse",
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentToolResult",
+            "AgentSession",
+            "AgentConversation",
+            "CompactionEntry",
+            "BearerPairingReady",
+        ] {
+            let field = if collection == "BearerPairingReady" {
                 "claimant_did"
             } else {
                 "requester_did"
             };
             assert_eq!(
-                filters.get(*collection),
+                filters.get(collection),
                 Some(&ReplicationFilter::eq(
                     field,
                     serde_json::json!("did:key:phone")
                 ))
             );
+        }
+        for collection in [
+            "AgentBehavior",
+            "ToolSelection",
+            "InferenceBackend",
+            "InferenceProfile",
+            "ToolServiceRegistry",
+            "Skill",
+        ] {
+            assert!(!filters.contains_key(collection));
         }
         assert_eq!(
             filters.get("PairingBearerClaim"),

@@ -12,23 +12,10 @@ import type {
 import type { FleetCopy } from "../copy.js";
 import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import { validateAgentDid } from "../peerConnectionImport.js";
+import { needsInferenceSetup } from "../fleetMetrics.js";
 import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
-
-function needsInferenceSetup(deployment: DeploymentView): boolean {
-  const behavior =
-    deployment.behaviors.find((entry) => entry.isDefault) ??
-    deployment.behaviors[0];
-  const backend =
-    deployment.inferenceBackends.find(
-      (entry) => entry.backendId === behavior?.backendId,
-    ) ?? deployment.inferenceBackends[0];
-  if (!backend) return true;
-  if (backend.enabled === false) return true;
-  if (backend.models.length === 0) return true;
-  return false;
-}
 
 export type FleetDashboardProps = {
   addingPeer: boolean;
@@ -222,32 +209,6 @@ export function FleetDashboard({
         </div>
       </header>
 
-      {deploymentNeedingInference && renderInferenceSetup ? (
-        <section
-          className="panel fleet-inference-callout"
-          data-testid="fleet-inference-callout"
-        >
-          <div className="fleet-inference-callout-copy">
-            <span className="eyebrow">Inference</span>
-            <strong>
-              Finish setting up {deploymentNeedingInference.label}
-            </strong>
-            <span className="muted">
-              This agent still needs a working model backend. Connect OpenAI, a
-              local server, a custom endpoint, or your ChatGPT subscription.
-            </span>
-          </div>
-          <button
-            className="primary-button"
-            data-testid="fleet-inference-setup"
-            type="button"
-            onClick={() => setWizardDeployment(deploymentNeedingInference)}
-          >
-            Set up inference
-          </button>
-        </section>
-      ) : null}
-
       {pairingNotice ? (
         <p
           aria-live="polite"
@@ -300,6 +261,9 @@ export function FleetDashboard({
                 onOpenConfig={onOpenConfig}
                 onRemovePeer={onRemovePeer}
                 onRenamePeer={onRenamePeer}
+                onSetupInference={
+                  renderInferenceSetup ? setWizardDeployment : undefined
+                }
               />
             ))}
           </tbody>
