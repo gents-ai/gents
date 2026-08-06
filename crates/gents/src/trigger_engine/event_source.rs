@@ -98,6 +98,7 @@ impl SourceSchemaCache {
         collection: &str,
         node: &EmbeddedNode,
     ) -> anyhow::Result<Vec<String>> {
+        crate::graphql::validate_collection_identifier(collection)?;
         let mut guard = self.by_collection.lock().await;
         if let Some(fields) = guard.get(collection) {
             return Ok(fields.clone());
@@ -209,10 +210,30 @@ impl EventSource {
     }
 
     pub(crate) async fn reconcile_subscriptions(&mut self, snapshot: &ActiveRuntimeSnapshot) {
+        // Resolve-time quarantine keeps identifier-invalid source
+        // collections out of active_event_triggers, but this source must
+        // not trust that another code path assembled the snapshot the same
+        // way: names that fail the collection-identifier check never enter
+        // the desired set, so no seed/rescan/probe query is built from them.
         let desired: HashSet<String> = snapshot
             .active_event_triggers()
             .values()
             .map(|t| t.source_collection.clone())
+            .filter(
+                |collection| match crate::graphql::validate_collection_identifier(collection) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        tracing::warn!(
+                            source_collection = %collection,
+                            generation = snapshot.generation,
+                            %error,
+                            "event source refusing to observe source collection: \
+                             not a valid GraphQL collection identifier",
+                        );
+                        false
+                    }
+                },
+            )
             .collect();
 
         let added: Vec<String> = desired
@@ -261,6 +282,7 @@ impl EventSource {
     }
 
     async fn seed_seen_docs_for_collection(&mut self, collection: &str) -> anyhow::Result<()> {
+        crate::graphql::validate_collection_identifier(collection)?;
         let query = format!(
             r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
             collection = collection,
@@ -306,6 +328,7 @@ impl EventSource {
     }
 
     async fn load_doc_ids_for_collection(&self, collection: &str) -> anyhow::Result<Vec<String>> {
+        crate::graphql::validate_collection_identifier(collection)?;
         let query = format!(
             r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
             collection = collection,
@@ -384,24 +407,30 @@ impl EventSource {
     /// itself errored — the caller treats errors as "skip this fire" so a
     /// transient GraphQL failure doesn't brick the source.
     ///
-    /// Trust boundary: `trigger.filter` is operator-authored and validated
-    /// at apply time (the apply path rejects ill-formed filter objects
-    /// before the trigger ever lands in `active_event_triggers`). It's
-    /// interpolated directly as a filter-object fragment — we do NOT run
-    /// it through `escape_graphql_string`, because that helper escapes
-    /// scalar string literals and would break the object syntax. The
-    /// `_docID` value, which comes from the event payload (external
-    /// input), IS escaped.
+    /// Trust boundary, one defense per interpolation position:
+    /// `source_collection` is validated as a collection identifier, the
+    /// `_docID` from the event payload is escaped, and `trigger.filter` —
+    /// spliced in whole as an object fragment, where escaping would break
+    /// the syntax — is checked as a balanced filter object. A break-out has
+    /// to close an `]`, `}` or `)` it never opened, which is what that
+    /// check rejects.
+    ///
+    /// Note the CLI apply probe is not a substitute: it executes the filter
+    /// rather than validating it, in a different embedding than this one.
     async fn probe_filter(
         &self,
         source_doc_id: &str,
         trigger: &crate::runtime_snapshot::ResolvedEventTrigger,
     ) -> anyhow::Result<bool> {
+        crate::graphql::validate_collection_identifier(&trigger.source_collection)?;
         let user_filter = trigger
             .filter
             .as_deref()
             .map(str::trim)
             .filter(|f| !f.is_empty());
+        if let Some(filter) = user_filter {
+            crate::graphql::validate_graphql_filter_fragment(filter)?;
+        }
         let filter_literal = match user_filter {
             Some(f) => format!(
                 r#"{{ _docID: {{ _eq: "{id}" }}, _and: [ {user_filter} ] }}"#,
@@ -439,6 +468,8 @@ impl EventSource {
         collection: &str,
         source_doc_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        // `fields_for` validates this same binding and `?`-propagates before
+        // the query below is built, so it is the one gate for both sites.
         let fields = self
             .source_schema_cache
             .fields_for(collection, &self.node)

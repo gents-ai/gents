@@ -945,3 +945,36 @@ async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
 
     let _ = fs::remove_dir_all(&data_path);
 }
+
+/// A hostile `response_key` containing quote/brace characters must be
+/// escaped into the filter's string literal — the query stays well-formed
+/// and simply matches nothing (`Ok(None)`), never a GraphQL parse error.
+#[tokio::test]
+async fn load_response_state_by_key_escapes_hostile_key() {
+    let (node, data_path) = build_test_node("hostile-response-key").await;
+    let result =
+        super::queries::load_response_state_by_key(&node, r#"k" }) { __typename } x("#).await;
+    assert!(
+        result
+            .expect("hostile response_key must not break the query")
+            .is_none(),
+        "hostile key matches nothing"
+    );
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+/// Same contract for `load_response_state`: the doc_id is a content-addressed
+/// id in practice, but the query layer must not rely on that — a hostile
+/// value is escaped, not interpolated raw.
+#[tokio::test]
+async fn load_response_state_escapes_hostile_doc_id() {
+    let (node, data_path) = build_test_node("hostile-doc-id").await;
+    let result = super::queries::load_response_state(&node, r#"d" }) { __typename } x("#).await;
+    assert!(
+        result
+            .expect("hostile doc_id must not break the query")
+            .is_none(),
+        "hostile doc_id matches nothing"
+    );
+    let _ = fs::remove_dir_all(&data_path);
+}
