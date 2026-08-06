@@ -252,6 +252,7 @@ done
 
 logs_dir=${GENTS_LOGS_DIR}
 server_log="${logs_dir}/gents-server.log"
+bootstrap_server_log="${logs_dir}/gents-server-bootstrap.log"
 init_log="${logs_dir}/gents-init.json"
 request_log="${logs_dir}/request.json"
 request_stdout="${logs_dir}/request.stdout.json"
@@ -475,7 +476,12 @@ wait_for_server_ready() {
   server_ready=0
   attempt=0
   while [ "${attempt}" -lt "${GENTS_SERVER_STARTUP_TIMEOUT_SECS}" ]; do
-    if "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
+    # The persisted status file can still describe the bootstrap server for a
+    # brief window after restart. Requiring the new process's serving marker
+    # prevents a concurrent home-opening CLI (notably `tools explain`) from
+    # racing the restarted server for RocksDB's exclusive LOCK.
+    if grep -qF 'gents server is running with' "${server_log}" &&
+      "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
       grep -q '"process_state": "ready"' "${status_log}" &&
       grep -q '"behavior_readiness": "ready"' "${status_log}"; then
       server_ready=1
@@ -600,6 +606,8 @@ configure_tools
 # snapshot before any benchmark request can exist.
 kill "${server_pid}" >/dev/null 2>&1 || true
 wait "${server_pid}" || true
+mv "${server_log}" "${bootstrap_server_log}"
+: >"${server_log}"
 start_server
 wait_for_server_ready
 

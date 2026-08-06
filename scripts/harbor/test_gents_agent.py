@@ -309,8 +309,14 @@ elif args[:1] == ["server"]:
     count_file.write_text(str(count))
     print(f"fake server start {count}", flush=True)
     if count == 1:
+        print("gents server is running with fake transport", flush=True)
         while True:
             time.sleep(1)
+    # Model the production restart race: status can report the prior server's
+    # persisted ready state before the replacement has acquired its store.
+    time.sleep(0.2)
+    (home / "second-server-ready").touch()
+    print("gents server is running with fake transport", flush=True)
     while not (home / "waiter-started").exists():
         time.sleep(0.01)
     time.sleep(0.05)
@@ -321,6 +327,9 @@ elif args[:3] == ["config", "profile", "set"]:
 elif args[:3] == ["config", "tools", "set"]:
     print("{}")
 elif args[:2] == ["tools", "explain"]:
+    if not (home / "second-server-ready").exists():
+        print("database is locked by the restarting server", file=sys.stderr)
+        sys.exit(73)
     print(json.dumps({"behaviors": []}))
 elif args[:1] == ["status"]:
     if (home / "server-lost").exists():
