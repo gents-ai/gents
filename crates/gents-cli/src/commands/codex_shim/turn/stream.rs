@@ -380,8 +380,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     &current.request_id,
                     reasoning,
                     response_row.and_then(|row| scalar_marker(Some(row), "progress_seq")),
-                    response_row
-                        .and_then(|row| scalar_marker(Some(row), "reasoning_progress_seq")),
+                    response_row.and_then(|row| scalar_marker(Some(row), "reasoning_progress_seq")),
                 );
                 if let Some(item_id) = observation.completed_item_id {
                     projection
@@ -1491,13 +1490,23 @@ mod tests {
         assert_eq!(first.text, "inspect");
 
         let appended = cursor
-            .observe("request-1", "inspect then test", Some("1".to_string()), None)
+            .observe(
+                "request-1",
+                "inspect then test",
+                Some("1".to_string()),
+                None,
+            )
             .delta
             .expect("appended reasoning delta");
         assert_eq!(appended.item_id, first.item_id);
         assert_eq!(appended.text, " then test");
         assert_eq!(
-            cursor.observe("request-1", "inspect then test", Some("1".to_string()), None),
+            cursor.observe(
+                "request-1",
+                "inspect then test",
+                Some("1".to_string()),
+                None
+            ),
             Default::default()
         );
     }
