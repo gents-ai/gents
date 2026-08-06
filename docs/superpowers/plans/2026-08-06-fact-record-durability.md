@@ -14,6 +14,21 @@ This plan is the prerequisite for the live multi-turn resolver test in Plan 2.
 Plan 2 still owns `tool_call_key`, `read_tool_result`, and executable trimming
 stubs.
 
+## Rebase note (2026-08-06)
+
+Rebased onto `origin/main` at `fa2d7a78`, which merged **#988** — ATIF v1.7 is
+now a first-class adapter projection (`crates/gents/src/adapter_projection/atif.rs`),
+so there are four projections to surface captured requests through, not three.
+Also landed: GraphQL identifier and filter-fragment validators at the trust
+boundary (#1034), protocol mutation input-key validation, and the compaction
+fixes that were stacked on #988. Those compaction fixes matter for
+reconstruction: message-window behavior changed under them, so read the current
+`drop_compacted_prefix` rather than any pre-#988 description of it.
+
+Housekeeping unblocked by the same merge: issues #1015–#1019, #1031, and #1032
+were fixed on the #988 branch and could not auto-close across bases. They are
+closeable now.
+
 ## Corrections made during review
 
 The previous plan was not implementation-safe. This revision makes the
@@ -57,7 +72,15 @@ following decisions explicit:
 
 - Follow the foundation flow: Lean model, generated conformance cases, Rust.
 - Always apply `crate::graphql::escape_graphql_string()` to interpolated
-  GraphQL values.
+  GraphQL **string-literal** values.
+- For anything interpolated as a bare **identifier** — collection names, field
+  names — use `validate_collection_identifier` / `validate_graphql_name`, and
+  use `validate_graphql_filter_fragment` for filter fragments. These landed on
+  main in #1034 (`crates/gents/src/graphql.rs:6-20`, re-exported from
+  `gents-protocol`). `escape_graphql_string` cannot defend an identifier
+  position; validation is the only defense there. This applies directly to the
+  `_commits(docID:, fieldName:)` provenance queries and to any reconstructor
+  query that selects across collections by name.
 - Never emit `[]` in a DefraDB mutation; use `null` for an absent list.
 - Treat GraphQL response errors as errors. A missing `data` field is not the
   same as "no rows".
@@ -298,8 +321,9 @@ task: doing so would invalidate the migration baseline pins.
 - Modify: `crates/gents/src/llm/rig_compat.rs`
 - Add focused unit tests in those modules.
 
-- [ ] Add `capture_key`, `requester_did`, `capture_version`, `request_hash`, and
-  `provenance_json` to `RenderedCompletionRequest`.
+- [ ] Add `capture_key`, `requester_did`, `capture_version`, and
+  `provenance_json` to `RenderedCompletionRequest`. No `request_hash` — see
+  "Integrity comes from the database, not from a column".
 - [ ] Derive `capture_key` from a canonical tuple containing agent, session,
   request, turn, and attempt. Do not concatenate an unescaped delimiter format,
   and do not assume `AgentRequest.request_id` is globally unique (its schema
@@ -309,8 +333,10 @@ task: doing so would invalidate the migration baseline pins.
 - [ ] Make one canonical JSON encoder the source of both persisted bytes and
   hashes. Expose it as `pub(crate)`; do not maintain a second implementation in
   the sink or reconstructor.
-- [ ] Hash the complete canonical `request_json` as `request_hash`; retain
-  component hashes for messages/input and tools.
+- [ ] Retain component hashes for messages/input and tools as query indexes
+  only. Do not compute a whole-request digest: the signed field commit for
+  `request_json` is the content address, and a second one would create a
+  source of truth that can disagree with it.
 - [ ] Include `requester_did` in `RenderedRequestContext::for_request`.
 - [ ] Define `capture_version = 1` and a typed, versioned provenance manifest.
   Version 1 may begin as `CapturedOnly`; it must not serialize missing fields as
@@ -345,9 +371,8 @@ Run: `cargo test -p gents rendered_request`
 - [ ] Enforce idempotency by `capture_key`:
 
   - missing row -> create encrypted row and participant relationship;
-  - existing row with the same `request_hash` and identical canonical payload
-    -> success;
-  - existing row with a different hash/payload -> integrity error;
+  - existing row with an identical canonical `request_json` -> success;
+  - existing row with a different canonical `request_json` -> integrity error;
   - never overwrite a prior capture.
 
 - [ ] Reuse the repository's mutation/query retry helpers. Test a write whose
@@ -357,7 +382,7 @@ Run: `cargo test -p gents rendered_request`
 - [ ] Keep the callback immediately before `model.stream`. Sink or ACP failure
   must produce a terminal provider/capture error without issuing the HTTP call.
 - [ ] Emit structured tracing fields: `capture_key`, `request_id`,
-  `turn_index`, `attempt`, `request_hash`, and failure stage. Never log payload
+  `turn_index`, `attempt`, `prompt_hash`, and failure stage. Never log payload
   contents.
 - [ ] Add a fault-injection test whose sink fails and assert the mock backend
   observed zero requests.
@@ -428,7 +453,7 @@ view in Tasks 8-9 is not.
 - [ ] Include decrypted `request_json` only in an explicitly authorized full
   projection. Apply redaction after the authorized read; never persist a
   redacted replacement over the canonical row.
-- [ ] Add rendered requests to OpenAI-Codex, LangGraph, and multi-agent adapter
+- [ ] Add rendered requests to OpenAI-Codex, LangGraph, ATIF, and multi-agent adapter
   shapes where their contracts allow it; otherwise expose a documented
   extension field.
 - [ ] Test unauthorized CLI/adapter reads fail closed and do not leak whether a
@@ -552,12 +577,15 @@ pub enum ReconstructionOutcome {
   7. preamble construction with effective tool/target manifest;
   8. retry repair transform when applicable;
   9. Rig/provider wire conversion and normalization;
-  10. complete canonical request hash.
+  10. canonical serialization of the complete request.
 
 - [ ] Share production functions or extract pure helpers. Do not copy the
-  sanitizer, preamble builder, canonical hasher, or provider converter.
-- [ ] Compare `request_hash`, not only `prompt_hash`. Return `Verified` only on
-  complete equality.
+  sanitizer, preamble builder, canonical encoder, or provider converter.
+- [ ] Compare the reconstructed canonical `request_json` against the stored
+  one directly, as values — not `prompt_hash`, and not a recomputed digest.
+  Return `Verified` only on complete equality. Report the stored value's
+  field-commit CID and signature alongside the verdict so a caller can see
+  which durable version was compared against.
 - [ ] Test: first turn, multi-request session, multi-turn tools, compaction,
   later behavior/profile/backend/tool-selection/skill edits, selected skills,
   request context, transport retry, repair retry, and both provider wire APIs.
