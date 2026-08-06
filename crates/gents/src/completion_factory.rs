@@ -145,7 +145,10 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
 }
 
 /// Maps the inference profile's reasoning effort into each provider's wire
-/// contract. An absent profile setting does not inject any reasoning default.
+/// contract. An absent profile setting injects no reasoning default, except for
+/// ChatGPT Codex: it has a known Responses contract and keeps the `medium`
+/// default it shipped before reasoning effort became profile configuration
+/// (#540).
 ///
 /// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
 /// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
@@ -164,7 +167,17 @@ fn reasoning_profile_params(
     wire_api: OpenAiWireApi,
     reasoning_effort: Option<ReasoningEffort>,
 ) -> Option<serde_json::Value> {
-    let reasoning_effort = reasoning_effort?;
+    let Some(reasoning_effort) = reasoning_effort else {
+        // Codex predates profile-configured reasoning: it has a known Responses
+        // contract and shipped an unconditional `medium`. Profile plumbing may
+        // override that default, never silently drop it (#540). Every other
+        // backend waits for explicit configuration.
+        return matches!(kind, BackendProviderKind::ChatGptCodex).then(|| {
+            serde_json::json!({
+                "reasoning": { "effort": ReasoningEffort::Medium.as_str() }
+            })
+        });
+    };
     match (kind, wire_api) {
         (BackendProviderKind::OpenAiCompatible, OpenAiWireApi::ChatCompletions) => {
             let mut kwargs = serde_json::Map::from_iter([(

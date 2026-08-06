@@ -52,12 +52,29 @@ fn absent_profile_effort_does_not_inject_reasoning() {
         None,
     )
     .is_none());
-    assert!(reasoning_profile_params(
-        BackendProviderKind::ChatGptCodex,
-        crate::OpenAiWireApi::Responses,
-        None,
-    )
-    .is_none());
+}
+
+/// Codex is the one backend whose reasoning default predates profile
+/// configuration: it has a known Responses contract and shipped a hardcoded
+/// `medium`. Profile plumbing may override that, never silently drop it (#540).
+#[test]
+fn absent_profile_effort_keeps_the_codex_medium_default() {
+    assert_eq!(
+        reasoning_profile_params(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+            None,
+        ),
+        Some(serde_json::json!({ "reasoning": { "effort": "medium" } })),
+    );
+    assert_eq!(
+        reasoning_profile_params(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+            Some(ReasoningEffort::High),
+        ),
+        Some(serde_json::json!({ "reasoning": { "effort": "high" } })),
+    );
 }
 
 #[test]
