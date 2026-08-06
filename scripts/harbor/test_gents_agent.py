@@ -169,6 +169,50 @@ class PopulateContextPostRunTest(unittest.TestCase):
 
 
 class RunnerSupervisionTest(unittest.TestCase):
+    def test_transient_graphql_waiter_failure_reconnects(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logs = root / "logs"
+            home = root / "home"
+            instruction = root / "instruction.md"
+            fake_gents = root / "gents"
+            instruction.write_text("finish the task")
+            fake_gents.write_text(_FAKE_GENTS)
+            fake_gents.chmod(0o755)
+
+            env = {
+                **os.environ,
+                "FAKE_WAITER_TRANSIENT_ONCE": "1",
+                "GENTS_BINARY": str(fake_gents),
+                "GENTS_HOME": str(home),
+                "GENTS_INSTRUCTION_FILE": str(instruction),
+                "GENTS_INFERENCE_URL": "http://127.0.0.1:8000/v1",
+                "GENTS_MODEL": "fake-model",
+                "GENTS_TOOL_ROOT": str(root),
+                "GENTS_LOGS_DIR": str(logs),
+                "GENTS_SERVER_STARTUP_TIMEOUT_SECS": "5",
+                "GENTS_RESPONSE_WAITER_MAX_RESTARTS": "2",
+                "GENTS_SUPERVISION_POLL_SECS": "0.05",
+            }
+            result = subprocess.run(
+                ["sh", str(_REPO_ROOT / "scripts/harbor/run_gents.sh")],
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("restarting (1/2)", result.stderr)
+            response = json.loads((logs / "response.json").read_text())
+            self.assertEqual(response["status"], "complete")
+            self.assertEqual(
+                (home / "invocations.jsonl").read_text().count('["response", "wait"'),
+                2,
+            )
+            self.assertTrue((logs / "trajectory.json").is_file())
+
     def test_server_signal_cancels_waiter_and_preserves_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -317,6 +361,11 @@ elif args[:1] == ["server"]:
     time.sleep(0.2)
     (home / "second-server-ready").touch()
     print("gents server is running with fake transport", flush=True)
+    if os.environ.get("FAKE_WAITER_TRANSIENT_ONCE"):
+        while not (home / "waiter-finished").exists():
+            time.sleep(0.01)
+        while True:
+            time.sleep(1)
     while not (home / "waiter-started").exists():
         time.sleep(0.01)
     time.sleep(0.05)
@@ -341,6 +390,21 @@ elif args[:2] == ["request", "submit"]:
     Path(option("--output-file")).write_text(json.dumps(request, indent=2))
     print(json.dumps(request, indent=2))
 elif args[:2] == ["response", "wait"]:
+    if os.environ.get("FAKE_WAITER_TRANSIENT_ONCE"):
+        count_file = home / "waiter-count"
+        count = int(count_file.read_text()) + 1 if count_file.exists() else 1
+        count_file.write_text(str(count))
+        if count == 1:
+            print("Error: posting GraphQL to http://127.0.0.1:9191/api/v0/graphql", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps({
+            "request_id": "request-1",
+            "status": "complete",
+            "content": "done",
+            "error_message": None,
+        }, indent=2))
+        (home / "waiter-finished").touch()
+        sys.exit(0)
     (home / "waiter-started").touch()
     def cancelled(_signum, _frame):
         (home / "waiter-cancelled").touch()

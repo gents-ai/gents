@@ -237,11 +237,13 @@ fi
 : "${GENTS_DIAGNOSTIC_TIMEOUT_SECS:=10}"
 : "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES:=67108864}"
 : "${GENTS_SUPERVISION_POLL_SECS:=1}"
+: "${GENTS_RESPONSE_WAITER_MAX_RESTARTS:=10}"
 : "${GENTS_LOGS_DIR:=/logs/agent}"
 
 for numeric_value in \
   "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
-  "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}"; do
+  "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}" \
+  "${GENTS_RESPONSE_WAITER_MAX_RESTARTS}"; do
   case "${numeric_value}" in
     ''|*[!0-9]*|0)
       echo "diagnostic bounds must be positive integers" >&2
@@ -257,6 +259,8 @@ init_log="${logs_dir}/gents-init.json"
 request_log="${logs_dir}/request.json"
 request_stdout="${logs_dir}/request.stdout.json"
 response_log="${logs_dir}/response.json"
+response_wait_log="${logs_dir}/response-wait.stderr.log"
+response_wait_attempt_log="${logs_dir}/response-wait-attempt.stderr.log"
 trajectory_path="${logs_dir}/trajectory.json"
 outcome_log="${logs_dir}/gents-outcome.json"
 status_log="${logs_dir}/gents-status.json"
@@ -641,38 +645,67 @@ if [ -z "${request_id}" ]; then
   exit 1
 fi
 
-"${GENTS_BINARY}" response wait \
-  --home "${GENTS_HOME}" \
-  --request-id "${request_id}" \
-  --timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
-  --poll-secs 1 \
-  >"${response_log}" 2>"${logs_dir}/response-wait.stderr.log" &
-waiter_pid=$!
+: >"${response_wait_log}"
+waiter_restart_count=0
+while :; do
+  : >"${response_log}"
+  : >"${response_wait_attempt_log}"
+  "${GENTS_BINARY}" response wait \
+    --home "${GENTS_HOME}" \
+    --request-id "${request_id}" \
+    --timeout-secs "${GENTS_REQUEST_TIMEOUT_SECS}" \
+    --poll-secs 1 \
+    >"${response_log}" 2>"${response_wait_attempt_log}" &
+  waiter_pid=$!
 
-while process_is_running "${waiter_pid}"; do
+  while process_is_running "${waiter_pid}"; do
+    if ! process_is_running "${server_pid}"; then
+      record_server_exit
+      stop_waiter
+      capture_diagnostics "server_lost_during_request"
+      echo "Gents server exited during active request (${server_exit_description}); waiter cancelled; diagnostics=${diagnostic_log}" >&2
+      exit 70
+    fi
+    sleep "${GENTS_SUPERVISION_POLL_SECS}"
+  done
+
+  waiter_status=0
+  wait "${waiter_pid}" || waiter_status=$?
+  waiter_pid=""
   if ! process_is_running "${server_pid}"; then
     record_server_exit
-    stop_waiter
     capture_diagnostics "server_lost_during_request"
-    echo "Gents server exited during active request (${server_exit_description}); waiter cancelled; diagnostics=${diagnostic_log}" >&2
+    echo "Gents server exited during active request (${server_exit_description}); diagnostics=${diagnostic_log}" >&2
     exit 70
   fi
-  sleep "${GENTS_SUPERVISION_POLL_SECS}"
-done
 
-waiter_status=0
-wait "${waiter_pid}" || waiter_status=$?
-waiter_pid=""
-if ! process_is_running "${server_pid}"; then
-  record_server_exit
-  capture_diagnostics "server_lost_during_request"
-  echo "Gents server exited during active request (${server_exit_description}); diagnostics=${diagnostic_log}" >&2
-  exit 70
-fi
-if [ "${waiter_status}" -ne 0 ]; then
+  transient_waiter_failure=0
+  if grep -Eq \
+    'posting GraphQL to|reading GraphQL response|decoding GraphQL response|GraphQL request retries exhausted' \
+    "${response_wait_attempt_log}"; then
+    transient_waiter_failure=1
+  fi
+  printf '%s\n' "--- response waiter attempt $((waiter_restart_count + 1)) (status ${waiter_status}) ---" \
+    >>"${response_wait_log}"
+  cat "${response_wait_attempt_log}" >>"${response_wait_log}"
+
+  if [ "${waiter_status}" -eq 0 ]; then
+    rm -f "${response_wait_attempt_log}"
+    break
+  fi
+  if [ "${transient_waiter_failure}" = "1" ] &&
+    [ "${waiter_restart_count}" -lt "${GENTS_RESPONSE_WAITER_MAX_RESTARTS}" ]; then
+    waiter_restart_count=$((waiter_restart_count + 1))
+    echo "Gents response waiter exhausted transient GraphQL retries; restarting (${waiter_restart_count}/${GENTS_RESPONSE_WAITER_MAX_RESTARTS})" \
+      | tee -a "${response_wait_log}" >&2
+    sleep 1
+    continue
+  fi
+
+  rm -f "${response_wait_attempt_log}"
   echo "Gents response waiter exited with status ${waiter_status}" >&2
   exit "${waiter_status}"
-fi
+done
 
 "${GENTS_BINARY}" trace project \
   --home "${GENTS_HOME}" \
