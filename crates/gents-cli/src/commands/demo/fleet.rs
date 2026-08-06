@@ -141,16 +141,32 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
     let backend = fleet.backend.clone();
     let home_b = home_a.join("node-b");
     let work_b = home_b.join("work");
-    let port_b = fleet.base_port + 1;
-    let graphql_b = format!("http://127.0.0.1:{port_b}/api/v0/graphql");
 
     println!("  initializing node B (worker)…");
     let did_b = init_agent(&bin, &home_b, &work_b, &backend, "worker").await?;
     std::fs::create_dir_all(&work_b)?;
 
     println!("  starting node B…");
-    let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
-    wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await?;
+    // Allocate node B's port at spawn time, not fleet-start time: a reserved
+    // but unbound port sits exposed to the OS ephemeral allocator (poll
+    // sockets take source ports from the same range), and a stolen bind kills
+    // the node's HTTP listener while the process stays alive. Keeping the
+    // window at milliseconds plus one respawn retry removes the class.
+    let mut attempt = 0;
+    let (mut server_b, graphql_b) = loop {
+        attempt += 1;
+        let port_b = allocate_ephemeral_port()?;
+        let graphql_b = format!("http://127.0.0.1:{port_b}/api/v0/graphql");
+        let mut server_b = spawn_server(&bin, &home_b, port_b, &home_b.join("server.log"))?;
+        match wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await {
+            Ok(()) => break (server_b, graphql_b),
+            Err(error) if attempt < 3 => {
+                let _ = server_b.start_kill();
+                println!("  node B did not come up ({error}); retrying with a fresh port…");
+            }
+            Err(error) => return Err(error),
+        }
+    };
     wait_runtime_ready(&graphql_b, &did_b, &mut server_b).await?;
 
     let (peer_a, addr_a) = p2p_identity(&bin, &home_a, &graphql_a).await?;
@@ -248,9 +264,25 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
         server: server_b,
     });
     println!(
-        "  ✓ paired. Node B (worker) is live; run `delegate` to enable cross-node delegation."
+        "  ✓ paired. Node B (worker) is live at {}; run `delegate` to enable cross-node delegation.",
+        fleet
+            .node_b
+            .as_ref()
+            .map(|worker| worker.graphql.as_str())
+            .unwrap_or_default()
     );
     Ok(())
+}
+
+fn allocate_ephemeral_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .context("allocating an ephemeral port for node B")?;
+    let port = listener
+        .local_addr()
+        .context("reading allocated node B port")?
+        .port();
+    drop(listener);
+    Ok(port)
 }
 
 /// The fleet always knows each node's admin endpoint, so pass it explicitly:
