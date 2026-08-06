@@ -35,6 +35,7 @@ Interactive execution:
                -> AgentToolCall
                -> AgentToolResult
                -> CompactionEntry
+               -> RenderedRequest
 
 Scheduled and event-driven execution:
   Task         -> behavior_id -> AgentBehavior
@@ -82,6 +83,7 @@ These documents record user requests, assistant output, and conversation history
 | `AgentToolCall` | `tool_call_key`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status`, trace enrichment fields | concrete tool invocation records within a session | runtime/tool persistence | chat progress, TUI, diagnostics |
 | `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
 | `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
+| `RenderedRequest` | `capture_key`, `request_id`, `session_id`, `turn_index`, `attempt`, `request_json`, `prompt_hash`, `tools_hash`, `provenance_json` | one durable fact per provider attempt: the exact rendered request, persisted before send | rendered-request capture sink (no production writer yet) | trace projections, capture-verified reconstruction |
 
 ### Tasks, Schedules, and Event Triggers
 
@@ -171,10 +173,19 @@ Several operational collections are marked `@branchable`:
 - `AgentToolCall`
 - `AgentToolResult`
 - `CompactionEntry`
+- `RenderedRequest`
 - `Task`
 - `Schedule`
 
 These are the documents where preserving observable history matters most.
+
+`@branchable` is not what gives a field its content address — DefraDB writes
+per-field and composite commit blocks unconditionally, and `is_branchable` gates
+only the extra collection-level block. It is irreversible (DefraDB rejects every
+patch that flips it, and a populated collection cannot be dropped and
+recreated), and it is the precondition for branchable collection sync and for
+collection-scoped ACP read decisions. Choose it when the collection is created
+or never.
 
 The core configuration collections are not branchable:
 

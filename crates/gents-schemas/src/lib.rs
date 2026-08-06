@@ -35,6 +35,8 @@ pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
+pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";
+pub const RENDERED_REQUEST: &str = include_str!("../schemas/agent/rendered_request.graphql");
 pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
 pub const PROJECTION_ACP_BINDING: &str =
     include_str!("../schemas/agent/projection_acp_binding.graphql");
@@ -106,6 +108,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_CALL,
     AGENT_TOOL_APPROVAL,
     COMPACTION_ENTRY,
+    RENDERED_REQUEST,
     PROJECTION_ACP_BINDING,
     TASK,
     SCHEDULE,
@@ -145,6 +148,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_CALL_NAME,
     AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
+    RENDERED_REQUEST_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
@@ -164,7 +168,11 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PERSONA_CONFIG_REQUEST_NAME,
 ];
 
-/// Agent-domain collections that can be replicated across desktop branches.
+/// Agent-domain collections the desktop bulk-syncs after pairing.
+///
+/// This is a curated subset of the `@branchable` collections, not a mirror of
+/// the directive: `WorkspaceRoot`, `AgentNetwork`, `PeerEndpoint`, and
+/// `RenderedRequest` are branchable but deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_RUNTIME_NAME,
     AGENT_DIRECTORY_ENTRY_NAME,

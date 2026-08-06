@@ -1,0 +1,66 @@
+# The durable fact record for one provider call: the exact rendered request,
+# persisted before it is sent. `Proofs/RenderedCapture.lean` fences the order —
+# a send is legal only after the matching (capture_key, canonical request) is
+# durable, and one capture key names at most one canonical request.
+#
+# `@branchable` is deliberate and irreversible. DefraDB rejects every patch that
+# flips `is_branchable`, and a populated collection cannot be dropped and
+# recreated, so the property is chosen here or never. It is NOT what produces
+# the content address for `request_json`: per-field and composite commit blocks
+# are written unconditionally, and `is_branchable` gates only the extra
+# collection-level block. It is taken because it is the sole precondition for
+# two capabilities this fact record will want and could not acquire later —
+# DefraDB's branchable collection sync, which is a newly paired peer's only bulk
+# backfill path and rejects non-branchable collections outright, and
+# collection-scoped ACP read decisions, which are the enforcement surface #840's
+# participant boundary needs once defradb.rs#1318 lands.
+#
+# There is deliberately no `request_hash` column. A stored digest is
+# self-attested: the same writer chooses both the bytes and the digest over
+# them, so it proves nothing an auditor could not have been lied to about.
+# Integrity comes from the DefraDB field commit CID for `request_json`, which is
+# computed over the block that was actually stored and replicates with it.
+#
+# No `@policy` and no encryption directives. ACP is blocked on defradb.rs#1318
+# (`EmbeddedNode` exposes no policy or relationship API), and a policy id that
+# is never installed deploys cleanly while leaving rows anonymously readable.
+# `encrypt: true` protects replicated CRDT block deltas only — the local node
+# writes plaintext into the datastore — so it would be confidentiality theater
+# on a single-node install. #840's participant-boundary criterion is therefore
+# NOT met by this collection as shipped.
+type RenderedRequest @branchable {
+    # sha256 over the canonical (agent_did, session_id, request_id, turn_index,
+    # attempt) tuple. Unique: exactly one capture per provider attempt, ever.
+    # Reusing this key with a different canonical request is an integrity
+    # error, never an update.
+    capture_key: String @index(unique: true) @immutable
+    request_id: String @index @immutable
+    session_id: String @index @immutable
+    agent_did: String @index @immutable
+    requester_did: String @immutable
+    behavior_id: String @immutable
+    # The owned completion loop's turn and retry counters. Neither is
+    # `InferenceCall.attempt`; they count different things.
+    turn_index: Int @immutable
+    attempt: Int @immutable
+    # Capture format version. Gates how `provenance_json` is interpreted; an
+    # unsupported version is reported, never silently reinterpreted.
+    capture_version: Int @immutable
+    model_name: String @immutable
+    # Provider wire shape the request was rendered for, e.g. openai_responses
+    # or openai_chat_completions.
+    source: String @immutable
+    # Canonical JSON of the complete provider request. This is the conformance
+    # oracle every reconstruction is compared against.
+    request_json: String @immutable
+    # Query indexes only: dedup, "every capture sharing this tool surface", and
+    # prefix-stability analysis. Explicitly NOT an integrity mechanism — see the
+    # field commit CID note above.
+    prompt_hash: String @index @immutable
+    tools_hash: String @index @immutable
+    # Versioned provenance manifest. Never an overloaded empty map: absent
+    # required provenance reads as CapturedOnly, not as evidence of
+    # reconstructibility.
+    provenance_json: String @immutable
+    created_at: DateTime @index @immutable
+}

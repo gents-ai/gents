@@ -186,6 +186,139 @@ async fn inference_profile_reasoning_effort_migration_preserves_existing_documen
 }
 
 #[tokio::test]
+async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
+    // A store created before RenderedRequest existed: every other baseline
+    // collection registered at its frozen SDL, with live data in one of them.
+    let node = fresh_node().await;
+    for entry in gents_migration::DEFAULT_BASELINE {
+        if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
+            continue;
+        }
+        node.add_schema(entry.sdl)
+            .await
+            .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
+    }
+    let create = r#"mutation {
+        create_AgentSession(input: { session_id: "pre-upgrade-session" }) { session_id }
+    }"#;
+    let response = node.execute(create).await;
+    assert!(
+        !response.has_errors(),
+        "seed pre-upgrade session: {:?}",
+        response.errors
+    );
+    assert!(
+        node.get_collection(gents_protocol::schemas::RENDERED_REQUEST_NAME)
+            .expect("get_collection")
+            .is_none(),
+        "fixture must start without RenderedRequest"
+    );
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("upgrade an existing store");
+
+    let rendered = node
+        .get_collection(gents_protocol::schemas::RENDERED_REQUEST_NAME)
+        .expect("get_collection")
+        .expect("RenderedRequest present after upgrade");
+    assert!(rendered.is_active);
+    assert!(!rendered.is_placeholder);
+    let pin = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME)
+        .and_then(|entry| entry.expected_version)
+        .expect("RenderedRequest baseline pin");
+    assert_eq!(rendered.version_id, pin);
+
+    // Pre-upgrade data is untouched.
+    let response = node
+        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "pre-upgrade-session"}}) { session_id } }"#)
+        .await;
+    assert!(
+        !response.has_errors(),
+        "read pre-upgrade session: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentSession"))
+        .and_then(serde_json::Value::as_array)
+        .expect("AgentSession rows");
+    assert_eq!(rows.len(), 1);
+
+    // The registered collection is usable, and `capture_key` is the unique
+    // idempotency key the capture sink will depend on.
+    let capture = r#"mutation {
+        create_RenderedRequest(input: {
+            capture_key: "rendered:v1:aaa"
+            request_id: "req-1"
+            session_id: "pre-upgrade-session"
+            agent_did: "did:key:agent"
+            requester_did: "did:key:requester"
+            behavior_id: "behavior-1"
+            turn_index: 0
+            attempt: 0
+            capture_version: 1
+            model_name: "test-model"
+            source: "openai_responses"
+            request_json: "{}"
+            prompt_hash: "ph"
+            tools_hash: "th"
+            provenance_json: "{\"version\":1}"
+            created_at: "2026-08-06T00:00:00Z"
+        }) { capture_key turn_index attempt capture_version }
+    }"#;
+    let response = node.execute(capture).await;
+    assert!(
+        !response.has_errors(),
+        "create RenderedRequest: {:?}",
+        response.errors
+    );
+    let duplicate = node.execute(capture).await;
+    assert!(
+        duplicate.has_errors(),
+        "unique capture_key must reject a second row: {:?}",
+        duplicate.data
+    );
+    let response = node
+        .execute(r#"{ RenderedRequest(filter: {capture_key: {_eq: "rendered:v1:aaa"}}) { capture_key } }"#)
+        .await;
+    assert!(
+        !response.has_errors(),
+        "read captures: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("RenderedRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("RenderedRequest rows");
+    assert_eq!(rows.len(), 1, "one capture per key, ever");
+
+    // Every field is @immutable: a capture is a fact, never an update.
+    let overwrite = node
+        .execute(
+            r#"mutation {
+                update_RenderedRequest(
+                    filter: { capture_key: { _eq: "rendered:v1:aaa" } }
+                    input: { request_json: "{\"tampered\":true}" }
+                ) { capture_key }
+            }"#,
+        )
+        .await;
+    assert!(
+        overwrite.has_errors(),
+        "@immutable must reject rewriting a captured request: {:?}",
+        overwrite.data
+    );
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn multi_version_lineage_is_rejected() {
     let node = fresh_node().await;
     ensure_migrations(node.as_ref()).await.expect("baseline");

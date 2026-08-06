@@ -264,6 +264,14 @@ const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
 /// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
 /// AgentMemory). Collections with post-cutover changes use frozen local SDL
 /// constants here and advance through [`DEFAULT_STEPS`].
+///
+/// A *brand-new* collection is added here, not as a
+/// [`MigrationStep::AddCollection`]. The two are mutually exclusive: the
+/// baseline is asserted set-equal and order-equal to the protocol catalog, no
+/// pin-authoring workflow exists for steps, and `Registry::managed_names`
+/// excludes AddCollection collections from eager materialization. Adding a new
+/// collection changes no existing lineage — `register_baseline` simply
+/// registers it on stores that lack it.
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
@@ -374,6 +382,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
         gents_protocol::schemas::COMPACTION_ENTRY,
         "bafyreiczxjv6ah2blpjdz7jxtwzue4rvjzwkefuds4gukibexhddam4j5y"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::RENDERED_REQUEST_NAME,
+        gents_protocol::schemas::RENDERED_REQUEST,
+        "bafyreigxjekjbu2lwjgyu6c2jfnarhbx5kvxde37f2yargowcxwcahdnua"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,
