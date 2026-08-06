@@ -83,6 +83,12 @@ def boundaryModelNatTypedIdsTimeId : String :=
 def boundaryP2pBackpressureObligationModelId : String :=
   "boundary.p2p-backpressure.obligation-model"
 
+def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
+  "boundary.rendered-capture.assembled-request-artifact"
+
+def boundaryRenderedCaptureKeyEncodingInjectivityId : String :=
+  "boundary.rendered-capture.key-encoding-injectivity"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -271,6 +277,26 @@ def boundaries : List Boundary :=
         some "A future queue-admission, durable-retry, store-before-ack, or restart-recovery regression can pass this one-wave model; the separate pinned-struct observability and P2P end-to-end tests are implementation fences, not proofs of those properties."
     , acceptedFollowUp :=
         some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
+    }
+  , { id := boundaryRenderedCaptureAssembledRequestArtifactId
+    , domain := "RenderedCapture"
+    , subject := "the captured artifact is the assembled request, not the HTTP body"
+    , statement :=
+        "Proofs.RenderedCapture's CanonicalRequest is the assembled provider request observed at the capture seam in crates/gents/src/agent/loop_stream.rs:297, immediately before model.stream at :307. It is NOT the serialized HTTP body. Two shipping transports rewrite the body after that point: chatgpt_codex.rs::patch_instructions_body hoists system text into a top-level `instructions` field and strips it from `input`, forces store=false and stream=true, deletes max_output_tokens/temperature/top_p (CHATGPT_CODEX_UNSUPPORTED_PARAMS), and forces strict=false on every tool; xai_grok_oauth.rs::patch_store_false injects store=false. Capture is pre-transport, so canonical-request equality is equality of the assembled request for those providers, not of the bytes on the wire."
+    , acceptedFailureMode :=
+        some "A regression in a provider-specific body rewrite is invisible to this model and to any conformance row derived from it. #523's issue text currently asks for \"the exact bytes that were sent\", which this scope does not deliver."
+    , acceptedFollowUp :=
+        some "Either amend #523 to canonical-JSON fidelity over the assembled request and name the excluded transports, or add a second capture at the HttpClientExt::send_streaming seam and extend the model to Assembled -> DurablyCaptured -> Rewritten -> Sent."
+    }
+  , { id := boundaryRenderedCaptureKeyEncodingInjectivityId
+    , domain := "RenderedCapture"
+    , subject := "capture key tuple vs the durable string column"
+    , statement :=
+        "The modeled CaptureKey is a five-component tuple (agentDid, sessionId, requestId, turnIndex, attempt) with componentwise decidable equality, so \"the same key\" means \"the same five facts\" and there is no delimiter to collide on. The durable column is a single string. The model does not prove that the Rust encoding is injective on the tuple; that obligation sits entirely on the encoder."
+    , acceptedFailureMode :=
+        some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents chat --session-id`, so a crafted session id can shadow or pre-claim another session's key."
+    , acceptedFollowUp :=
+        some "Derive capture_key from a canonical encoding of the tuple (length-prefixed or canonical-JSON, then hashed) and fence injectivity with an adversarial Rust property test, rather than concatenating with a delimiter."
     }
   ]
 

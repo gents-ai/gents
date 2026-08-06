@@ -12,6 +12,7 @@ import Proofs.Session.Properties
 import Proofs.Transcript
 import Proofs.Compaction
 import Proofs.PromptAssembly
+import Proofs.RenderedCapture
 import Proofs.RuntimeReconcile
 import Proofs.PairingReconcile
 import Proofs.PeerRegistryDiscovery

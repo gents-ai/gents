@@ -638,6 +638,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_turn_budget_cases_drive_every_completion_dispatch",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_rendered_capture_cases_fence_persist_before_send",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/rendered_capture.rs",
+            module_path: "conformance::rendered_capture",
+            function: "generated_rendered_capture_key_cases_pin_the_capture_key_tuple",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests.rs",

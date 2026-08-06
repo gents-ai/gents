@@ -568,6 +568,152 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     );
 }
 
+/// The durable `RenderedRequest` table, as `Proofs.RenderedCapture` models it:
+/// a partial map from the five-component capture key to the opaque canonical
+/// request stored under it.
+type CaptureKey = (u64, u64, u64, usize, u32);
+
+/// `RenderedCapture.capture`, mirrored. This is deliberately the *only* hand
+/// written thing in the fence below, and it is the shape PR2's
+/// `rendered_request::sink` has to implement: missing key writes, identical
+/// canonical value succeeds without a write, conflicting canonical value is an
+/// integrity error. Everything else the test asserts is generated.
+fn mirror_capture(
+    store: &mut std::collections::HashMap<CaptureKey, u64>,
+    key: CaptureKey,
+    request: u64,
+) -> &'static str {
+    match store.get(&key).copied() {
+        None => {
+            store.insert(key, request);
+            "fresh"
+        }
+        Some(stored) if stored == request => "idempotent",
+        Some(_) => "rejected",
+    }
+}
+
+/// Persist-before-send, driven end to end through the real owned loop.
+///
+/// The Lean model (`Proofs/RenderedCapture.lean`) proves that `sent` is
+/// unreachable from `assembled` without an intervening successful capture of
+/// the same `(key, canonical request)`, and that a rejected capture makes
+/// `sent` unreachable permanently. This test is the fence that keeps
+/// `run_loop_stream` honest about it: for every generated row, a sink that
+/// answers exactly as `RenderedCapture.capture` does must let the provider
+/// observe exactly `provider_requests_observed` requests — one when the fact is
+/// durable, zero when it is not.
+///
+/// The seam under test is `crates/gents/src/agent/loop_stream.rs:297-307`:
+/// `on_rendered_request` runs immediately before `model.stream`, and its error
+/// is mapped to a terminal completion error rather than being logged and
+/// stepped over. A fail-open regression there — swallowing the sink error,
+/// moving the call after `model.stream`, or making the sink optional at the
+/// dispatch site — flips `provider_requests_observed` on the rejected row and
+/// fails here.
+#[tokio::test(start_paused = true)]
+async fn generated_rendered_capture_cases_fence_persist_before_send() {
+    let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
+    assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
+
+    for case in cases {
+        let key: CaptureKey = (
+            case.agent_did,
+            case.session_id,
+            case.request_id,
+            case.turn_index,
+            case.attempt,
+        );
+        let mut seeded = std::collections::HashMap::new();
+        if let Some(prior) = case.prior_binding {
+            seeded.insert(key, prior);
+        }
+        let store = Arc::new(Mutex::new(seeded));
+        let outcomes = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+        let store_for_sink = store.clone();
+        let outcomes_for_sink = outcomes.clone();
+        let request_value = case.request;
+        let mut loop_config = config(0);
+        loop_config.on_rendered_request = Some(Arc::new(move |_turn_index, _attempt, _request| {
+            let store = store_for_sink.clone();
+            let outcomes = outcomes_for_sink.clone();
+            Box::pin(async move {
+                let outcome = mirror_capture(&mut *store.lock().await, key, request_value);
+                outcomes.lock().await.push(outcome);
+                if outcome == "rejected" {
+                    Err(anyhow::anyhow!(
+                        "capture key already names a different canonical request"
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+        }));
+
+        let model = ScriptedModel::new(vec![
+            RawStreamingChoice::Message("ok".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]);
+        let stream = run_loop_stream(
+            model.clone(),
+            None,
+            Message::user("hi"),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            loop_config,
+        );
+        let collected = collect_scripted_stream(stream).await;
+
+        assert_eq!(
+            outcomes.lock().await.as_slice(),
+            &[case.capture_outcome.as_str()],
+            "{}: the sink decision drifted from RenderedCapture.capture",
+            case.name
+        );
+        assert_eq!(
+            store.lock().await.get(&key).copied(),
+            case.durable_after,
+            "{}: the durable binding drifted from the Lean model",
+            case.name
+        );
+        assert_eq!(
+            model.seen_histories().await.len(),
+            case.provider_requests_observed,
+            "{}: the provider observed a different number of requests than the \
+             modeled trace permits (expected final stage {})",
+            case.name,
+            case.final_stage
+        );
+
+        if case.send_permitted {
+            assert_eq!(case.final_stage, "sent");
+            assert!(
+                collected.error.is_none(),
+                "{}: a durable capture must not fail the turn: {:?}",
+                case.name,
+                collected.error
+            );
+        } else {
+            assert_eq!(case.final_stage, "assembled");
+            assert!(
+                !case.capture_durable,
+                "{}: a row may not refuse the send while claiming durability",
+                case.name
+            );
+            let error = collected
+                .error
+                .as_deref()
+                .unwrap_or_else(|| panic!("{}: capture failure must be terminal", case.name));
+            assert!(
+                error.contains("capturing rendered completion request failed"),
+                "{}: unexpected terminal error: {error}",
+                case.name
+            );
+        }
+    }
+}
+
 #[test]
 fn generated_turn_budget_cases_drive_every_completion_dispatch() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_turn_budget_cases();

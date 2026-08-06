@@ -12,6 +12,7 @@ import Proofs.Conformance.Contracts.Json.Workflow
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.PromptAssembly
+import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
@@ -214,6 +215,10 @@ def snapshotJson : String :=
       ++ promptAssemblyBudgetCasesJson ++ ","
     ++ "\"prompt_assembly_turn_budget_cases\":"
       ++ promptAssemblyTurnBudgetCasesJson ++ ","
+    ++ "\"rendered_capture_cases\":"
+      ++ renderedCaptureCasesJson ++ ","
+    ++ "\"rendered_capture_key_cases\":"
+      ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

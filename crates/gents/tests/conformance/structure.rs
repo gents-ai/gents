@@ -64,6 +64,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Process", Module("conformance/process.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),
+        (
+            "RenderedCapture",
+            Module("conformance/rendered_capture.rs"),
+        ),
         ("Request", Module("conformance/request_lifecycle.rs")),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),

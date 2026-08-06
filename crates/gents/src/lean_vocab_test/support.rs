@@ -147,6 +147,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
     #[serde(default)]
     pub(crate) prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
+    #[serde(default)]
+    pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
+    #[serde(default)]
+    pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -365,6 +369,8 @@ mod composed_invariants;
 mod event_delivery;
 #[path = "prompt_assembly.rs"]
 mod prompt_assembly;
+#[path = "rendered_capture.rs"]
+mod rendered_capture;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
@@ -381,6 +387,7 @@ pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
+pub(crate) use rendered_capture::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
@@ -867,6 +874,14 @@ pub(crate) fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssembl
 pub(crate) fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyTurnBudgetCase]
 {
     &lean_contract_snapshot().prompt_assembly_turn_budget_cases
+}
+
+pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
+    &lean_contract_snapshot().rendered_capture_cases
+}
+
+pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {
+    &lean_contract_snapshot().rendered_capture_key_cases
 }
 
 pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {
