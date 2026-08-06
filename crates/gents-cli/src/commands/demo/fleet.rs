@@ -161,7 +161,9 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
         match wait_http(&format!("http://127.0.0.1:{port_b}/healthz"), &mut server_b).await {
             Ok(()) => break (server_b, graphql_b),
             Err(error) if attempt < 3 => {
-                let _ = server_b.start_kill();
+                // kill() waits for exit so the replacement cannot race the old
+                // process's RocksDB lock on the shared node B home.
+                let _ = server_b.kill().await;
                 println!("  node B did not come up ({error}); retrying with a fresh port…");
             }
             Err(error) => return Err(error),

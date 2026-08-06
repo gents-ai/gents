@@ -30,6 +30,10 @@ fi
 
 if git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add "$dest" "$branch"
+elif git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+    # worktree add does not DWIM remote-only branches unless
+    # worktree.guessRemote is set; start the local branch from origin's.
+    git worktree add -b "$branch" "$dest" "origin/$branch"
 else
     git worktree add -b "$branch" "$dest" "$base"
 fi

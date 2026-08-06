@@ -3,7 +3,7 @@ use support::*;
 
 use std::fs;
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
