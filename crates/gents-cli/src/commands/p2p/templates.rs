@@ -172,7 +172,10 @@ mod tests {
         let row = rows.iter().find(|r| r.id == "conversation").unwrap();
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
-        assert_eq!(row.collections.split(',').count(), 9);
+        let collections = row.collections.split(',').collect::<Vec<_>>();
+        assert_eq!(collections.len(), 15);
+        assert!(collections.contains(&"AgentRequest"));
+        assert!(collections.contains(&"InferenceBackend"));
     }
 
     #[test]
@@ -182,10 +185,11 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 11);
+        assert_eq!(collections.len(), 17);
         assert!(collections.contains(&"BearerPairingReady"));
         assert!(collections.contains(&"AgentDirectoryEntry"));
         assert!(collections.contains(&"PersonaConfigRequest"));
+        assert!(collections.contains(&"Skill"));
     }
 
     #[test]
