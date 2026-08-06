@@ -281,13 +281,20 @@ pub(super) fn split_messages_for_summary(
     // pair. Retreating keeps the pair valid, but an exceptionally large
     // reasoning-bearing assistant turn can make that atomic tail exceed the
     // retention budget by itself. In that case retaining it cannot satisfy the
-    // caller's dispatch budget. Summarize the complete tail too, advancing only
-    // to the next pair-safe boundary. The generated summary then becomes the
-    // caller's next prompt.
+    // caller's dispatch budget, so summarize every row: the retained provider
+    // view becomes empty and the generated summary becomes the caller's next
+    // prompt. That over-summarizes any complete turns following the oversized
+    // pair, which the budget would otherwise have kept; fitting the dispatch
+    // budget wins over retaining them, and the summary still covers them.
     //
-    // Keep a sole message intact: there is no earlier conversation to compact,
-    // and silently replacing an oversized initial user prompt with a summary
-    // would change the request rather than compact its history.
+    // Modelled as `Compaction.summarize_oversized_complete_turn`.
+    //
+    // The retreat guard (`split_index < raw_split_index`) is what keeps a
+    // never-compacted transcript intact: with nothing to retreat over there is
+    // no earlier conversation to compact, and silently replacing an oversized
+    // initial user prompt with a summary would change the request rather than
+    // compact its history. The full-list check then refuses to end on a tool
+    // call still awaiting its result.
     let retained_tokens = estimate_message_tokens(&messages[split_index..]);
     if split_index < raw_split_index
         && retained_tokens > keep_recent_tokens

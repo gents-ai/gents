@@ -53,12 +53,13 @@ work in next_actions in execution order; the first item must be the immediate co
 }
 
 pub(super) fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, String> {
-    let checkpoint: ContinuationCheckpoint = serde_json::from_str(raw).map_err(|error| {
-        format!(
-            "strict JSON validation failed: {error}; raw_output_preview={}",
-            bounded_raw_output_preview(raw)
-        )
-    })?;
+    let checkpoint: ContinuationCheckpoint = serde_json::from_str(strip_markdown_fence(raw))
+        .map_err(|error| {
+            format!(
+                "strict JSON validation failed: {error}; raw_output_preview={}",
+                bounded_raw_output_preview(raw)
+            )
+        })?;
     if checkpoint.goal.trim().is_empty() {
         return Err(format!(
             "checkpoint goal is empty; raw_output_preview={}",
@@ -76,6 +77,28 @@ pub(super) fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpo
         ));
     }
     Ok(checkpoint)
+}
+
+/// Strips a `json` or untyped Markdown fence around the checkpoint object. The
+/// closing fence is optional: models sometimes emit a complete object after an
+/// opening fence and stop without closing it (#1015).
+///
+/// The fallback prompt asks for raw JSON, but this path is only reached once
+/// guided decoding has already failed — against exactly the providers that
+/// ignore that instruction — and it gets a single attempt with no retry.
+/// `serde_json::from_str` still requires the payload to be one JSON object and
+/// nothing else, so tolerating the fence does not widen into extracting an
+/// object out of prose.
+fn strip_markdown_fence(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let Some(body) = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+    else {
+        return trimmed;
+    };
+    let body = body.trim();
+    body.strip_suffix("```").map(str::trim_end).unwrap_or(body)
 }
 
 fn bounded_raw_output_preview(raw: &str) -> String {

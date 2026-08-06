@@ -159,10 +159,11 @@ impl CompletionRetryPolicy {
     }
 
     /// No retry at all: an empty transport ladder, no resample, no repair. For
-    /// internal sub-completions that already retry at their own layer (title
-    /// generation's `generate_title_with_fallback`) — the inner completion
-    /// must not also inherit the scheduled ladder's minutes-scale,
-    /// deadline-less backoff (#648).
+    /// internal sub-completions that must not inherit the scheduled ladder's
+    /// minutes-scale, deadline-less backoff (#648): title generation, which
+    /// already retries at its own layer via `generate_title_with_fallback`, and
+    /// compaction's non-guided JSON fallback, which is a last resort reached
+    /// only after guided decoding exhausted its own recovery ladder.
     pub fn no_retry() -> Self {
         Self {
             transport_backoff: Vec::new(),

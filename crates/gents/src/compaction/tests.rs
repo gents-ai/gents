@@ -1387,6 +1387,47 @@ fn non_guided_fallback_rejects_a_vague_checkpoint_without_pending_actions() {
     assert!(error.contains("no pending next action"));
 }
 
+/// The fallback fires only after guided decoding failed, so it runs against
+/// exactly the providers that ignore "no Markdown" — the same unterminated
+/// `json` fence that #1015 fixed for the free-form summarizer. It gets one
+/// attempt with `no_retry()`, so a fence here aborts the whole request.
+#[test]
+fn non_guided_fallback_decodes_a_fenced_checkpoint() {
+    let json = valid_summary_json();
+    for raw in [
+        format!("```json\n{json}\n```"),
+        format!("```\n{json}\n```"),
+        // Opened and never closed: the exact #1015 failure shape.
+        format!("```json\n{json}"),
+        format!("  \n{json}\n  "),
+    ] {
+        let checkpoint = super::summary::parse_fallback_checkpoint(&raw)
+            .unwrap_or_else(|error| panic!("fenced fallback must decode: {raw:?}: {error}"));
+        assert_eq!(
+            checkpoint.goal,
+            "Continue the task from the compacted turns."
+        );
+        assert_eq!(
+            checkpoint.next_actions,
+            vec!["Run the pending verification command."]
+        );
+    }
+}
+
+/// Fence tolerance must not widen into extracting an object out of prose: the
+/// payload is still exactly one JSON object and nothing else (#1015).
+#[test]
+fn non_guided_fallback_still_rejects_json_embedded_in_prose() {
+    let json = valid_summary_json();
+    for raw in [
+        format!("Here is the checkpoint:\n{json}"),
+        format!("{json}\nLet me know if you need more."),
+    ] {
+        super::summary::parse_fallback_checkpoint(&raw)
+            .expect_err("only a bare JSON object may be accepted");
+    }
+}
+
 #[test]
 fn strip_preserves_text_messages() {
     let messages = vec![text_msg("user", "hello"), text_msg("assistant", "hi there")];
