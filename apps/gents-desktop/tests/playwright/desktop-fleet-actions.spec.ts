@@ -1,6 +1,6 @@
 import { expect, gotoHarness, PEER_ID, test } from "./desktopTest";
 
-test.describe("fleet row action buttons", () => {
+test.describe("fleet deployment navigation", () => {
   test("signed bearer invite is the primary remote pairing flow", async ({ page }) => {
     await gotoHarness(page, "default");
     await page.getByRole("button", { name: "Add Agent", exact: true }).click();
@@ -13,24 +13,24 @@ test.describe("fleet row action buttons", () => {
     await expect(page.getByTestId("fleet-pair-token")).toHaveCount(0);
   });
 
-  test("chat action button opens the chat workspace", async ({ page }) => {
+  test("deployment row opens the chat workspace", async ({ page }) => {
     await gotoHarness(page, "default");
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
-    const chatAction = page.getByTestId(`fleet-chat-${PEER_ID}`);
-    await expect(chatAction).toBeEnabled();
-    await chatAction.click();
+    await page.getByTestId(`fleet-row-${PEER_ID}`).click();
+    if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760) {
+      await page.getByTestId("conversation-session-intro").click();
+    }
 
     await expect(page.getByTestId("composer-input")).toBeVisible();
   });
 
-  test("config action button opens the config workspace", async ({ page }) => {
+  test("deployment workspace opens config", async ({ page }) => {
     await gotoHarness(page, "default");
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
-    const configAction = page.getByTestId(`fleet-config-${PEER_ID}`);
-    await expect(configAction).toBeEnabled();
-    await configAction.click();
+    await page.getByTestId(`fleet-row-${PEER_ID}`).click();
+    await page.getByRole("button", { name: "Configure" }).click();
 
     await expect(page.locator(".config-workspace")).toBeVisible();
   });

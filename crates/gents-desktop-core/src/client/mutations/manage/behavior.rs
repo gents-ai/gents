@@ -5,20 +5,14 @@ use gents_protocol::row::AgentBehaviorRow;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_delete_mutation,
-    execute_remote_mutation, graphql_optional_bool_field, graphql_optional_float_field,
-    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
+    graphql_optional_float_field, graphql_string_field, graphql_string_list_field, join_fields,
+    normalize_required,
 };
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
     let mutation = build_upsert_agent_behavior_mutation(row)?;
     execute_mutation(node, &mutation, "upsert_agent_behavior").await
-}
-
-pub async fn upsert_agent_behavior_to_graphql(graphql: &str, row: &AgentBehaviorRow) -> Result<()> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_upsert_agent_behavior_mutation(row)?;
-    execute_remote_mutation(graphql, &mutation, "upsert_agent_behavior").await
 }
 
 fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String> {
@@ -175,22 +169,6 @@ pub async fn delete_agent_behavior(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
-}
-
-pub async fn delete_agent_behavior_from_graphql(
-    graphql: &str,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Result<usize> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_delete_agent_behavior_mutation(agent_did, behavior_id)?;
-    execute_remote_delete_mutation(
-        graphql,
-        &mutation,
-        "delete_agent_behavior",
-        "delete_AgentBehavior",
-    )
-    .await
 }
 
 fn build_delete_agent_behavior_mutation(agent_did: &str, behavior_id: &str) -> Result<String> {

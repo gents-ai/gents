@@ -105,6 +105,8 @@ mod compaction_gate;
 mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
 mod composed_invariants;
+#[path = "conformance/config_replication.rs"]
+mod config_replication;
 #[path = "conformance/coverage.rs"]
 mod coverage;
 #[path = "conformance/directory_projection.rs"]
@@ -508,6 +510,8 @@ mod pairing_invariant_tests;
 mod pairing_reconcile;
 #[path = "conformance/peer_registry_discovery.rs"]
 mod peer_registry_discovery;
+#[path = "conformance/persona_request.rs"]
+mod persona_request;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "conformance/r5_scenarios.rs"]

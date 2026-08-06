@@ -399,7 +399,7 @@ pub fn desktop_set_selected_agent(
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);
         tauri::async_runtime::spawn(async move {
-            match core_arc.refresh_remote_agent(&did_str).await {
+            match core_arc.refresh_agent(&did_str).await {
                 Ok(Some(_version)) => {}
                 Ok(None) => {
                     if let Err(err) = core_arc.ensure_agent_loaded(&did_str).await {

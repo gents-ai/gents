@@ -20,15 +20,6 @@ pub async fn desktop_session_snapshot(
     };
 
     if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
-        if let Err(error) = core.refresh_remote_request(agent_did, request_id).await {
-            tracing::warn!(
-                target: "gents_desktop::chat",
-                agent_did,
-                request_id,
-                error = %error,
-                "selected remote request refresh failed; returning the last observed session"
-            );
-        }
         if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
             tracing::warn!(
                 target: "gents_desktop::chat",

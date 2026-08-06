@@ -84,39 +84,18 @@ test.describe("desktop responsive layout guardrails", () => {
     await expect(page.locator(".sidebar")).toBeHidden();
   });
 
-  test("fleet row action buttons stay reachable at any width", async ({ page }) => {
+  test("fleet deployment navigation stays reachable at any width", async ({ page }) => {
     await gotoHarness(page);
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-    await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toBeVisible();
-
-    const chatButton = page.getByTestId(`fleet-chat-${PEER_ID}`);
-    const configButton = page.getByTestId(`fleet-config-${PEER_ID}`);
-
-    await expect(chatButton).toBeAttached();
-    await expect(configButton).toBeAttached();
-
-    const scrollableAncestor = await configButton.evaluate((el) => {
-      let node: HTMLElement | null = el.closest("td");
-      while (node) {
-        const overflowX = getComputedStyle(node).overflowX;
-        if (overflowX === "auto" || overflowX === "scroll") {
-          return { className: node.className, overflowX };
-        }
-        node = node.parentElement;
-      }
-      return null;
-    });
-    expect(scrollableAncestor?.className ?? "").toContain("fleet-table-wrap");
-
-    for (const button of [chatButton, configButton]) {
-      await button.scrollIntoViewIfNeeded();
-      await expect(button).toBeVisible();
-      await button.click({ trial: true });
-    }
+    const deploymentRow = page.getByTestId(`fleet-row-${PEER_ID}`);
+    await expect(deploymentRow).toBeVisible();
+    await deploymentRow.click();
+    const configureButton = page.getByRole("button", { name: "Configure" });
+    await expect(configureButton).toBeVisible();
 
     await expectNoPageHorizontalOverflow(page);
 
-    await configButton.click();
+    await configureButton.click();
     await expect(page.locator(".config-workspace")).toBeVisible();
     await expectNoPageHorizontalOverflow(page);
   });

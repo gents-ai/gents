@@ -16,22 +16,42 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
 }
 
 #[test]
-fn conversation_scope_resolves_to_requester_filter_for_every_collection() {
+fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
     let t = resolve_template("conversation").expect("conversation in catalog");
     assert_eq!(t.delivery, Delivery::Push);
     assert!(matches!(t.scope, Scope::PerCollection(_)));
 
     let filter = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-    assert_eq!(filter.len(), t.collections.len());
-    for col in t.collections {
-        let pred = filter.get(*col).expect("filter for every collection");
-        let expected_field = if *col == "BearerPairingReady" {
+    for col in [
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+        "BearerPairingReady",
+    ] {
+        let pred = filter.get(col).expect("transcript collection filter");
+        let expected_field = if col == "BearerPairingReady" {
             "claimant_did"
         } else {
             "requester_did"
         };
         assert_eq!(pred.field, expected_field);
         assert_eq!(pred.value, "did:key:bob");
+    }
+    for col in [
+        "AgentBehavior",
+        "ToolSelection",
+        "InferenceBackend",
+        "InferenceProfile",
+        "ToolServiceRegistry",
+        "Skill",
+    ] {
+        assert!(t.collections.contains(&col));
+        assert!(!filter.contains_key(col), "config {col} must be unfiltered");
     }
 }
 
@@ -60,13 +80,19 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         "did:key:issuer",
     );
 
-    assert_eq!(filters.len(), template.collections.len());
-    for collection in resolve_template("conversation")
-        .expect("conversation in catalog")
-        .collections
-    {
-        let predicate = filters.get(*collection).expect("conversation filter");
-        let expected_field = if *collection == "BearerPairingReady" {
+    for collection in [
+        "AgentRequest",
+        "AgentResponse",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "AgentSession",
+        "AgentConversation",
+        "CompactionEntry",
+        "BearerPairingReady",
+    ] {
+        let predicate = filters.get(collection).expect("conversation filter");
+        let expected_field = if collection == "BearerPairingReady" {
             "claimant_did"
         } else {
             "requester_did"

@@ -12,6 +12,14 @@
     border-radius: var(--radius-md);
   }
 
+  .conversation-sync {
+    min-height: 34px;
+    padding: 0 var(--space-3);
+    color: var(--color-accent);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+  }
+
   .conversation-row {
     position: relative;
     display: block;
@@ -106,31 +114,6 @@
   .conversation-list-title {
     -webkit-line-clamp: 1;
     min-width: 0;
-  }
-
-  .conversation-filter {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    gap: var(--space-3);
-    min-width: 0;
-  }
-
-  .conversation-filter span {
-    color: var(--color-text-muted);
-    font-size: var(--text-2xs);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .conversation-filter select {
-    min-width: 0;
-    height: 34px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 0;
-    background: var(--color-surface-strong);
-    color: var(--color-text-soft);
-    padding: 0 var(--space-4);
   }
 
   .conversation-task-tag {

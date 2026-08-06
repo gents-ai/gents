@@ -109,9 +109,28 @@ pub type PairingFilters = BTreeMap<String, FilterPredicate>;
 // Built-in template catalog
 // ---------------------------------------------------------------------------
 
-/// Conversation collections: all request/response/turn artifacts, scoped by
-/// the immutable requester route carried through the complete transcript.
+/// Conversation grants carry requester-scoped transcript artifacts plus the
+/// small unfiltered configuration control plane needed to render and operate
+/// the paired agent without a second transport.
 const CONVERSATION_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentMessage",
+    "AgentToolCall",
+    "AgentToolResult",
+    "AgentSession",
+    "AgentConversation",
+    "CompactionEntry",
+    "BearerPairingReady",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+    "ToolServiceRegistry",
+    "Skill",
+];
+
+const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
     "AgentMessage",
@@ -188,6 +207,13 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentConversation",
     "CompactionEntry",
     "BearerPairingReady",
+    "AgentBehavior",
+    "ToolSelection",
+    "InferenceBackend",
+    "InferenceProfile",
+    "ToolServiceRegistry",
+    "Skill",
+    "PersonaConfigRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
 
@@ -235,6 +261,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "BearerPairingReady",
         field: "claimant_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "PersonaConfigRequest",
+        field: "requester_did",
         source: DidSource::PeerDid,
     },
     CollectionRule {
@@ -354,7 +385,7 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
     },
     ScopeTemplate {
         id: "backup",
-        collections: CONVERSATION_COLLECTIONS,
+        collections: CONVERSATION_TRANSCRIPT_COLLECTIONS,
         scope: Scope::Unscoped,
         delivery: Delivery::Replicate,
     },
@@ -412,7 +443,8 @@ pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
 ///   `{ field, value: peer_did }`.
 /// - `Scope::Unscoped` → empty map (no filtering).
 /// - `Scope::PerCollection(rules)` → insert each exact collection rule using
-///   either the peer DID or local DID as the value source.
+///   either the peer DID or local DID as the value source. Declared
+///   collections without a rule are deliberately unfiltered.
 pub fn scope_filter(
     scope: &Scope,
     collections: &[&str],
@@ -476,9 +508,10 @@ mod tests {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 9);
+        assert_eq!(t.collections.len(), 15);
         assert!(t.collections.contains(&"AgentRequest"));
         assert!(t.collections.contains(&"BearerPairingReady"));
+        assert!(t.collections.contains(&"AgentBehavior"));
     }
 
     #[test]
@@ -585,11 +618,17 @@ mod tests {
     }
 
     #[test]
-    fn scope_filter_covers_all_collections_in_template() {
+    fn conversation_scope_filters_transcript_and_leaves_config_unfiltered() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:alice", "did:key:self");
-        for col in t.collections {
-            assert!(f.contains_key(*col), "missing filter for {col}");
+        for col in CONVERSATION_RULES.iter().map(|rule| rule.collection) {
+            assert!(f.contains_key(col), "missing filter for {col}");
+        }
+        for col in AGENT_CONFIG_COLLECTIONS {
+            assert!(
+                !f.contains_key(*col),
+                "config collection {col} must be unfiltered"
+            );
         }
     }
 
@@ -648,13 +687,13 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 10);
+        assert_eq!(t.collections.len(), 17);
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.
-        for col in CONVERSATION_COLLECTIONS {
-            let predicate = filters.get(*col).expect("conversation collection filtered");
-            let expected_field = if *col == "BearerPairingReady" {
+        for col in CONVERSATION_RULES.iter().map(|rule| rule.collection) {
+            let predicate = filters.get(col).expect("conversation collection filtered");
+            let expected_field = if col == "BearerPairingReady" {
                 "claimant_did"
             } else {
                 "requester_did"
@@ -667,6 +706,16 @@ mod tests {
             Some(&FilterPredicate {
                 field: "source_did".to_string(),
                 value: "did:key:server".to_string(),
+            })
+        );
+        // Persona request rows carry requester-authored config picks and the
+        // server's status_detail; losing this rule would push every
+        // requester's rows to every machine peer (the #687 leak class).
+        assert_eq!(
+            filters.get("PersonaConfigRequest"),
+            Some(&FilterPredicate {
+                field: "requester_did".to_string(),
+                value: "did:key:phone".to_string(),
             })
         );
     }

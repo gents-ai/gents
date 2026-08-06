@@ -15,6 +15,7 @@ pub(crate) mod skill;
 pub(crate) mod task_run;
 pub(crate) mod tools;
 pub(crate) mod validate;
+pub(crate) mod workspace_root;
 
 pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
     match command {
@@ -30,8 +31,11 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::Behavior { command } => match command {
             BehaviorCommand::Set(args) => behavior::behavior_set(args).await,
+            BehaviorCommand::Create(args) => behavior::behavior_create(args).await,
+            BehaviorCommand::Clone(args) => behavior::behavior_clone(args).await,
+            BehaviorCommand::Disable(args) => behavior::behavior_disable(args).await,
             BehaviorCommand::List(args) => crud::config_list(crud::BEHAVIOR_SPEC, args).await,
-            BehaviorCommand::Show(args) => crud::config_show(crud::BEHAVIOR_SPEC, args).await,
+            BehaviorCommand::Show(args) => behavior::behavior_show(args).await,
             BehaviorCommand::Rm(args) => crud::config_rm(crud::BEHAVIOR_SPEC, args).await,
         },
         ConfigCommand::Tools { command } => match command {
@@ -85,6 +89,16 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             SkillCommand::Rm(args) => skill::skill_rm(args).await,
             SkillCommand::Enable(args) => skill::skill_set_enabled(args, true).await,
             SkillCommand::Disable(args) => skill::skill_set_enabled(args, false).await,
+        },
+        ConfigCommand::WorkspaceRoot { command } => match command {
+            WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
+            WorkspaceRootCommand::List(args) => {
+                crud::config_list(crud::WORKSPACE_ROOT_SPEC, args).await
+            }
+            WorkspaceRootCommand::Show(args) => {
+                crud::config_show(crud::WORKSPACE_ROOT_SPEC, args).await
+            }
+            WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,
         ConfigCommand::Import(args) => import::config_import(args).await,

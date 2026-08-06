@@ -1,8 +1,4 @@
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
-import {
-  displayAgentIdentity,
-  displayGraphqlEndpoint,
-} from "@source-inc/gents-desktop-client";
 
 export type ConnectedPeerSectionProps = {
   deployments: DeploymentView[];
@@ -23,12 +19,51 @@ export function ConnectedPeerSection({
 }: ConnectedPeerSectionProps) {
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
-  const agentIdentity = displayAgentIdentity(selectedDeployment?.agentDid);
-  const graphqlEndpoint = displayGraphqlEndpoint(selectedDeployment?.graphql);
 
   return (
     <section className="sidebar-section connected-peer-section">
       <div className="connected-peer-card">
+        <div className="connected-peer-toolbar">
+          <button
+            aria-label="Back to Fleet"
+            className="ghost-button connected-peer-back"
+            data-testid="sidebar-back-to-fleet"
+            onClick={onOpenFleet}
+            type="button"
+          >
+            <span aria-hidden="true">←</span>
+            Fleet
+          </button>
+          <div className="connected-peer-actions">
+            {onOpenCode ? (
+              <button
+                className="ghost-button connected-peer-action"
+                data-testid="sidebar-open-code"
+                disabled={!selectedDeployment}
+                onClick={() => {
+                  if (selectedDeployment) {
+                    onOpenCode(selectedDeployment.agentDid);
+                  }
+                }}
+                type="button"
+              >
+                Code
+              </button>
+            ) : null}
+            <button
+              className="ghost-button connected-peer-action"
+              disabled={!selectedDeployment}
+              onClick={() => {
+                if (selectedDeployment) {
+                  onConfigureDeployment(selectedDeployment.agentDid);
+                }
+              }}
+              type="button"
+            >
+              Configure
+            </button>
+          </div>
+        </div>
         <div className="connected-peer-header">
           <div>
             <p className="eyebrow">Connected Peer</p>
@@ -58,56 +93,29 @@ export function ConnectedPeerSection({
           ) : null}
         </div>
 
-        {agentIdentity ? (
-          <span className="connected-peer-identity">{agentIdentity}</span>
+        {selectedDeployment ? (
+          <div
+            aria-label={`${selectedDeployment.behaviors.length} behaviors, ${selectedDeployment.conversations.length} conversations, ${selectedDeployment.tasks.length} tasks`}
+            className="connected-peer-stats"
+          >
+            <PeerStat label="Behaviors" value={selectedDeployment.behaviors.length} />
+            <PeerStat
+              label="Conversations"
+              value={selectedDeployment.conversations.length}
+            />
+            <PeerStat label="Tasks" value={selectedDeployment.tasks.length} />
+          </div>
         ) : null}
-        {graphqlEndpoint ? (
-          <span
-            className="connected-peer-detail"
-            title={`GraphQL endpoint: ${selectedDeployment?.graphql ?? ""}`}
-          >
-            <span className="connected-peer-detail-label">GraphQL</span>
-            <span className="connected-peer-endpoint">{graphqlEndpoint}</span>
-          </span>
-        ) : null}
-
-        <div className="connected-peer-actions">
-          <button
-            className="ghost-button connected-peer-action"
-            onClick={onOpenFleet}
-            type="button"
-          >
-            Fleet Dashboard
-          </button>
-          {onOpenCode ? (
-            <button
-              className="ghost-button connected-peer-action"
-              data-testid="sidebar-open-code"
-              disabled={!selectedDeployment}
-              onClick={() => {
-                if (selectedDeployment) {
-                  onOpenCode(selectedDeployment.agentDid);
-                }
-              }}
-              type="button"
-            >
-              Code
-            </button>
-          ) : null}
-          <button
-            className="ghost-button connected-peer-action"
-            disabled={!selectedDeployment}
-            onClick={() => {
-              if (selectedDeployment) {
-                onConfigureDeployment(selectedDeployment.agentDid);
-              }
-            }}
-            type="button"
-          >
-            Configure
-          </button>
-        </div>
       </div>
     </section>
+  );
+}
+
+function PeerStat({ label, value }: { label: string; value: number }) {
+  return (
+    <span>
+      <strong>{value}</strong>
+      {label}
+    </span>
   );
 }

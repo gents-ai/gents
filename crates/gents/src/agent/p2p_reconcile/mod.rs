@@ -10,6 +10,7 @@ pub mod error_class;
 mod graphql_helpers;
 pub mod intervals;
 pub mod network;
+pub mod persona_requests;
 pub mod profiles;
 pub mod reciprocal;
 pub mod registry;
@@ -42,6 +43,10 @@ pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use network::{
     derive_network_desired, endpoint_is_fresh, reconcile_network_tick, run_network_reconciler,
     GraphqlNetworkStore, NetworkEndpointEntry, NetworkStore, NetworkTickOutcome, SOURCE_NETWORK,
+};
+pub use persona_requests::{
+    reconcile_persona_tick, run_persona_request_reconciler, GraphqlPersonaRequestStore,
+    PersonaRequestStore, PersonaTickOutcome,
 };
 pub use profiles::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 pub use reciprocal::{

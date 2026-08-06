@@ -42,6 +42,8 @@ pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
 pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
+pub const WORKSPACE_ROOT_NAME: &str = "WorkspaceRoot";
+pub const WORKSPACE_ROOT: &str = include_str!("../schemas/agent/workspace_root.graphql");
 pub const TASK_NAME: &str = "Task";
 pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
 pub const SCHEDULE_NAME: &str = "Schedule";
@@ -80,6 +82,9 @@ pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.gra
 pub const NETWORK_JOIN_REQUEST_NAME: &str = "NetworkJoinRequest";
 pub const NETWORK_JOIN_REQUEST: &str =
     include_str!("../schemas/agent/network_join_request.graphql");
+pub const PERSONA_CONFIG_REQUEST_NAME: &str = "PersonaConfigRequest";
+pub const PERSONA_CONFIG_REQUEST: &str =
+    include_str!("../schemas/agent/persona_config_request.graphql");
 
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
@@ -90,6 +95,7 @@ pub const ALL: &[&str] = &[
     AGENT_MEMORY,
     TOOL_SELECTION,
     SKILL,
+    WORKSPACE_ROOT,
     AGENT_CONVERSATION,
     AGENT_REQUEST,
     AGENT_RESPONSE,
@@ -116,6 +122,7 @@ pub const ALL: &[&str] = &[
     NETWORK_MEMBERSHIP,
     PEER_ENDPOINT,
     NETWORK_JOIN_REQUEST,
+    PERSONA_CONFIG_REQUEST,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -127,6 +134,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MEMORY_NAME,
     TOOL_SELECTION_NAME,
     SKILL_NAME,
+    WORKSPACE_ROOT_NAME,
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
@@ -153,6 +161,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_MEMBERSHIP_NAME,
     PEER_ENDPOINT_NAME,
     NETWORK_JOIN_REQUEST_NAME,
+    PERSONA_CONFIG_REQUEST_NAME,
 ];
 
 /// Agent-domain collections that can be replicated across desktop branches.

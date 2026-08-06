@@ -351,7 +351,9 @@ if (
   !fleetBaseStyles.includes("./styles/layout.css") ||
   !fleetLayoutStyles.includes('./layout/dashboard.css"') ||
   !fleetLayoutStyles.includes('./layout/pairing.css"') ||
-  !fleetLayoutPartials.includes(".fleet-inference-callout")
+  !fleetLayoutStyles.includes('./layout/responsive.css"') ||
+  !fleetLayoutStyles.includes('./layout/responsive-table.css"') ||
+  !fleetLayoutPartials.includes(".fleet-dashboard")
 ) {
   failures.push(
     "FleetDashboard modular layout styles must ship through the base fleet entrypoint",
@@ -634,6 +636,7 @@ for (const [path, maximumLines] of [
   ["packages/gents-desktop-fleet/styles/layout/network.css", 120],
   ["packages/gents-desktop-fleet/styles/layout/pairing.css", 230],
   ["packages/gents-desktop-fleet/styles/layout/responsive.css", 100],
+  ["packages/gents-desktop-fleet/styles/layout/responsive-table.css", 100],
   ["packages/gents-desktop-operations/styles/backend-health.css", 20],
   ["packages/gents-desktop-operations/styles/backend-health/overview.css", 120],
   ["packages/gents-desktop-operations/styles/backend-health/list.css", 230],

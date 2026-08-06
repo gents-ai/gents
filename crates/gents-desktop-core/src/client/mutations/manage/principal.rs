@@ -4,22 +4,13 @@ use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentPrincipalRow;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, execute_remote_mutation, graphql_optional_bool_field,
-    graphql_string_field, join_fields, normalize_required,
+    escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
+    join_fields, normalize_required,
 };
 
 pub async fn upsert_agent_principal(node: &EmbeddedNode, row: &AgentPrincipalRow) -> Result<()> {
     let mutation = build_upsert_agent_principal_mutation(row)?;
     execute_mutation(node, &mutation, "upsert_agent_principal").await
-}
-
-pub async fn upsert_agent_principal_to_graphql(
-    graphql: &str,
-    row: &AgentPrincipalRow,
-) -> Result<()> {
-    let graphql = normalize_required("graphql", graphql)?;
-    let mutation = build_upsert_agent_principal_mutation(row)?;
-    execute_remote_mutation(graphql, &mutation, "upsert_agent_principal").await
 }
 
 fn build_upsert_agent_principal_mutation(row: &AgentPrincipalRow) -> Result<String> {

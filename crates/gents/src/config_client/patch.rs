@@ -40,11 +40,12 @@ pub enum SelfConfigTarget {
 
 /// Self-config tool categories (`ToolSelection.self_config_categories`
 /// vocabulary), in the canonical sorted order the policy scope uses.
-pub const SELF_CONFIG_CATEGORIES: [&str; 6] = [
+pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
     "automation",
     "backend",
     "behavior",
     "mcp_service",
+    "persona",
     "profile",
     "tools",
 ];

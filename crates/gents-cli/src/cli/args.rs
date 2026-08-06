@@ -1233,6 +1233,11 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: SkillCommand,
     },
+    #[command(about = "Write a WorkspaceRoot document")]
+    WorkspaceRoot {
+        #[command(subcommand)]
+        command: WorkspaceRootCommand,
+    },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
     #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
@@ -1277,6 +1282,21 @@ pub(crate) enum BackendCommand {
 pub(crate) enum BehaviorCommand {
     #[command(name = "set")]
     Set(BehaviorUpsertArgs),
+    #[command(
+        name = "create",
+        about = "Create a persona's AgentBehavior through the shared persona materializer"
+    )]
+    Create(BehaviorCreateArgs),
+    #[command(
+        name = "clone",
+        about = "Clone an existing persona's tool selection into a new AgentBehavior"
+    )]
+    Clone(BehaviorCloneArgs),
+    #[command(
+        name = "disable",
+        about = "Disable a persona's AgentBehavior through the shared persona materializer"
+    )]
+    Disable(BehaviorDisableArgs),
     #[command(name = "list", about = "List AgentBehavior documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an AgentBehavior document")]
@@ -1284,6 +1304,22 @@ pub(crate) enum BehaviorCommand {
     #[command(
         name = "rm",
         about = "Delete an AgentBehavior document",
+        alias = "remove"
+    )]
+    Rm(ConfigShowArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkspaceRootCommand {
+    #[command(name = "set")]
+    Set(WorkspaceRootUpsertArgs),
+    #[command(name = "list", about = "List WorkspaceRoot documents")]
+    List(ConfigListArgs),
+    #[command(name = "show", about = "Show a WorkspaceRoot document")]
+    Show(ConfigShowArgs),
+    #[command(
+        name = "rm",
+        about = "Delete a WorkspaceRoot document",
         alias = "remove"
     )]
     Rm(ConfigShowArgs),
@@ -1540,6 +1576,21 @@ pub(crate) struct ConfigShowArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct WorkspaceRootUpsertArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long, help = "Absolute path to register as a workspace root")]
+    pub(crate) path: PathBuf,
+    #[arg(long)]
+    pub(crate) display_name: Option<String>,
+    #[arg(
+        long,
+        help = "Register the root disabled; excluded from allowed_roots until re-enabled"
+    )]
+    pub(crate) disabled: bool,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct BehaviorUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
@@ -1565,6 +1616,76 @@ pub(crate) struct BehaviorUpsertArgs {
     pub(crate) compaction_threshold: Option<f64>,
     #[arg(long, default_value_t = true)]
     pub(crate) enabled: bool,
+}
+
+/// Routes through the shared persona materializer (`gents::agent::persona_ops`):
+/// a `PersonaConfigRequest` row is submitted and polled to a terminal status
+/// rather than writing `AgentBehavior`/`ToolSelection` directly, so admission
+/// and materialization never drift from the reconciler / self-config tool's
+/// own writes. `--model` and `--backend-id`/`--model-name` are two spellings
+/// of the same `backend_id|model_name` value; supply one or the other.
+#[derive(clap::Args)]
+pub(crate) struct BehaviorCreateArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) agent_did: String,
+    #[arg(long, help = "Persona display name")]
+    pub(crate) display_name: String,
+    #[arg(
+        long,
+        help = "Built-in permission preset (readonly|write); mutually exclusive with --clone-from"
+    )]
+    pub(crate) preset: Option<String>,
+    #[arg(
+        long,
+        help = "Optional workspace root scope; must be a published WorkspaceRoot path"
+    )]
+    pub(crate) root: Option<String>,
+    #[arg(
+        long,
+        help = "behavior_id of an existing enabled persona to clone the tool selection from; mutually exclusive with --preset"
+    )]
+    pub(crate) clone_from: Option<String>,
+    #[arg(long, help = r#""backend_id|model_name", e.g. "openai|gpt-5""#)]
+    pub(crate) model: Option<String>,
+    #[arg(long, help = "Alternative to --model")]
+    pub(crate) backend_id: Option<String>,
+    #[arg(long, help = "Alternative to --model")]
+    pub(crate) model_name: Option<String>,
+    #[arg(long)]
+    pub(crate) profile_id: Option<String>,
+}
+
+/// See [`BehaviorCreateArgs`] doc comment: same materializer routing. The
+/// clone's `agent_did` is derived from `source_behavior_id` (a clone always
+/// creates a sibling persona of the same agent as its source); `--model`/
+/// `--profile-id` default to the source behavior's own current values when
+/// omitted.
+#[derive(clap::Args)]
+pub(crate) struct BehaviorCloneArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(value_name = "SOURCE_BEHAVIOR_ID")]
+    pub(crate) source_behavior_id: String,
+    #[arg(long, help = "Display name for the cloned persona")]
+    pub(crate) display_name: String,
+    #[arg(long, help = "Override the source's workspace root scope")]
+    pub(crate) root: Option<String>,
+    #[arg(long, help = r#"Override the source's model, "backend_id|model_name""#)]
+    pub(crate) model: Option<String>,
+    #[arg(long, help = "Override the source's inference profile")]
+    pub(crate) profile_id: Option<String>,
+}
+
+/// See [`BehaviorCreateArgs`] doc comment: same materializer routing. The
+/// target's `agent_did` is derived from `behavior_id` itself.
+#[derive(clap::Args)]
+pub(crate) struct BehaviorDisableArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(value_name = "BEHAVIOR_ID")]
+    pub(crate) behavior_id: String,
 }
 
 #[derive(clap::Args)]

@@ -18,7 +18,8 @@ use super::super::schema::{
     subscribed_collection_names,
 };
 use super::bearer_pairing::{
-    install_bearer_replicator_for_record, is_bearer_peer, publish_local_endpoint,
+    current_local_endpoint, install_bearer_replicator_for_record, is_bearer_peer,
+    publish_local_endpoint,
 };
 use super::materialization::spawn_materialization_supervisor_task;
 use super::p2p_ops::{
@@ -31,7 +32,6 @@ use super::{
     BOOTSTRAP_OPERATION_TIMEOUT,
 };
 pub(super) const BRANCHABLE_PAIR_SYNC_ENV: &str = "GENTS_DESKTOP_SYNC_BRANCHABLE_ON_PAIR";
-pub(super) const REMOTE_P2P_PAIRING_ENV: &str = "GENTS_DESKTOP_PAIR_REMOTE_P2P";
 
 impl ClientCore {
     pub async fn start() -> Result<Self> {
@@ -198,13 +198,7 @@ pub(super) async fn bootstrap_saved_peers(
             Ok(()) => {
                 status.dial_succeeded = true;
 
-                let p2p_pairing_enabled = record
-                    .graphql
-                    .as_deref()
-                    .map(p2p_pairing_enabled_for_graphql)
-                    .unwrap_or(true);
-
-                if options.install_replicators_on_bootstrap && p2p_pairing_enabled {
+                if options.install_replicators_on_bootstrap {
                     let replicator_result = if is_bearer_peer(record) {
                         if let Err(error) = publish_local_endpoint(node, p2p, actor).await {
                             let message = format!(
@@ -237,71 +231,54 @@ pub(super) async fn bootstrap_saved_peers(
                         status.last_error = Some(message.clone());
                         errors.push(message);
                     }
-                } else if record.graphql.is_some() && !p2p_pairing_enabled {
-                    tracing::info!(
-                        target: "gents_desktop_core::peer",
-                        label = %record.label,
-                        env = REMOTE_P2P_PAIRING_ENV,
-                        "skipping automatic remote P2P replicator bootstrap for GraphQL-managed peer"
-                    );
                 }
 
-                if let Some(graphql) = record.graphql.as_deref() {
-                    if p2p_pairing_enabled {
-                        match configure_local_runtime_pairing(node, record).await {
-                            Ok(()) => {
-                                if branchable_pair_sync_enabled() {
-                                    match sync_branchable_collections_with_retry(
-                                        node,
-                                        p2p,
-                                        &record.label,
-                                        BOOTSTRAP_OPERATION_TIMEOUT,
-                                    )
-                                    .await
-                                    {
-                                        Ok(synced) => {
-                                            tracing::info!(
-                                                target: "gents_desktop_core::peer",
-                                                label = %record.label,
-                                                synced_collections = ?synced,
-                                                "desktop requested branchable collection sync after pairing"
-                                            );
-                                        }
-                                        Err(error) => {
-                                            let message = format!(
-                                                "peer {} branchable sync failed: {}",
-                                                record.label, error
-                                            );
-                                            status.last_error = Some(message.clone());
-                                            errors.push(message);
-                                        }
+                if options.install_replicators_on_bootstrap && !is_bearer_peer(record) {
+                    match configure_local_runtime_pairing(node, p2p, actor, record).await {
+                        Ok(()) => {
+                            if branchable_pair_sync_enabled() {
+                                match sync_branchable_collections_with_retry(
+                                    node,
+                                    p2p,
+                                    &record.label,
+                                    BOOTSTRAP_OPERATION_TIMEOUT,
+                                )
+                                .await
+                                {
+                                    Ok(synced) => {
+                                        tracing::info!(
+                                            target: "gents_desktop_core::peer",
+                                            label = %record.label,
+                                            synced_collections = ?synced,
+                                            "desktop requested branchable collection sync after pairing"
+                                        );
                                     }
-                                } else {
-                                    tracing::debug!(
-                                        target: "gents_desktop_core::peer",
-                                        label = %record.label,
-                                        env = BRANCHABLE_PAIR_SYNC_ENV,
-                                        "skipping opt-in branchable collection sync after pairing"
-                                    );
+                                    Err(error) => {
+                                        let message = format!(
+                                            "peer {} branchable sync failed: {}",
+                                            record.label, error
+                                        );
+                                        status.last_error = Some(message.clone());
+                                        errors.push(message);
+                                    }
                                 }
-                            }
-                            Err(error) => {
-                                let message = format!(
-                                    "peer {} local runtime pairing failed: {}",
-                                    record.label, error
+                            } else {
+                                tracing::debug!(
+                                    target: "gents_desktop_core::peer",
+                                    label = %record.label,
+                                    env = BRANCHABLE_PAIR_SYNC_ENV,
+                                    "skipping opt-in branchable collection sync after pairing"
                                 );
-                                status.last_error = Some(message.clone());
-                                errors.push(message);
                             }
                         }
-                    } else {
-                        tracing::info!(
-                            target: "gents_desktop_core::peer",
-                            label = %record.label,
-                            graphql,
-                            env = REMOTE_P2P_PAIRING_ENV,
-                            "skipping automatic reverse P2P pairing for GraphQL-managed peer"
-                        );
+                        Err(error) => {
+                            let message = format!(
+                                "peer {} local runtime pairing failed: {}",
+                                record.label, error
+                            );
+                            status.last_error = Some(message.clone());
+                            errors.push(message);
+                        }
                     }
                 }
             }
@@ -320,25 +297,35 @@ pub(super) async fn bootstrap_saved_peers(
 
 pub(super) async fn configure_local_runtime_pairing(
     node: &EmbeddedNode,
+    p2p: &Arc<dyn P2POps>,
+    actor: &PrincipalIdentity,
     record: &PeerRecord,
 ) -> Result<()> {
-    write_peer_pairing_desired(node, record).await
+    let local_endpoint = current_local_endpoint(p2p, actor)
+        .await
+        .context("resolving requester P2P endpoint for reciprocal pairing")?;
+    write_peer_pairing_desired(node, record, actor.did(), &local_endpoint.address).await
 }
 
 pub(super) async fn write_peer_pairing_desired(
     node: &EmbeddedNode,
     record: &PeerRecord,
+    requester_did: &str,
+    requester_addr: &str,
 ) -> Result<()> {
     use gents_protocol::graphql::escape_graphql_string;
 
     let peer_id = escape_graphql_string(&record.peer_id);
-    let agent_did = escape_graphql_string(&record.agent_did);
+    // This row is consumed by the remote runtime. Its peer identity and
+    // replicator address therefore describe this requester, not the remote
+    // deployment represented by `record`.
+    let agent_did = escape_graphql_string(requester_did);
     let collections = subscribed_collection_names()
         .iter()
         .map(|s| format!(r#""{}""#, escape_graphql_string(s)))
         .collect::<Vec<_>>()
         .join(", ");
-    let replicator_addr = escape_graphql_string(&record.addr);
+    let replicator_addr = escape_graphql_string(requester_addr);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = escape_graphql_string(&now);
 
@@ -579,19 +566,6 @@ pub(super) fn branchable_pair_sync_enabled() -> bool {
     env_flag_enabled(BRANCHABLE_PAIR_SYNC_ENV)
 }
 
-pub(super) fn p2p_pairing_enabled_for_graphql(graphql: &str) -> bool {
-    let env_value = std::env::var(REMOTE_P2P_PAIRING_ENV).ok();
-    p2p_pairing_enabled_for_graphql_with_env(graphql, env_value.as_deref())
-}
-
-fn p2p_pairing_enabled_for_graphql_with_env(graphql: &str, env_value: Option<&str>) -> bool {
-    if let Some(enabled) = env_flag_value(env_value) {
-        return enabled;
-    }
-
-    graphql_endpoint_is_loopback_or_unspecified(graphql)
-}
-
 fn env_flag_enabled(name: &str) -> bool {
     let Ok(value) = std::env::var(name) else {
         return false;
@@ -641,21 +615,6 @@ pub(super) fn normalize_required<'a>(field: &str, value: &'a str) -> Result<&'a 
         .with_context(|| format!("{field} must not be empty"))
 }
 
-fn graphql_endpoint_is_loopback_or_unspecified(graphql: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(graphql) else {
-        return false;
-    };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    host.parse::<std::net::IpAddr>()
-        .map(|addr| addr.is_loopback() || addr.is_unspecified())
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,37 +635,5 @@ mod tests {
             config.max_doc_sync_request_doc_ids,
             p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS
         );
-    }
-
-    #[test]
-    fn loopback_graphql_pairs_by_default() {
-        assert!(p2p_pairing_enabled_for_graphql_with_env(
-            "http://127.0.0.1:9191/api/v0/graphql",
-            None
-        ));
-    }
-
-    #[test]
-    fn explicit_pairing_env_false_disables_loopback_pairing() {
-        assert!(!p2p_pairing_enabled_for_graphql_with_env(
-            "http://127.0.0.1:9191/api/v0/graphql",
-            Some("0")
-        ));
-        assert!(!p2p_pairing_enabled_for_graphql_with_env(
-            "http://localhost:9191/api/v0/graphql",
-            Some("false")
-        ));
-    }
-
-    #[test]
-    fn explicit_pairing_env_true_enables_remote_pairing() {
-        assert!(p2p_pairing_enabled_for_graphql_with_env(
-            "http://agent-host:9191/api/v0/graphql",
-            Some("1")
-        ));
-        assert!(p2p_pairing_enabled_for_graphql_with_env(
-            "http://agent-host:9191/api/v0/graphql",
-            Some("yes")
-        ));
     }
 }

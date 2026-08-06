@@ -14,7 +14,7 @@ use crate::{
     graphql_rows, print_json, resolve_config_access, CONFIG_EXPORT_FORMAT,
     EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
     EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
-    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS, EXPORT_WORKSPACE_ROOT_FIELDS,
 };
 
 #[derive(Clone, Copy)]
@@ -64,6 +64,16 @@ pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "mcp",
     collection: Collection::ToolServiceRegistry,
     fields: EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
+};
+
+// list/show only: WorkspaceRoot is local-only config with no agent_did and
+// no incoming/outgoing references (see workspace_root.rs), so it does not
+// route through config_rm's desired-state reference-safety check — rm is
+// implemented directly in commands/config/workspace_root.rs instead.
+pub(super) const WORKSPACE_ROOT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "workspace root",
+    collection: Collection::WorkspaceRoot,
+    fields: EXPORT_WORKSPACE_ROOT_FIELDS,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
@@ -249,6 +259,7 @@ fn empty_bundle(access_mode: &str, agent_did: &str) -> ConfigExportBundle {
         agent_principal: None,
         agent_behaviors: Vec::new(),
         skills: Vec::new(),
+        workspace_roots: Vec::new(),
         tool_selections: Vec::new(),
         inference_backends: Vec::new(),
         inference_profiles: Vec::new(),
@@ -274,6 +285,7 @@ fn push_doc(bundle: &mut ConfigExportBundle, collection: Collection, doc: Value)
     match collection {
         Collection::AgentBehavior => bundle.agent_behaviors.push(doc),
         Collection::Skill => bundle.skills.push(doc),
+        Collection::WorkspaceRoot => bundle.workspace_roots.push(doc),
         Collection::ToolSelection => bundle.tool_selections.push(doc),
         Collection::InferenceBackend => bundle.inference_backends.push(doc),
         Collection::InferenceProfile => bundle.inference_profiles.push(doc),
@@ -341,6 +353,10 @@ fn remove_target(
         Collection::Schedule => manifest.schedules.retain(|row| row.schedule_id != id),
         Collection::EventTrigger => manifest.event_triggers.retain(|row| row.trigger_id != id),
         Collection::AgentPrincipal => {}
+        // WorkspaceRoot has no desired-state manifest list yet (not part of
+        // Collection::ALL / CONFIG_APPLY_ORDER); nothing to retain against
+        // until a follow-up task wires the file-based CRUD surface.
+        Collection::WorkspaceRoot => {}
     }
 }
 

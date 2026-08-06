@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
 import { ChatWorkspace } from "./components/ChatWorkspace";
@@ -11,6 +11,7 @@ import { applyTheme, loadTheme } from "./lib/theme";
 import { applyShellPlatform } from "./lib/shellPlatform";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
+import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { Sidebar } from "./components/Sidebar";
 import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
@@ -54,7 +55,32 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "conversation">(
     "navigation",
   );
+  const [configReturnView, setConfigReturnView] = useState<"fleet" | "chat">("fleet");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  const navigateBack = useCallback(() => {
+    if (workspaceView === "config") {
+      setWorkspaceView(configReturnView);
+      if (configReturnView === "chat") {
+        setMobileChatPane("navigation");
+      }
+      return;
+    }
+    if (workspaceView === "code") {
+      setWorkspaceView("chat");
+      setMobileChatPane("navigation");
+      return;
+    }
+    if (workspaceView === "chat" && mobileChatPane === "conversation") {
+      setMobileChatPane("navigation");
+      return;
+    }
+    if (workspaceView === "chat") {
+      setWorkspaceView("fleet");
+    }
+  }, [configReturnView, mobileChatPane, workspaceView]);
+
+  useMobileBackSwipe(workspaceView !== "fleet", navigateBack);
 
   useAppShortcuts({
     setView: (view) => {
@@ -88,7 +114,10 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
-    setMobileChatPane("conversation");
+    // Fleet selects an agent instance first. On narrow screens the sidebar is
+    // that instance view (behaviors + conversations); opening the conversation
+    // pane here made it impossible to reach that navigation from Fleet.
+    setMobileChatPane("navigation");
     setWorkspaceView("chat");
   }
 
@@ -104,6 +133,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
+    setConfigReturnView(workspaceView === "fleet" ? "fleet" : "chat");
     setWorkspaceView("config");
   }
 
@@ -172,6 +202,8 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
               setMobileChatPane("conversation");
             }}
             onRenameConversationTitle={shell.onRenameConversationTitle}
+            onSyncConversations={shell.onRepairP2P}
+            syncingConversations={shell.repairingP2P}
             onStartNewConversation={(behaviorId) => {
               shell.onStartNewConversation(behaviorId);
               setMobileChatPane("conversation");
@@ -233,7 +265,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           <ConfigWorkspace
             api={bridge.api}
             bootstrap={shell.snapshot?.bootstrap ?? null}
-            onBack={() => setWorkspaceView("chat")}
+            onBack={navigateBack}
             onDeleteSkillConfig={shell.onDeleteSkillConfig}
             onDeleteTaskConfig={shell.onDeleteTaskConfig}
             onDeleteScheduleConfig={shell.onDeleteScheduleConfig}

@@ -27,7 +27,7 @@ function renderRow(
 }
 
 describe("FleetRow", () => {
-  it("renders the chat and config action buttons keyed by peerId", () => {
+  it("keeps desktop actions available while the responsive layout hides them", () => {
     renderRow();
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
     expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();
@@ -37,6 +37,20 @@ describe("FleetRow", () => {
   it("calls onOpenChat with the agent DID when the chat button is clicked", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
+  });
+
+  it("opens agent details from the whole card and summarizes its documents", () => {
+    const props = renderRow();
+
+    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+      `${deployment.behaviors.length} behaviors`,
+    );
+    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+      `${deployment.conversations.length} conversations`,
+    );
+    fireEvent.click(screen.getByTestId("fleet-row-peer-1"));
+
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.agentDid);
   });
 
@@ -60,6 +74,7 @@ describe("FleetRow", () => {
     const props = renderRow();
     fireEvent.click(screen.getByTestId("fleet-config-peer-1"));
     expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.agentDid);
+    expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
   it("shows the deployment's own runtime heartbeat as Last update", () => {
@@ -76,6 +91,15 @@ describe("FleetRow", () => {
   it("shows unknown when the deployment has no runtime heartbeat", () => {
     renderRow({}, { ...deployment, runtime: null });
     expect(screen.getByTitle(/Last runtime state change/)).toHaveTextContent("unknown");
+  });
+
+  it("shows inference setup status only on the affected deployment row", () => {
+    const onSetupInference = vi.fn();
+    const missingInference = { ...deployment, inferenceBackends: [] };
+    renderRow({ onSetupInference }, missingInference);
+
+    fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
+    expect(onSetupInference).toHaveBeenCalledWith(missingInference);
   });
 
   it("claims the local init.json tool ceiling only for local-runtime rows", () => {

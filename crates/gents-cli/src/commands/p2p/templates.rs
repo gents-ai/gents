@@ -182,9 +182,10 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 10);
+        assert_eq!(collections.len(), 11);
         assert!(collections.contains(&"BearerPairingReady"));
         assert!(collections.contains(&"AgentDirectoryEntry"));
+        assert!(collections.contains(&"PersonaConfigRequest"));
     }
 
     #[test]

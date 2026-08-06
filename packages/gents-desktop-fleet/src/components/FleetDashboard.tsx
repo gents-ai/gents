@@ -16,19 +16,6 @@ import { AddPeerForm } from "./AddPeerForm.js";
 import { FleetRow } from "./FleetRow.js";
 import { NetworkPanel } from "./NetworkPanel.js";
 
-function needsInferenceSetup(deployment: DeploymentView): boolean {
-  const behavior =
-    deployment.behaviors.find((entry) => entry.isDefault) ??
-    deployment.behaviors[0];
-  const backend =
-    deployment.inferenceBackends.find(
-      (entry) => entry.backendId === behavior?.backendId,
-    ) ?? deployment.inferenceBackends[0];
-  if (!backend) return true;
-  if (backend.enabled === false) return true;
-  return backend.models.length === 0;
-}
-
 export type FleetDashboardProps = {
   addingPeer: boolean;
   bootstrap: BootstrapSummary | null;
@@ -97,8 +84,6 @@ export function FleetDashboard({
     useState<DeploymentView | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const hasDeployments = deployments.length > 0;
-  const deploymentNeedingInference =
-    deployments.find(needsInferenceSetup) ?? null;
   const activeWizardDeployment = wizardDeployment
     ? (deployments.find((entry) => entry.peerId === wizardDeployment.peerId) ??
       wizardDeployment)
@@ -150,7 +135,7 @@ export function FleetDashboard({
             </p>
           </div>
           {localRuntimeSetup}
-          { }
+          {}
           <details
             className="fleet-remote-disclosure"
             data-testid="fleet-remote-disclosure"
@@ -208,32 +193,6 @@ export function FleetDashboard({
         </div>
       </header>
 
-      {deploymentNeedingInference && renderInferenceSetup ? (
-        <section
-          className="panel fleet-inference-callout"
-          data-testid="fleet-inference-callout"
-        >
-          <div className="fleet-inference-callout-copy">
-            <span className="eyebrow">Inference</span>
-            <strong>
-              Finish setting up {deploymentNeedingInference.label}
-            </strong>
-            <span className="muted">
-              This agent has no model backend yet. Connect OpenAI, a local
-              server, a custom endpoint, or your ChatGPT subscription.
-            </span>
-          </div>
-          <button
-            className="primary-button"
-            data-testid="fleet-inference-setup"
-            type="button"
-            onClick={() => setWizardDeployment(deploymentNeedingInference)}
-          >
-            Set up inference
-          </button>
-        </section>
-      ) : null}
-
       {pairingNotice ? (
         <p
           aria-live="polite"
@@ -286,6 +245,9 @@ export function FleetDashboard({
                 onOpenConfig={onOpenConfig}
                 onRemovePeer={onRemovePeer}
                 onRenamePeer={onRenamePeer}
+                onSetupInference={
+                  renderInferenceSetup ? setWizardDeployment : undefined
+                }
               />
             ))}
           </tbody>

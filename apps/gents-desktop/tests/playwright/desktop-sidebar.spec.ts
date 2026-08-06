@@ -20,7 +20,7 @@ test.describe("desktop sidebar workflows", () => {
     await expect(connectedPeer).toContainText("Bombadil UI Agent");
     await expect(connectedPeer).toContainText("connected");
 
-    await connectedPeer.getByRole("button", { name: "Fleet Dashboard" }).click();
+    await connectedPeer.getByRole("button", { name: "Back to Fleet" }).click();
     await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
 
     await openChat(page);
@@ -47,7 +47,7 @@ test.describe("desktop sidebar workflows", () => {
     await expectNoPageHorizontalOverflow(page);
   });
 
-  test("conversation task filter separates manual and task-created sessions", async ({
+  test("manual and task-created sessions stay visible without a task filter", async ({
     page,
   }) => {
     await gotoHarness(page);
@@ -55,13 +55,8 @@ test.describe("desktop sidebar workflows", () => {
     await openChatNavigation(page);
 
     const taskFilter = page.getByTestId("conversation-task-filter");
-    await expect(taskFilter).toBeVisible();
-
-    await taskFilter.selectOption("__untasked__");
+    await expect(taskFilter).toHaveCount(0);
     await expect(page.getByTestId("conversation-session-intro")).toBeVisible();
-
-    await taskFilter.selectOption("host-check");
-    await expect(page.getByText("No conversations for this task.")).toBeVisible();
 
     await page
       .locator(".connected-peer-card")
@@ -75,13 +70,9 @@ test.describe("desktop sidebar workflows", () => {
 
     await page.getByTestId("config-back-tab").click();
     await openChatNavigation(page);
-    await taskFilter.selectOption("host-check");
     const conversationList = page.locator(".conversation-list");
     await expect(conversationList.getByText("Run task host-check")).toBeVisible();
     await expect(conversationList.getByText("Host check")).toBeVisible();
-
-    await taskFilter.selectOption("__untasked__");
-    await expect(conversationList.getByText("Run task host-check")).toHaveCount(0);
     await expect(page.getByTestId("conversation-session-intro")).toBeVisible();
   });
 });

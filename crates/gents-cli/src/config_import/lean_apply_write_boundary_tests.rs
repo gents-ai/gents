@@ -1057,6 +1057,9 @@ fn diff_report_from_lean(case: &LeanApplyReconcileCase) -> desired_state::Desire
         agent_principal: diff_for_collection(case, Collection::AgentPrincipal),
         agent_behaviors: diff_for_collection(case, Collection::AgentBehavior),
         skills: diff_for_collection(case, Collection::Skill),
+        // WorkspaceRoot is not part of Collection::ALL yet, so no Lean
+        // fixture ever references it; this is always an empty diff.
+        workspace_roots: diff_for_collection(case, Collection::WorkspaceRoot),
         tool_selections: diff_for_collection(case, Collection::ToolSelection),
         inference_backends: diff_for_collection(case, Collection::InferenceBackend),
         inference_profiles: diff_for_collection(case, Collection::InferenceProfile),
@@ -1192,6 +1195,7 @@ fn count_for_collection(counts: &ConfigApplyCounts, collection: Collection) -> u
         Collection::AgentPrincipal => counts.agent_principal,
         Collection::AgentBehavior => counts.agent_behaviors,
         Collection::Skill => counts.skills,
+        Collection::WorkspaceRoot => counts.workspace_roots,
         Collection::ToolSelection => counts.tool_selections,
         Collection::InferenceBackend => counts.inference_backends,
         Collection::InferenceProfile => counts.inference_profiles,

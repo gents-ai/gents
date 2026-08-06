@@ -288,7 +288,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY_NAME,
         gents_protocol::schemas::AGENT_DIRECTORY_ENTRY,
-        "bafyreib3nckkjgeabgwk7uy2h4xc7ztmivf7qkrfzghrjpln6ze4i6e52m"
+        "bafyreiaxxfmx23imaflwk55zu6mu3nv4bppgxmys5g726jk76q5iyluenu"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_MEMORY_NAME,
@@ -304,6 +304,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::SKILL_NAME,
         gents_protocol::schemas::SKILL,
         "bafyreib6grod5kwezldwy74gt5425ewoymiyyjvmygtfzhq25zwngwsrly"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::WORKSPACE_ROOT_NAME,
+        gents_protocol::schemas::WORKSPACE_ROOT,
+        "bafyreibw7kuk4xise6epukrca2inza3j44bgsxfbkse3tkbk6enqzsr6ui"
     ),
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
@@ -459,6 +464,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NETWORK_JOIN_REQUEST_NAME,
         gents_protocol::schemas::NETWORK_JOIN_REQUEST,
         "bafyreib5ufwrdzy77qvfziodcdgevd44pqoix4jcrriir3arpyyjwhdjym"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME,
+        gents_protocol::schemas::PERSONA_CONFIG_REQUEST,
+        "bafyreihvhau2vf2wxh6jfbyfbwdndyfsrfamfvpceghflx4m7vdaangb5q"
     ),
 ];
 
