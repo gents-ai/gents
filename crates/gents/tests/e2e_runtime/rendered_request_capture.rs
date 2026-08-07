@@ -87,6 +87,11 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         "the persisted payload must be the body the provider was posted"
     );
     assert_eq!(row["capture_scope"], "inference.1");
+    assert_eq!(row["request_doc_id"], doc_id);
+    let request_commit_cid = row["request_commit_cid"]
+        .as_str()
+        .filter(|cid| !cid.is_empty())
+        .expect("document-backed capture must pin its request composite commit");
     assert_eq!(row["turn_index"], 0);
     assert_eq!(row["attempt"], 0);
     assert_eq!(row["source"], "openai_chat_completions");
@@ -109,6 +114,12 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["capture_seam"], "transport_body");
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
+    assert_eq!(provenance["manifest_version"], 3);
+    assert_eq!(provenance["request_version"]["doc_id"], doc_id);
+    assert_eq!(
+        provenance["request_version"]["composite_commit_cid"],
+        request_commit_cid
+    );
     assert!(
         provenance["assembly_trace"]
             .get("effective_messages")
@@ -119,6 +130,37 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         provenance["assembly_trace"]["effective_message_count"], 1,
         "the compact trace still validates positional overlays"
     );
+
+    let historical = db
+        .node
+        .execute(&format!(
+            r#"query {{
+                AgentRequest(cid: ["{}"]) {{
+                    _docID
+                    content
+                    status
+                    lifecycle_state
+                }}
+            }}"#,
+            escape_graphql_string(request_commit_cid),
+        ))
+        .await;
+    assert!(
+        !historical.has_errors(),
+        "pinned request time-travel read failed: {:?}",
+        historical.errors
+    );
+    let historical = historical
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("pinned request snapshot");
+    assert_eq!(historical["_docID"], doc_id);
+    assert_eq!(historical["content"], "please capture-me");
+    assert_eq!(historical["status"], "processing");
+    assert_eq!(historical["lifecycle_state"], "claimed");
 
     agent.shutdown().await;
 }
@@ -259,6 +301,27 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         commit_set(db.node.as_ref(), &first.capture_key).await,
         anchor,
         "a provenance conflict must not mutate the winning fact"
+    );
+
+    // Same key and byte-identical provider body, but a different claimed
+    // AgentRequest commit: still a different fact. This is the Rust fence for
+    // `RenderedCapture.capture_rejects_source_version_rebinding`.
+    let mut source_version_conflict = first.clone();
+    source_version_conflict.request_commit_cid = "bafy-another-claim".to_string();
+    source_version_conflict.provenance_json["request_version"]["composite_commit_cid"] =
+        Value::String(source_version_conflict.request_commit_cid.clone());
+    let error = sink
+        .capture(source_version_conflict)
+        .await
+        .expect_err("request-version rebinding must be an integrity error");
+    assert!(
+        error.to_string().contains("integrity violation"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &first.capture_key).await,
+        anchor,
+        "a request-version conflict must not mutate the winning fact"
     );
 
     // Same key, different canonical value: integrity error, no write.
@@ -1125,6 +1188,10 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     let agent_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
     let request_doc_id = "bae-request-idem".to_string();
+    let request_version = gents::DocumentVersionRef {
+        doc_id: request_doc_id.clone(),
+        composite_commit_cid: "bafy-claim-idem".to_string(),
+    };
     let request_id = "req-idem".to_string();
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
@@ -1143,6 +1210,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         .expect("capture key"),
         capture_version: gents::rendered_request::CAPTURE_VERSION,
         request_doc_id,
+        request_commit_cid: request_version.composite_commit_cid.clone(),
         request_id,
         capture_scope: capture_scope.clone(),
         turn_index: 0,
@@ -1161,9 +1229,10 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         prompt_hash: "0".repeat(64),
         tools_hash: "0".repeat(64),
         provenance_json: serde_json::to_value(
-            gents::rendered_request::ProvenanceManifest::captured_only(
+            gents::rendered_request::ProvenanceManifest::captured_only_with_request_version(
                 capture_scope,
                 None,
+                Some(request_version),
                 assembly_trace.clone(),
             ),
         )
@@ -1204,6 +1273,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
             RenderedRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 capture_key
                 request_doc_id
+                request_commit_cid
                 request_id
                 session_id
                 agent_did

@@ -24,6 +24,7 @@ pub mod defra_query;
 pub mod defra_write;
 pub mod desired_fields;
 pub mod document_config;
+pub mod document_version;
 pub mod error;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
@@ -147,6 +148,7 @@ pub use document_config::{
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
+pub use document_version::DocumentVersionRef;
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
     ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,

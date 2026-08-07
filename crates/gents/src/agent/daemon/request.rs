@@ -19,6 +19,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
+        let request_version = lifecycle.request_version().cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "claimed AgentRequest {} has no composite commit provenance",
+                request.doc_id
+            )
+        })?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let behavior_name = self.behavior.behavior_id.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -48,12 +54,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let capture_scope = crate::rendered_request::scope::scope_from_factory(
             crate::rendered_request::RenderedRequestContext::for_request(
                 &request,
+                request_version.clone(),
                 self.behavior.model_name.clone(),
             ),
             self.rendered_request_capture_factory.as_ref(),
         );
         let handled = admission::scope_request(admission_context, async {
-            self.spawn_conversation_title_generation(&request, title_admission_context);
+            self.spawn_conversation_title_generation(
+                &request,
+                request_version,
+                title_admission_context,
+            );
 
             let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
             let skill_reminders = self

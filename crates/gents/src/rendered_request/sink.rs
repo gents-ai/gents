@@ -106,6 +106,7 @@ impl DefraRenderedRequestSink {
             r#"query {{
                 {collection}(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
                     request_doc_id
+                    request_commit_cid
                     request_id
                     session_id
                     agent_did
@@ -168,6 +169,7 @@ impl DefraRenderedRequestSink {
                 create_{collection}(input: {{
                     capture_key: "{capture_key}",
                     request_doc_id: "{request_doc_id}",
+                    request_commit_cid: "{request_commit_cid}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
@@ -189,6 +191,7 @@ impl DefraRenderedRequestSink {
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(&rendered.capture_key),
             request_doc_id = escape_graphql_string(&rendered.request_doc_id),
+            request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
             agent_did = escape_graphql_string(&rendered.agent_did),
@@ -334,6 +337,7 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
     Ok(canonical_json(&serde_json::json!({
         "request_doc_id": rendered.request_doc_id,
+        "request_commit_cid": rendered.request_commit_cid,
         "request_id": rendered.request_id,
         "session_id": rendered.session_id,
         "agent_did": rendered.agent_did,

@@ -52,6 +52,7 @@ use gents::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
     RenderedCompletionRequest, RenderedRequestSource, CAPTURE_VERSION,
 };
+use gents::DocumentVersionRef;
 use serde_json::{json, Value};
 
 use crate::lean_vocab_test::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
@@ -113,6 +114,10 @@ fn rendered_in_scope(
     let agent_did = agent_did(agent);
     let session_id = session_id(session);
     let request_doc_id = request_doc_id(request);
+    let request_version = DocumentVersionRef {
+        doc_id: request_doc_id.clone(),
+        composite_commit_cid: format!("bafy-claim-{request}"),
+    };
     let assembly_trace =
         AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
 
@@ -128,6 +133,7 @@ fn rendered_in_scope(
         .expect("capture key"),
         capture_version: CAPTURE_VERSION,
         request_doc_id,
+        request_commit_cid: request_version.composite_commit_cid.clone(),
         request_id: format!("logical-request-{request}"),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -145,11 +151,14 @@ fn rendered_in_scope(
         sampling_json: Value::Null,
         prompt_hash: String::new(),
         tools_hash: String::new(),
-        provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
-            capture_scope.to_string(),
-            None,
-            assembly_trace.clone(),
-        ))
+        provenance_json: serde_json::to_value(
+            ProvenanceManifest::captured_only_with_request_version(
+                capture_scope.to_string(),
+                None,
+                Some(request_version),
+                assembly_trace.clone(),
+            ),
+        )
         .expect("provenance manifest"),
         assembly_trace,
     }

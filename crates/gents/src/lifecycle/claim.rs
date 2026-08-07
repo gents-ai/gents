@@ -1,4 +1,119 @@
 use super::*;
+use std::collections::HashSet;
+
+#[derive(serde::Deserialize)]
+struct CompositeCommitRow {
+    cid: String,
+    height: i64,
+}
+
+async fn composite_commits(node: &EmbeddedNode, doc_id: &str) -> Result<Vec<CompositeCommitRow>> {
+    let escaped_doc_id = escape_graphql_string(doc_id);
+    let query = format!(
+        r#"query {{
+            _commits(
+                docID: ["{escaped_doc_id}"],
+                filter: {{ fieldName: {{ _eq: "_C" }} }}
+            ) {{
+                cid
+                height
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying AgentRequest {doc_id} composite commits failed: {:?}",
+            response.errors
+        );
+    }
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map(|rows| rows.unwrap_or_default())
+        .map_err(Into::into)
+}
+
+pub(super) async fn current_composite_commit_cids(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<HashSet<String>> {
+    Ok(composite_commits(node, doc_id)
+        .await?
+        .into_iter()
+        .map(|commit| commit.cid)
+        .collect())
+}
+
+pub(super) async fn resolve_claimed_request_version(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    claimed_at: &str,
+    deadline: &str,
+    behavior_id: &str,
+    backend_id: &str,
+    execution_origin: &str,
+    commits_before_claim: &HashSet<String>,
+) -> Result<(crate::DocumentVersionRef, AgentRequest)> {
+    let mut commits = composite_commits(node, doc_id).await?;
+    commits.retain(|commit| !commits_before_claim.contains(&commit.cid));
+    // The successful conditional mutation is the earliest new snapshot with
+    // these claim markers. Later mutations inherit the markers, so choosing a
+    // newest match would silently move the execution boundary forward.
+    commits.sort_by(|left, right| {
+        left.height
+            .cmp(&right.height)
+            .then_with(|| left.cid.cmp(&right.cid))
+    });
+
+    let mut selected: Option<(i64, crate::DocumentVersionRef, AgentRequest)> = None;
+    for commit in commits {
+        if selected
+            .as_ref()
+            .is_some_and(|(height, _, _)| commit.height > *height)
+        {
+            break;
+        }
+        let Some(snapshot) =
+            crate::watcher::load_agent_request_at_cid(node, &commit.cid, doc_id).await?
+        else {
+            continue;
+        };
+        let request = &snapshot.request;
+        let matches_claim = snapshot.status == "processing"
+            && snapshot.lifecycle_state.as_deref() == Some("claimed")
+            && snapshot.claimed_at.as_deref() == Some(claimed_at)
+            && snapshot.backend_id.as_deref().unwrap_or("") == backend_id
+            && request.behavior_id.as_deref().unwrap_or("") == behavior_id
+            && request.execution_origin.as_deref().unwrap_or("") == execution_origin
+            && request.deadline.as_deref() == Some(deadline);
+        if matches_claim {
+            if selected.is_some() {
+                anyhow::bail!(
+                    "AgentRequest {doc_id} has multiple new claim snapshots at height {}; refusing to choose a CID",
+                    commit.height
+                );
+            }
+            selected = Some((
+                commit.height,
+                crate::DocumentVersionRef::new(doc_id, commit.cid),
+                snapshot.request,
+            ));
+        }
+    }
+
+    if let Some((_, version, request)) = selected {
+        return Ok((version, request));
+    }
+
+    anyhow::bail!(
+        "AgentRequest {doc_id} was claimed but no new composite commit reconstructs the exact claim snapshot"
+    )
+}
 
 fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
@@ -246,6 +361,8 @@ impl RequestLifecycle {
             .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
         let doc_id = &self.request.doc_id;
+        let commits_before_claim = current_composite_commit_cids(&self.node, doc_id).await?;
+        let escaped_doc_id = escape_graphql_string(doc_id);
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
@@ -256,7 +373,7 @@ impl RequestLifecycle {
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
@@ -301,6 +418,20 @@ impl RequestLifecycle {
                 "claimed agent request with deadline"
             );
         }
+
+        let (request_version, claimed_request) = resolve_claimed_request_version(
+            &self.node,
+            doc_id,
+            &claimed_at,
+            &deadline,
+            &self.behavior_id,
+            &self.backend_id,
+            execution_origin,
+            &commits_before_claim,
+        )
+        .await?;
+        self.request = claimed_request;
+        self.request_version = Some(request_version);
 
         self.state = LocalLifecycleState::Claimed;
         self.claimed_deadline_at = Some(deadline_at);
@@ -483,5 +614,154 @@ mod tests {
             second_lifecycle.claim_with_identity().await.unwrap(),
             ClaimOutcome::Queued
         );
+    }
+
+    #[tokio::test]
+    async fn claim_reloads_the_exact_composite_snapshot_it_pins() {
+        let node = test_node().await;
+        let stale_request = insert_pending_request(
+            node.as_ref(),
+            "claim-version-request",
+            "claim-version-session",
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+        let doc_id = stale_request.doc_id.clone();
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{}" }} }},
+                    input: {{ content: "edited after watcher read" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "pre-claim edit failed: {:?}",
+            response.errors
+        );
+
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            TEST_BEHAVIOR_ID,
+            TEST_AGENT_DID,
+            stale_request,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        );
+
+        assert_eq!(lifecycle.request().content, "edited after watcher read");
+        let version = lifecycle
+            .request_version()
+            .expect("claim must pin an AgentRequest version");
+        assert_eq!(version.doc_id, doc_id);
+        assert!(!version.composite_commit_cid.is_empty());
+
+        let snapshot = crate::watcher::load_agent_request_at_cid(
+            node.as_ref(),
+            &version.composite_commit_cid,
+            &doc_id,
+        )
+        .await
+        .unwrap()
+        .expect("pinned claim snapshot");
+        assert_eq!(snapshot.status, "processing");
+        assert_eq!(snapshot.lifecycle_state.as_deref(), Some("claimed"));
+        assert_eq!(snapshot.request.content, lifecycle.request().content);
+    }
+
+    #[tokio::test]
+    async fn claim_version_resolution_rejects_later_marker_preserving_edits() {
+        let node = test_node().await;
+        let pending = insert_pending_request(
+            node.as_ref(),
+            "claim-version-race-request",
+            "claim-version-race-session",
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+        let doc_id = pending.doc_id.clone();
+        let commits_before_claim = current_composite_commit_cids(node.as_ref(), &doc_id)
+            .await
+            .unwrap();
+        let claimed_at = "2026-01-01T00:00:01Z";
+        let deadline = "2026-01-01T00:01:01Z";
+        let claim = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{
+                        _docID: {{ _eq: "{}" }},
+                        status: {{ _eq: "pending" }},
+                        lifecycle_state: {{ _eq: "pending" }}
+                    }},
+                    input: {{
+                        status: "processing",
+                        lifecycle_state: "claimed",
+                        behavior_id: "{TEST_BEHAVIOR_ID}",
+                        backend_id: "{TEST_BACKEND_ID}",
+                        execution_origin: "interactive",
+                        claimed_at: "{claimed_at}",
+                        deadline: "{deadline}"
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+        );
+        let response = node.execute(&claim).await;
+        assert!(
+            !response.has_errors(),
+            "claim failed: {:?}",
+            response.errors
+        );
+
+        // This commit inherits every claim marker. A newest-first scan would
+        // therefore pin this later content instead of the claim boundary.
+        let edit = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{}" }} }},
+                    input: {{ content: "edited after claim" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+        );
+        let response = node.execute(&edit).await;
+        assert!(
+            !response.has_errors(),
+            "post-claim edit failed: {:?}",
+            response.errors
+        );
+
+        let (version, snapshot) = resolve_claimed_request_version(
+            node.as_ref(),
+            &doc_id,
+            claimed_at,
+            deadline,
+            TEST_BEHAVIOR_ID,
+            TEST_BACKEND_ID,
+            "interactive",
+            &commits_before_claim,
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.content, pending.content);
+        assert_ne!(snapshot.content, "edited after claim");
+
+        let reconstructed = crate::watcher::load_agent_request_at_cid(
+            node.as_ref(),
+            &version.composite_commit_cid,
+            &doc_id,
+        )
+        .await
+        .unwrap()
+        .expect("pinned claim snapshot");
+        assert_eq!(reconstructed.request.content, pending.content);
     }
 }

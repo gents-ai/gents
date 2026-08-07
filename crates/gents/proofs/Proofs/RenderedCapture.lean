@@ -13,8 +13,10 @@ names two different canonical requests.
 
 ## What is modeled, and what is deliberately not
 
-* `CanonicalRequest` is **opaque**. The model never looks inside it; it only
-  ever compares two of them for equality. That is the whole point of stating
+* The provider body inside `CanonicalRequest` is **opaque**. The model never
+  looks inside it; it only ever compares two bodies for equality. A capture also
+  carries the exact DefraDB request-document version that supplied its input.
+  That is the whole point of stating
   `capture_key_determines_request` over the request *value* rather than over a
   stored digest: DefraDB already supplies a content address for the persisted
   field as a per-field commit, so a modeled hash column would add an unmodeled
@@ -66,6 +68,8 @@ names two different canonical requests.
 * `capture_idempotent`, `capture_rejects_rebinding` — redelivery of an identical
   capture succeeds without a write; a conflicting one is an integrity error and
   never an update.
+* `capture_rejects_source_version_rebinding` — identical provider bytes do not
+  make two different request-document versions the same fact.
 * `capture_failure_blocks_send` — a rejected capture leaves the store unchanged
   and makes `sent` unreachable forever. This is the fail-closed property the
   sink must satisfy; the implementation is not free to choose fail-open after
@@ -94,13 +98,25 @@ structure CaptureKey where
   attempt : Nat
   deriving DecidableEq, Repr
 
-/-- The canonical assembled provider request.
+/-- One exact DefraDB document version. `_docID` identifies the document while
+the composite commit CID identifies the immutable snapshot within its history.
+Both are opaque natural numbers under `boundary.model.nat-typed-ids-time`. -/
+structure DocumentVersionRef where
+  docId : Nat
+  compositeCommitCid : Nat
+  deriving DecidableEq, Repr
 
-Opaque on purpose: the only operation the model performs on it is equality.
-Whatever the Rust canonical encoder produces, two captures agree exactly when
-their canonical values agree. -/
+/-- The canonical provider request and the request-document snapshot from which
+the runtime executed it.
+
+`value` is opaque on purpose: the only operation the model performs on provider
+bytes is equality. `requestVersion` is `none` only for a one-shot run, which has
+no `AgentRequest` document. A document-backed capture compares the source
+version as part of the immutable fact, so equal bytes from different versions
+cannot be accepted as an idempotent redelivery. -/
 structure CanonicalRequest where
   value : Nat
+  requestVersion : Option DocumentVersionRef := none
   deriving DecidableEq, Repr
 
 /-! ## Durable capture table -/
@@ -183,6 +199,18 @@ theorem capture_rejects_rebinding (s : Store) (k : CaptureKey)
     (stored r : CanonicalRequest) (h : s k = some stored) (h_conflict : stored ≠ r) :
     capture s k r = (.rejected, s) := by
   simp [capture, h, h_conflict]
+
+/-- A source-version change is a fact change even when the rendered provider
+body is byte-identical. This prevents an idempotency key from laundering a
+different request snapshot into an existing capture. -/
+theorem capture_rejects_source_version_rebinding (s : Store) (k : CaptureKey)
+    (stored r : CanonicalRequest) (h : s k = some stored)
+    (h_version : stored.requestVersion ≠ r.requestVersion) :
+    capture s k r = (.rejected, s) := by
+  apply capture_rejects_rebinding s k stored r h
+  intro h_request
+  apply h_version
+  exact congrArg CanonicalRequest.requestVersion h_request
 
 /-- Capture is total and its three outcomes are mutually exclusive. -/
 theorem capture_outcome_classified (s : Store) (k : CaptureKey) (r : CanonicalRequest) :

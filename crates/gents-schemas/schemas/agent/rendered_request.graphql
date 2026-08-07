@@ -39,6 +39,11 @@ type RenderedRequest @branchable {
     # provenance edge; request_id below remains the logical/user-facing id.
     # Empty only for one-shot runs, which do not author an AgentRequest.
     request_doc_id: String @index @immutable
+    # Composite commit CID of the exact AgentRequest snapshot consumed by the
+    # runtime. Together with request_doc_id this is a DefraDB time-travel
+    # pointer, not another application-generated identifier. Empty only for a
+    # one-shot run.
+    request_commit_cid: String @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable

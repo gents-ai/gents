@@ -18,6 +18,7 @@ use cooldown::{
     mark_processed, prune_processed_requests, request_is_cooling_down,
     take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL, PROCESSED_REQUEST_COOLDOWN,
 };
+pub(crate) use query::load_agent_request_at_cid;
 
 #[derive(Debug, Clone)]
 pub struct AgentRequest {

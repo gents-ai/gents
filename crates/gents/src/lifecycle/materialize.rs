@@ -240,6 +240,7 @@ impl RequestLifecycle {
             backend_id: backend_id.into(),
             failure_reason: None,
             request,
+            request_version: None,
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
@@ -333,11 +334,12 @@ impl RequestLifecycle {
             "add_AgentRequest returned no _docID",
         )
         .await?;
+        let escaped_doc_id = escape_graphql_string(&doc_id);
 
         let lineage_mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                     input: {{
                         retry_parent_request: "",
                         retry_root_request: "{escaped_retry_root_request}",
@@ -354,26 +356,17 @@ impl RequestLifecycle {
             );
         }
 
-        let request = AgentRequest {
-            doc_id,
-            request_id: request_id.clone(),
-            agent_did: agent_did.to_string(),
-            requester_did: None,
-            behavior_id: Some(behavior_id.clone()),
-            session_id: session_id.clone(),
-            content: content.to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            max_tokens: None,
-            metadata: None,
-            execution_origin: Some(execution_origin_str.to_string()),
-            created_at,
-            deadline: Some(deadline),
-            subagent_depth: 0,
-            caused_by_parent_request_id: None,
-            caused_by_parent_tool_call_id: None,
-        };
+        let (request_version, request) = super::claim::resolve_claimed_request_version(
+            node.as_ref(),
+            &doc_id,
+            &claimed_at,
+            &deadline,
+            &behavior_id,
+            &backend_id,
+            execution_origin_str,
+            &std::collections::HashSet::new(),
+        )
+        .await?;
 
         session::upsert_conversation_from_request_with_identity(
             node.as_ref(),
@@ -396,6 +389,7 @@ impl RequestLifecycle {
             backend_id,
             failure_reason: None,
             request,
+            request_version: Some(request_version),
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,

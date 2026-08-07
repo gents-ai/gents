@@ -241,6 +241,7 @@ pub struct RequestLifecycle {
     backend_id: String,
     failure_reason: Option<String>,
     request: AgentRequest,
+    request_version: Option<crate::DocumentVersionRef>,
     response_doc_id: Option<String>,
     progress_seq: u32,
     deadline_duration_secs: u64,
@@ -256,6 +257,10 @@ impl RequestLifecycle {
 
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.valid_until_at_claim
+    }
+
+    pub fn request_version(&self) -> Option<&crate::DocumentVersionRef> {
+        self.request_version.as_ref()
     }
 }
 

@@ -163,31 +163,43 @@ DocumentVersionRef {
 - The signer of either document is not yet guaranteed to match its claimed
   principal; that is tracked by issue #1064.
 
-### Provisional direction
+### Implemented direction
 
-1. Define a native Rust `DocumentVersionRef` with validated DefraDB `_docID`
-   and CID values.
-2. Extend the request loader so the request value and its composite commit CID
-   are acquired from one consistent read.
-3. Carry the reference through request ownership and capture scope without a
-   later lookup by logical ID.
-4. Version the rendered provenance manifest and record the request reference.
-5. Reconstruct the request with a `docID` plus `cid` time-travel query.
-6. Mutate the live `AgentRequest` after capture and prove reconstruction still
-   loads the consumed version.
-7. Report missing, inaccessible, unsigned, and mismatched provenance as
-   explicit non-verified outcomes.
+1. `DocumentVersionRef` pairs the stable `_docID` with a composite commit CID.
+2. The formal capture fact compares that source version as well as the rendered
+   body; equal provider bytes cannot make a different source version
+   idempotent.
+3. The conditional claim write is the named provider-input boundary. After the
+   write, the runtime excludes every composite observed before the mutation,
+   then uses CID time-travel reads to locate the earliest new
+   `processing`/`claimed` snapshot with the claim's timestamp, deadline,
+   behavior, backend, and execution origin. Selecting the earliest new match
+   prevents a later content edit that inherits the claim markers from moving
+   the boundary forward.
+4. The runtime replaces the watcher-loaded value with that reconstructed
+   snapshot before prompt assembly. This closes the watcher-read/claim-write
+   race even while request input fields remain mutable in the current schema.
+5. A document-backed capture fails closed without the reference. The
+   `RenderedRequest` row stores `request_doc_id` and `request_commit_cid`, and
+   provenance manifest v3 carries the structured pair.
+6. The status remains `CapturedOnly`: config, transcript, ACP-read, and signer
+   evidence are not all pinned yet.
 
-### Required investigation before implementation
+### Findings from the pinned DefraDB implementation
 
-- Establish the pinned DefraDB GraphQL shape that returns document fields and
-  the consumed composite `_C` CID from one consistent read.
-- Define behavior when a document has concurrent composite heads.
-- Decide which `AgentRequest` lifecycle version is the provider-input source:
-  claimed, processing, or another formally named boundary.
-- Extend the PromptAssembly/projection-fidelity model before reporting the
-  reconstructed result as `Verified`.
-- Confirm ACP is enforced for normal, CID, `_version`, and `_commits` reads.
+- `_version` on a normal query or mutation returns all reachable composite
+  versions, sorted by height. Treating element zero as “the consumed version”
+  would be unsound under concurrent heads.
+- DefraDB update events carry the exact written CID, but the event bus is
+  live-only and is therefore not a sufficient recovery source.
+- `_commits` exposes composite `_C` CIDs and `Collection(cid: [CID])` performs
+  an exact historical read. Excluding the pre-mutation history and matching the
+  earliest new claim-state snapshot selects the runtime's claim commit without
+  relying on head order or assuming unchanged marker fields are unique forever.
+- The exact claimed snapshot, before the later `claimed -> processing`
+  transition, is the request source boundary.
+- ACP behavior for CID/history reads, signer evidence, and complete
+  reconstructibility remain follow-up gates before `Verified` is legal.
 
 ### Initial acceptance criteria
 
@@ -201,5 +213,6 @@ DocumentVersionRef {
 - Signer verification remains explicit and cannot be inferred from
   `agent_did` or `requester_did` fields.
 
-Status: **Provisional**. The DefraDB read-shape and concurrent-head questions
-must be settled before the Lean and conformance changes are authored.
+Status: **Implemented first slice**. Exact request-version provenance is
+captured; the manifest intentionally remains `CapturedOnly` until the remaining
+config, transcript, ACP, and signer evidence is modeled and implemented.

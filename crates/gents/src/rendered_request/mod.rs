@@ -75,12 +75,12 @@ pub use transport::RenderedRequestCapturingHttpClient;
 
 /// Capture format version stamped onto every row. Bump when the *set of
 /// columns* a reader must understand changes.
-pub const CAPTURE_VERSION: u32 = 1;
+pub const CAPTURE_VERSION: u32 = 2;
 
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
 /// `UnsupportedManifest` rather than guessing.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 2;
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 3;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
@@ -357,9 +357,9 @@ impl AssemblyTrace {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProvenanceStatus {
-    /// The rendered request is durable and exact, but no durable source
-    /// versions are pinned alongside it, so a reconstruction cannot be
-    /// verified against it. This is the only status version 1 emits.
+    /// The rendered request is durable and exact, but not all durable source
+    /// versions are pinned alongside it, so a reconstruction cannot yet be
+    /// fully verified. This is the only status version 3 emits.
     CapturedOnly,
 }
 
@@ -372,16 +372,16 @@ pub enum ProvenanceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureSeam {
     /// The last `HttpClientExt` before the network client. The only seam
-    /// version 1 emits.
+    /// version 3 emits.
     TransportBody,
 }
 
 /// Versioned provenance travelling in the `provenance_json` column.
 ///
-/// Version 1 carries the assembly trace, the seam the bytes came from, the
-/// capture scope, and an honest `CapturedOnly` status. Pinned
-/// config/transcript CIDs are a later version; when they arrive, a version-1
-/// row must still be readable and must still report `CapturedOnly`.
+/// Version 3 carries the assembly trace, the seam, the observed provider
+/// endpoint, the exact request-document version, and an honest `CapturedOnly`
+/// status. Pinned config/transcript CIDs are a later version; version-1 and
+/// version-2 rows remain readable as captures without a request-version pin.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
     pub manifest_version: u32,
@@ -404,26 +404,54 @@ pub struct ProvenanceManifest {
     /// bytes were meant to go; this says where they went.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_endpoint: Option<String>,
+    /// Exact source snapshot for a document-backed request. `None` is valid
+    /// only for a one-shot run, which has no `AgentRequest` document.
+    #[serde(default)]
+    pub request_version: Option<crate::DocumentVersionRef>,
     pub assembly_trace: AssemblyTrace,
 }
 
 impl ProvenanceManifest {
     const CAPTURED_ONLY_REASON: &'static str =
-        "this provenance manifest pins no config or transcript versions, so a \
-         reconstruction cannot be verified against this capture";
+        "provenance manifest v3 pins the request snapshot but not all config or \
+         transcript versions, so a reconstruction cannot yet be fully verified";
+    const ONESHOT_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v3 describes a one-shot run with no request document \
+         and pins no config or transcript versions, so a reconstruction cannot \
+         yet be fully verified";
 
     pub fn captured_only(
         capture_scope: String,
         provider_endpoint: Option<String>,
         assembly_trace: AssemblyTrace,
     ) -> Self {
+        Self::captured_only_with_request_version(
+            capture_scope,
+            provider_endpoint,
+            None,
+            assembly_trace,
+        )
+    }
+
+    pub fn captured_only_with_request_version(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        request_version: Option<crate::DocumentVersionRef>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
+        let status_reason = if request_version.is_some() {
+            Self::CAPTURED_ONLY_REASON
+        } else {
+            Self::ONESHOT_CAPTURED_ONLY_REASON
+        };
         Self {
             manifest_version: PROVENANCE_MANIFEST_VERSION,
             status: ProvenanceStatus::CapturedOnly,
-            status_reason: Self::CAPTURED_ONLY_REASON.to_string(),
+            status_reason: status_reason.to_string(),
             capture_seam: CaptureSeam::TransportBody,
             capture_scope,
             provider_endpoint,
+            request_version,
             assembly_trace,
         }
     }
@@ -442,6 +470,8 @@ pub struct RenderedRequestContext {
     /// invalid duplicate logical id exists in the collection. Empty only for a
     /// one-shot run, which does not author an `AgentRequest` document.
     pub request_doc_id: String,
+    #[serde(default)]
+    pub request_version: Option<crate::DocumentVersionRef>,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -456,9 +486,14 @@ pub struct RenderedRequestContext {
 }
 
 impl RenderedRequestContext {
-    pub(crate) fn for_request(request: &crate::watcher::AgentRequest, model_name: String) -> Self {
+    pub(crate) fn for_request(
+        request: &crate::watcher::AgentRequest,
+        request_version: crate::DocumentVersionRef,
+        model_name: String,
+    ) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
+            request_version: Some(request_version),
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -540,6 +575,9 @@ pub struct RenderedCompletionRequest {
     /// remains alongside it for user-facing correlation and queries. Empty for
     /// a one-shot run, which has no `AgentRequest` document.
     pub request_doc_id: String,
+    /// Composite commit CID of the exact `AgentRequest` snapshot consumed by
+    /// the runtime. Empty only for one-shot runs.
+    pub request_commit_cid: String,
     pub request_id: String,
     /// Which completion loop inside the request issued this call, e.g.
     /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
@@ -594,6 +632,21 @@ pub(crate) fn build_rendered_completion_request(
 
     let prompt_hash = sha256_canonical_json(&prompt_json)?;
     let tools_hash = sha256_canonical_json(&tools_json)?;
+    match (&context.request_doc_id, &context.request_version) {
+        (doc_id, Some(version))
+            if !doc_id.is_empty() && version.doc_id.as_str() == doc_id.as_str() => {}
+        (doc_id, None) if doc_id.is_empty() => {}
+        (doc_id, Some(_)) if doc_id.is_empty() => {
+            anyhow::bail!("one-shot rendered-request context cannot carry a request version")
+        }
+        (doc_id, None) => anyhow::bail!(
+            "document-backed rendered-request context {doc_id} has no composite commit CID"
+        ),
+        (doc_id, Some(version)) => anyhow::bail!(
+            "rendered-request context document {doc_id} disagrees with version document {}",
+            version.doc_id
+        ),
+    }
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
@@ -602,9 +655,10 @@ pub(crate) fn build_rendered_completion_request(
         turn_index,
         attempt,
     )?;
-    let manifest = ProvenanceManifest::captured_only(
+    let manifest = ProvenanceManifest::captured_only_with_request_version(
         capture_scope.to_string(),
         provider_endpoint,
+        context.request_version.clone(),
         assembly_trace.clone(),
     );
     let provenance_json = canonical_json(
@@ -620,6 +674,11 @@ pub(crate) fn build_rendered_completion_request(
         capture_key,
         capture_version: CAPTURE_VERSION,
         request_doc_id: context.request_doc_id.clone(),
+        request_commit_cid: context
+            .request_version
+            .as_ref()
+            .map(|version| version.composite_commit_cid.clone())
+            .unwrap_or_default(),
         request_id: context.request_id.clone(),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -734,6 +793,7 @@ mod tests {
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
+            request_version: Some(crate::DocumentVersionRef::new("doc-1", "bafy-claim-1")),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),
@@ -1282,6 +1342,10 @@ mod tests {
         assert!(!manifest.status_reason.is_empty());
         assert_eq!(manifest.capture_seam, CaptureSeam::TransportBody);
         assert_eq!(manifest.capture_scope, "inference.1");
+        assert_eq!(
+            manifest.request_version,
+            Some(crate::DocumentVersionRef::new("doc-1", "bafy-claim-1"))
+        );
         assert_eq!(manifest.assembly_trace, trace);
         assert_eq!(rendered.assembly_trace, trace);
     }
@@ -1298,10 +1362,10 @@ mod tests {
         );
     }
 
-    /// Version 1 declares `captured_only` positively. An absent field is never
+    /// Version 3 declares `captured_only` positively. An absent field is never
     /// the evidence — a reader must be able to see the claim, not infer it.
     #[test]
-    fn version_one_provenance_never_claims_verification() {
+    fn version_three_provenance_never_claims_verification() {
         let rendered = build(0, 0, empty_trace(), components());
 
         assert_eq!(rendered.provenance_json["status"], "captured_only");
@@ -1312,6 +1376,27 @@ mod tests {
         assert!(rendered.provenance_json.get("assembly_trace").is_some());
     }
 
+    #[test]
+    fn version_two_manifest_without_request_version_remains_readable() {
+        let mut value = serde_json::to_value(ProvenanceManifest::captured_only(
+            "inference.1".to_string(),
+            Some("https://provider.example".to_string()),
+            empty_trace(),
+        ))
+        .expect("legacy manifest fixture");
+        value["manifest_version"] = json!(2);
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("request_version");
+
+        let decoded: ProvenanceManifest =
+            serde_json::from_value(value).expect("version-two manifest remains readable");
+        assert_eq!(decoded.manifest_version, 2);
+        assert_eq!(decoded.request_version, None);
+        assert_eq!(decoded.status, ProvenanceStatus::CapturedOnly);
+    }
+
     /// The seam is recorded positively so a reader never has to guess whether
     /// the bytes predate the ChatGPT-Codex and Grok body rewrites.
     #[test]
@@ -1320,6 +1405,42 @@ mod tests {
 
         assert_eq!(rendered.provenance_json["capture_seam"], "transport_body");
         assert_eq!(rendered.provenance_json["capture_scope"], "inference.1");
+    }
+
+    #[test]
+    fn document_backed_capture_fails_closed_without_matching_version() {
+        let mut missing = context();
+        missing.request_version = None;
+        let error = build_rendered_completion_request(
+            &missing,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("document-backed capture without a CID must fail");
+        assert!(error.to_string().contains("no composite commit CID"));
+
+        let mut mismatched = context();
+        mismatched.request_version = Some(crate::DocumentVersionRef::new(
+            "another-doc",
+            "bafy-claim-1",
+        ));
+        let error = build_rendered_completion_request(
+            &mismatched,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("a CID reference for another document must fail");
+        assert!(error
+            .to_string()
+            .contains("disagrees with version document"));
     }
 
     fn agent_request() -> crate::watcher::AgentRequest {
@@ -1349,11 +1470,19 @@ mod tests {
     fn context_for_request_carries_an_absent_requester_as_empty() {
         let mut request = agent_request();
         request.requester_did = None;
-        let context = RenderedRequestContext::for_request(&request, "test-model".to_string());
+        let context = RenderedRequestContext::for_request(
+            &request,
+            crate::DocumentVersionRef::new("doc-1", "bafy-claim-1"),
+            "test-model".to_string(),
+        );
         assert_eq!(context.requester_did, "");
 
         request.requester_did = Some("did:key:requester".to_string());
-        let context = RenderedRequestContext::for_request(&request, "test-model".to_string());
+        let context = RenderedRequestContext::for_request(
+            &request,
+            crate::DocumentVersionRef::new("doc-1", "bafy-claim-1"),
+            "test-model".to_string(),
+        );
         assert_eq!(context.requester_did, "did:key:requester");
     }
 }

@@ -1248,6 +1248,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     let scope = test_scope(
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
+            request_version: Some(crate::DocumentVersionRef::new("doc-1", "bafy-claim-1")),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),

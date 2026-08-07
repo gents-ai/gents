@@ -21,6 +21,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn spawn_conversation_title_generation(
         &self,
         request: &AgentRequest,
+        request_version: crate::DocumentVersionRef,
         admission_context: AdmissionCallContext,
     ) {
         let node = Arc::clone(&self.node);
@@ -48,6 +49,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // scope and this provider call would be the one that stays uncaptured.
         let capture_context = crate::rendered_request::RenderedRequestContext::for_request(
             &request,
+            request_version,
             self.behavior.model_name.clone(),
         );
         let capture_factory = self.rendered_request_capture_factory.clone();

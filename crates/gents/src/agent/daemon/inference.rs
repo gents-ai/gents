@@ -726,7 +726,9 @@ mod tests {
                     created_at: "{created_at}",
                     retry_count: 0,
                     max_retries: 3,
-                    subagent_depth: 1
+                    subagent_depth: 1,
+                    caused_by_parent_request_id: "parent-request",
+                    caused_by_parent_tool_call_id: "parent-tool-call"
                 }}) {{ _docID }}
             }}"#
         );

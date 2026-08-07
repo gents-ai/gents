@@ -73,9 +73,20 @@ Use `_docID` plus a composite commit CID when provenance must identify the exact
 document version consumed. DefraDB exposes commit metadata through `_version`
 and `_commits`, and accepts `docID`/`cid` for time-travel reads.
 
-The loader must acquire the value and its version reference together and carry
-that reference through the runtime. Re-querying the current CID later is a
-time-correlation race, not provenance.
+The runtime must acquire the value and its version reference at one named
+boundary and carry that reference forward. For a plain read, acquire both as
+one consistent observation. When a conditional mutation defines the boundary,
+record the pre-mutation commit set, then locate the earliest new composite with
+that mutation's distinguishing state and reload the value by CID before using
+it. The pre-mutation exclusion matters: later mutations inherit unchanged
+claim fields and can otherwise look like the boundary. Re-querying the current
+head later is a time-correlation race, not provenance.
+
+On the pinned DefraDB version, `_version` without a target CID returns every
+reachable composite version and sorts by height. Concurrent heads make
+“element zero is current” an invalid correctness rule. Use an exact mutation
+marker or update-event CID, verify it with a CID time-travel read, and retain
+the resulting `_docID`/CID pair.
 
 ### Signer identity
 

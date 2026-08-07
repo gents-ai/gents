@@ -18,12 +18,62 @@ const AGENT_REQUEST_FIELDS: &str = r#"
                     max_tokens
                     metadata
                     execution_origin
+                    backend_id
                     created_at
+                    claimed_at
                     deadline
                     subagent_depth
                     caused_by_parent_request_id
                     caused_by_parent_tool_call_id
 "#;
+
+/// A request reconstructed from one exact DefraDB composite commit.
+pub(crate) struct AgentRequestVersionSnapshot {
+    pub(crate) request: AgentRequest,
+    pub(crate) status: String,
+    pub(crate) lifecycle_state: Option<String>,
+    pub(crate) backend_id: Option<String>,
+    pub(crate) claimed_at: Option<String>,
+}
+
+pub(crate) async fn load_agent_request_at_cid(
+    node: &defra_node::EmbeddedNode,
+    composite_commit_cid: &str,
+    expected_doc_id: &str,
+) -> anyhow::Result<Option<AgentRequestVersionSnapshot>> {
+    let cid = crate::graphql::escape_graphql_string(composite_commit_cid);
+    let query = format!(
+        r#"query {{
+            AgentRequest(cid: ["{cid}"]) {{{fields}
+                status
+                lifecycle_state
+                interrupt_requested_at
+                valid_until
+            }}
+        }}"#,
+        fields = AGENT_REQUEST_FIELDS,
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "AgentRequest CID time-travel query failed for {composite_commit_cid}: {:?}",
+            response.errors
+        );
+    }
+    let Some(row) = active_runtime_rows(response.data.as_ref())?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    if row.doc_id != expected_doc_id {
+        anyhow::bail!(
+            "AgentRequest CID {composite_commit_cid} resolved document {}, expected {expected_doc_id}",
+            row.doc_id
+        );
+    }
+    row.into_version_snapshot().map(Some)
+}
 
 impl DefraWatcher {
     pub async fn try_fetch_request(&self, doc_id: &str) -> anyhow::Result<Option<AgentRequest>> {
@@ -223,7 +273,9 @@ struct AgentRequestRow {
     max_tokens: Option<i64>,
     metadata: Option<String>,
     execution_origin: Option<String>,
+    backend_id: Option<String>,
     created_at: String,
+    claimed_at: Option<String>,
     deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
@@ -311,6 +363,20 @@ impl AgentRequestRow {
         };
         validate_agent_request_subagent_coherence(&req)?;
         Ok(req)
+    }
+
+    fn into_version_snapshot(self) -> anyhow::Result<AgentRequestVersionSnapshot> {
+        let status = self.status.clone();
+        let lifecycle_state = normalize_optional_string(self.lifecycle_state.clone());
+        let backend_id = normalize_optional_string(self.backend_id.clone());
+        let claimed_at = normalize_optional_string(self.claimed_at.clone());
+        Ok(AgentRequestVersionSnapshot {
+            request: self.into_agent_request()?,
+            status,
+            lifecycle_state,
+            backend_id,
+            claimed_at,
+        })
     }
 }
 
