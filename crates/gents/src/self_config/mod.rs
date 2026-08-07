@@ -953,19 +953,30 @@ pub struct ConfigurePersonaParams {
     pub action: String,
     #[serde(default)]
     pub persona_name: Option<String>,
-    /// The target persona's `behavior_id` (required for `edit`/`disable`).
+    /// The target persona's `behavior_id` (required for `edit`/`disable`). A
+    /// short name (without the `{agent_did}:` prefix) resolves automatically
+    /// — see [`resolve_persona_ref`].
     #[serde(default)]
     pub behavior_id: Option<String>,
-    /// The sibling `behavior_id` to clone from (required for `clone`).
+    /// The sibling `behavior_id` to clone from (required for `clone`, unless
+    /// `preset` is also given — see the tool description). A short name
+    /// resolves automatically, same as `behavior_id`.
     #[serde(default)]
     pub clone_from: Option<String>,
-    /// `"backend_id|model_name"`, e.g. `"openai|gpt-5"`.
+    /// `"backend_id|model_name"`; real backend ids are DID-qualified, e.g.
+    /// `"did:key:zAgentExample...:openai|gpt-5.5"`. A bare model name (e.g.
+    /// `"gpt-5.5"`) is also accepted when it uniquely identifies one enabled
+    /// backend's model — see [`resolve_model`].
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub root: Option<String>,
     #[serde(default)]
     pub preset: Option<String>,
+    /// Inference profile id. A short name (without the `{agent_did}:`
+    /// prefix) resolves automatically; an `"id|display"` pair is also
+    /// accepted (the display half is stripped) — see
+    /// [`resolve_profile_id`].
     #[serde(default)]
     pub profile_id: Option<String>,
 }
@@ -1025,6 +1036,84 @@ struct PersonaRequestRowOut {
     applied_behavior_id: Option<String>,
     #[serde(default)]
     processed_at: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Short-id normalization (#1052): the model routinely types short, human
+// names ("default", "default-profile", a bare model name) rather than the
+// DID-qualified ids the underlying documents actually key on. Resolution
+// happens HERE, in the tool, before the request row is authored — admission
+// (`decide_persona_request` in `crate::agent::persona_ops`) stays strict and
+// untouched, so a short id that still doesn't resolve to anything real gets
+// the same enumerated rejection a fully-qualified typo would. Pure and
+// independently unit-tested (see `self_config::tests`).
+// ---------------------------------------------------------------------------
+
+/// True when `value` already carries `agent_did`'s qualifying prefix
+/// (`"{agent_did}:"`) — i.e. is already a fully-qualified id rather than a
+/// short name the model typed by hand.
+fn is_agent_qualified(agent_did: &str, value: &str) -> bool {
+    value.starts_with(&format!("{agent_did}:"))
+}
+
+/// Resolve a short `behavior_id`/`clone_from` name to `{agent_did}:{value}`
+/// unless it is empty or already agent-DID-qualified.
+fn resolve_persona_ref(agent_did: &str, value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || is_agent_qualified(agent_did, trimmed) {
+        trimmed.to_string()
+    } else {
+        format!("{agent_did}:{trimmed}")
+    }
+}
+
+/// Resolve a `profile_id`: first strip a `"|display"` suffix that leaks in
+/// when a model copies the `id|display` shape it sees elsewhere (e.g. the
+/// `"backend|model"` pairs in `available_models`), then apply the same
+/// short-id qualification as [`resolve_persona_ref`].
+fn resolve_profile_id(agent_did: &str, value: &str) -> String {
+    let trimmed = value.trim();
+    let base = trimmed.split_once('|').map_or(trimmed, |(id, _display)| id);
+    resolve_persona_ref(agent_did, base)
+}
+
+/// Resolve a `model` value. `"backend_id|model_name"` passes through
+/// unchanged — the DID-qualified backend id can't be guessed. A bare name
+/// with no `'|'` resolves against the catalog's `available_models` when
+/// exactly one entry's model-name suffix (the part after the first `'|'`)
+/// matches; zero or multiple matches pass the value through unchanged so
+/// admission's enumerated rejection can explain why.
+fn resolve_model(value: &str, available_models: &BTreeSet<String>) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains('|') {
+        return trimmed.to_string();
+    }
+    let mut matches = available_models
+        .iter()
+        .filter(|pair| pair.split_once('|').map(|(_, model_name)| model_name) == Some(trimmed));
+    match (matches.next(), matches.next()) {
+        (Some(unique), None) => unique.clone(),
+        _ => trimmed.to_string(),
+    }
+}
+
+/// Resolve `configure_persona`'s `model` argument, loading the persona
+/// catalog view only when the value needs bare-name resolution (no `'|'`) —
+/// the same loader `action: "list"` (`persona_list`) already uses.
+async fn resolve_model_arg(
+    node: &Arc<EmbeddedNode>,
+    agent_did: &str,
+    model: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(value) = model.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.contains('|') {
+        return Ok(Some(value.to_string()));
+    }
+    let store = GraphqlPersonaRequestStore::new(node.clone());
+    let catalog = store.load_catalog_view(agent_did).await?;
+    Ok(Some(resolve_model(value, &catalog.available_models)))
 }
 
 fn nullable_graphql_string(value: Option<&str>) -> String {
@@ -1182,9 +1271,22 @@ async fn persona_mutate(
     agent_did: &str,
     args: &ConfigurePersonaParams,
 ) -> Result<String> {
+    // Short-id normalization (#1052): resolved once, up front, so every
+    // action below (and the mutation builder) sees fully-qualified values.
+    // Admission stays strict — a short id that still doesn't resolve to
+    // anything real reaches the same enumerated rejection a typo would.
+    let resolved_behavior_id = args
+        .behavior_id
+        .as_deref()
+        .map(|value| resolve_persona_ref(agent_did, value));
+    let resolved_profile_id = args
+        .profile_id
+        .as_deref()
+        .map(|value| resolve_profile_id(agent_did, value));
+    let resolved_model = resolve_model_arg(node, agent_did, args.model.as_deref()).await?;
+
     let required_behavior_id = |action: &str| -> Result<()> {
-        if args
-            .behavior_id
+        if resolved_behavior_id
             .as_deref()
             .map(str::trim)
             .unwrap_or("")
@@ -1194,18 +1296,35 @@ async fn persona_mutate(
         }
         Ok(())
     };
-    let (op, clone_from) = match args.action.as_str() {
+    let (op, clone_from): (&str, Option<String>) = match args.action.as_str() {
         "create" => ("create", None),
         "clone" => {
-            let clone_from = args
-                .clone_from
+            let preset_given = args
+                .preset
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow!("clone action requires clone_from (the sibling behavior_id to clone)")
-                })?;
-            ("create", Some(clone_from))
+                .is_some();
+            if preset_given {
+                // Unifies with the mobile composer's semantic: naming a
+                // preset means you want DIFFERENT permissions than the
+                // clone source (which admission rejects for clone_from
+                // anyway — clone copies permissions verbatim), so this
+                // authors a plain create instead of a clone.
+                ("create", None)
+            } else {
+                let clone_from = args
+                    .clone_from
+                    .as_deref()
+                    .map(|value| resolve_persona_ref(agent_did, value))
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "clone action requires clone_from (the sibling behavior_id to clone)"
+                        )
+                    })?;
+                ("create", Some(clone_from))
+            }
         }
         "edit" => {
             required_behavior_id("edit")?;
@@ -1225,13 +1344,13 @@ async fn persona_mutate(
         agent_did,
         agent_did,
         op,
-        args.behavior_id.as_deref(),
-        clone_from,
+        resolved_behavior_id.as_deref(),
+        clone_from.as_deref(),
         args.persona_name.as_deref(),
-        args.model.as_deref(),
+        resolved_model.as_deref(),
         args.root.as_deref(),
         args.preset.as_deref(),
-        args.profile_id.as_deref(),
+        resolved_profile_id.as_deref(),
         &now,
     );
     let response = node.execute(&mutation).await;
@@ -1259,7 +1378,16 @@ impl Tool for ConfigurePersonaTool {
                  materializes it; a still-pending result names the request_key so you can check \
                  again. Unlike every other configure_* tool, behavior_id/clone_from here may \
                  name ANY behavior of this same agent — that cross-behavior reach is this \
-                 tool's purpose, not an exception to self-config's self-only rule."
+                 tool's purpose, not an exception to self-config's self-only rule. \
+                 behavior_id/clone_from/profile_id accept a short name (without the agent DID \
+                 prefix) when unambiguous, and model accepts a bare model name when it \
+                 uniquely identifies one enabled backend's model — this tool resolves all of \
+                 these before submitting the request; a value that still doesn't resolve is \
+                 rejected with the published options. Clone copies the source persona's \
+                 permissions verbatim: naming a preset alongside clone_from means you want \
+                 DIFFERENT permissions, so it is treated as a plain create instead of a clone \
+                 (want different permissions? that's a create; clone copies the source's \
+                 permissions)."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -1274,15 +1402,15 @@ impl Tool for ConfigurePersonaTool {
                     },
                     "behavior_id": {
                         "type": "string",
-                        "description": "Target persona's behavior_id (required for edit/disable).",
+                        "description": "Target persona's behavior_id (required for edit/disable). A short name (without the agent DID prefix) resolves automatically to \"{agent_did}:{name}\".",
                     },
                     "clone_from": {
                         "type": "string",
-                        "description": "Sibling behavior_id to clone from (required for clone).",
+                        "description": "Sibling behavior_id to clone from (required for clone, unless preset is also given — see the tool description). A short name resolves automatically, same as behavior_id.",
                     },
                     "model": {
                         "type": "string",
-                        "description": "\"backend_id|model_name\", e.g. \"openai|gpt-5\".",
+                        "description": "\"backend_id|model_name\" — real backend ids are DID-qualified, e.g. \"did:key:zAgentExample...:openai|gpt-5.5\". A bare model name (e.g. \"gpt-5.5\") is also accepted when it uniquely identifies one enabled backend's model.",
                     },
                     "root": {
                         "type": "string",
@@ -1290,9 +1418,12 @@ impl Tool for ConfigurePersonaTool {
                     },
                     "preset": {
                         "type": "string",
-                        "description": "Built-in permission preset (create/edit without clone_from).",
+                        "description": "Built-in permission preset (create/edit; also converts a clone into a plain create when set alongside clone_from).",
                     },
-                    "profile_id": { "type": "string" },
+                    "profile_id": {
+                        "type": "string",
+                        "description": "Inference profile id. A short name (without the agent DID prefix) resolves automatically; an \"id|display\" pair is also accepted (the display half is stripped).",
+                    },
                 },
                 "required": ["action"],
             }),

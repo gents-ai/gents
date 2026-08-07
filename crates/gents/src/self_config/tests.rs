@@ -4,6 +4,114 @@
 
 use super::*;
 
+// -- configure_persona short-id normalization (#1052) --
+//
+// Pure functions, tested independently of the tool/network: matrix covers
+// qualified passthrough, unqualified resolution, model bare-name
+// unique/ambiguous/unknown, and profile pair-stripping.
+
+#[test]
+fn resolve_persona_ref_passes_through_qualified_id() {
+    assert_eq!(
+        resolve_persona_ref("did:key:zAgent", "did:key:zAgent:existing"),
+        "did:key:zAgent:existing"
+    );
+}
+
+#[test]
+fn resolve_persona_ref_qualifies_short_name() {
+    assert_eq!(
+        resolve_persona_ref("did:key:zAgent", "default"),
+        "did:key:zAgent:default"
+    );
+}
+
+#[test]
+fn resolve_persona_ref_trims_and_leaves_empty_empty() {
+    assert_eq!(resolve_persona_ref("did:key:zAgent", "   "), "");
+    assert_eq!(
+        resolve_persona_ref("did:key:zAgent", "  default  "),
+        "did:key:zAgent:default"
+    );
+}
+
+#[test]
+fn resolve_persona_ref_does_not_double_qualify_a_different_agent_prefixed_value() {
+    // A value qualified under ANOTHER agent's DID is left alone — admission,
+    // not this pure resolver, is the place that rejects a foreign reference.
+    assert_eq!(
+        resolve_persona_ref("did:key:zAgent", "did:key:zOther:default"),
+        "did:key:zAgent:did:key:zOther:default"
+    );
+}
+
+#[test]
+fn resolve_profile_id_qualifies_short_name() {
+    assert_eq!(
+        resolve_profile_id("did:key:zAgent", "default-profile"),
+        "did:key:zAgent:default-profile"
+    );
+}
+
+#[test]
+fn resolve_profile_id_passes_through_qualified_id() {
+    assert_eq!(
+        resolve_profile_id("did:key:zAgent", "did:key:zAgent:default-profile"),
+        "did:key:zAgent:default-profile"
+    );
+}
+
+#[test]
+fn resolve_profile_id_strips_display_pair_suffix() {
+    // Guards against a model copying the "id|display" shape it sees in
+    // available_models pairs into profile_id.
+    assert_eq!(
+        resolve_profile_id("did:key:zAgent", "default-profile|Fast"),
+        "did:key:zAgent:default-profile"
+    );
+}
+
+#[test]
+fn resolve_profile_id_strips_pair_suffix_then_still_qualifies() {
+    assert_eq!(
+        resolve_profile_id("did:key:zAgent", "did:key:zAgent:default-profile|Fast"),
+        "did:key:zAgent:default-profile"
+    );
+}
+
+#[test]
+fn resolve_model_passes_through_qualified_pair_unchanged() {
+    let available = BTreeSet::new();
+    assert_eq!(
+        resolve_model("did:key:zAgent:openai|gpt-5.5", &available),
+        "did:key:zAgent:openai|gpt-5.5"
+    );
+}
+
+#[test]
+fn resolve_model_unique_bare_name_resolves() {
+    let available = BTreeSet::from(["did:key:zAgent:openai|gpt-5.5".to_string()]);
+    assert_eq!(
+        resolve_model("gpt-5.5", &available),
+        "did:key:zAgent:openai|gpt-5.5"
+    );
+}
+
+#[test]
+fn resolve_model_ambiguous_bare_name_passes_through_unchanged() {
+    let available = BTreeSet::from([
+        "did:key:zAgent:openai|gpt-5.5".to_string(),
+        "did:key:zAgent:anthropic|gpt-5.5".to_string(),
+    ]);
+    assert_eq!(resolve_model("gpt-5.5", &available), "gpt-5.5");
+}
+
+#[test]
+fn resolve_model_unknown_bare_name_passes_through_unchanged() {
+    let available = BTreeSet::from(["did:key:zAgent:openai|gpt-5.5".to_string()]);
+    assert_eq!(resolve_model("no-such-model", &available), "no-such-model");
+}
+
 fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
@@ -234,7 +342,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
                 models: ["gpt-5"]
             }}) {{ _docID }}
             create_InferenceProfile(input: {{
-                profile_id: "profile-1",
+                profile_id: "{agent_did}:profile-1",
                 display_name: "Fast"
             }}) {{ _docID }}
         }}"#
@@ -250,6 +358,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         "persona_name": "Research Assistant",
         "model": "openai|gpt-5",
         "preset": "write",
+        // Short id — exercises the #1052 normalization end-to-end: the tool
+        // must resolve this to "{agent_did}:profile-1" before admission sees it.
         "profile_id": "profile-1",
     })
     .to_string();
@@ -328,7 +438,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
                 models: ["gpt-5"]
             }}) {{ _docID }}
             create_InferenceProfile(input: {{
-                profile_id: "profile-1",
+                profile_id: "{agent_did}:profile-1",
                 display_name: "Fast"
             }}) {{ _docID }}
         }}"#
@@ -337,7 +447,10 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
 
     // A sibling behavior/selection this agent already owns — cloning FROM a
-    // sibling of the same principal is the whole point of this tool.
+    // sibling of the same principal is the whole point of this tool. Seeded
+    // with the agent-DID-qualified id real behavior ids carry, so the short
+    // "sibling-behavior" passed as clone_from below exercises #1052's
+    // normalization end-to-end.
     let sibling_selection = crate::document_config::ToolSelectionDocument {
         selection_id: "sel-sibling".to_string(),
         agent_did: agent_did.to_string(),
@@ -350,8 +463,9 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     crate::config_client::write_tool_selection_document(&access, &sibling_selection)
         .await
         .expect("seed sibling selection");
+    let qualified_sibling_id = format!("{agent_did}:sibling-behavior");
     let sibling_behavior = crate::AgentBehaviorDocument {
-        behavior_id: "sibling-behavior".to_string(),
+        behavior_id: qualified_sibling_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: None,
         description: None,
@@ -378,6 +492,8 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     let args = serde_json::json!({
         "action": "clone",
         "persona_name": "Cloned Persona",
+        // Short id — exercises #1052 normalization: the tool must resolve
+        // this to `qualified_sibling_id` before admission sees it.
         "clone_from": "sibling-behavior",
         "model": "openai|gpt-5",
         "profile_id": "profile-1",
@@ -392,8 +508,8 @@ async fn persona_clone_accepts_sibling_behavior_id() {
             assert_eq!(row.op.as_deref(), Some("create"));
             assert_eq!(
                 row.clone_from.as_deref(),
-                Some("sibling-behavior"),
-                "clone_from must name the sibling behavior"
+                Some(qualified_sibling_id.as_str()),
+                "clone_from must resolve to the sibling's fully-qualified behavior_id"
             );
             assert!(row.preset.is_none(), "clone must not also set a preset");
             request_key = row.request_key;
