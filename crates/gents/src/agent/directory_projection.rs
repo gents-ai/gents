@@ -91,6 +91,11 @@ pub struct CatalogOptions {
     /// `"profile_id|display_name"`, sorted; split on the FIRST `|` —
     /// display names may contain `|`, profile ids must not.
     pub available_profiles: Vec<String>,
+    /// Compact JSON object per profile (#1050's info-card fields),
+    /// INDEX-ALIGNED with `available_profiles` (`params[i]` describes
+    /// `profiles[i]`). See [`render_profile_params_json`] for the exact
+    /// shape.
+    pub available_profile_params: Vec<String>,
 }
 
 /// Everything `derive_directory_entries` consumes, loaded as one unit. The
@@ -475,6 +480,11 @@ impl DirectoryStore for GraphqlDirectoryStore {
             InferenceProfile {
                 profile_id
                 display_name
+                context_window
+                max_output_tokens
+                max_turns
+                temperature
+                top_p
             }
         }"#;
         let response = self.node.execute(query).await;
@@ -511,6 +521,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 allowed_roots
                 permission_presets
                 available_profiles
+                available_profile_params
                 runtime_state
                 last_seen
             }}
@@ -546,6 +557,7 @@ impl DirectoryStore for GraphqlDirectoryStore {
                         allowed_roots: row.allowed_roots.unwrap_or_default(),
                         permission_presets: row.permission_presets.unwrap_or_default(),
                         available_profiles: row.available_profiles.unwrap_or_default(),
+                        available_profile_params: row.available_profile_params.unwrap_or_default(),
                     },
                     runtime_state: row.runtime_state.unwrap_or_default(),
                     last_seen: row.last_seen.unwrap_or_default(),
@@ -597,6 +609,13 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
         graphql_string_list_literal(entry.options.permission_presets.iter().map(String::as_str));
     let available_profiles =
         graphql_string_list_literal(entry.options.available_profiles.iter().map(String::as_str));
+    let available_profile_params = graphql_string_list_literal(
+        entry
+            .options
+            .available_profile_params
+            .iter()
+            .map(String::as_str),
+    );
     let runtime_state = escape_graphql_string(&entry.runtime_state);
     let last_seen = graphql_nullable_datetime_literal(&entry.last_seen);
     let now = escape_graphql_string(now);
@@ -620,6 +639,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     allowed_roots: {allowed_roots},
                     permission_presets: {permission_presets},
                     available_profiles: {available_profiles},
+                    available_profile_params: {available_profile_params},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -637,6 +657,7 @@ fn upsert_directory_entry_mutation(entry: &DirectoryEntry, now: &str) -> String 
                     allowed_roots: {allowed_roots},
                     permission_presets: {permission_presets},
                     available_profiles: {available_profiles},
+                    available_profile_params: {available_profile_params},
                     runtime_state: "{runtime_state}",
                     last_seen: {last_seen},
                     updated_at: "{now}"
@@ -860,6 +881,46 @@ fn parse_tool_selections(response: &QueryResponse) -> Result<BTreeMap<String, Se
     Ok(grouped)
 }
 
+/// Hand-assembles a compact JSON object describing an `InferenceProfile`'s
+/// display-relevant parameters (#1050's info-card fields), in a FIXED key
+/// order: `context_window`, `max_output_tokens`, `max_turns`, `temperature`,
+/// `top_p`. Deliberately NOT `serde_json::to_string` of a map — a map's key
+/// order is not guaranteed stable, and byte-stability across sweeps is what
+/// feeds `directory_projection`'s write-free settled fixpoint. Each key is
+/// omitted entirely when its source field is `None`; `{}` when the profile
+/// has none of them.
+///
+/// Floats render via Rust's `{}` `Display` on exactly the decoded row
+/// value — no canonicalization (unlike `canonicalize_last_seen`). That's
+/// sufficient for the fixpoint: the same stored row decodes to the same
+/// `f64` and re-renders byte-identical on every sweep, so settled
+/// comparison never spuriously drifts.
+fn render_profile_params_json(
+    context_window: Option<i64>,
+    max_output_tokens: Option<i64>,
+    max_turns: Option<i64>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+) -> String {
+    let mut fields = Vec::new();
+    if let Some(value) = context_window {
+        fields.push(format!(r#""context_window":{value}"#));
+    }
+    if let Some(value) = max_output_tokens {
+        fields.push(format!(r#""max_output_tokens":{value}"#));
+    }
+    if let Some(value) = max_turns {
+        fields.push(format!(r#""max_turns":{value}"#));
+    }
+    if let Some(value) = temperature {
+        fields.push(format!(r#""temperature":{value}"#));
+    }
+    if let Some(value) = top_p {
+        fields.push(format!(r#""top_p":{value}"#));
+    }
+    format!("{{{}}}", fields.join(","))
+}
+
 fn parse_catalog_options(response: &QueryResponse) -> Result<CatalogOptions> {
     // Backend rows always carry `enabled` (backend_registry treats it as
     // required on decode), so the conservative null-means-disabled default
@@ -889,7 +950,12 @@ fn parse_catalog_options(response: &QueryResponse) -> Result<CatalogOptions> {
         .collect();
     allowed_roots.sort();
 
-    let mut available_profiles: Vec<String> =
+    // Sort pairs first, then split (mirrors how `behaviors`/`behavior_ids`
+    // stay aligned in `derive_directory_entries`): each tuple carries both
+    // the `available_profiles` string and its aligned params JSON, so a
+    // single sort keeps `available_profile_params[i]` describing
+    // `available_profiles[i]` after the split.
+    let mut profile_pairs: Vec<(String, String)> =
         rows::<InferenceProfileRow>(response, "InferenceProfile")?
             .into_iter()
             .filter_map(|row| {
@@ -898,10 +964,19 @@ fn parse_catalog_options(response: &QueryResponse) -> Result<CatalogOptions> {
                     .display_name
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| profile_id.clone());
-                Some(format!("{profile_id}|{display_name}"))
+                let params = render_profile_params_json(
+                    row.context_window,
+                    row.max_output_tokens,
+                    row.max_turns,
+                    row.temperature,
+                    row.top_p,
+                );
+                Some((format!("{profile_id}|{display_name}"), params))
             })
             .collect();
-    available_profiles.sort();
+    profile_pairs.sort();
+    let (available_profiles, available_profile_params): (Vec<String>, Vec<String>) =
+        profile_pairs.into_iter().unzip();
 
     Ok(CatalogOptions {
         available_models,
@@ -911,6 +986,7 @@ fn parse_catalog_options(response: &QueryResponse) -> Result<CatalogOptions> {
             .map(|name| name.to_string())
             .collect(),
         available_profiles,
+        available_profile_params,
     })
 }
 
@@ -994,6 +1070,16 @@ struct InferenceProfileRow {
     profile_id: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
+    #[serde(default)]
+    context_window: Option<i64>,
+    #[serde(default)]
+    max_output_tokens: Option<i64>,
+    #[serde(default)]
+    max_turns: Option<i64>,
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    top_p: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1036,6 +1122,8 @@ struct DirectoryRow {
     permission_presets: Option<Vec<String>>,
     #[serde(default)]
     available_profiles: Option<Vec<String>>,
+    #[serde(default)]
+    available_profile_params: Option<Vec<String>>,
     #[serde(default)]
     runtime_state: Option<String>,
     #[serde(default)]
@@ -1142,12 +1230,13 @@ mod tests {
         assert!(mutation.contains(r#"behavior_ids: ["did:key:a:artist", "did:key:a:coder"]"#));
     }
 
-    /// The eight new dimension/option columns follow the same null-never-[]
+    /// The nine new dimension/option columns follow the same null-never-[]
     /// discipline as `behaviors`/`behavior_ids`, in BOTH the add and update
     /// payloads — an empty list literal types as `JsonArray` and corrupts
-    /// nillable array columns.
+    /// nillable array columns. `available_profile_params` (#1050) is the
+    /// newest of these.
     #[test]
-    fn upsert_mutation_renders_null_for_all_eight_new_columns_when_empty() {
+    fn upsert_mutation_renders_null_for_all_nine_new_columns_when_empty() {
         let mutation = upsert_directory_entry_mutation(
             &entry("did:key:no-dimensions", "2026-07-20T00:00:00Z"),
             "2026-07-23T00:00:00Z",
@@ -1161,6 +1250,7 @@ mod tests {
             "allowed_roots",
             "permission_presets",
             "available_profiles",
+            "available_profile_params",
         ] {
             let needle = format!("{column}: null");
             assert!(
@@ -1171,7 +1261,11 @@ mod tests {
     }
 
     /// Populated dimension/option lists render as aligned array literals in
-    /// both the add and update payloads.
+    /// both the add and update payloads. `available_profile_params` carries
+    /// a JSON string (embedded double quotes) to pin that
+    /// `graphql_string_list_literal`'s per-element `escape_graphql_string`
+    /// survives the mutation round-trip rather than producing invalid
+    /// GraphQL.
     #[test]
     fn upsert_mutation_renders_populated_dimension_and_option_lists() {
         let mut with_dimensions = entry("did:key:with-dimensions", "2026-07-20T00:00:00Z");
@@ -1185,6 +1279,9 @@ mod tests {
             allowed_roots: vec!["/repo/a".to_string()],
             permission_presets: vec!["readonly".to_string(), "write".to_string()],
             available_profiles: vec!["fast-profile|Fast".to_string()],
+            available_profile_params: vec![
+                r#"{"context_window":128000,"temperature":0.2}"#.to_string()
+            ],
         };
         let mutation = upsert_directory_entry_mutation(&with_dimensions, "2026-07-23T00:00:00Z");
         assert!(mutation.contains(r#"behavior_models: ["openai|gpt-5"]"#));
@@ -1195,6 +1292,12 @@ mod tests {
         assert!(mutation.contains(r#"allowed_roots: ["/repo/a"]"#));
         assert!(mutation.contains(r#"permission_presets: ["readonly", "write"]"#));
         assert!(mutation.contains(r#"available_profiles: ["fast-profile|Fast"]"#));
+        assert!(
+            mutation.contains(
+                r#"available_profile_params: ["{\"context_window\":128000,\"temperature\":0.2}"]"#
+            ),
+            "the params JSON string's embedded quotes must survive escaped: {mutation}"
+        );
     }
 
     /// `default_behavior_id` is a plain string field (unlike the nullable
@@ -1278,6 +1381,38 @@ mod tests {
     /// making every sweep re-upsert and — since the sweep runs on Update events
     /// — self-perpetuate into an unbounded write/event storm. Seeding the exact
     /// runtime format and asserting the second tick is write-free pins the fix.
+    /// The param-JSON builder matrix (#1050): fixed key order
+    /// (`context_window`, `max_output_tokens`, `max_turns`, `temperature`,
+    /// `top_p`), each key omitted entirely when its source field is `None`,
+    /// `{}` when the profile has none of them.
+    #[test]
+    fn render_profile_params_json_matrix() {
+        assert_eq!(
+            render_profile_params_json(Some(128000), Some(4096), Some(50), Some(0.2), Some(0.9)),
+            r#"{"context_window":128000,"max_output_tokens":4096,"max_turns":50,"temperature":0.2,"top_p":0.9}"#
+        );
+        assert_eq!(
+            render_profile_params_json(Some(128000), None, None, Some(0.2), None),
+            r#"{"context_window":128000,"temperature":0.2}"#
+        );
+        assert_eq!(
+            render_profile_params_json(None, None, None, None, None),
+            "{}"
+        );
+    }
+
+    /// Float rendering uses Rust's `{}` `Display` on exactly the decoded row
+    /// value — no canonicalization — so the same row re-renders
+    /// byte-identical on every sweep, which is all the settled-fixpoint
+    /// comparison needs.
+    #[test]
+    fn render_profile_params_json_float_display_is_byte_stable_across_renders() {
+        let first = render_profile_params_json(None, None, None, Some(0.1), Some(1.0));
+        let second = render_profile_params_json(None, None, None, Some(0.1), Some(1.0));
+        assert_eq!(first, second);
+        assert_eq!(first, r#"{"temperature":0.1,"top_p":1}"#);
+    }
+
     #[tokio::test]
     async fn graphql_tick_is_write_free_fixpoint_for_runtime_updated_at_format() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -1341,8 +1476,14 @@ mod tests {
     /// model, and profile; the other behavior wired to none of those, so its
     /// four dimension entries must derive `""`. A disabled `WorkspaceRoot`
     /// must be excluded from `allowed_roots`. The second tick over the same
-    /// settled state must still be write-free — the eight new columns must
-    /// not break the storm-regression invariant.
+    /// settled state must still be write-free — the nine new columns must
+    /// not break the storm-regression invariant. The `InferenceProfile`
+    /// carries a partial params set (`context_window` + `temperature`,
+    /// `max_output_tokens`/`max_turns`/`top_p` unset) so
+    /// `available_profile_params` (#1050) exercises the omit-when-null path
+    /// through a real node, aligned with `available_profiles`, and stays
+    /// write-free on the settled re-tick (the float-display byte-stability
+    /// this fences).
     #[tokio::test]
     async fn graphql_tick_converges_runtime_less_principal_and_retracts_on_removal() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
@@ -1419,7 +1560,9 @@ mod tests {
             }) { _docID }
             create_InferenceProfile(input: {
                 profile_id: "fast-profile",
-                display_name: "Fast Profile"
+                display_name: "Fast Profile",
+                context_window: 128000,
+                temperature: 0.2
             }) { _docID }
             create_WorkspaceRoot(input: {
                 root_path: "/repo/enabled",
@@ -1515,6 +1658,12 @@ mod tests {
         assert_eq!(
             with_runtime.options.available_profiles,
             vec!["fast-profile|Fast Profile".to_string()]
+        );
+        assert_eq!(
+            with_runtime.options.available_profile_params,
+            vec![r#"{"context_window":128000,"temperature":0.2}"#.to_string()],
+            "available_profile_params must round-trip through a real node, aligned with \
+             available_profiles, omitting the unset max_output_tokens/max_turns/top_p keys"
         );
         assert!(
             !entries.contains_key("did:key:disabled"),

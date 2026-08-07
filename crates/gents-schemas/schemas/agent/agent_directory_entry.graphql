@@ -60,6 +60,14 @@ type AgentDirectoryEntry @branchable {
     # names may contain "|", profile ids must not. Null (never []) when
     # empty.
     available_profiles: [String]
+    # Compact JSON object per profile, INDEX-ALIGNED with `available_profiles`
+    # (params[i] describes profiles[i]) — issue #1050's info-card fields
+    # (context_window, max_output_tokens, max_turns, temperature, top_p),
+    # each key present only when the source InferenceProfile field is
+    # non-null; "{}" when a profile has none of them. Same grants-nothing
+    # catalog posture as the rest of this collection. Null (never []) when
+    # empty.
+    available_profile_params: [String]
     runtime_state: String @index
     last_seen: DateTime
     updated_at: DateTime @index(direction: DESC)
