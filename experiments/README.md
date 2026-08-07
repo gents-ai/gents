@@ -130,6 +130,7 @@ Live path that has been exercised end-to-end against DeepSeek V4 Flash
    ```
 
    Drop exports under `runs/<job_id>/` (gitignored).
+
 ## Measurement
 
 Trust for cost/structure:
@@ -137,8 +138,8 @@ Trust for cost/structure:
 - Request count / siblings by `caused_by_trigger_id`
 - Inference call count and wall time from the run timeline
 - **Token usage from `InferenceCall.prompt_tokens` /
-  `completion_tokens` / `cached_input_tokens`** (query `InferenceCall` by
-  `request_id` if timeline export does not yet project those fields)
+  `completion_tokens` / `cached_input_tokens`** — query `InferenceCall` by
+  `request_id` (timeline rows do not project these fields today)
 
 Do **not** use `AgentResponse.token_count` as a cost metric — it is a
 streaming word-count proxy and can read 0 on recovered responses.
@@ -146,7 +147,15 @@ streaming word-count proxy and can read 0 on recovered responses.
 Quality scoring (LLM-as-judge, human rubrics) is out of band via
 eval-jsonl export.
 
+## Scope of this tree
+
+Shipped here: **desired-state arms + schemas + this operator guide**.  
+Not in this tree or PR: CI e2e (`experiment_graph_e2e`),
+`cli_experiment_shapes`, or a custom harness binary. Runtime already
+provides config apply, schema apply, triggers, and `gents trace`.
+
 ## Design
 
 See `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`
-and the implementation plan under `docs/superpowers/plans/`.
+and the status plan under
+`docs/superpowers/plans/2026-08-07-event-trigger-graph-experiments.md`.
