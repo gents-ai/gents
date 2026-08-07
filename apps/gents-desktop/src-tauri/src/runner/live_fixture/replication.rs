@@ -148,12 +148,46 @@ async fn set_replicator_with_retry(
     }
 }
 
+/// Collections the live fixture replicates between its two nodes.
+///
+/// `RenderedRequest` is deliberately excluded. Its `request_json` and
+/// `provenance_json` are the whole conversation, the system prompt, and the
+/// tool surface in plaintext — `RenderedRequest` carries no `@policy` and no
+/// field encryption, because both are blocked on defradb.rs#1318 — and this
+/// list is built from `ALL_COLLECTION_NAMES` verbatim, so a new collection
+/// joins the P2P subscription set with no decision being taken about it.
+/// Capture is on by default, so shipping those bodies to a fixture peer would
+/// be exactly that unmade decision.
 fn subscribed_collection_names_for_runner() -> Vec<String> {
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .chain(gents_protocol::schemas::ALL_COLLECTION_NAMES.iter())
+        .filter(|name| **name != gents_protocol::schemas::RENDERED_REQUEST_NAME)
         .map(|name| (*name).to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::subscribed_collection_names_for_runner;
+
+    /// The runner's subscription set is derived from a list that grows
+    /// whenever a collection is added, so the exclusion has to be asserted
+    /// rather than assumed.
+    #[test]
+    fn the_runner_does_not_replicate_plaintext_provider_bodies() {
+        let names = subscribed_collection_names_for_runner();
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == gents_protocol::schemas::RENDERED_REQUEST_NAME),
+            "RenderedRequest must stay out of the fixture's replication set: {names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "AgentRequest"),
+            "the exclusion must not have emptied the set: {names:?}"
+        );
+    }
 }
 
 pub(super) fn write_peer_directory_records(

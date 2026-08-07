@@ -36,14 +36,51 @@ pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
+/// `RenderedRequest` is deliberately excluded.
+///
+/// Each row is a full provider request body — the conversation, the rendered
+/// preamble, and the resolved tool surface in plaintext, because
+/// `RenderedRequest` carries no `@policy` and no field encryption (both blocked
+/// on defradb.rs#1318). Capture is on by default and writes one row per turn per
+/// attempt, so subscribing it would push a full conversation body per provider
+/// call onto the gossip channel, to a device class that includes iOS, for a
+/// collection nothing on the desktop reads.
+///
+/// This list is built from `ALL_COLLECTION_NAMES` verbatim, so a new collection
+/// otherwise joins the subscription set with no decision being taken about it.
+/// The same exclusion is applied to the desktop live-fixture runner.
 pub fn subscribed_collection_names() -> Vec<&'static str> {
     RUNTIME_COLLECTION_NAMES
         .iter()
         .chain(ALL_COLLECTION_NAMES.iter())
+        .filter(|name| **name != gents_protocol::schemas::RENDERED_REQUEST_NAME)
         .copied()
         .collect()
 }
 
 pub fn branchable_collection_names() -> Vec<&'static str> {
     BRANCHABLE_COLLECTION_NAMES.to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::subscribed_collection_names;
+
+    /// The subscription set is derived from a list that grows whenever a
+    /// collection is added, so the exclusion has to be asserted rather than
+    /// assumed. This mirrors the desktop live-fixture runner's test.
+    #[test]
+    fn the_desktop_does_not_replicate_plaintext_provider_bodies() {
+        let names = subscribed_collection_names();
+        assert!(
+            !names
+                .iter()
+                .any(|name| *name == gents_protocol::schemas::RENDERED_REQUEST_NAME),
+            "RenderedRequest must stay out of the desktop replication set: {names:?}"
+        );
+        assert!(
+            names.iter().any(|name| *name == "AgentRequest"),
+            "the exclusion must not have emptied the set: {names:?}"
+        );
+    }
 }

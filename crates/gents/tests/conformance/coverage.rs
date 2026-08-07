@@ -288,6 +288,8 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
+        "boundary.rendered-capture.assembled-request-artifact",
+        "boundary.rendered-capture.key-encoding-injectivity",
     ]
     .into_iter()
     .map(str::to_string)
@@ -791,6 +793,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyTurnBudgetCases".to_string(),
         ));
     }
+    if !snapshot.rendered_capture_cases.is_empty() {
+        emitted.insert((
+            "rendered_capture_cases".to_string(),
+            "RenderedCaptureCases".to_string(),
+        ));
+    }
+    if !snapshot.rendered_capture_key_cases.is_empty() {
+        emitted.insert((
+            "rendered_capture_cases".to_string(),
+            "RenderedCaptureKeyCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_delivery_transition_case_count,
         snapshot.event_delivery_transition_cases.len(),
@@ -1029,6 +1043,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "transcript_cases",
         "compaction_reducer_cases",
         "prompt_assembly_cases",
+        "rendered_capture_cases",
         "streaming_response_cases",
         "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",

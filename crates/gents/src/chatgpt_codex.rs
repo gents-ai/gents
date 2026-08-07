@@ -554,7 +554,14 @@ pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient<DbCredentialBearer>>> {
+) -> Result<
+    rig::providers::openai::Client<
+        ChatGptCodexHttpClient<
+            DbCredentialBearer,
+            crate::rendered_request::RenderedRequestCapturingHttpClient,
+        >,
+    >,
+> {
     let provider = CHATGPT_CODEX_PROVIDER;
     let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
         .await
@@ -582,7 +589,15 @@ pub async fn build_responses_client(
             CHATGPT_OAUTH_PRODUCT,
         )
     });
-    let http = ChatGptCodexHttpClient::new(bearer);
+    // The capture wrapper sits *below* the Codex wrapper, so it sees the body
+    // after `patch_instructions_body` has hoisted `instructions`, stripped
+    // system items, set `store`/`stream`, deleted the unsupported sampling
+    // params, and forced `strict:false`. Capturing above it would persist a
+    // request this backend never receives.
+    let http = ChatGptCodexHttpClient::with_inner(
+        bearer,
+        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+    );
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,
@@ -687,6 +702,119 @@ mod tests {
             status.parse().expect("valid status"),
             String::new(),
         )
+    }
+
+    /// The reason the capture seam is a transport wrapper at all.
+    ///
+    /// `build_responses_client` puts the capture client *below* this one so the
+    /// durable row is the body ChatGPT actually receives. Nothing about the
+    /// types enforces that: both wrappers are generic over their inner client,
+    /// so hoisting the capture above the Codex wrapper compiles and streams
+    /// fine while persisting a request this backend never sees. This composes
+    /// the real stack — Codex over capture over a recording terminal — and
+    /// pins the row to the post-rewrite body.
+    #[tokio::test]
+    async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
+        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+        use crate::rendered_request::transport::CountingInner;
+        use crate::rendered_request::{
+            AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
+            RenderedRequestCaptureSink, RenderedRequestContext,
+        };
+        use std::sync::Mutex;
+
+        let terminal = CountingInner::default();
+        let client = ChatGptCodexHttpClient::with_inner(
+            CountingBearer::new("tok"),
+            crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
+        );
+
+        let seen: Arc<Mutex<Vec<RenderedCompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
+            let seen = Arc::clone(&sink_seen);
+            Box::pin(async move {
+                seen.lock().expect("seen").push(rendered);
+                Ok(())
+            })
+        });
+        let scope = test_scope(
+            RenderedRequestContext {
+                request_doc_id: "doc-1".to_string(),
+                request_id: "req-1".to_string(),
+                agent_did: "did:key:agent".to_string(),
+                requester_did: String::new(),
+                behavior_id: "behavior".to_string(),
+                session_id: "session".to_string(),
+                model_name: "configured-model".to_string(),
+            },
+            sink,
+        );
+
+        // The pre-rewrite body: system text still in `input`, sampling params
+        // Codex rejects still present, and a strict tool.
+        let assembled = serde_json::json!({
+            "model": "gpt-5-codex",
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": "you are gents"}]},
+                {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+            "tools": [{"type": "function", "name": "read", "strict": true}],
+            "temperature": 0.7,
+            "max_output_tokens": 4096,
+        });
+
+        scope_request(scope, async {
+            arm(
+                CaptureScopeKind::Inference,
+                0,
+                0,
+                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+            )
+            .expect("armed");
+            let req = Request::builder()
+                .method("POST")
+                .uri("https://chatgpt.com/backend-api/codex/responses")
+                .body(Bytes::from(
+                    serde_json::to_vec(&assembled).expect("assembled body"),
+                ))
+                .expect("request");
+            let _ = HttpClientExt::send_streaming(&client, req)
+                .await
+                .expect("send");
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), 1, "exactly one row for one completion body");
+        let captured = &seen[0].request_json;
+
+        assert_eq!(
+            captured["instructions"], "you are gents",
+            "the row must show the hoisted instructions, not the assembled `input` system item"
+        );
+        assert!(
+            captured["input"]
+                .as_array()
+                .expect("input array")
+                .iter()
+                .all(|item| item["role"] != "system"),
+            "system items are stripped from `input` before the send: {captured}"
+        );
+        assert_eq!(captured["store"], false);
+        assert_eq!(captured["stream"], true);
+        assert_eq!(captured["tools"][0]["strict"], false);
+        assert!(
+            captured.get("temperature").is_none() && captured.get("max_output_tokens").is_none(),
+            "params Codex deletes must be absent from the row: {captured}"
+        );
+
+        assert_eq!(
+            terminal.bodies().first().expect("a forwarded body"),
+            captured,
+            "the persisted row and the bytes the network client received must be identical"
+        );
+        assert_eq!(terminal.send_count(), 1);
     }
 
     #[test]

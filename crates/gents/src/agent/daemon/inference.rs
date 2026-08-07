@@ -167,7 +167,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let behavior_id = self.behavior.behavior_id.clone();
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.behavior.model_name.clone();
-        let outcome = async {
+        // The rendered-request capture scope is installed by `handle_request`,
+        // outside every completion loop the request contains — including the
+        // pre-request compaction summarizer, which runs before this function is
+        // ever called. Do not install one here: a second scope would restart
+        // the per-kind label sequence and hand the inference loop a label the
+        // summarizer's scope had already used.
+        let inference = async {
                 let hook = DefraSessionHook::resume_or_create_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
@@ -256,36 +262,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 };
                 loop_config.turn_compactor =
                     Some(std::sync::Arc::new(turn_compactor_callback));
-                if let Some(factory) = self.rendered_request_capture_factory.as_ref() {
-                    let context = crate::rendered_request::RenderedRequestContext::for_request(
-                        request,
-                        self.behavior.model_name.clone(),
-                        crate::rendered_request::RenderedRequestSource::for_behavior_provider(
-                            self.behavior.backend_provider_kind,
-                            self.behavior.openai_wire_api,
-                        ),
-                        self.behavior
-                            .openai_wire_api
-                            .normalizes_responses_wire(self.behavior.backend_provider_kind),
-                    );
-                    let sink = factory(context.clone());
-                    loop_config.on_rendered_request = Some(std::sync::Arc::new(
-                        move |turn_index, attempt, completion_request| {
-                            let context = context.clone();
-                            let sink = sink.clone();
-                            Box::pin(async move {
-                                let rendered =
-                                    crate::llm::rig_compat::rendered_completion_request(
-                                        &context,
-                                        turn_index,
-                                        attempt,
-                                        &completion_request,
-                                    )?;
-                                sink(rendered).await
-                            })
-                        },
-                    ));
-                }
                 loop_config.context_message = request_context_message.clone();
                 let loop_prompt = crate::llm::message::Message::user(request.content.clone());
                 let loop_history = history.to_vec();
@@ -576,8 +552,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 workspace_cwd_set,
                 attempt = attempt_index,
                 retry_attempt = false,
-            ))
-            .await?;
+            ));
+
+        // The capture scope installed by `handle_request` spans both the
+        // stream's construction and its drain loop: the SSE transports connect
+        // lazily on first poll, so the HTTP send that the capturing transport
+        // intercepts usually happens during polling.
+        let outcome = inference.await?;
 
         Ok(outcome)
     }

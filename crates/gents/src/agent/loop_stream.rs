@@ -38,6 +38,7 @@ use crate::llm::message::{
 };
 use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
+use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
@@ -60,11 +61,20 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 #[cfg(test)]
 mod tests;
 
+/// `(turn_index, attempt, request, assembly_trace)`.
+///
+/// The trace rides alongside the request because the assembled
+/// `CompletionRequest` is the *output* of prompt assembly and cannot explain
+/// its own inputs: the provider-assigned assistant message ids, the exact
+/// threaded tool-result content, the post-compaction message list, and which
+/// builder produced it are all in-memory facts that die with the loop. See
+/// `crate::rendered_request::AssemblyTrace`.
 pub(crate) type RenderedRequestSink = Arc<
     dyn Fn(
             usize,
             u32,
             CompletionRequest,
+            AssemblyTrace,
         ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
         + Send
         + Sync,
@@ -233,6 +243,17 @@ where
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
+        // Three in-memory-only transforms can enter these vectors: the rendered
+        // request context, a model-generated per-turn compaction summary, and a
+        // repair rewrite. Once any of them lands, this and every later turn must
+        // retain the full native list.
+        //
+        // The request context *is* persisted (`prompt_hook.rs:28-30`), so the
+        // reason to retain it is not absence — it is that persistence runs under
+        // a configurable `FailurePolicy::FailOpen`, so that row may legitimately
+        // be missing while the request still ships. Capture must not depend on a
+        // subsystem whose failure mode is tolerant.
+        let mut effective_messages_are_ephemeral = config.context_message.is_some();
 
         'turns: loop {
             if current_turn > config.max_turns + 1 {
@@ -253,7 +274,7 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
-            let mut request = build_budgeted_request(
+            let (mut request, compacted_this_turn) = build_budgeted_request(
                 &model,
                 &mut history,
                 &mut new_messages,
@@ -262,6 +283,7 @@ where
                 turn_index,
             )
             .await?;
+            effective_messages_are_ephemeral |= compacted_this_turn;
 
             let current_prompt = new_messages
                 .last()
@@ -292,10 +314,29 @@ where
             }
 
             let mut attempt = 0_u32;
+            // Which builder produced the `request` currently in hand. Flipped
+            // by the Repair directive below, which calls `build_request`
+            // directly and therefore never applies the output clamp. This is
+            // not recoverable from the transcript, so it rides in the trace.
+            let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let mut stream = loop {
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
-                        on_rendered_request(turn_index, attempt, request.clone())
+                        // `history ++ new_messages` is the effective provider
+                        // message list: post sanitization, post request-context
+                        // filtering, and post any per-turn compaction (which
+                        // rewrote both vectors in place).
+                        let effective_messages =
+                            history.iter().chain(new_messages.iter()).cloned().collect();
+                        let assembly_trace = if effective_messages_are_ephemeral {
+                            AssemblyTrace::from_effective_messages(build_path, effective_messages)
+                        } else {
+                            AssemblyTrace::from_reconstructible_messages(
+                                build_path,
+                                effective_messages,
+                            )
+                        };
+                        on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -350,6 +391,9 @@ where
                                         .cloned()
                                         .expect("new_messages remains non-empty after repair");
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    // `build_request`, not `build_budgeted_request`:
+                                    // no output clamp is applied to a repaired
+                                    // attempt.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -359,6 +403,15 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    build_path = AssemblyBuildPath::Repair;
+                                    // Repair rewrites `history` and `new_messages` in place, and
+                                    // both are declared outside `'turns`. The durable transcript is
+                                    // never rewritten to match, so every later turn is assembled
+                                    // from messages no `AgentMessage` row reproduces. Mark the
+                                    // effective list ephemeral for the rest of the request, not just
+                                    // this turn — `build_path` resets per turn and would otherwise
+                                    // report `Budgeted` for a turn whose input repair had altered.
+                                    effective_messages_are_ephemeral = true;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Fail { reason } => {
@@ -396,6 +449,16 @@ where
             while let Some(item) = stream.next().await {
                 let item = match item {
                     Ok(item) => {
+                        if !saw_stream_item {
+                            // A provider response arrived while this attempt's
+                            // capture was still waiting to be claimed, which
+                            // means the send did not travel through the
+                            // capturing transport. That is a mis-wired client
+                            // stack, and the only honest response is to stop:
+                            // silently continuing would produce a turn whose
+                            // provider input is not durable anywhere.
+                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                        }
                         saw_stream_item = true;
                         item
                     }
@@ -444,6 +507,9 @@ where
                                         "new_messages remains non-empty after repair",
                                     );
                                     let repaired_prior = &new_messages[..new_messages.len() - 1];
+                                    // `build_request`, not `build_budgeted_request`:
+                                    // no output clamp is applied to a repaired
+                                    // attempt.
                                     request = build_request(
                                         &model,
                                         repaired_prompt,
@@ -453,6 +519,11 @@ where
                                         &config,
                                     )
                                     .await?;
+                                    build_path = AssemblyBuildPath::Repair;
+                                    // See the sibling repair arm above: repair mutates the
+                                    // request-scoped message vectors, so the effective list stays
+                                    // ephemeral for every later turn of this request.
+                                    effective_messages_are_ephemeral = true;
                                     attempt += 1;
                                     continue 'attempts;
                                 }
@@ -671,6 +742,13 @@ where
                         }
                     }
                 }
+            }
+
+            // An empty stream never enters the item branch above. It is still
+            // proof that `model.stream` dispatched, so it must not reach the
+            // ordinary no-output retry path while this attempt remains armed.
+            if !saw_stream_item {
+                ensure_rendered_request_was_captured(turn_index, attempt)?;
             }
 
             if pending_results.is_empty() && turn_text.trim().is_empty() {
@@ -1229,6 +1307,22 @@ fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopC
     )
 }
 
+fn ensure_rendered_request_was_captured(
+    turn_index: usize,
+    attempt: u32,
+) -> Result<(), StreamingError> {
+    if crate::rendered_request::scope::pending_is_armed() {
+        return Err(StreamingError::Completion(CompletionError::ProviderError(
+            format!(
+                "provider response for turn {turn_index} attempt {attempt} \
+                 arrived without a durable rendered-request capture; the \
+                 completion client is missing its capturing transport"
+            ),
+        )));
+    }
+    Ok(())
+}
+
 async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<Message>,
@@ -1236,7 +1330,7 @@ async fn build_budgeted_request<M: CompletionModel>(
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
     turn_index: usize,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<(CompletionRequest, bool), StreamingError> {
     let current_prompt = new_messages
         .last()
         .cloned()
@@ -1246,10 +1340,10 @@ async fn build_budgeted_request<M: CompletionModel>(
     clamp_request_output_budget(&mut request, config);
 
     let Some(compactor) = config.turn_compactor.as_ref() else {
-        return Ok(request);
+        return Ok((request, false));
     };
     if !completion_request_exceeds_budget(&request, config) {
-        return Ok(request);
+        return Ok((request, false));
     }
 
     let provider_messages = history
@@ -1304,7 +1398,7 @@ async fn build_budgeted_request<M: CompletionModel>(
         )));
     }
 
-    Ok(rebuilt)
+    Ok((rebuilt, true))
 }
 
 async fn build_request<M: CompletionModel>(

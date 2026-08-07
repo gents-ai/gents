@@ -22,6 +22,8 @@ mod projection_acp_policy_lifecycle;
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/provider_fixture_replay.rs"]
 mod provider_fixture_replay;
+#[path = "e2e_runtime/rendered_request_capture.rs"]
+mod rendered_request_capture;
 #[path = "e2e_runtime/runtime_observability.rs"]
 mod runtime_observability;
 #[path = "e2e_runtime/schedule_snapshot_reconcile.rs"]

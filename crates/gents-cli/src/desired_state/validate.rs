@@ -312,12 +312,26 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
             ));
         }
-        if profile.reasoning_effort.as_deref().is_some_and(|value| {
-            !matches!(
-                value,
-                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-            )
-        }) {
+        // An empty value is not an invalid reasoning level, it is an *unset*
+        // one. `document_config::graphql_string_field` writes `""` for a
+        // `None` reasoning effort, so every profile `gents init` creates
+        // materializes as an empty string, `config export` copies it into the
+        // manifest, and rejecting it here would make the CLI refuse to apply
+        // the manifest it just exported. The runtime already resolves it the
+        // same way (`gents::agent`, "older/default Defra rows may materialize
+        // nullable strings as an empty value").
+        if profile
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| {
+                !matches!(
+                    value,
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            })
+        {
             errors.push(format!(
                 "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
             ));
@@ -1402,6 +1416,62 @@ mod tests {
         let mut errors = Vec::new();
         validate_manifest(&manifest, &mut errors);
         errors
+    }
+
+    fn manifest_with_reasoning_effort(reasoning_effort: Option<&str>) -> DesiredStateManifest {
+        let mut manifest = manifest(None, None);
+        manifest
+            .inference_profiles
+            .push(super::super::DesiredInferenceProfile {
+                profile_id: "default-profile".to_string(),
+                display_name: None,
+                context_window: None,
+                max_output_tokens: None,
+                max_turns: None,
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                min_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                repetition_penalty: None,
+                reasoning_effort: reasoning_effort.map(str::to_string),
+                stream_batch_ms: None,
+                stream_liveness_timeout_secs: None,
+                deadline_duration_secs: None,
+                retry_max_transport: None,
+                retry_backoff_ms: None,
+                retry_max_resample: None,
+                retry_allow_repair: None,
+                retry_interactive_max: None,
+            });
+        manifest
+    }
+
+    /// `gents init` writes no reasoning effort, which DefraDB materializes as
+    /// an empty string, which `config export` copies into the manifest. Treating
+    /// that as an invalid level made `config export` produce a manifest
+    /// `config apply` refused — the round trip the CLI's own shim test drives.
+    #[test]
+    fn an_unset_reasoning_effort_round_trips_through_export_and_apply() {
+        for unset in [Some(""), Some("   "), None] {
+            let errors = validate_errors(manifest_with_reasoning_effort(unset));
+            assert!(
+                errors.is_empty(),
+                "an unset reasoning_effort ({unset:?}) must validate: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reasoning_effort_outside_the_vocabulary_is_still_rejected() {
+        let errors = validate_errors(manifest_with_reasoning_effort(Some("extreme")));
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("reasoning_effort must be one of")),
+            "expected the vocabulary rejection, got {errors:?}"
+        );
     }
 
     #[test]

@@ -460,3 +460,92 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
         "a profile that pins no body-param knob must not send any"
     );
 }
+
+/// Capture is a property of every completion loop, not a privilege of the
+/// inference path (#840). `loop_config` is the only place a loop's capture
+/// scope is chosen, so this is where a call site that forgets one — or reuses
+/// another's — becomes visible.
+#[tokio::test]
+async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
+    use crate::rendered_request::scope::{
+        claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
+    };
+    use crate::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    };
+
+    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let context = RenderedRequestContext {
+        request_doc_id: "doc-1".to_string(),
+        request_id: "req-1".to_string(),
+        agent_did: "did:key:agent".to_string(),
+        requester_did: String::new(),
+        behavior_id: "general".to_string(),
+        session_id: "session-1".to_string(),
+        model_name: "model".to_string(),
+    };
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(context, sink);
+
+    scope_request(scope, async {
+        for (kind, expected) in [
+            (CaptureScopeKind::Inference, "inference.1"),
+            (CaptureScopeKind::Compaction, "compaction.1"),
+            (
+                CaptureScopeKind::CompactionFallback,
+                "compaction_fallback.1",
+            ),
+            (CaptureScopeKind::Title, "title.1"),
+            (CaptureScopeKind::OneShot, "oneshot.1"),
+        ] {
+            let config = loop_config(&behavior, "preamble".to_string(), 0, kind);
+            let on_rendered_request = config
+                .on_rendered_request
+                .clone()
+                .expect("every production loop config installs an arming sink");
+            on_rendered_request(
+                0,
+                0,
+                rig::completion::CompletionRequest {
+                    model: None,
+                    preamble: None,
+                    chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
+                        "hi",
+                    )),
+                    documents: Vec::new(),
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_tokens: None,
+                    tool_choice: None,
+                    additional_params: None,
+                    output_schema: None,
+                },
+                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+            )
+            .await
+            .expect("arming never fails");
+
+            let (_, claim) = claim_pending().expect("a scope is installed");
+            let CaptureClaim::Armed(pending) = claim else {
+                panic!("{kind} did not arm a pending capture");
+            };
+            assert_eq!(
+                pending.capture_scope, expected,
+                "{kind} armed the wrong scope"
+            );
+        }
+    })
+    .await;
+}
+
+/// `loop_config_for_request` is the inference path's entry point; it must not
+/// silently drop the capture the daemon depends on.
+#[test]
+fn loop_config_for_request_keeps_the_inference_capture_scope() {
+    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request(), 0);
+    assert!(
+        config.on_rendered_request.is_some(),
+        "the request path must arm a rendered-request capture"
+    );
+}

@@ -148,11 +148,15 @@ impl RuntimeContext {
                 );
                 if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                     let client: rig::providers::openai::CompletionsClient<
-                        crate::inference_http::SessionTaggingHttpClient,
+                        crate::inference_http::SessionTaggingHttpClient<
+                            crate::rendered_request::RenderedRequestCapturingHttpClient,
+                        >,
                     > = crate::inference_http::build_openai_chat_completions_client(
                         &api_key,
                         &behavior.backend_endpoint,
-                        crate::inference_http::SessionTaggingHttpClient::default(),
+                        crate::inference_http::SessionTaggingHttpClient::new(
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                        ),
                     )
                     .with_context(|| build_context.clone())?;
                     self.run_behavior_with_client(
@@ -170,13 +174,17 @@ impl RuntimeContext {
                 } else {
                     let client: rig::providers::openai::Client<
                         crate::inference_http::SessionTaggingHttpClient<
-                            crate::inference_http::ResponsesNormalizingHttpClient,
+                            crate::inference_http::ResponsesNormalizingHttpClient<
+                                crate::rendered_request::RenderedRequestCapturingHttpClient,
+                            >,
                         >,
                     > = crate::inference_http::build_openai_responses_client(
                         &api_key,
                         &behavior.backend_endpoint,
                         crate::inference_http::SessionTaggingHttpClient::new(
-                            crate::inference_http::ResponsesNormalizingHttpClient::default(),
+                            crate::inference_http::ResponsesNormalizingHttpClient::new(
+                                crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                            ),
                         ),
                         Default::default(),
                     )
@@ -200,12 +208,16 @@ impl RuntimeContext {
                     "building OpenRouter completion client for behavior {} against {}",
                     behavior.behavior_id, behavior.backend_endpoint
                 );
-                let client: rig::providers::openrouter::Client =
-                    rig::providers::openrouter::Client::builder()
-                        .api_key(&api_key)
-                        .base_url(&behavior.backend_endpoint)
-                        .build()
-                        .with_context(|| build_context.clone())?;
+                let client: rig::providers::openrouter::Client<
+                    crate::rendered_request::RenderedRequestCapturingHttpClient,
+                > = rig::providers::openrouter::Client::builder()
+                    .api_key(&api_key)
+                    .base_url(&behavior.backend_endpoint)
+                    .http_client(
+                        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                    )
+                    .build()
+                    .with_context(|| build_context.clone())?;
                 self.run_behavior_with_client(
                     behavior,
                     request_rx,

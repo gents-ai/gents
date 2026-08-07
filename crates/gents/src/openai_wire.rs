@@ -62,10 +62,6 @@ impl OpenAiWireApi {
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
         }
     }
-
-    pub fn normalizes_responses_wire(self, provider_kind: BackendProviderKind) -> bool {
-        provider_kind == BackendProviderKind::OpenAiCompatible && self == Self::Responses
-    }
 }
 
 impl std::fmt::Display for OpenAiWireApi {

@@ -83,6 +83,12 @@ def boundaryModelNatTypedIdsTimeId : String :=
 def boundaryP2pBackpressureObligationModelId : String :=
   "boundary.p2p-backpressure.obligation-model"
 
+def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
+  "boundary.rendered-capture.assembled-request-artifact"
+
+def boundaryRenderedCaptureKeyEncodingInjectivityId : String :=
+  "boundary.rendered-capture.key-encoding-injectivity"
+
 def boundaries : List Boundary :=
   [ { id := boundaryRequestInputRequiredReservedId
     , domain := "RequestLifecycle"
@@ -271,6 +277,26 @@ def boundaries : List Boundary :=
         some "A future queue-admission, durable-retry, store-before-ack, or restart-recovery regression can pass this one-wave model; the separate pinned-struct observability and P2P end-to-end tests are implementation fences, not proofs of those properties."
     , acceptedFollowUp :=
         some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
+    }
+  , { id := boundaryRenderedCaptureAssembledRequestArtifactId
+    , domain := "RenderedCapture"
+    , subject := "the captured artifact is the transport body, parsed as canonical JSON"
+    , statement :=
+        "Proofs.RenderedCapture's CanonicalRequest is opaque: the model states only that one capture key binds one canonical request, never which artifact that is. Production binds the serialized HTTP request body observed in crates/gents/src/rendered_request/transport.rs, the innermost HttpClientExt in every provider stack, after chatgpt_codex.rs::patch_instructions_body (system text hoisted into a top-level `instructions` field and stripped from `input`, store=false, stream=true, max_output_tokens/temperature/top_p deleted, strict=false forced on every tool), after xai_grok_oauth.rs::patch_store_false (store=false), and after inference_http.rs::ResponsesNormalizingHttpClient, and immediately before the inner network client is called. The residual gap is fidelity, not position: the bytes are parsed and re-encoded through the canonical JSON encoder before storage, so equality is canonical-JSON value equality and does not preserve the sender's key order or serializer whitespace."
+    , acceptedFailureMode :=
+        some "A transport that reordered or reformatted JSON without changing any value would compare equal. #523's issue text asks for \"the exact bytes that were sent\", which canonical-JSON equality does not literally deliver even though it now covers every provider-specific body rewrite."
+    , acceptedFollowUp :=
+        some "Either amend #523 to canonical-JSON fidelity over the transport body, or store the raw UTF-8 body alongside request_json and prove the inner client forwarded those same bytes."
+    }
+  , { id := boundaryRenderedCaptureKeyEncodingInjectivityId
+    , domain := "RenderedCapture"
+    , subject := "capture key tuple vs the durable string column"
+    , statement :=
+        "The modeled CaptureKey is a five-component tuple (agentDid, sessionId, requestId, turnIndex, attempt) with componentwise decidable equality, so \"the same key\" means \"the same five facts\" and there is no delimiter to collide on. The durable column is a single string. The model does not prove that the Rust encoding is injective on the tuple; that obligation sits entirely on the encoder."
+    , acceptedFailureMode :=
+        some "A non-injective encoder merges two distinct attempts into one capture key. The existing composite key in the tree shows this is a live class rather than a hypothetical one: AgentToolCall.tool_call_key is an unescaped \"{session_id}:{tool_call_id}\" concatenation, and session_id reaches it unvalidated from `gents chat --session-id`, so a crafted session id can shadow or pre-claim another session's key."
+    , acceptedFollowUp :=
+        some "Derive capture_key from a canonical encoding of the tuple (length-prefixed or canonical-JSON, then hashed) and fence injectivity with an adversarial Rust property test, rather than concatenating with a delimiter."
     }
   ]
 

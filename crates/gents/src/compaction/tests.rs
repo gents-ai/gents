@@ -1050,6 +1050,12 @@ impl CompletionModel for ScriptedSummaryModel {
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.requests.lock().unwrap().push(request);
+        // Stand in for the capturing transport as well as the provider. A real
+        // send claims the armed capture; without that the owned loop's
+        // "response arrived with no durable capture" fence fires, which is
+        // correct behaviour and would make this mock look like a mis-wired
+        // client stack. Outside a capture scope this is a no-op.
+        let _ = crate::rendered_request::scope::claim_pending();
         let turn = self
             .script
             .lock()
@@ -1205,6 +1211,85 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
         calls.load(std::sync::atomic::Ordering::SeqCst),
         2,
         "schema-invalid JSON must consume exactly one retry"
+    );
+}
+
+/// The summarizer is the call this whole fact record exists to explain: its
+/// output is injected straight into provider history and is never written as an
+/// `AgentCompactionEntry`. It runs two provider calls of its own inside a turn
+/// that already has an inference call, and all three start at `(turn 0, attempt
+/// 0)`. If they shared a capture scope they would share a capture key, and the
+/// sink would (correctly) reject the second as an integrity violation — taking
+/// the request down. Each has to arm its own scope.
+#[tokio::test(start_paused = true)]
+async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
+    use crate::rendered_request::scope::{
+        armed_labels, scope_request, test_scope, CaptureScopeKind,
+    };
+    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let mut config = scheduled_origin_config();
+    // Exactly what `completion_factory::loop_config(.., Compaction)` installs;
+    // `every_loop_config_arms_the_capture_scope_it_was_built_for` fences that
+    // equivalence.
+    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+        CaptureScopeKind::Compaction,
+    ));
+    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
+
+    let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(
+        RenderedRequestContext {
+            request_doc_id: "doc-1".to_string(),
+            request_id: "req-1".to_string(),
+            agent_did: "did:key:agent".to_string(),
+            requester_did: String::new(),
+            behavior_id: "behavior".to_string(),
+            session_id: "session-1".to_string(),
+            model_name: "model".to_string(),
+        },
+        sink,
+    );
+
+    let labels = scope_request(scope, async move {
+        compactor
+            .compact(
+                summary_worthy_messages(),
+                500,
+                &CompactionOptions {
+                    threshold: 0.50,
+                    keep_recent_tokens: 50,
+                    strategy: CompactionStrategy::Summarize,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("the strict JSON fallback recovers");
+        armed_labels()
+    })
+    .await;
+
+    assert_eq!(
+        labels.first().map(String::as_str),
+        Some("compaction.1"),
+        "the guided summarizer must arm its own scope: {labels:?}"
+    );
+    assert_eq!(
+        labels.last().map(String::as_str),
+        Some("compaction_fallback.1"),
+        "the strict JSON fallback is a second provider call and must be a second \
+         fact, not a rebinding of the guided attempt's: {labels:?}"
+    );
+    assert!(
+        labels.iter().all(|label| label != "inference.1"),
+        "the summarizer must never borrow the inference loop's scope: {labels:?}"
     );
 }
 

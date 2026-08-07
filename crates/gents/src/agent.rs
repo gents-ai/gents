@@ -177,6 +177,9 @@ impl Gents {
                 .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
+        let rendered_request_capture_factory =
+            crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
+
         Ok(Self {
             node,
             principal,
@@ -197,7 +200,11 @@ impl Gents {
             process_state_observer: options.process_state_observer,
             runtime_snapshot_observer: options.runtime_snapshot_observer,
             startup_readiness: options.startup_readiness,
-            rendered_request_capture_factory: None,
+            // Capture is mandatory (#840): a provider call with no durable
+            // rendered input is a log entry, not a fact record. The public
+            // builder exposes only a fail-closed fault-injection hook, never an
+            // arbitrary sink that could acknowledge without persisting.
+            rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })
     }

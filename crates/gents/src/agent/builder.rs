@@ -109,11 +109,21 @@ impl GentsBuilder {
         self
     }
 
-    pub fn rendered_request_capture_factory(
-        mut self,
-        factory: crate::rendered_request::RenderedRequestCaptureFactory,
-    ) -> Self {
-        self.rendered_request_capture_factory = Some(factory);
+    /// Install a fail-closed capture sink for end-to-end fault-injection tests.
+    ///
+    /// This deliberately exposes only failure, not arbitrary sink replacement:
+    /// callers must not be able to acknowledge a provider request without
+    /// first making its rendered input durable.
+    #[doc(hidden)]
+    pub fn fail_rendered_request_capture_for_test(mut self, message: impl Into<String>) -> Self {
+        let message = Arc::new(message.into());
+        self.rendered_request_capture_factory = Some(Arc::new(move |_context| {
+            let message = Arc::clone(&message);
+            Arc::new(move |_rendered| {
+                let message = Arc::clone(&message);
+                Box::pin(async move { Err(anyhow!(message.as_str().to_owned())) })
+            })
+        }));
         self
     }
 
@@ -203,6 +213,8 @@ impl GentsBuilder {
                 .then_with(|| left.behavior_id.cmp(&right.behavior_id))
         });
 
+        let capture_node = node.clone();
+
         Ok(Gents {
             node,
             principal,
@@ -223,7 +235,13 @@ impl GentsBuilder {
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
             startup_readiness: Default::default(),
-            rendered_request_capture_factory: self.rendered_request_capture_factory,
+            // Same default as `Gents::from_default_behavior_documents`: every
+            // provider request must pass through the durable DefraDB sink.
+            rendered_request_capture_factory: Some(
+                self.rendered_request_capture_factory.unwrap_or_else(|| {
+                    crate::rendered_request::defra_rendered_request_capture_factory(capture_node)
+                }),
+            ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
         })
     }

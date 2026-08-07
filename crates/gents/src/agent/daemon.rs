@@ -85,8 +85,12 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             behavior.agent_did(),
             Duration::from_millis(behavior.stream_batch_ms),
         );
-        let mut compaction_config =
-            crate::completion_factory::loop_config(behavior.as_ref(), preamble.clone(), 0);
+        let mut compaction_config = crate::completion_factory::loop_config(
+            behavior.as_ref(),
+            preamble.clone(),
+            0,
+            crate::rendered_request::CaptureScopeKind::Compaction,
+        );
         compaction_config.max_turns = 0;
         let compactor = DefraCompactor::new(model.clone(), compaction_config);
         let compaction_options = CompactionOptions {

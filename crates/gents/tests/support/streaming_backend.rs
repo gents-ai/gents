@@ -22,10 +22,47 @@ use axum::Router;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
+/// One streamed delta: assistant text, or a tool call the model is asking for.
+///
+/// Tool calls exist here because a multi-turn request is *only* reachable
+/// through them — the owned loop continues to a second turn exactly when a turn
+/// produced tool calls. A backend that can only stream text can never exercise
+/// turn 1, which is where per-turn compaction, threaded tool results, and the
+/// `turn_index` half of the rendered-capture key live.
+#[derive(Clone, Debug)]
+pub enum StreamChunk {
+    Text(String),
+    ToolCall {
+        id: String,
+        name: String,
+        /// The `arguments` string exactly as an OpenAI-compatible provider
+        /// streams it: a JSON *string* whose contents are the argument object.
+        arguments: String,
+    },
+}
+
+impl StreamChunk {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    pub fn tool_call(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamScript {
     marker: String,
-    chunks: Vec<String>,
+    chunks: Vec<StreamChunk>,
     pause_after_chunks: bool,
 }
 
@@ -36,7 +73,7 @@ impl StreamScript {
     ) -> Self {
         Self {
             marker: marker.into(),
-            chunks: chunks.into_iter().map(ToOwned::to_owned).collect(),
+            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
             pause_after_chunks: true,
         }
     }
@@ -47,7 +84,16 @@ impl StreamScript {
     ) -> Self {
         Self {
             marker: marker.into(),
-            chunks: chunks.into_iter().map(ToOwned::to_owned).collect(),
+            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
+            pause_after_chunks: false,
+        }
+    }
+
+    /// A script over explicit chunks, so a caller can stream tool calls.
+    pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
+        Self {
+            marker: marker.into(),
+            chunks,
             pause_after_chunks: false,
         }
     }
@@ -87,6 +133,10 @@ impl StreamResponse {
         chunks: impl IntoIterator<Item = &'static str>,
     ) -> Self {
         StreamResponse::Stream(StreamScript::completes(marker, chunks))
+    }
+
+    pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
+        StreamResponse::Stream(StreamScript::streams(marker, chunks))
     }
 
     pub fn service_unavailable(message: impl Into<String>) -> Self {
@@ -181,6 +231,24 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
+    /// Every completion body this backend was posted, matched plan or not.
+    ///
+    /// Marker-scoped counts cannot answer "was anything sent at all?", which is
+    /// the assertion a fail-closed capture test needs: an uncaptured send that
+    /// matches no plan would still be a provider call that escaped.
+    pub fn observed_completion_bodies(&self) -> Vec<serde_json::Value> {
+        self.state
+            .inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .completion_bodies
+            .clone()
+    }
+
+    pub fn observed_completion_requests(&self) -> usize {
+        self.observed_completion_bodies().len()
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
         let observed = self
             .state
@@ -215,6 +283,8 @@ struct StreamingState {
 struct StreamingStateInner {
     chunk_counts: HashMap<String, usize>,
     request_counts: HashMap<String, usize>,
+    /// Every completion body posted to this backend, in arrival order.
+    completion_bodies: Vec<serde_json::Value>,
     releases: HashSet<String>,
 }
 
@@ -227,6 +297,17 @@ impl StreamingState {
             inner: Mutex::new(StreamingStateInner::default()),
             notify: Notify::new(),
         }
+    }
+
+    fn record_completion_body(&self, body: &str) {
+        let value = serde_json::from_str::<serde_json::Value>(body)
+            .unwrap_or_else(|_| json!({ "__unparsed__": body }));
+        self.inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .completion_bodies
+            .push(value);
+        self.notify.notify_waiters();
     }
 
     fn next_response(&self, body: &str) -> StreamResponse {
@@ -340,6 +421,7 @@ async fn handle_models(State(state): State<Arc<StreamingState>>) -> Response {
 }
 
 async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> Response {
+    state.record_completion_body(&body);
     if request_is_streaming(&body) {
         return match state.next_response(&body) {
             StreamResponse::Stream(script) => streaming_response(script, state),
@@ -410,7 +492,8 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
                         return None;
                     }
                     if index < script.chunks.len() {
-                        let event = Event::default().data(chunk_payload(&script.chunks[index]));
+                        let event =
+                            Event::default().data(chunk_payload(index, &script.chunks[index]));
                         state.record_chunk(&script.marker);
                         return Some((
                             Ok::<Event, Infallible>(event),
@@ -446,18 +529,46 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
     Sse::new(stream).into_response()
 }
 
-fn chunk_payload(content: &str) -> String {
-    json!({
-        "choices": [{
-            "delta": {
-                "content": content,
-                "tool_calls": []
-            },
-            "finish_reason": null
-        }],
-        "usage": null
-    })
-    .to_string()
+/// `index` is the tool-call slot an OpenAI-compatible provider assigns. Using
+/// the chunk position keeps two tool calls in one turn from colliding on slot 0,
+/// which rig's accumulator would otherwise have to disambiguate by id and name.
+fn chunk_payload(index: usize, chunk: &StreamChunk) -> String {
+    match chunk {
+        StreamChunk::Text(content) => json!({
+            "choices": [{
+                "delta": {
+                    "content": content,
+                    "tool_calls": []
+                },
+                "finish_reason": null
+            }],
+            "usage": null
+        })
+        .to_string(),
+        StreamChunk::ToolCall {
+            id,
+            name,
+            arguments,
+        } => json!({
+            "choices": [{
+                "delta": {
+                    "content": null,
+                    "tool_calls": [{
+                        "index": index,
+                        "id": id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments
+                        }
+                    }]
+                },
+                "finish_reason": null
+            }],
+            "usage": null
+        })
+        .to_string(),
+    }
 }
 
 fn usage_payload() -> String {

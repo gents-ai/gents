@@ -191,6 +191,15 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "rendered-capture"
+    , required := [Surface.runtimeInternal]
+    , deferred :=
+        [ (Surface.operatorCli,
+            "#840 — `trace timeline|project` surfacing of captured requests lands with the projection slice; rows accumulate from this release onward with no reader")
+        , (Surface.operatorUi,
+            "#840 — the desktop rendered-request view lands with the same projection slice")
+        ]
+    }
   , { feature := "streaming-response"
     , required := [Surface.agentFacing, Surface.operatorUi]
     , deferred := []
@@ -903,6 +912,16 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyTurnBudgetCases"
       "agent::loop_stream::tests::generated_turn_budget_cases_drive_every_completion_dispatch")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "rendered_capture_cases"
+      "RenderedCaptureCases"
+      "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send")
+      "rendered-capture" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "rendered_capture_cases"
+      "RenderedCaptureKeyCases"
+      "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple")
+      "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"

@@ -516,6 +516,8 @@ mod persona_request;
 mod prompt_assembly;
 #[path = "conformance/r5_scenarios.rs"]
 mod r5_scenarios;
+#[path = "conformance/rendered_capture.rs"]
+mod rendered_capture;
 #[path = "conformance/scheduling.rs"]
 mod scheduling;
 #[path = "conformance/scope_templates.rs"]

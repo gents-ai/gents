@@ -10,6 +10,7 @@ use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, ReasoningEffort, SamplingConfig};
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
+use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
 fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
@@ -30,10 +31,21 @@ where
     AdmittedCompletionClient::new(client, admission).completion_model(&behavior.model_name)
 }
 
+/// Build a loop config for one completion loop.
+///
+/// `capture_scope` is not decoration. Every loop this factory serves issues
+/// provider calls under the same `(agent_did, session_id, request_id)`, and
+/// every one of them starts its turn and attempt counters at zero — the owned
+/// inference loop, the compaction summarizer and its JSON fallback, title
+/// generation, and the one-shot runner. The scope is what keeps their first
+/// calls from colliding into one durable fact, and passing it here is what
+/// makes capture the default for all of them instead of a privilege of the
+/// inference path (#840).
 pub(crate) fn loop_config(
     behavior: &AgentBehavior,
     preamble: String,
     tool_count: usize,
+    capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
     LoopConfig {
         preamble: Some(preamble),
@@ -53,7 +65,9 @@ pub(crate) fn loop_config(
         ),
         structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
-        on_rendered_request: None,
+        on_rendered_request: Some(crate::rendered_request::scope::ambient_arming_sink(
+            capture_scope,
+        )),
         turn_compactor: None,
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold,
@@ -69,7 +83,7 @@ pub(crate) fn loop_config_for_request(
     request: &AgentRequest,
     tool_count: usize,
 ) -> LoopConfig {
-    let mut config = loop_config(behavior, preamble, tool_count);
+    let mut config = loop_config(behavior, preamble, tool_count, CaptureScopeKind::Inference);
     let sampling = sampling_for_request(behavior.sampling, request);
     config.temperature = sampling.temperature;
     config.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
