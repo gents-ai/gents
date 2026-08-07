@@ -32,6 +32,7 @@ pub struct AgentRequest {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
+    pub seed: Option<i64>,
     pub max_tokens: Option<i64>,
     pub metadata: Option<String>,
     pub execution_origin: Option<String>,
@@ -44,7 +45,10 @@ pub struct AgentRequest {
     pub caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
-pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
+pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
+    if req.seed.is_some_and(|seed| seed < 0) {
+        anyhow::bail!("agent request seed must be non-negative");
+    }
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
     let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();

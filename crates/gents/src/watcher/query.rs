@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::Deserialize;
 
-use super::{validate_agent_request_subagent_coherence, AgentRequest, DefraWatcher};
+use super::{validate_agent_request, AgentRequest, DefraWatcher};
 
 mod rows;
 use rows::{AgentRequestRow, SessionQueueRow};
@@ -18,6 +18,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     temperature
                     top_p
                     top_k
+                    seed
                     max_tokens
                     metadata
                     execution_origin

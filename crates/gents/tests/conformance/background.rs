@@ -58,6 +58,7 @@ struct BackgroundTheoremChildRequestRow {
     temperature: Option<f64>,
     top_p: Option<f64>,
     top_k: Option<i64>,
+    seed: Option<i64>,
     max_tokens: Option<i64>,
     metadata: Option<String>,
     execution_origin: Option<String>,
@@ -87,6 +88,7 @@ impl BackgroundTheoremChildRequestRow {
             temperature: self.temperature,
             top_p: self.top_p,
             top_k: self.top_k,
+            seed: self.seed,
             max_tokens: self.max_tokens,
             metadata: self.metadata,
             execution_origin: self
@@ -437,6 +439,7 @@ async fn fetch_background_theorem_child_request(
                 temperature
                 top_p
                 top_k
+                seed
                 max_tokens
                 metadata
                 execution_origin
@@ -476,6 +479,7 @@ async fn fetch_background_theorem_child_request_optional(
                 temperature
                 top_p
                 top_k
+                seed
                 max_tokens
                 metadata
                 execution_origin
