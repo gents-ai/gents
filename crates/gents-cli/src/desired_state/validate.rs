@@ -312,6 +312,11 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
                 "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
             ));
         }
+        if profile.seed.is_some_and(|value| value < 0) {
+            errors.push(format!(
+                "InferenceProfile {profile_id} seed must be non-negative"
+            ));
+        }
         if profile.reasoning_effort.as_deref().is_some_and(|value| {
             !matches!(
                 value,
