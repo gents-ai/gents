@@ -62,7 +62,6 @@ impl OpenAiWireApi {
             BackendProviderKind::XaiGrokOAuth => configured.unwrap_or(Self::Responses),
         }
     }
-
 }
 
 impl std::fmt::Display for OpenAiWireApi {

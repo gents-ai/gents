@@ -17,10 +17,11 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::{
     RenderedCompletionRequest, RenderedRequestCaptureFactory, RenderedRequestCaptureSink,
 };
-use gents::{AgentIdentity, Gents, ToolCeiling};
+use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
@@ -28,12 +29,20 @@ use crate::support::interrupt::{
     create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
 };
 use crate::support::snapshots::fetch_request_snapshot;
-use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
+use crate::support::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
+};
 use crate::support::test_db;
 
 const CAPTURE_MODEL: &str = "capture-model";
 const CAPTURE_BACKEND_ID: &str = "capture-backend";
 const CAPTURE_BEHAVIOR_ID: &str = "capture-behavior";
+const CAPTURE_TOOL: &str = "capture_probe";
+
+/// The production parse-400 body that classifies as `ParseBadRequest` and so
+/// reaches `PreStreamDirective::Repair`. Copied verbatim from
+/// `completion_retry_tape.rs`, which is where it was captured from a real vLLM.
+const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
 
 /// The exact bytes the provider received must be the exact bytes on the row.
 ///
@@ -173,6 +182,14 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
 /// reusing the key for a different one is an integrity error, never an update.
 /// This drives the sink directly because the loop can never produce the second
 /// case — that is the point of proving it here rather than assuming it.
+///
+/// Row counts alone cannot tell "the sink skipped the write" from "the sink
+/// rewrote the row with the same bytes", and the second is not idempotent: it
+/// appends a commit and moves the content anchor this design takes integrity
+/// from. So both outcomes are also measured against the row's `_commits`. The
+/// commit for `request_json` is asserted by name in Rust rather than filtered
+/// for in the query, because `_commits` evaluates its `fieldName` filter in
+/// memory and a malformed one degrades to no filter at all.
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let db = test_db("rendered-request-capture-idempotency").await;
@@ -190,6 +207,15 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         1
     );
 
+    let anchor = commit_set(db.node.as_ref(), &first.capture_key).await;
+    assert!(
+        anchor
+            .iter()
+            .any(|(field_name, _)| field_name == "request_json"),
+        "the payload must have its own field commit; that CID is the version \
+         anchor this design uses instead of a stored request_hash: {anchor:?}"
+    );
+
     // Same key, same canonical value, keys reordered: still one fact.
     let mut redelivered = first.clone();
     redelivered.request_json = serde_json::json!({"messages": [{"role": "user"}], "model": "m"});
@@ -202,6 +228,12 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
             .len(),
         1,
         "an idempotent redelivery must not write a second row"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &first.capture_key).await,
+        anchor,
+        "an idempotent redelivery must not write at all: the commit set, and so \
+         the content anchor, must be untouched"
     );
 
     // Same key, different canonical value: integrity error, no write.
@@ -223,9 +255,614 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         canonical(&first.request_json),
         "the original fact must survive the rejected rebinding"
     );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &first.capture_key).await,
+        anchor,
+        "a rejected rebinding must leave no trace in the commit history either"
+    );
+}
+
+/// Two attempts at one turn are two facts, and `attempt` is the only thing that
+/// makes them so.
+///
+/// `RenderedCapture.attempt_distinguishes_facts` is proven in Lean, and for a
+/// while nothing in Rust depended on it: a mutation probe that replaced the
+/// loop's `attempt` with a literal `0` compiled and failed no test. The in-crate
+/// seam test
+/// (`agent::loop_stream::tests::capture_seam_reports_distinct_attempts_and_the_repair_build_path`)
+/// now fences the loop's *arguments*; this fences the *durable rows*, which is
+/// the thing #840 actually promises, and it does so through the full daemon,
+/// transport, and DefraDB path where the counter has to survive a task-local
+/// hand-off from the loop to the capturing HTTP client.
+///
+/// The scenario is deliberately the weakest one: a 503 that is retried with a
+/// byte-identical request. Nothing about the payload distinguishes the two
+/// provider calls, so if `attempt` did not reach the key, the sink would find
+/// the key already bound to the identical canonical value, report an idempotent
+/// success, and leave exactly one row behind — a durable fact record that
+/// silently under-counts what the provider was actually sent.
+///
+/// The scope assertion is load-bearing for the same reason. `label_for` treats a
+/// `(turn 0, attempt 0)` arm as the start of a new completion loop, so an
+/// `attempt` pinned to `0` does not merely collapse the rows — it allocates a
+/// second scope, `inference.2`, and produces two rows that look plausible until
+/// you read their coordinates.
+#[tokio::test]
+async fn a_retried_attempt_is_its_own_durable_fact() {
+    let marker = "capture-attempt-fence";
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::service_unavailable(
+                    "HTTP status 503 forcing exactly one transport retry",
+                ),
+                StreamResponse::completes(marker, ["recovered"]),
+            ],
+        )],
+    )
+    .expect("mock backend");
+    let db = test_db("rendered-request-capture-attempts").await;
+    let agent = boot_capture_agent(
+        &db,
+        "rendered-request-capture-attempts",
+        backend.endpoint(),
+        None,
+    )
+    .await;
+
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-attempts",
+        "session-capture-attempts",
+        &format!("please recover {marker}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+
+    let observed = backend.observed_completion_bodies();
+    assert_eq!(
+        observed.len(),
+        2,
+        "one refused attempt and one recovery: {observed:?}"
+    );
+    // The premise the fence rests on: a transport retry resamples the same
+    // request, so the two provider calls are byte-identical and `attempt` is
+    // the only component of the capture key that can separate them.
+    assert_eq!(
+        canonical(&observed[0]),
+        canonical(&observed[1]),
+        "a transport retry must resample the same request; if this ever stops \
+         being true, the fence below no longer isolates `attempt`"
+    );
+
+    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-attempts", 2).await;
+    assert_eq!(
+        coordinates(&rows),
+        vec![("inference.1", 0, 0), ("inference.1", 0, 1)],
+        "both provider calls belong to the same completion loop and the same \
+         turn, and are distinguished only by the loop's own attempt counter"
+    );
+    assert_ne!(
+        rows[0]["capture_key"], rows[1]["capture_key"],
+        "distinct attempts must derive distinct capture keys"
+    );
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(
+            parse_json(&row["request_json"]),
+            canonical(&observed[index]),
+            "row {index} must carry the body the provider was posted"
+        );
+        assert_eq!(build_path(row), "budgeted");
+    }
+
+    agent.shutdown().await;
+}
+
+/// Every turn of a multi-turn, tool-using request is its own ordered fact, and
+/// each one is the body the provider received.
+///
+/// `turn_index` is the other half of what the single-turn test cannot reach: one
+/// request, one completion loop, several provider calls, each strictly extending
+/// the last. The assertion that turn 1 carries the tool call id and the tool's
+/// output is what makes the ordering meaningful — a capture that recorded turn
+/// 1's coordinates but turn 0's bytes would satisfy the coordinate check alone.
+#[tokio::test]
+async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
+    const TOOL_OUTPUT: &str = "MULTI_TURN_TOOL_OUTPUT_47bd";
+    let marker = "capture-multi-turn";
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "call-multi-1",
+                        CAPTURE_TOOL,
+                        r#"{"note":"first"}"#,
+                    )],
+                ),
+                StreamResponse::completes(marker, ["done"]),
+            ],
+        )],
+    )
+    .expect("mock backend");
+    let db = test_db("rendered-request-capture-multi-turn").await;
+    let agent = boot_capture_agent_with(
+        &db,
+        "rendered-request-capture-multi-turn",
+        backend.endpoint(),
+        None,
+        |behavior| behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, TOOL_OUTPUT)),
+    )
+    .await;
+
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-multi-turn",
+        "session-capture-multi-turn",
+        &format!("please use the tool {marker}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+
+    let observed = backend.observed_completion_bodies();
+    assert_eq!(
+        observed.len(),
+        2,
+        "a tool-calling turn and the turn that reads its result: {observed:?}"
+    );
+
+    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-multi-turn", 2).await;
+    assert_eq!(
+        coordinates(&rows),
+        vec![("inference.1", 0, 0), ("inference.1", 1, 0)],
+        "one row per turn, in order, all inside one completion loop"
+    );
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(
+            parse_json(&row["request_json"]),
+            canonical(&observed[index]),
+            "turn {index} must carry the body the provider was posted"
+        );
+    }
+
+    // Turn 1 is turn 0 plus the tool exchange, not a re-render of turn 0.
+    let turn_zero = message_count(&rows[0]);
+    let turn_one = message_count(&rows[1]);
+    assert!(
+        turn_one > turn_zero,
+        "turn 1 must extend turn 0's message list ({turn_zero} -> {turn_one})"
+    );
+    let turn_one_body = row_text(&rows[1]);
+    assert!(
+        turn_one_body.contains("call-multi-1"),
+        "turn 1 must thread the tool call id back to the provider"
+    );
+    assert!(
+        turn_one_body.contains(TOOL_OUTPUT),
+        "turn 1 must thread the tool's output back to the provider"
+    );
+    assert!(
+        !row_text(&rows[0]).contains(TOOL_OUTPUT),
+        "turn 0 was sent before the tool ran; its body cannot contain the result"
+    );
+
+    // The trace records the same exchange in native form, keyed by call id: this
+    // is the leak set a reconstructor overlays onto rebuilt `AgentMessage` rows.
+    let threaded = serde_json::to_string(
+        &parse_json(&rows[1]["provenance_json"])["assembly_trace"]["threaded_tool_results"],
+    )
+    .expect("threaded tool results");
+    assert!(
+        threaded.contains("call-multi-1") && threaded.contains(TOOL_OUTPUT),
+        "the assembly trace must carry the threaded tool result verbatim: {threaded}"
+    );
+
+    agent.shutdown().await;
+}
+
+/// A repaired attempt is a second fact whose bytes genuinely differ, and the row
+/// says which builder produced it.
+///
+/// `PreStreamDirective::Repair` rewrites the assembled provider input in place —
+/// it normalizes tool-call arguments — and rebuilds with `build_request` rather
+/// than `build_budgeted_request`, so it also skips the output clamp. Both make
+/// the repaired attempt a different provider request from attempt 0 with *no
+/// transcript write in between*: nothing in `AgentMessage` records that the
+/// arguments the provider saw the second time had their control characters
+/// stripped. Without `build_path` on the row a reconstructor would replay the
+/// budgeted path and report a false mismatch.
+#[tokio::test]
+async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request() {
+    let marker = "capture-repair";
+    // A raw control character in the tool-call arguments. `repair_provider_input`
+    // strips it, which is what makes attempt 1's body differ from attempt 0's.
+    let poisoned_arguments = format!("{{\"note\":\"bad{}value\"}}", '\u{0007}');
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "call-repair-1",
+                        CAPTURE_TOOL,
+                        poisoned_arguments,
+                    )],
+                ),
+                StreamResponse::bad_request(PROD_PARSE_400_BODY),
+                StreamResponse::completes(marker, ["repaired"]),
+            ],
+        )],
+    )
+    .expect("mock backend");
+    let db = test_db("rendered-request-capture-repair").await;
+    let agent = boot_capture_agent_with(
+        &db,
+        "rendered-request-capture-repair",
+        backend.endpoint(),
+        None,
+        |behavior| behavior.custom_tool(FixedOutputTool::new(CAPTURE_TOOL, "REPAIR_TOOL_OUTPUT")),
+    )
+    .await;
+
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-repair",
+        "session-capture-repair",
+        &format!("please use the tool {marker}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+
+    let observed = backend.observed_completion_bodies();
+    assert_eq!(
+        observed.len(),
+        3,
+        "the tool turn, its parse-400, and the repaired retry: {observed:?}"
+    );
+
+    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-repair", 3).await;
+    assert_eq!(
+        coordinates(&rows),
+        vec![
+            ("inference.1", 0, 0),
+            ("inference.1", 1, 0),
+            ("inference.1", 1, 1),
+        ],
+        "the repaired attempt is a second attempt at the same turn"
+    );
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(
+            parse_json(&row["request_json"]),
+            canonical(&observed[index]),
+            "row {index} must carry the body the provider was posted"
+        );
+    }
+
+    assert_eq!(
+        rows.iter().map(build_path).collect::<Vec<_>>(),
+        vec!["budgeted", "budgeted", "repair"],
+        "only the rebuilt attempt reports the repair path"
+    );
+
+    let original = parse_json(&rows[1]["request_json"]);
+    let repaired = parse_json(&rows[2]["request_json"]);
+    assert_ne!(
+        original, repaired,
+        "a repaired attempt is a different provider request, and no transcript \
+         row records the difference"
+    );
+    let original_arguments = tool_call_arguments(&rows[1], "call-repair-1");
+    let repaired_arguments = tool_call_arguments(&rows[2], "call-repair-1");
+    assert_ne!(
+        original_arguments, repaired_arguments,
+        "the difference must be the repaired tool-call arguments"
+    );
+    // The wire form is a JSON string, so the control character travels as the
+    // six-character escape `\u0007` rather than as a raw byte.
+    assert!(
+        original_arguments.contains(r"bad\u0007value"),
+        "attempt 0 must carry the arguments the model actually emitted, control \
+         character and all; got {original_arguments:?}"
+    );
+    assert!(
+        !repaired_arguments.contains(r"\u0007") && repaired_arguments.contains("badvalue"),
+        "the repaired attempt must carry the sanitized arguments; got \
+         {repaired_arguments:?}"
+    );
+
+    agent.shutdown().await;
+}
+
+/// The post-compaction message list is captured, and later turns are assembled
+/// from it.
+///
+/// Per-turn compaction is a *sticky* mutation of the loop's own state
+/// (`*history = compacted; *new_messages = vec![compacted_prompt]`): one turn's
+/// narrowing governs every later turn of the request, and nothing durable
+/// records that it happened — no `AgentCompactionEntry` is written, and the
+/// `AgentMessage` rows still hold the full tool result. So the captured bodies
+/// are the only evidence of what the provider was actually shown from that turn
+/// onward.
+///
+/// The strategy is `StripToolResults`, which is deterministic and needs no
+/// provider call, so every completion body this test observes belongs to the
+/// inference loop.
+///
+/// Two assertions make this a *stickiness* fence rather than a compaction
+/// fence. The trace must agree with the captured body — a compaction that
+/// narrowed the request without rewriting the loop's own state would leave the
+/// two describing different conversations. And turn 2 must carry its own tool
+/// result verbatim: if the compacted list were not retained, turn 2 would
+/// reassemble from the full result, land over budget again, and be compacted a
+/// second time, stripping the second result too.
+#[tokio::test]
+async fn per_turn_compaction_is_captured_and_governs_later_turns() {
+    const BIG_MARKER: &str = "COMPACTED_AWAY_PAYLOAD_5f1c";
+    const SMALL_MARKER: &str = "SECOND_TOOL_RESULT_9a02";
+    // 40 000 chars: comfortably over the budget below, comfortably under the
+    // 50 KiB threading cap so the result is not truncated before compaction.
+    const BIG_OUTPUT_CHARS: usize = 40_000;
+    const CONTEXT_WINDOW: usize = 40_000;
+    const COMPACTION_THRESHOLD: f64 = 0.25;
+    // `estimate_tokens` is `len / 4`, so the same budget in characters is 4x the
+    // token budget: 10 000 tokens, 40 000 characters.
+    let budget_chars = ((CONTEXT_WINDOW as f64 * COMPACTION_THRESHOLD) as usize) * 4;
+
+    let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
+    let marker = "capture-compaction";
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![StreamPlan::new(
+            marker,
+            vec![
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "call-compaction-1",
+                        "capture_big",
+                        r#"{"note":"big"}"#,
+                    )],
+                ),
+                StreamResponse::streams(
+                    marker,
+                    vec![StreamChunk::tool_call(
+                        "call-compaction-2",
+                        "capture_small",
+                        r#"{"note":"small"}"#,
+                    )],
+                ),
+                StreamResponse::completes(marker, ["done"]),
+            ],
+        )],
+    )
+    .expect("mock backend");
+    let db = test_db("rendered-request-capture-compaction").await;
+    let agent = boot_capture_agent_with(
+        &db,
+        "rendered-request-capture-compaction",
+        backend.endpoint(),
+        None,
+        |behavior| {
+            behavior
+                .enable_meta_tools(false)
+                .enable_context_budget(false)
+                .context_window(CONTEXT_WINDOW)
+                .compaction_threshold(COMPACTION_THRESHOLD)
+                .compaction_strategy(CompactionStrategy::StripToolResults)
+                .custom_tool(FixedOutputTool::new("capture_big", big_output))
+                .custom_tool(FixedOutputTool::new("capture_small", SMALL_MARKER))
+        },
+    )
+    .await;
+
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-compaction",
+        "session-capture-compaction",
+        &format!("please use both tools {marker}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+
+    let observed = backend.observed_completion_bodies();
+    assert_eq!(
+        observed.len(),
+        3,
+        "three inference turns and no summarizer call: {}",
+        observed.len()
+    );
+
+    let rows = wait_for_rendered_requests(db.node.as_ref(), "req-capture-compaction", 3).await;
+    assert_eq!(
+        coordinates(&rows),
+        vec![
+            ("inference.1", 0, 0),
+            ("inference.1", 1, 0),
+            ("inference.1", 2, 0),
+        ],
+        "three turns of one completion loop, none of them retried"
+    );
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(
+            parse_json(&row["request_json"]),
+            canonical(&observed[index]),
+            "turn {index} must carry the body the provider was posted"
+        );
+    }
+
+    // The premise: turn 0 starts under budget, so the compaction observed at
+    // turn 1 is caused by the tool result and not by a preamble that has since
+    // outgrown the window.
+    let turn_zero_chars = row_text(&rows[0]).len();
+    assert!(
+        turn_zero_chars < budget_chars,
+        "turn 0 must start under the compaction budget; it was {turn_zero_chars} \
+         chars against a budget of {budget_chars}"
+    );
+
+    // Turn 1: the compacted list is what the provider was shown.
+    let turn_one = row_text(&rows[1]);
+    assert!(
+        !turn_one.contains(BIG_MARKER),
+        "turn 1 must not carry the compacted-away tool output"
+    );
+    assert!(
+        turn_one.contains("see DefraDB AgentToolCall for full output]"),
+        "turn 1 must carry the stub compaction left in its place; the body was \
+         {} chars",
+        turn_one.len()
+    );
+
+    // ...and the trace records that same narrowed list, in native form.
+    let trace = parse_json(&rows[1]["provenance_json"])["assembly_trace"].clone();
+    let effective = serde_json::to_string(&trace["effective_messages"]).expect("trace messages");
+    assert!(
+        !effective.contains(BIG_MARKER)
+            && effective.contains("see DefraDB AgentToolCall for full output]"),
+        "the assembly trace must be the post-compaction message list"
+    );
+
+    // Turn 2: assembled from the sticky compacted list. The first result is
+    // still a stub, and — the sharp half — the second result is verbatim, which
+    // is only possible if turn 2 was already under budget.
+    let turn_two = row_text(&rows[2]);
+    assert!(
+        !turn_two.contains(BIG_MARKER),
+        "a turn after the compaction turn must still be assembled from the \
+         compacted list"
+    );
+    assert!(
+        turn_two.contains(SMALL_MARKER),
+        "turn 2 must carry its own tool result verbatim; a stripped one would \
+         mean turn 2 compacted again, which is what stickiness prevents"
+    );
+
+    agent.shutdown().await;
 }
 
 // ===== helpers =====
+
+/// A tool with a fixed name and a fixed output.
+///
+/// `ToolDyn` is implemented directly rather than through `Tool` so the tool
+/// never parses its arguments. The repair fence deliberately streams a tool call
+/// whose arguments carry a raw control character, and a parsing tool would
+/// reject it before the loop ever assembled the turn that gets repaired.
+#[derive(Clone)]
+struct FixedOutputTool {
+    name: String,
+    output: String,
+}
+
+impl FixedOutputTool {
+    fn new(name: impl Into<String>, output: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            output: output.into(),
+        }
+    }
+}
+
+impl ToolDyn for FixedOutputTool {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.clone(),
+                description: "Test probe that returns a fixed string".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": { "note": { "type": "string" } },
+                    "required": ["note"]
+                }),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { Ok(self.output.clone()) })
+    }
+}
+
+/// `(capture_scope, turn_index, attempt)` for each row, in query order.
+fn coordinates(rows: &[Value]) -> Vec<(&str, i64, i64)> {
+    rows.iter()
+        .map(|row| {
+            (
+                row["capture_scope"].as_str().unwrap_or("<missing>"),
+                row["turn_index"].as_i64().unwrap_or(-1),
+                row["attempt"].as_i64().unwrap_or(-1),
+            )
+        })
+        .collect()
+}
+
+/// The builder that produced the captured request, as recorded in the manifest.
+fn build_path(row: &Value) -> String {
+    parse_json(&row["provenance_json"])["assembly_trace"]["build_path"]
+        .as_str()
+        .unwrap_or("<missing>")
+        .to_string()
+}
+
+/// The captured body re-serialized, for substring assertions. Control characters
+/// come back as `\uXXXX` escapes, exactly as they went out on the wire.
+fn row_text(row: &Value) -> String {
+    serde_json::to_string(&parse_json(&row["request_json"])).expect("captured body re-serializes")
+}
+
+/// The `arguments` string the captured body carried for one tool call id.
+///
+/// The wire form is a JSON *string* holding the argument object, so this is the
+/// exact text the provider had to parse — which is what the parse-400 and its
+/// repair are about.
+fn tool_call_arguments(row: &Value, tool_call_id: &str) -> String {
+    let body = parse_json(&row["request_json"]);
+    let messages = body["messages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| panic!("captured body has no messages: {body}"));
+    for message in messages {
+        let Some(tool_calls) = message["tool_calls"].as_array() else {
+            continue;
+        };
+        for tool_call in tool_calls {
+            if tool_call["id"] == tool_call_id {
+                return tool_call["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("tool call {tool_call_id} has no arguments string"))
+                    .to_string();
+            }
+        }
+    }
+    panic!("captured body carries no tool call {tool_call_id}: {body}");
+}
+
+/// How many messages the captured body carried.
+fn message_count(row: &Value) -> usize {
+    parse_json(&row["request_json"])["messages"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default()
+}
 
 fn canonical(value: &Value) -> Value {
     match value {
@@ -355,6 +992,75 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
     rows
 }
 
+/// Every `(field_name, cid)` DefraDB holds for the row under `capture_key`,
+/// sorted so two reads are comparable.
+///
+/// `_commits` takes exactly one document id — two or more is a parse error — so
+/// the document id is resolved first. No `fieldName` filter is used: that filter
+/// is applied in memory and a malformed one degrades to no filter at all, which
+/// would make a filtered assertion pass for the wrong reason. The field names
+/// come back and are checked in Rust instead.
+async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, String)> {
+    let doc_id_query = format!(
+        r#"query {{
+            RenderedRequest(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#,
+        capture_key = escape_graphql_string(capture_key),
+    );
+    let response = node.execute(&doc_id_query).await;
+    assert!(
+        !response.has_errors(),
+        "RenderedRequest _docID query failed: {:?}",
+        response.errors
+    );
+    let doc_id = response
+        .data
+        .and_then(|data| data.get("RenderedRequest").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .first()
+        .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| panic!("no RenderedRequest row for capture key {capture_key}"));
+
+    let commits_query = format!(
+        r#"query {{
+            _commits(docID: "{doc_id}") {{
+                cid
+                fieldName
+            }}
+        }}"#,
+        doc_id = escape_graphql_string(&doc_id),
+    );
+    let response = node.execute(&commits_query).await;
+    assert!(
+        !response.has_errors(),
+        "_commits query failed: {:?}",
+        response.errors
+    );
+    let mut commits = response
+        .data
+        .and_then(|data| data.get("_commits").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|commit| {
+            (
+                commit["fieldName"].as_str().unwrap_or("").to_string(),
+                commit["cid"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !commits.is_empty(),
+        "a stored RenderedRequest must have commits; an empty list is \
+         'unavailable', never 'unchanged'"
+    );
+    commits.sort();
+    commits
+}
+
 /// Wait for any terminal lifecycle state and report which one it reached.
 async fn wait_for_request_terminal_state(node: &EmbeddedNode, request_doc_id: &str) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -401,6 +1107,21 @@ async fn boot_capture_agent(
     endpoint: &str,
     capture_factory: Option<RenderedRequestCaptureFactory>,
 ) -> BootedAgent {
+    boot_capture_agent_with(db, test_name, endpoint, capture_factory, |behavior| {
+        behavior
+    })
+    .await
+}
+
+/// `customize` receives the behavior mid-build so a test can add tools or
+/// change the compaction budget without each test rebuilding the whole agent.
+async fn boot_capture_agent_with(
+    db: &crate::support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+    capture_factory: Option<RenderedRequestCaptureFactory>,
+    customize: impl FnOnce(BehaviorBuilder) -> BehaviorBuilder,
+) -> BootedAgent {
     upsert_capture_backend(db.node.as_ref(), endpoint).await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
     let mut builder = Gents::builder()
@@ -411,12 +1132,13 @@ async fn boot_capture_agent(
     if let Some(factory) = capture_factory {
         builder = builder.rendered_request_capture_factory(factory);
     }
-    let agent = builder
+    let behavior = builder
         .behavior(CAPTURE_BEHAVIOR_ID)
         .backend_id(CAPTURE_BACKEND_ID)
         .model_name(CAPTURE_MODEL)
         .stream_batch_ms(0)
-        .deadline_duration_secs(30)
+        .deadline_duration_secs(30);
+    let agent = customize(behavior)
         .done()
         .build()
         .await

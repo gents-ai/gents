@@ -22,10 +22,47 @@ use axum::Router;
 use serde_json::json;
 use tokio::sync::{oneshot, Notify};
 
+/// One streamed delta: assistant text, or a tool call the model is asking for.
+///
+/// Tool calls exist here because a multi-turn request is *only* reachable
+/// through them — the owned loop continues to a second turn exactly when a turn
+/// produced tool calls. A backend that can only stream text can never exercise
+/// turn 1, which is where per-turn compaction, threaded tool results, and the
+/// `turn_index` half of the rendered-capture key live.
+#[derive(Clone, Debug)]
+pub enum StreamChunk {
+    Text(String),
+    ToolCall {
+        id: String,
+        name: String,
+        /// The `arguments` string exactly as an OpenAI-compatible provider
+        /// streams it: a JSON *string* whose contents are the argument object.
+        arguments: String,
+    },
+}
+
+impl StreamChunk {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    pub fn tool_call(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamScript {
     marker: String,
-    chunks: Vec<String>,
+    chunks: Vec<StreamChunk>,
     pause_after_chunks: bool,
 }
 
@@ -36,7 +73,7 @@ impl StreamScript {
     ) -> Self {
         Self {
             marker: marker.into(),
-            chunks: chunks.into_iter().map(ToOwned::to_owned).collect(),
+            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
             pause_after_chunks: true,
         }
     }
@@ -47,7 +84,16 @@ impl StreamScript {
     ) -> Self {
         Self {
             marker: marker.into(),
-            chunks: chunks.into_iter().map(ToOwned::to_owned).collect(),
+            chunks: chunks.into_iter().map(StreamChunk::text).collect(),
+            pause_after_chunks: false,
+        }
+    }
+
+    /// A script over explicit chunks, so a caller can stream tool calls.
+    pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
+        Self {
+            marker: marker.into(),
+            chunks,
             pause_after_chunks: false,
         }
     }
@@ -87,6 +133,10 @@ impl StreamResponse {
         chunks: impl IntoIterator<Item = &'static str>,
     ) -> Self {
         StreamResponse::Stream(StreamScript::completes(marker, chunks))
+    }
+
+    pub fn streams(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
+        StreamResponse::Stream(StreamScript::streams(marker, chunks))
     }
 
     pub fn service_unavailable(message: impl Into<String>) -> Self {
@@ -442,7 +492,8 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
                         return None;
                     }
                     if index < script.chunks.len() {
-                        let event = Event::default().data(chunk_payload(&script.chunks[index]));
+                        let event =
+                            Event::default().data(chunk_payload(index, &script.chunks[index]));
                         state.record_chunk(&script.marker);
                         return Some((
                             Ok::<Event, Infallible>(event),
@@ -478,18 +529,46 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
     Sse::new(stream).into_response()
 }
 
-fn chunk_payload(content: &str) -> String {
-    json!({
-        "choices": [{
-            "delta": {
-                "content": content,
-                "tool_calls": []
-            },
-            "finish_reason": null
-        }],
-        "usage": null
-    })
-    .to_string()
+/// `index` is the tool-call slot an OpenAI-compatible provider assigns. Using
+/// the chunk position keeps two tool calls in one turn from colliding on slot 0,
+/// which rig's accumulator would otherwise have to disambiguate by id and name.
+fn chunk_payload(index: usize, chunk: &StreamChunk) -> String {
+    match chunk {
+        StreamChunk::Text(content) => json!({
+            "choices": [{
+                "delta": {
+                    "content": content,
+                    "tool_calls": []
+                },
+                "finish_reason": null
+            }],
+            "usage": null
+        })
+        .to_string(),
+        StreamChunk::ToolCall {
+            id,
+            name,
+            arguments,
+        } => json!({
+            "choices": [{
+                "delta": {
+                    "content": null,
+                    "tool_calls": [{
+                        "index": index,
+                        "id": id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments
+                        }
+                    }]
+                },
+                "finish_reason": null
+            }],
+            "usage": null
+        })
+        .to_string(),
+    }
 }
 
 fn usage_payload() -> String {
