@@ -518,6 +518,8 @@ mod prompt_assembly;
 mod r5_scenarios;
 #[path = "conformance/rendered_capture.rs"]
 mod rendered_capture;
+#[path = "conformance/request_ingest.rs"]
+mod request_ingest;
 #[path = "conformance/scheduling.rs"]
 mod scheduling;
 #[path = "conformance/scope_templates.rs"]

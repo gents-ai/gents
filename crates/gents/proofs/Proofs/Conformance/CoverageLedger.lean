@@ -923,6 +923,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "request_ingest_cases"
+      "RequestIngestCases"
+      "conformance::request_ingest::generated_request_ingest_cases_fence_provenance_invariants")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
       "conformance::event_delivery_transition_cases_match_contract")

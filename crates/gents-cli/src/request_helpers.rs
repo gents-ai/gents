@@ -288,6 +288,7 @@ pub(crate) async fn create_agent_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 {behavior_field}
                 session_id: "{session_id}",
                 retry_parent_request: "{retry_parent}",

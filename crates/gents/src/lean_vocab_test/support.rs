@@ -151,6 +151,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     #[serde(default)]
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
+    #[serde(default)]
+    pub(crate) request_ingest_cases: Vec<LeanRequestIngestCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -371,6 +373,8 @@ mod event_delivery;
 mod prompt_assembly;
 #[path = "rendered_capture.rs"]
 mod rendered_capture;
+#[path = "request_ingest.rs"]
+mod request_ingest;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
@@ -388,6 +392,7 @@ pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
 pub(crate) use rendered_capture::*;
+pub(crate) use request_ingest::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
@@ -882,6 +887,10 @@ pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase
 
 pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {
     &lean_contract_snapshot().rendered_capture_key_cases
+}
+
+pub(crate) fn lean_request_ingest_cases() -> &'static [LeanRequestIngestCase] {
+    &lean_contract_snapshot().request_ingest_cases
 }
 
 pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {

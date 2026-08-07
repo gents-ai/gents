@@ -68,6 +68,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "RenderedCapture",
             Module("conformance/rendered_capture.rs"),
         ),
+        ("RequestIngest", Module("conformance/request_ingest.rs")),
         ("Request", Module("conformance/request_lifecycle.rs")),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),

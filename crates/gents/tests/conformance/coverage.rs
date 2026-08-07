@@ -805,6 +805,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RenderedCaptureKeyCases".to_string(),
         ));
     }
+    if !snapshot.request_ingest_cases.is_empty() {
+        emitted.insert((
+            "request_ingest_cases".to_string(),
+            "RequestIngestCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_delivery_transition_case_count,
         snapshot.event_delivery_transition_cases.len(),
@@ -1044,6 +1050,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "compaction_reducer_cases",
         "prompt_assembly_cases",
         "rendered_capture_cases",
+        "request_ingest_cases",
         "streaming_response_cases",
         "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",

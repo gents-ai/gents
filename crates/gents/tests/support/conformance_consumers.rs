@@ -652,6 +652,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_rendered_capture_key_cases_pin_the_capture_key_tuple",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::request_ingest::generated_request_ingest_cases_fence_provenance_invariants",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/request_ingest.rs",
+            module_path: "conformance::request_ingest",
+            function: "generated_request_ingest_cases_fence_provenance_invariants",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests.rs",
