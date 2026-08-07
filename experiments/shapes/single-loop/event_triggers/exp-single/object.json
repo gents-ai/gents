@@ -1,0 +1,9 @@
+{
+  "trigger_id": "exp-single",
+  "task_id": "exp-single-task",
+  "source_collection": "ExperimentJob",
+  "event_kind": "created",
+  "filter": null,
+  "enabled": true,
+  "concurrency": "parallel"
+}
