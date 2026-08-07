@@ -12,6 +12,13 @@ documents for inspection and debugging.
 This file is the quick map of what each collection means, how collections relate
 to each other, and which subsystem writes them.
 
+Collection changes are governed by the repository-wide
+[DefraDB schema design guide](../../../docs/defradb-schema-guide.md) and tracked
+in the [schema decision ledger](../../../docs/schema-decision-ledger.md). The
+guide defines identity, branchability, replication, ACP, provenance, and
+retention requirements that are intentionally broader than this operational
+map.
+
 ## High-Level Shape
 
 ```text
