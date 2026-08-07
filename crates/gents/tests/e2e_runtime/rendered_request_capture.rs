@@ -524,7 +524,17 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         &format!("please use the tool {marker}"),
     )
     .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
+    // Wait for *any* terminal state and assert which one separately. A defect
+    // that made the two attempts collide on one capture key ends this request
+    // as `failed` — the sink rejecting the rebinding, correctly — and waiting
+    // for "completed" would report that as a lifecycle timeout instead of as
+    // the coordinate claim this test is about.
+    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    assert_eq!(
+        terminal, "completed",
+        "the repaired attempt must be a second durable fact, not a rejected \
+         rebinding of the first"
+    );
 
     let observed = backend.observed_completion_bodies();
     assert_eq!(
@@ -755,6 +765,207 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     agent.shutdown().await;
 }
 
+/// The summarizer is a provider call too, and it runs *before* the request's
+/// own completion loop exists.
+///
+/// `BehaviorDaemon::handle_request` compacts while it is assembling the prompt,
+/// roughly ninety lines before `run_inference`. `StripThenSummarize` is the
+/// default strategy, so for any session over its threshold that pre-request
+/// compaction issues a real, model-backed provider call whose input is the
+/// entire pre-truncated transcript. While the capture scope was installed
+/// around `run_inference` only, that call had no ambient scope: its arming sink
+/// no-opped, the transport found nothing pending and forwarded, and the loop's
+/// backstop could not fire because nothing was armed. Zero rows, zero
+/// diagnostics, for the single largest provider input the runtime produces.
+///
+/// The other compaction test deliberately picks `StripToolResults` precisely so
+/// no summarizer runs, which is why that hole survived. This one forces the
+/// summarizer and states the invariant at its strongest: every completion body
+/// the backend was posted — inference, pre-request summarizer, and #988's
+/// per-turn budget guard alike — has exactly one durable row carrying exactly
+/// those bytes.
+#[tokio::test]
+async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
+    // 200 000-token window at a 0.25 threshold is a 50 000-token budget. The
+    // seeded assistant turn is ~65 000 tokens, so request 2 is over budget at
+    // prompt-assembly time and the daemon summarizes before it builds a loop.
+    const CONTEXT_WINDOW: usize = 200_000;
+    const COMPACTION_THRESHOLD: f64 = 0.25;
+    const SEED_CHARS: usize = 260_000;
+    const SEED_MARKER: &str = "capture-summarizer";
+    /// The summarizer's own user turn. Unique to the compaction loop, so the
+    /// mock can answer it with a checkpoint instead of prose — and matched
+    /// first, because the summarizer's body also carries the transcript and so
+    /// contains the inference marker too.
+    const SUMMARIZER_MARKER: &str = "Produce the required structured continuation checkpoint now.";
+
+    let checkpoint = serde_json::json!({
+        "goal": "continue the seeded conversation",
+        "constraints_and_preferences": [],
+        "completed_work": ["seeded a long assistant turn"],
+        "in_progress": [],
+        "blockers": [],
+        "current_work": ["answering the follow-up"],
+        "key_decisions": [],
+        "errors_and_fixes": [],
+        "verification": [],
+        "uncertainties": [],
+        "next_actions": ["answer the follow-up turn"],
+        "critical_context": [],
+    })
+    .to_string();
+
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![
+            StreamPlan::new(
+                SUMMARIZER_MARKER,
+                vec![StreamResponse::streams(
+                    SUMMARIZER_MARKER,
+                    vec![StreamChunk::text(checkpoint)],
+                )],
+            ),
+            StreamPlan::new(
+                SEED_MARKER,
+                vec![
+                    StreamResponse::streams(
+                        SEED_MARKER,
+                        vec![StreamChunk::text(format!(
+                            "SEEDED{}",
+                            "x".repeat(SEED_CHARS)
+                        ))],
+                    ),
+                    StreamResponse::completes(SEED_MARKER, ["done"]),
+                ],
+            ),
+        ],
+    )
+    .expect("mock backend");
+
+    let db = test_db("rendered-request-capture-summarizer").await;
+    let agent = boot_capture_agent_with(
+        &db,
+        "rendered-request-capture-summarizer",
+        backend.endpoint(),
+        None,
+        |behavior| {
+            behavior
+                .enable_meta_tools(false)
+                .enable_context_budget(false)
+                .context_window(CONTEXT_WINDOW)
+                .compaction_threshold(COMPACTION_THRESHOLD)
+                .compaction_strategy(CompactionStrategy::StripThenSummarize)
+        },
+    )
+    .await;
+
+    let session_id = "session-capture-summarizer";
+    let seed_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-seed",
+        session_id,
+        &format!("seed the transcript {SEED_MARKER}"),
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &seed_doc, "completed").await;
+    let seed_bodies = backend.observed_completion_requests();
+    assert_eq!(
+        seed_bodies, 1,
+        "the seeding request must be a single uncompacted completion"
+    );
+
+    let follow_up_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-capture-summarized",
+        session_id,
+        "and now a short follow-up",
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &follow_up_doc, "completed").await;
+
+    let follow_up_bodies = backend.observed_completion_bodies()[seed_bodies..].to_vec();
+    assert!(
+        follow_up_bodies.len() >= 2,
+        "the follow-up must have summarized before answering; it issued {} \
+         completion(s)",
+        follow_up_bodies.len()
+    );
+
+    let rows = wait_for_rendered_requests(
+        db.node.as_ref(),
+        "req-capture-summarized",
+        follow_up_bodies.len(),
+    )
+    .await;
+
+    // The invariant, measured at the backend rather than at the loop: every
+    // body the provider was posted has one row, and the row carries those
+    // bytes. A summarizer call outside every capture scope fails here as a
+    // count mismatch, not as a missing assertion.
+    assert_eq!(
+        rows.len(),
+        follow_up_bodies.len(),
+        "one durable row per provider call; rows {:?} against {} bodies",
+        coordinates(&rows),
+        follow_up_bodies.len()
+    );
+    let mut persisted = rows
+        .iter()
+        .map(|row| parse_json(&row["request_json"]))
+        .collect::<Vec<_>>();
+    let mut observed = follow_up_bodies.iter().map(canonical).collect::<Vec<_>>();
+    let sort_key = |value: &Value| serde_json::to_string(value).expect("body re-serializes");
+    persisted.sort_by_key(sort_key);
+    observed.sort_by_key(sort_key);
+    assert_eq!(
+        persisted, observed,
+        "the persisted rows and the bodies the provider received must be the \
+         same set of requests"
+    );
+
+    // ...and the summarizer's row is its own fact, under its own capture scope,
+    // rather than a rebinding of the inference loop's `(turn 0, attempt 0)`.
+    let summarizer_rows = rows
+        .iter()
+        .filter(|row| {
+            row["capture_scope"]
+                .as_str()
+                .is_some_and(|scope| scope.starts_with("compaction"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !summarizer_rows.is_empty(),
+        "the summarizer's provider call must be captured under a compaction \
+         scope; the rows were {:?}",
+        coordinates(&rows)
+    );
+    for row in &summarizer_rows {
+        assert!(
+            row_text(row).contains("continuation checkpoint"),
+            "a compaction-scoped row must carry the summarizer's own prompt"
+        );
+    }
+    assert!(
+        rows.iter().any(|row| row["capture_scope"] == "inference.1"),
+        "the request's own completion loop must still be captured alongside it"
+    );
+
+    // The summary reached the transcript, which is what makes the summarizer's
+    // input unrecoverable from anything but this row: the durable entry holds
+    // the model's words, never the request that produced them.
+    let entries = compaction_entry_count(db.node.as_ref(), session_id).await;
+    assert_eq!(
+        entries, 1,
+        "the pre-request summarizer must have written its compaction entry"
+    );
+
+    agent.shutdown().await;
+}
+
 // ===== helpers =====
 
 /// A tool with a fixed name and a fixed output.
@@ -942,6 +1153,32 @@ fn failing_capture_factory() -> RenderedRequestCaptureFactory {
         });
         sink
     })
+}
+
+/// How many durable compaction entries a session has — the evidence that the
+/// pre-request summarizer actually summarized rather than being skipped by the
+/// gate.
+async fn compaction_entry_count(node: &EmbeddedNode, session_id: &str) -> usize {
+    let query = format!(
+        r#"query {{
+            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                compaction_key
+            }}
+        }}"#,
+        session_id = escape_graphql_string(session_id),
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "CompactionEntry query failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .and_then(|data| data.get("CompactionEntry").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .len()
 }
 
 async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {

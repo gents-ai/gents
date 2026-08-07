@@ -167,18 +167,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let behavior_id = self.behavior.behavior_id.clone();
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.behavior.model_name.clone();
-        // One capture scope per request, installed outside every loop it
-        // contains. The scope owns the per-kind sequence that keeps the
-        // inference loop, the compaction summarizer, and the summarizer's JSON
-        // fallback from colliding on `(turn 0, attempt 0)`, so it must not be
-        // re-created per turn or per completion.
-        let capture_scope = crate::rendered_request::scope::scope_from_factory(
-            crate::rendered_request::RenderedRequestContext::for_request(
-                request,
-                self.behavior.model_name.clone(),
-            ),
-            self.rendered_request_capture_factory.as_ref(),
-        );
+        // The rendered-request capture scope is installed by `handle_request`,
+        // outside every completion loop the request contains — including the
+        // pre-request compaction summarizer, which runs before this function is
+        // ever called. Do not install one here: a second scope would restart
+        // the per-kind label sequence and hand the inference loop a label the
+        // summarizer's scope had already used.
         let inference = async {
                 let hook = DefraSessionHook::resume_or_create_with_identity_policy(
                     self.node.clone(),
@@ -560,14 +554,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 retry_attempt = false,
             ));
 
-        // The capture scope has to span both the stream's construction and its
-        // drain loop: the SSE transports connect lazily on first poll, so the
-        // HTTP send that the capturing transport intercepts usually happens
-        // during polling.
-        let outcome = match capture_scope {
-            Some(scope) => crate::rendered_request::scope::scope_request(scope, inference).await,
-            None => inference.await,
-        }?;
+        // The capture scope installed by `handle_request` spans both the
+        // stream's construction and its drain loop: the SSE transports connect
+        // lazily on first poll, so the HTTP send that the capturing transport
+        // intercepts usually happens during polling.
+        let outcome = inference.await?;
 
         Ok(outcome)
     }

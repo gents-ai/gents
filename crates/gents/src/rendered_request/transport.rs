@@ -29,8 +29,20 @@
 //! is the only place the implementation can honour it, because this is the only
 //! place that owns both the bytes and the decision to send them.
 //!
-//! Requests that are not completion bodies (`/models`, `/key`, multipart) are
-//! forwarded untouched and never consume an armed capture.
+//! The contract is stated positively, which matters. "Capture succeeded" is one
+//! premise; "no capture was armed, so forward" is a *different* premise, and it
+//! is the one under which a whole completion loop — the pre-request compaction
+//! summarizer — once reached the provider with no durable row and no warning.
+//! So inside a capture scope, a completion body with nothing armed and nothing
+//! previously claimed is refused outright: a call nothing can name is a call
+//! this transport will not make. Only two things forward without a row: a
+//! non-completion path (`/models`, `/key`, multipart), and a send outside any
+//! scope, which means no request is running in this task at all.
+//!
+//! One armed attempt may legitimately produce several outbound bodies — rig's
+//! SSE event source reconnects by re-posting the request — so a send after the
+//! arm was claimed re-captures under the same coordinates. Identical bytes make
+//! that idempotent; changed bytes make it the integrity error it should be.
 
 use std::fmt;
 use std::future::Future;
@@ -42,7 +54,7 @@ use rig::http_client::{
 };
 use rig::wasm_compat::WasmCompatSend;
 
-use super::scope::{self, PendingCapture, RequestCaptureScope};
+use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
 
 /// Transport wrapper that persists the outbound completion body before it is
@@ -60,7 +72,8 @@ impl<H> RenderedRequestCapturingHttpClient<H> {
 
 /// What a send should do with the request it is holding.
 enum CaptureDecision {
-    /// Not a completion body, or nothing armed. Forward unchanged.
+    /// Not a completion body, or no capture scope installed at all. Forward
+    /// unchanged.
     Forward,
     /// Capture first; forward only on success.
     Capture {
@@ -68,31 +81,58 @@ enum CaptureDecision {
         pending: PendingCapture,
         source: RenderedRequestSource,
     },
+    /// A completion body inside a request that armed nothing. Refuse.
+    Refuse {
+        scope: std::sync::Arc<RequestCaptureScope>,
+        path: String,
+    },
 }
 
 fn decide(path: &str) -> CaptureDecision {
     let Some(source) = RenderedRequestSource::for_request_path(path) else {
         return CaptureDecision::Forward;
     };
-    match scope::take_pending() {
-        Some((scope, pending)) => CaptureDecision::Capture {
+    // No scope at all means no request is running in this task — a CLI probe or
+    // a library embedding. Inside a scope the answer is never "forward
+    // silently": either a capture names this body, or nothing can, and the
+    // latter is a refusal.
+    let Some((scope, claim)) = scope::claim_pending() else {
+        return CaptureDecision::Forward;
+    };
+    match claim {
+        CaptureClaim::Armed(pending) | CaptureClaim::Resend(pending) => CaptureDecision::Capture {
             scope,
             pending,
             source,
         },
-        None => CaptureDecision::Forward,
+        CaptureClaim::Unexplained => CaptureDecision::Refuse {
+            scope,
+            path: path.to_string(),
+        },
     }
 }
 
 /// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
-    let CaptureDecision::Capture {
-        scope,
-        pending,
-        source,
-    } = decision
-    else {
-        return Ok(());
+    let (scope, pending, source) = match decision {
+        CaptureDecision::Forward => return Ok(()),
+        CaptureDecision::Refuse { scope, path } => {
+            tracing::error!(
+                request_id = %scope.context().request_id,
+                session_id = %scope.context().session_id,
+                path = %path,
+                "refusing provider send: a completion body reached the transport with no armed \
+                 rendered-request capture"
+            );
+            return Err(http_client::Error::Instance(
+                anyhow::anyhow!(scope::unexplained_send_message(scope.context(), &path)).into(),
+            ));
+        }
+        CaptureDecision::Capture {
+            scope,
+            pending,
+            source,
+        } => (scope, pending, source),
     };
 
     let capture_scope = pending.capture_scope.clone();
@@ -190,27 +230,38 @@ where
     }
 }
 
+/// Terminal transport for capture-seam tests: counts and records every body it
+/// is asked to send, and answers with an empty success. A capture failure must
+/// leave `sends` at zero.
+///
+/// It lives outside `mod tests` because the provider wrappers that must sit
+/// *above* the capture seam — ChatGPT Codex, xAI Grok — assemble their real
+/// stack over it in their own modules to prove the row describes the rewritten
+/// body rather than the one rig serialized.
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CountingInner {
+    pub(crate) sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub(crate) bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+}
 
-    use serde_json::json;
+#[cfg(test)]
+impl CountingInner {
+    pub(crate) fn send_count(&self) -> usize {
+        self.sends.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn bodies(&self) -> Vec<serde_json::Value> {
+        self.bodies.lock().expect("bodies").clone()
+    }
+}
+
+#[cfg(test)]
+mod counting_inner_impl {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     use super::*;
-    use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
-    use crate::rendered_request::{
-        AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
-        RenderedRequestContext,
-    };
-
-    /// Inner transport that counts and records everything it is asked to send.
-    /// A capture failure must leave this at zero.
-    #[derive(Clone, Debug, Default)]
-    struct CountingInner {
-        sends: Arc<AtomicUsize>,
-        bodies: Arc<Mutex<Vec<serde_json::Value>>>,
-    }
 
     impl HttpClientExt for CountingInner {
         fn send<T, U>(
@@ -270,6 +321,21 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+    use crate::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
+        RenderedRequestContext,
+    };
 
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
@@ -463,6 +529,77 @@ mod tests {
             .expect("send");
 
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
+    }
+
+    /// The positive half of fail-closed, and the fence over the defect that
+    /// motivated it: a completion loop that runs inside a request without
+    /// arming a capture (the pre-request compaction summarizer did exactly
+    /// this, because its scope did not span it) must not reach the provider.
+    /// The old contract forwarded this body silently.
+    #[tokio::test]
+    async fn a_completion_inside_a_scope_that_never_armed_is_refused() {
+        let inner = CountingInner::default();
+        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+        let (sink, seen) = recording_sink();
+        let scope = test_scope(context(), sink);
+
+        let error = scope_request(scope, async {
+            HttpClientExt::send_streaming(
+                &client,
+                responses_request(json!({"input": [{"role": "user", "content": "hi"}]})),
+            )
+            .await
+            .err()
+            .expect("an unarmed completion inside a request must be refused")
+        })
+        .await;
+
+        assert!(
+            error
+                .to_string()
+                .contains("no armed rendered-request capture"),
+            "the refusal must name its cause: {error}"
+        );
+        assert_eq!(
+            inner.sends.load(Ordering::SeqCst),
+            0,
+            "no HTTP request may be issued for a completion nothing can name"
+        );
+        assert!(seen.lock().expect("seen").is_empty());
+    }
+
+    /// rig's SSE event source reconnects by re-posting the same request. That
+    /// second body has no arm of its own, but it is not unexplained: it belongs
+    /// to the attempt already claimed, so it re-captures under the same
+    /// coordinates (idempotent for identical bytes) and is forwarded.
+    #[tokio::test]
+    async fn a_transport_resend_recaptures_the_same_attempt_rather_than_being_refused() {
+        let inner = CountingInner::default();
+        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+        let (sink, seen) = recording_sink();
+        let scope = test_scope(context(), sink);
+
+        scope_request(scope, async {
+            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
+            let body = json!({"model": "m", "input": [{"role": "user", "content": "hi"}]});
+            let _ = HttpClientExt::send_streaming(&client, responses_request(body.clone()))
+                .await
+                .expect("first send");
+            let _ = HttpClientExt::send_streaming(&client, responses_request(body))
+                .await
+                .expect("reconnect send");
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), 2, "both bodies must be offered to the sink");
+        assert_eq!(seen[0].capture_key, seen[1].capture_key);
+        assert_eq!(
+            (seen[1].turn_index, seen[1].attempt),
+            (2, 1),
+            "a resend keeps the coordinates of the attempt it re-posts"
+        );
+        assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 
     /// Chat Completions bodies name their message list `messages`, and the

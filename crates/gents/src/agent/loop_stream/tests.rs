@@ -1220,6 +1220,73 @@ async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch()
     );
 }
 
+/// The mis-wired-transport backstop, which nothing else exercises.
+///
+/// The transport is what claims an armed capture and writes the row. A provider
+/// stack assembled without `RenderedRequestCapturingHttpClient` — a new
+/// `BackendProviderKind`, a wrapper inserted below the capture seam, a builder
+/// that forgets it — still streams perfectly well; the only observable trace is
+/// that the arm is still pending when the first stream item arrives. Deleting
+/// the check at that point would otherwise pass the entire suite while every
+/// turn on that backend went uncaptured.
+///
+/// `ScriptedModel` stands in for exactly that mis-wiring: it answers the loop
+/// without ever claiming the pending capture.
+#[tokio::test(start_paused = true)]
+async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
+    use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
+    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("uncaptured".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+
+    let context = RenderedRequestContext {
+        request_id: "req-1".to_string(),
+        agent_did: "did:key:agent".to_string(),
+        requester_did: String::new(),
+        behavior_id: "general".to_string(),
+        session_id: "session-1".to_string(),
+        model_name: "model".to_string(),
+    };
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(context, sink);
+
+    let mut loop_config = config(0);
+    // The production arming sink: it arms the ambient scope and leaves the
+    // write to the transport, which in this stack does not exist.
+    loop_config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+        CaptureScopeKind::Inference,
+    ));
+
+    let collected = scope_request(scope, async {
+        let stream = run_loop_stream(
+            model.clone(),
+            None,
+            Message::user("hi"),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            loop_config,
+        );
+        collect_scripted_stream(stream).await
+    })
+    .await;
+
+    let error = collected
+        .error
+        .as_deref()
+        .expect("a response with no durable capture must terminate the turn");
+    assert!(
+        error.contains("missing its capturing transport"),
+        "the failure must name the mis-wired stack: {error}"
+    );
+    assert_eq!(
+        collected.final_text, None,
+        "no turn may complete on a provider response nothing captured"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn first_stream_poll_parse_400_uses_pre_stream_retry_policy() {
     let model = ScriptedModel::new_calls(vec![

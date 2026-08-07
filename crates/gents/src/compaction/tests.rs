@@ -1055,7 +1055,7 @@ impl CompletionModel for ScriptedSummaryModel {
         // "response arrived with no durable capture" fence fires, which is
         // correct behaviour and would make this mock look like a mis-wired
         // client stack. Outside a capture scope this is a no-op.
-        let _ = crate::rendered_request::scope::take_pending();
+        let _ = crate::rendered_request::scope::claim_pending();
         let turn = self
             .script
             .lock()

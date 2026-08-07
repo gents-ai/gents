@@ -27,7 +27,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             lifecycle.backend_id(),
         );
         let title_admission_context = admission_context.clone();
-        admission::scope_request(admission_context, async {
+        // One capture scope for the whole request, installed here rather than
+        // around `run_inference`.
+        //
+        // `run_inference` is not the only completion loop a request contains.
+        // The pre-request compaction summarizer below runs ~90 lines earlier —
+        // it is the *default* path for any session over its threshold
+        // (`CompactionStrategy::StripThenSummarize`) — and issues one or two
+        // real provider calls whose input is the entire pre-truncated
+        // transcript. Scoping only the inference block left those calls with no
+        // ambient scope, so their arming sink no-opped, the transport found
+        // nothing pending, and the bodies went to the provider with no durable
+        // row and no diagnostic. Spanning the whole request body is what makes
+        // "no provider call without its fact record" true rather than aspired
+        // to.
+        //
+        // It must stay a single scope instance: the per-kind sequence that
+        // keeps the inference loop, the summarizer, and the summarizer's JSON
+        // fallback from colliding on `(turn 0, attempt 0)` lives in the scope.
+        let capture_scope = crate::rendered_request::scope::scope_from_factory(
+            crate::rendered_request::RenderedRequestContext::for_request(
+                &request,
+                self.behavior.model_name.clone(),
+            ),
+            self.rendered_request_capture_factory.as_ref(),
+        );
+        let handled = admission::scope_request(admission_context, async {
             self.spawn_conversation_title_generation(&request, title_admission_context);
 
             let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
@@ -399,8 +424,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     Err(error)
                 }
             }
-        })
-        .await
+        });
+
+        match capture_scope {
+            Some(scope) => crate::rendered_request::scope::scope_request(scope, handled).await,
+            None => handled.await,
+        }
     }
 }
 

@@ -14,17 +14,22 @@
 //! ## Arm, then consume
 //!
 //! The loop *arms* a [`PendingCapture`] immediately before `model.stream`. The
-//! transport *takes* it when it is about to post a completion body, writes the
-//! durable row, and only then forwards. Two properties follow:
+//! transport *claims* it when it is about to post a completion body, writes the
+//! durable row, and only then forwards. Three properties follow:
 //!
-//! * Nothing reaches the network uncaptured while a capture is armed — taking
-//!   and writing happen inside the send path, before delegation.
+//! * Nothing reaches the network uncaptured while a capture is armed —
+//!   claiming and writing happen inside the send path, before delegation.
 //! * Nothing else consumes the turn's identity by accident: only a request
 //!   whose path is a completion path claims the pending capture, so a `/models`
-//!   listing or an SSE reconnect issued in the same task passes through
-//!   untouched.
+//!   listing issued in the same task passes through untouched.
+//! * A completion body inside a scope that never armed is [`CaptureClaim::
+//!   Unexplained`], and the transport refuses to send it. This is the positive
+//!   half of the contract: "capture succeeded" is not the same statement as
+//!   "nothing armed, so carry on", and the second was the shape in which a
+//!   whole uncaptured completion loop (the pre-request compaction summarizer)
+//!   hid.
 //!
-//! [`pending_is_armed`] closes the other direction. If a provider response
+//! [`pending_is_armed`] closes the remaining direction. If a provider response
 //! arrives while the arm is still pending, the send bypassed the capturing
 //! transport — a mis-wired client stack — and the loop turns that into a
 //! terminal error rather than a silently uncaptured call.
@@ -102,6 +107,18 @@ struct ScopeState {
     /// turns and attempts.
     current: BTreeMap<CaptureScopeKind, String>,
     pending: Option<PendingCapture>,
+    /// The capture claimed by the attempt currently in flight, retained after
+    /// the transport takes it and cleared by the next arm.
+    ///
+    /// rig's SSE event source reconnects by re-posting the same request
+    /// (`http_client::sse::GenericEventSource::create_response_future`), so one
+    /// armed attempt can produce more than one outbound completion body. Those
+    /// resends carry identical bytes, and re-capturing them under the same
+    /// coordinates is idempotent — while a resend whose body *changed* is
+    /// exactly the integrity violation the sink must reject. Without this, a
+    /// resend would be a completion body with no arm, which the transport now
+    /// refuses to send.
+    claimed: Option<PendingCapture>,
     /// Every arm this scope has seen, in order. Tests need this because an arm
     /// the transport never claims is silently replaced by the next one, so a
     /// test that only reads `pending` cannot see a loop that armed and then was
@@ -201,6 +218,11 @@ pub(crate) fn arm(
         let mut state = scope.lock();
         #[cfg(test)]
         state.armed_labels.push(capture_scope.clone());
+        // A new arm ends the previous attempt's resend window: its stream has
+        // drained (or its retry superseded it), so a body arriving now cannot
+        // belong to it. Clearing here also keeps at most one `AssemblyTrace` —
+        // a whole conversation — alive per scope instead of two.
+        state.claimed = None;
         state.pending.replace(pending).is_some()
     };
     if replaced {
@@ -214,12 +236,43 @@ pub(crate) fn arm(
     Some(capture_scope)
 }
 
+/// What a completion body observed inside a capture scope is entitled to do.
+#[derive(Clone, Debug)]
+pub(crate) enum CaptureClaim {
+    /// The arm this send was expected to consume. Capture, then forward.
+    Armed(PendingCapture),
+    /// No arm is pending, but this scope has already claimed one: a
+    /// transport-level resend of an attempt already captured (an SSE
+    /// reconnect). Re-capture under the same coordinates — identical bytes make
+    /// that a no-op, and changed bytes make it an integrity error.
+    Resend(PendingCapture),
+    /// A completion body inside a request that never armed a capture. Nothing
+    /// can name this call, so it must not be sent.
+    Unexplained,
+}
+
 /// Claim the armed capture. Called by the capturing transport once it knows the
 /// outbound request is a completion body.
-pub(crate) fn take_pending() -> Option<(Arc<RequestCaptureScope>, PendingCapture)> {
+///
+/// `None` means no scope is installed at all — a `gents` embedding outside any
+/// request. Inside a scope the answer is never "nothing to do": it is `Armed`,
+/// `Resend`, or `Unexplained`, and the last of those is a refusal.
+pub(crate) fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
     let scope = current_scope()?;
-    let pending = scope.lock().pending.take()?;
-    Some((scope, pending))
+    let claim = {
+        let mut state = scope.lock();
+        match state.pending.take() {
+            Some(pending) => {
+                state.claimed = Some(pending.clone());
+                CaptureClaim::Armed(pending)
+            }
+            None => match state.claimed.clone() {
+                Some(claimed) => CaptureClaim::Resend(claimed),
+                None => CaptureClaim::Unexplained,
+            },
+        }
+    };
+    Some((scope, claim))
 }
 
 /// Whether an armed capture is still waiting. `true` after a provider response
@@ -231,9 +284,11 @@ pub(crate) fn pending_is_armed() -> bool {
 /// The `LoopConfig::on_rendered_request` callback every production completion
 /// loop installs: arm the ambient scope, never write.
 ///
-/// Returns `Ok(())` when no scope is installed. That is not fail-open — with no
-/// scope there is no sink and no capture context, which is the state of a
-/// `gents` embedding that never started a request (unit tests, library use).
+/// Returns `Ok(())` when no scope is installed, because with no scope there is
+/// no sink and no capture context — the state of a `gents` embedding that never
+/// started a request (unit tests, library use). That is not a licence to send:
+/// inside a scope, a completion body that reaches the transport without an arm
+/// is refused, so a loop that forgets to arm fails loudly instead of quietly.
 /// The fail-closed obligation lives where the write does, in
 /// `transport::RenderedRequestCapturingHttpClient`.
 pub(crate) fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
@@ -340,6 +395,18 @@ pub(crate) async fn capture_body(
     Ok(())
 }
 
+/// The refusal for a completion body that arrived inside a capture scope with
+/// nothing armed and nothing previously claimed.
+pub(crate) fn unexplained_send_message(context: &RenderedRequestContext, path: &str) -> String {
+    format!(
+        "a completion request to {path} reached the provider transport for request {} \
+         with no armed rendered-request capture; the completion loop that issued it does not \
+         install `LoopConfig::on_rendered_request`, so the call cannot be made durable and was \
+         not issued",
+        context.request_id
+    )
+}
+
 /// Typed error the transport turns into a refusal to send.
 pub(crate) fn capture_failure_message(
     stage: CaptureFailureStage,
@@ -407,18 +474,18 @@ mod tests {
                 arm(CaptureScopeKind::Compaction, 0, 0, trace()).unwrap(),
                 "compaction.1"
             );
-            let _ = take_pending();
+            let _ = claim_pending();
             assert_eq!(
                 arm(CaptureScopeKind::Compaction, 0, 0, trace()).unwrap(),
                 "compaction.2"
             );
-            let _ = take_pending();
+            let _ = claim_pending();
             // A retry inside the second loop keeps that loop's label.
             assert_eq!(
                 arm(CaptureScopeKind::Compaction, 0, 1, trace()).unwrap(),
                 "compaction.2"
             );
-            let _ = take_pending();
+            let _ = claim_pending();
             assert_eq!(
                 arm(CaptureScopeKind::Compaction, 1, 0, trace()).unwrap(),
                 "compaction.2"
@@ -435,7 +502,7 @@ mod tests {
                 arm(CaptureScopeKind::Inference, 0, 0, trace()).unwrap(),
                 "inference.1"
             );
-            let _ = take_pending();
+            let _ = claim_pending();
             assert_eq!(
                 arm(CaptureScopeKind::Title, 0, 0, trace()).unwrap(),
                 "title.1"
@@ -445,14 +512,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn take_pending_consumes_exactly_once() {
+    async fn an_arm_is_claimed_exactly_once_and_then_reads_as_a_resend() {
         let scope = test_scope(context(), noop_sink());
         scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
+            arm(CaptureScopeKind::Inference, 7, 2, trace()).expect("armed");
             assert!(pending_is_armed());
-            assert!(take_pending().is_some());
+
+            let (_, claim) = claim_pending().expect("scope installed");
+            let CaptureClaim::Armed(pending) = claim else {
+                panic!("the first claim must consume the arm");
+            };
+            assert_eq!((pending.turn_index, pending.attempt), (7, 2));
             assert!(!pending_is_armed());
-            assert!(take_pending().is_none());
+
+            // A second completion body for the same attempt — rig's SSE source
+            // reconnecting — reuses the same coordinates so the re-capture is
+            // idempotent rather than unexplained.
+            let (_, claim) = claim_pending().expect("scope installed");
+            let CaptureClaim::Resend(pending) = claim else {
+                panic!("a send after the arm was claimed must read as a resend");
+            };
+            assert_eq!((pending.turn_index, pending.attempt), (7, 2));
+            assert!(!pending_is_armed());
+
+            // The next attempt closes the previous one's resend window: a body
+            // arriving after it can no longer belong to the attempt whose
+            // stream has already drained.
+            arm(CaptureScopeKind::Inference, 8, 0, trace()).expect("armed");
+            let (_, claim) = claim_pending().expect("scope installed");
+            let CaptureClaim::Armed(pending) = claim else {
+                panic!("the new attempt's arm must be claimed as an arm");
+            };
+            assert_eq!((pending.turn_index, pending.attempt), (8, 0));
+        })
+        .await;
+    }
+
+    /// The positive contract. Inside a request, a completion body that no loop
+    /// armed has no durable identity, and the transport is required to refuse
+    /// it rather than treat "nothing pending" as "nothing to do".
+    #[tokio::test]
+    async fn a_scope_that_never_armed_reports_an_unexplained_send() {
+        let scope = test_scope(context(), noop_sink());
+        scope_request(scope, async {
+            let (_, claim) = claim_pending().expect("scope installed");
+            assert!(
+                matches!(claim, CaptureClaim::Unexplained),
+                "a scope with no arm and no prior claim must be unexplained"
+            );
         })
         .await;
     }
@@ -463,6 +570,6 @@ mod tests {
     async fn arming_without_a_scope_is_a_noop() {
         assert!(arm(CaptureScopeKind::Inference, 0, 0, trace()).is_none());
         assert!(!pending_is_armed());
-        assert!(take_pending().is_none());
+        assert!(claim_pending().is_none());
     }
 }

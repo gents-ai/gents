@@ -468,7 +468,7 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     use crate::rendered_request::scope::{
-        scope_request, take_pending, test_scope, CaptureScopeKind,
+        claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
     };
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
@@ -524,7 +524,10 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             .await
             .expect("arming never fails");
 
-            let (_, pending) = take_pending().expect("the sink must arm a pending capture");
+            let (_, claim) = claim_pending().expect("a scope is installed");
+            let CaptureClaim::Armed(pending) = claim else {
+                panic!("{kind} did not arm a pending capture");
+            };
             assert_eq!(
                 pending.capture_scope, expected,
                 "{kind} armed the wrong scope"

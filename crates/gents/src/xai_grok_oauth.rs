@@ -645,4 +645,85 @@ mod tests {
         let body = serde_json::json!({"store": true, "model": "grok-4.5"});
         assert!(patch_store_false(&serde_json::to_vec(&body).unwrap()).is_none());
     }
+
+    /// `build_authenticated_http` installs the capture seam *below* this
+    /// wrapper so the row carries the `store:false` Grok injects. Both wrappers
+    /// are generic over their inner client, so swapping their order compiles;
+    /// only composing the real stack catches it.
+    #[tokio::test]
+    async fn the_captured_row_carries_the_store_false_grok_injects() {
+        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
+        use crate::rendered_request::transport::CountingInner;
+        use crate::rendered_request::{
+            AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
+            RenderedRequestCaptureSink, RenderedRequestContext,
+        };
+        use std::sync::Mutex;
+
+        let terminal = CountingInner::default();
+        let client = XaiGrokOAuthHttpClient::with_inner(
+            CountingBearer::new("tok"),
+            crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
+        );
+
+        let seen: Arc<Mutex<Vec<RenderedCompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
+            let seen = Arc::clone(&sink_seen);
+            Box::pin(async move {
+                seen.lock().expect("seen").push(rendered);
+                Ok(())
+            })
+        });
+        let scope = test_scope(
+            RenderedRequestContext {
+                request_id: "req-1".to_string(),
+                agent_did: "did:key:agent".to_string(),
+                requester_did: String::new(),
+                behavior_id: "behavior".to_string(),
+                session_id: "session".to_string(),
+                model_name: "configured-model".to_string(),
+            },
+            sink,
+        );
+
+        scope_request(scope, async {
+            arm(
+                CaptureScopeKind::Inference,
+                0,
+                0,
+                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+            )
+            .expect("armed");
+            let req = Request::builder()
+                .method("POST")
+                .uri("https://api.x.ai/v1/responses")
+                .body(Bytes::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "model": "grok-4.5",
+                        "input": [{"role": "user", "content": "hi"}],
+                    }))
+                    .expect("assembled body"),
+                ))
+                .expect("request");
+            let _ = HttpClientExt::send_streaming(&client, req)
+                .await
+                .expect("send");
+        })
+        .await;
+
+        let seen = seen.lock().expect("seen");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0].request_json["store"],
+            serde_json::Value::Bool(false),
+            "the row must show the body after Grok's rewrite: {}",
+            seen[0].request_json
+        );
+        assert_eq!(
+            terminal.bodies().first().expect("a forwarded body"),
+            &seen[0].request_json,
+            "the persisted row and the bytes the network client received must be identical"
+        );
+    }
 }
