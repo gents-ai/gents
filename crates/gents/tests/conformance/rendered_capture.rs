@@ -18,18 +18,28 @@
 //!
 //! This file fences the *identity* half: that the capture key is the
 //! five-component tuple the model quantifies over, and that every one of those
-//! components is actually carried on the production capture DTO. A component
+//! components is actually carried on the production capture DTO. The model's
+//! `requestId` component names the provider-call *scope* inside a request, and
+//! production encodes it as the injective JSON pair
+//! `[request_id, capture_scope]`; one request runs several completion loops and
+//! each starts its turn and attempt counters at zero, so the request document id
+//! alone does not identify a provider attempt. A component
 //! dropped here does not fail loudly at runtime — it silently merges two
 //! provider attempts into one durable fact, which is exactly the failure
 //! `capture_key_determines_request` is supposed to make impossible.
 //!
 //! Two scope notes, both declared as emitted boundaries rather than assumed:
 //!
-//! * `boundary.rendered-capture.assembled-request-artifact` — the modeled
-//!   canonical request is the assembled request at the capture seam
-//!   (`agent/loop_stream.rs:312`), not the serialized HTTP body. The
-//!   ChatGPT-Codex and xAI Grok transports rewrite the body after that point.
-//!   Still open.
+//! * `boundary.rendered-capture.assembled-request-artifact` — **closed in
+//!   production, still open in Lean.** The model's `CanonicalRequest` is
+//!   opaque, so it is agnostic about which artifact the implementation binds to
+//!   the key; the earlier note recorded that production bound the *assembled*
+//!   request, which the ChatGPT-Codex and xAI Grok transports then rewrote.
+//!   Production now captures at the transport seam
+//!   (`rendered_request::transport::RenderedRequestCapturingHttpClient`), so the
+//!   bound artifact is the body the provider received. The order property is
+//!   unchanged and strictly better placed: capture and send are now the same
+//!   function call, in that order.
 //! * `boundary.rendered-capture.key-encoding-injectivity` — the model's key is
 //!   a tuple with componentwise equality; the durable column is a string, and
 //!   the model does not prove the encoder is injective on the tuple. Lean still
@@ -75,6 +85,31 @@ fn rendered(
     attempt: u32,
     request_json: Value,
 ) -> RenderedCompletionRequest {
+    rendered_in_scope(
+        agent,
+        session,
+        request,
+        CAPTURE_SCOPE,
+        turn_index,
+        attempt,
+        request_json,
+    )
+}
+
+/// The scope every generated row uses. The Lean rows vary `requestId`, which
+/// production splits into `(request_id, capture_scope)`; holding the scope fixed
+/// keeps each row varying exactly one modeled component.
+const CAPTURE_SCOPE: &str = "inference.1";
+
+fn rendered_in_scope(
+    agent: u64,
+    session: u64,
+    request: u64,
+    capture_scope: &str,
+    turn_index: usize,
+    attempt: u32,
+    request_json: Value,
+) -> RenderedCompletionRequest {
     let agent_did = agent_did(agent);
     let session_id = session_id(session);
     let request_id = request_id(request);
@@ -82,10 +117,18 @@ fn rendered(
         AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
 
     RenderedCompletionRequest {
-        capture_key: derive_capture_key(&agent_did, &session_id, &request_id, turn_index, attempt)
-            .expect("capture key"),
+        capture_key: derive_capture_key(
+            &agent_did,
+            &session_id,
+            &request_id,
+            capture_scope,
+            turn_index,
+            attempt,
+        )
+        .expect("capture key"),
         capture_version: CAPTURE_VERSION,
         request_id,
+        capture_scope: capture_scope.to_string(),
         turn_index,
         attempt,
         agent_did,
@@ -102,6 +145,7 @@ fn rendered(
         prompt_hash: String::new(),
         tools_hash: String::new(),
         provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
+            capture_scope.to_string(),
             assembly_trace.clone(),
         ))
         .expect("provenance manifest"),
@@ -112,11 +156,13 @@ fn rendered(
 /// The five components `RenderedCapture.CaptureKey` is made of, projected off
 /// the production DTO. PR2 derives the durable `capture_key` column from
 /// exactly this tuple.
-fn capture_key(rendered: &RenderedCompletionRequest) -> (String, String, String, usize, u32) {
+fn capture_key(
+    rendered: &RenderedCompletionRequest,
+) -> (String, String, (String, String), usize, u32) {
     (
         rendered.agent_did.clone(),
         rendered.session_id.clone(),
-        rendered.request_id.clone(),
+        (rendered.request_id.clone(), rendered.capture_scope.clone()),
         rendered.turn_index,
         rendered.attempt,
     )
@@ -196,6 +242,81 @@ fn generated_rendered_capture_key_cases_pin_the_capture_key_tuple() {
             case.name
         );
     }
+}
+
+/// The Lean rows hold `requestId` opaque, so they cannot vary the scope half of
+/// production's third component. This is that half: two completion loops inside
+/// one request, at the same turn and attempt, must be two facts. It is the
+/// concrete case — the request's first inference turn versus the compaction
+/// summarizer's first call — that `capture_key_determines_request` would
+/// otherwise be violated by, because the sink would be asked to bind one key to
+/// two different canonical requests and would (correctly) refuse, taking the
+/// agent down.
+#[test]
+fn the_capture_scope_separates_completion_loops_within_one_request() {
+    let inference = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));
+    let compaction = rendered_in_scope(1, 1, 1, "compaction.1", 0, 0, json!({"model": "m"}));
+    let fallback = rendered_in_scope(
+        1,
+        1,
+        1,
+        "compaction_fallback.1",
+        0,
+        0,
+        json!({"model": "m"}),
+    );
+    // A second summarizer run in the same request, e.g. compaction at turn 7
+    // after compaction at turn 3.
+    let compaction_again = rendered_in_scope(1, 1, 1, "compaction.2", 0, 0, json!({"model": "m"}));
+
+    let keys = [&inference, &compaction, &fallback, &compaction_again];
+    for (index, left) in keys.iter().enumerate() {
+        for right in keys.iter().skip(index + 1) {
+            assert_ne!(
+                capture_key(left),
+                capture_key(right),
+                "scopes {} and {} must be separate facts",
+                left.capture_scope,
+                right.capture_scope
+            );
+            assert_ne!(
+                left.capture_key, right.capture_key,
+                "scopes {} and {} must derive different capture keys",
+                left.capture_scope, right.capture_scope
+            );
+        }
+    }
+}
+
+/// The scope rides inside the third component as a JSON pair rather than a
+/// delimited string. `request_id` is caller-supplied and unvalidated, so a
+/// `"{request_id}#{scope}"` encoding would let a caller mint a request id that
+/// forges another scope's fact.
+#[test]
+fn a_caller_chosen_request_id_cannot_forge_another_scopes_key() {
+    let forged = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));
+    let honest = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));
+    assert_eq!(forged.capture_key, honest.capture_key);
+
+    let sneaky = derive_capture_key(
+        &agent_did(1),
+        &session_id(1),
+        &format!("{}#compaction.1", request_id(1)),
+        "inference.1",
+        0,
+        0,
+    )
+    .expect("capture key");
+    let target = derive_capture_key(
+        &agent_did(1),
+        &session_id(1),
+        &request_id(1),
+        "compaction.1",
+        0,
+        0,
+    )
+    .expect("capture key");
+    assert_ne!(sneaky, target);
 }
 
 /// The emitted rows must never describe a fail-open capture. This guards the

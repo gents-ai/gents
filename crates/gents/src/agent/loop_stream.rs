@@ -423,6 +423,22 @@ where
             while let Some(item) = stream.next().await {
                 let item = match item {
                     Ok(item) => {
+                        if !saw_stream_item && crate::rendered_request::scope::pending_is_armed() {
+                            // A provider response arrived while this attempt's
+                            // capture was still waiting to be claimed, which
+                            // means the send did not travel through the
+                            // capturing transport. That is a mis-wired client
+                            // stack, and the only honest response is to stop:
+                            // silently continuing would produce a turn whose
+                            // provider input is not durable anywhere.
+                            Err(StreamingError::Completion(CompletionError::ProviderError(
+                                format!(
+                                    "provider response for turn {turn_index} attempt {attempt} \
+                                     arrived without a durable rendered-request capture; the \
+                                     completion client is missing its capturing transport"
+                                ),
+                            )))?;
+                        }
                         saw_stream_item = true;
                         item
                     }

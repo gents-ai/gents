@@ -29,16 +29,27 @@
 # on a single-node install. #840's participant-boundary criterion is therefore
 # NOT met by this collection as shipped.
 type RenderedRequest @branchable {
-    # sha256 over the canonical (agent_did, session_id, request_id, turn_index,
-    # attempt) tuple. Unique: exactly one capture per provider attempt, ever.
-    # Reusing this key with a different canonical request is an integrity
-    # error, never an update.
+    # sha256 over the canonical (agent_did, session_id, request_scope,
+    # turn_index, attempt) tuple, where `request_scope` is the injective JSON
+    # pair `[request_id, capture_scope]`. Unique: exactly one capture per
+    # provider attempt, ever. Reusing this key with a different canonical
+    # request is an integrity error, never an update.
     capture_key: String @index(unique: true) @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @immutable
     behavior_id: String @immutable
+    # Which completion loop inside the request issued this provider call.
+    # `inference.N` is the request's own loop; `compaction.N` and
+    # `compaction_fallback.N` are the summarizer that produces the ephemeral
+    # continuation checkpoint; `title.N` and `oneshot.N` are the rest. Each loop
+    # starts its own turn/attempt counters at zero, so without this component
+    # the summarizer's first call and the request's first turn would be one
+    # fact. Deliberately unindexed: it is low cardinality and always reachable
+    # behind the `request_id` and `session_id` indexes, and this is a hot,
+    # large-payload write path.
+    capture_scope: String @immutable
     # The owned completion loop's turn and retry counters. Neither is
     # `InferenceCall.attempt`; they count different things.
     turn_index: Int @immutable
@@ -47,11 +58,17 @@ type RenderedRequest @branchable {
     # unsupported version is reported, never silently reinterpreted.
     capture_version: Int @immutable
     model_name: String @immutable
-    # Provider wire shape the request was rendered for, e.g. openai_responses
-    # or openai_chat_completions.
+    # Provider wire shape the request was sent on, e.g. openai_responses or
+    # openai_chat_completions. Derived from the request path the transport
+    # actually posted to, not from behavior configuration.
     source: String @immutable
-    # Canonical JSON of the complete provider request. This is the conformance
-    # oracle every reconstruction is compared against.
+    # Canonical JSON of the complete provider request body, captured at the
+    # transport seam: the last point at which the body exists before the HTTP
+    # send, after the ChatGPT-Codex instructions/store/strict rewrite, after
+    # Grok's `store:false` injection, and after Responses assistant-item
+    # normalization. This is the conformance oracle every reconstruction is
+    # compared against, and it is what the provider received rather than what
+    # the loop assembled.
     request_json: String @immutable
     # Query indexes only: dedup, "every capture sharing this tool surface", and
     # prefix-stability analysis. Explicitly NOT an integrity mechanism — see the

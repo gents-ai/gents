@@ -554,7 +554,14 @@ pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<ChatGptCodexHttpClient<DbCredentialBearer>>> {
+) -> Result<
+    rig::providers::openai::Client<
+        ChatGptCodexHttpClient<
+            DbCredentialBearer,
+            crate::rendered_request::RenderedRequestCapturingHttpClient,
+        >,
+    >,
+> {
     let provider = CHATGPT_CODEX_PROVIDER;
     let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
         .await
@@ -582,7 +589,15 @@ pub async fn build_responses_client(
             CHATGPT_OAUTH_PRODUCT,
         )
     });
-    let http = ChatGptCodexHttpClient::new(bearer);
+    // The capture wrapper sits *below* the Codex wrapper, so it sees the body
+    // after `patch_instructions_body` has hoisted `instructions`, stripped
+    // system items, set `store`/`stream`, deleted the unsupported sampling
+    // params, and forced `strict:false`. Capturing above it would persist a
+    // request this backend never receives.
+    let http = ChatGptCodexHttpClient::with_inner(
+        bearer,
+        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+    );
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",
         &endpoint,

@@ -62,11 +62,15 @@ pub async fn run_openai_oneshot_with_tools(
             );
             if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client: rig::providers::openai::CompletionsClient<
-                    crate::inference_http::SessionTaggingHttpClient,
+                    crate::inference_http::SessionTaggingHttpClient<
+                        crate::rendered_request::RenderedRequestCapturingHttpClient,
+                    >,
                 > = crate::inference_http::build_openai_chat_completions_client(
                     &api_key,
                     &behavior.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::default(),
+                    crate::inference_http::SessionTaggingHttpClient::new(
+                        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                    ),
                 )
                 .with_context(|| build_context.clone())?;
                 run_oneshot_with_completion_client(
@@ -83,13 +87,17 @@ pub async fn run_openai_oneshot_with_tools(
             } else {
                 let client: rig::providers::openai::Client<
                     crate::inference_http::SessionTaggingHttpClient<
-                        crate::inference_http::ResponsesNormalizingHttpClient,
+                        crate::inference_http::ResponsesNormalizingHttpClient<
+                            crate::rendered_request::RenderedRequestCapturingHttpClient,
+                        >,
                     >,
                 > = crate::inference_http::build_openai_responses_client(
                     &api_key,
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::inference_http::ResponsesNormalizingHttpClient::default(),
+                        crate::inference_http::ResponsesNormalizingHttpClient::new(
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                        ),
                     ),
                     Default::default(),
                 )
@@ -112,12 +120,14 @@ pub async fn run_openai_oneshot_with_tools(
                 "building OpenRouter completion client for behavior {} against {}",
                 behavior.behavior_id, behavior.backend_endpoint
             );
-            let client: rig::providers::openrouter::Client =
-                rig::providers::openrouter::Client::builder()
-                    .api_key(&api_key)
-                    .base_url(&behavior.backend_endpoint)
-                    .build()
-                    .with_context(|| build_context.clone())?;
+            let client: rig::providers::openrouter::Client<
+                crate::rendered_request::RenderedRequestCapturingHttpClient,
+            > = rig::providers::openrouter::Client::builder()
+                .api_key(&api_key)
+                .base_url(&behavior.backend_endpoint)
+                .http_client(crate::rendered_request::RenderedRequestCapturingHttpClient::default())
+                .build()
+                .with_context(|| build_context.clone())?;
             run_oneshot_with_completion_client(
                 node,
                 behavior,
@@ -219,7 +229,12 @@ where
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
     let model = client.completion_model(&behavior.model_name);
-    let config = loop_config(behavior, preamble, tools.len());
+    let config = loop_config(
+        behavior,
+        preamble,
+        tools.len(),
+        crate::rendered_request::CaptureScopeKind::OneShot,
+    );
     run_oneshot_owned(
         node,
         behavior,
@@ -247,24 +262,48 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
 where
     M::StreamingResponse: 'static,
 {
-    let hook = DefraSessionHook::with_identity(
+    // A one-shot run has no `AgentRequest` document, so its capture identity is
+    // minted here and the session is created eagerly rather than on the hook's
+    // first write. Both halves of the `(session_id, request_id)` pair have to
+    // exist *before* the first provider call, because they are components of
+    // the capture key.
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let request_id = format!("oneshot-{}", uuid::Uuid::new_v4());
+    let capture_scope = crate::rendered_request::scope::scope_from_factory(
+        crate::rendered_request::RenderedRequestContext {
+            request_id,
+            agent_did: behavior.agent_did().to_string(),
+            requester_did: String::new(),
+            behavior_id: behavior.behavior_id.clone(),
+            session_id: session_id.clone(),
+            model_name: behavior.model_name.clone(),
+        },
+        Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+    );
+
+    let hook = DefraSessionHook::resume_or_create_with_identity_policy(
         node,
+        &session_id,
         &behavior.behavior_id,
         behavior.agent_did(),
         FailurePolicy::default(),
     )
+    .await?
     .with_background_tool_registry(background_tool_registry);
     let history = prompt_builder.build(&[], &[]).await?.messages;
 
-    let response = crate::agent::loop_stream::run_loop_to_text(
+    let inference = crate::agent::loop_stream::run_loop_to_text(
         model,
         Some(hook.clone()),
         Message::user(prompt),
         history,
         tools,
         config,
-    )
-    .await
+    );
+    let response = match capture_scope {
+        Some(scope) => crate::rendered_request::scope::scope_request(scope, inference).await,
+        None => inference.await,
+    }
     .map_err(|error| anyhow!("one-shot inference failed: {error}"));
 
     let session_id = hook.session_id().await;

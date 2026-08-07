@@ -3,11 +3,11 @@ import Proofs.Basic
 /-!
 # RenderedCapture — persist-before-send at the provider boundary (#840, #523)
 
-The owned completion loop assembles a provider request and then calls
-`model.stream`. Between those two lines sits the capture seam
-`on_rendered_request(turn_index, attempt, request)`
-(`crates/gents/src/agent/loop_stream.rs:297-307`). This model fences the
-*order*: a provider send is legal only after the matching
+The owned completion loop assembles a provider request, arms this attempt's
+capture (`on_rendered_request`, `crates/gents/src/agent/loop_stream.rs`), and
+the innermost HTTP transport then persists the body it is about to post before
+it posts it (`crates/gents/src/rendered_request/transport.rs`). This model
+fences the *order*: a provider send is legal only after the matching
 `(capture key, canonical request)` pair is durable, and one capture key never
 names two different canonical requests.
 
@@ -31,9 +31,24 @@ names two different canonical requests.
   `session_id`, so a delimited encoding is a live defect class here rather than
   a hypothetical one.
 
-* The modeled artifact is the **assembled request at the capture seam**, not the
-  serialized HTTP body (`boundary.rendered-capture.assembled-request-artifact`).
-  The ChatGPT-Codex and xAI Grok transports rewrite the body after this point.
+* `requestId` names the **provider-call scope inside a request**, not only the
+  request document. One request runs several completion loops — the owned
+  inference loop, the per-turn compaction summarizer plus its strict-JSON
+  fallback, conversation title generation — and each starts its own `turnIndex`
+  and `attempt` at zero, so the request document id alone does not identify a
+  provider attempt. Production encodes this component as the injective JSON pair
+  `[request_id, capture_scope]`, keeping the tuple five components wide;
+  `crates/gents/tests/conformance/rendered_capture.rs` fences both halves.
+
+* `CanonicalRequest` is opaque, so the model does not say *which* artifact the
+  implementation binds to a key — only that a key binds one of them. Production
+  binds the **serialized HTTP body at the transport seam**
+  (`crates/gents/src/rendered_request/transport.rs`), captured after the
+  ChatGPT-Codex and xAI Grok body rewrites and immediately before the network
+  client is called. `boundary.rendered-capture.assembled-request-artifact`,
+  which recorded the earlier assembled-request binding, is closed on the
+  production side by that move; capture and send are now the same function call,
+  in that order.
 
 * `attempt` is part of the key, so a repair retry whose assembled input
   legitimately differs is a *separate fact*, never a rebinding of the previous

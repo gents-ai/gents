@@ -322,10 +322,13 @@ fn patch_store_false(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
+/// The authenticated Grok transport, with the rendered-request capture wrapper
+/// installed *below* it so the captured body already carries the `store:false`
+/// this client injects in `prepare`.
 async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
-) -> Result<XaiGrokOAuthHttpClient<DbCredentialBearer>> {
+) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
         .await
@@ -350,14 +353,23 @@ async fn build_authenticated_http(
             XAI_OAUTH_PRODUCT,
         )
     });
-    Ok(XaiGrokOAuthHttpClient::new(bearer))
+    Ok(XaiGrokOAuthHttpClient::with_inner(
+        bearer,
+        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+    ))
 }
+
+/// Grok's OAuth transport wrapping the capture seam, which wraps reqwest.
+pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
+    DbCredentialBearer,
+    crate::rendered_request::RenderedRequestCapturingHttpClient,
+>;
 
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     endpoint: &str,
-) -> Result<rig::providers::openai::Client<XaiGrokOAuthHttpClient<DbCredentialBearer>>> {
+) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, agent_did).await?;
@@ -374,7 +386,7 @@ pub async fn build_chat_completions_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
     endpoint: &str,
-) -> Result<rig::providers::openai::CompletionsClient<XaiGrokOAuthHttpClient<DbCredentialBearer>>> {
+) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
     let endpoint = normalize_endpoint(endpoint);
     // Identity headers ride along via `prepare` on every request.
     let http = build_authenticated_http(node, agent_did).await?;

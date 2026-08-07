@@ -181,6 +181,24 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
+    /// Every completion body this backend was posted, matched plan or not.
+    ///
+    /// Marker-scoped counts cannot answer "was anything sent at all?", which is
+    /// the assertion a fail-closed capture test needs: an uncaptured send that
+    /// matches no plan would still be a provider call that escaped.
+    pub fn observed_completion_bodies(&self) -> Vec<serde_json::Value> {
+        self.state
+            .inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .completion_bodies
+            .clone()
+    }
+
+    pub fn observed_completion_requests(&self) -> usize {
+        self.observed_completion_bodies().len()
+    }
+
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
         let observed = self
             .state
@@ -215,6 +233,8 @@ struct StreamingState {
 struct StreamingStateInner {
     chunk_counts: HashMap<String, usize>,
     request_counts: HashMap<String, usize>,
+    /// Every completion body posted to this backend, in arrival order.
+    completion_bodies: Vec<serde_json::Value>,
     releases: HashSet<String>,
 }
 
@@ -227,6 +247,17 @@ impl StreamingState {
             inner: Mutex::new(StreamingStateInner::default()),
             notify: Notify::new(),
         }
+    }
+
+    fn record_completion_body(&self, body: &str) {
+        let value = serde_json::from_str::<serde_json::Value>(body)
+            .unwrap_or_else(|_| json!({ "__unparsed__": body }));
+        self.inner
+            .lock()
+            .expect("streaming backend mutex poisoned")
+            .completion_bodies
+            .push(value);
+        self.notify.notify_waiters();
     }
 
     fn next_response(&self, body: &str) -> StreamResponse {
@@ -340,6 +371,7 @@ async fn handle_models(State(state): State<Arc<StreamingState>>) -> Response {
 }
 
 async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> Response {
+    state.record_completion_body(&body);
     if request_is_streaming(&body) {
         return match state.next_response(&body) {
             StreamResponse::Stream(script) => streaming_response(script, state),

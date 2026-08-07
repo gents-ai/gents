@@ -237,6 +237,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
                 );
                 let mut fallback_config = summary_config;
                 fallback_config.structured_output = None;
+                // A distinct capture scope: this is a second provider call for
+                // the same turn, and it must be its own durable fact rather
+                // than a rebinding of the guided attempt's.
+                fallback_config.on_rendered_request =
+                    Some(crate::rendered_request::scope::ambient_arming_sink(
+                        crate::rendered_request::CaptureScopeKind::CompactionFallback,
+                    ));
                 fallback_config.retry_policy =
                     crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
                 fallback_config.preamble = Some(format!(

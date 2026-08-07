@@ -386,7 +386,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::RENDERED_REQUEST_NAME,
         gents_protocol::schemas::RENDERED_REQUEST,
-        "bafyreigxjekjbu2lwjgyu6c2jfnarhbx5kvxde37f2yargowcxwcahdnua"
+        "bafyreiaknzivt7iqbjab7rxeqwe44ntm4fdkitecz6h33vs3v7zvoay64e"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,

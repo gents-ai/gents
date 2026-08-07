@@ -280,13 +280,13 @@ def boundaries : List Boundary :=
     }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"
-    , subject := "the captured artifact is the assembled request, not the HTTP body"
+    , subject := "the captured artifact is the transport body, parsed as canonical JSON"
     , statement :=
-        "Proofs.RenderedCapture's CanonicalRequest is the assembled provider request observed at the capture seam in crates/gents/src/agent/loop_stream.rs:297, immediately before model.stream at :307. It is NOT the serialized HTTP body. Two shipping transports rewrite the body after that point: chatgpt_codex.rs::patch_instructions_body hoists system text into a top-level `instructions` field and strips it from `input`, forces store=false and stream=true, deletes max_output_tokens/temperature/top_p (CHATGPT_CODEX_UNSUPPORTED_PARAMS), and forces strict=false on every tool; xai_grok_oauth.rs::patch_store_false injects store=false. Capture is pre-transport, so canonical-request equality is equality of the assembled request for those providers, not of the bytes on the wire."
+        "Proofs.RenderedCapture's CanonicalRequest is opaque: the model states only that one capture key binds one canonical request, never which artifact that is. Production binds the serialized HTTP request body observed in crates/gents/src/rendered_request/transport.rs, the innermost HttpClientExt in every provider stack, after chatgpt_codex.rs::patch_instructions_body (system text hoisted into a top-level `instructions` field and stripped from `input`, store=false, stream=true, max_output_tokens/temperature/top_p deleted, strict=false forced on every tool), after xai_grok_oauth.rs::patch_store_false (store=false), and after inference_http.rs::ResponsesNormalizingHttpClient, and immediately before the inner network client is called. The residual gap is fidelity, not position: the bytes are parsed and re-encoded through the canonical JSON encoder before storage, so equality is canonical-JSON value equality and does not preserve the sender's key order or serializer whitespace."
     , acceptedFailureMode :=
-        some "A regression in a provider-specific body rewrite is invisible to this model and to any conformance row derived from it. #523's issue text currently asks for \"the exact bytes that were sent\", which this scope does not deliver."
+        some "A transport that reordered or reformatted JSON without changing any value would compare equal. #523's issue text asks for \"the exact bytes that were sent\", which canonical-JSON equality does not literally deliver even though it now covers every provider-specific body rewrite."
     , acceptedFollowUp :=
-        some "Either amend #523 to canonical-JSON fidelity over the assembled request and name the excluded transports, or add a second capture at the HttpClientExt::send_streaming seam and extend the model to Assembled -> DurablyCaptured -> Rewritten -> Sent."
+        some "Either amend #523 to canonical-JSON fidelity over the transport body, or store the raw UTF-8 body alongside request_json and prove the inner client forwarded those same bytes."
     }
   , { id := boundaryRenderedCaptureKeyEncodingInjectivityId
     , domain := "RenderedCapture"

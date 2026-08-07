@@ -31,6 +31,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             self.behavior.as_ref(),
             title_generation_preamble(),
             0,
+            crate::rendered_request::CaptureScopeKind::Title,
         );
         title_config.temperature = Some(0.0);
         title_config.max_tokens = Some(24);
@@ -41,10 +42,30 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         title_config.retry_policy =
             crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
 
+        // Title generation runs on its own task, and task-locals are not
+        // inherited by `tokio::spawn`. The capture scope therefore has to be
+        // installed here, or `title_config`'s arming sink would find no ambient
+        // scope and this provider call would be the one that stays uncaptured.
+        let capture_context = crate::rendered_request::RenderedRequestContext::for_request(
+            &request,
+            self.behavior.model_name.clone(),
+        );
+        let capture_factory = self.rendered_request_capture_factory.clone();
+
         tokio::spawn(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
-                maybe_generate_conversation_title(node, &behavior_did, request, model, title_config)
-                    .await
+                crate::rendered_request::scope::scope_request_if_configured(
+                    capture_context,
+                    capture_factory.as_ref(),
+                    maybe_generate_conversation_title(
+                        node,
+                        &behavior_did,
+                        request,
+                        model,
+                        title_config,
+                    ),
+                )
+                .await
             })
             .await
             {
