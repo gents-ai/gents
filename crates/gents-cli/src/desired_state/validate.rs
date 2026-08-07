@@ -1564,6 +1564,7 @@ mod tests {
                 temperature: None,
                 top_p: None,
                 top_k: None,
+                seed: None,
                 min_p: None,
                 frequency_penalty: None,
                 presence_penalty: None,
