@@ -10,6 +10,23 @@ the current schema. A row becomes **decided** only after its detailed entry
 answers every question in the template below and links the resulting tests and
 migration work.
 
+The evidence and proposed breaking contracts are split into four audit tracks:
+
+- [Track A: conversation and session durability](schema-audit-track-a.md)
+  ([#1068](https://github.com/source-inc/gents/issues/1068))
+- [Track B: responses and inference attempts](schema-audit-track-b.md)
+  ([#1070](https://github.com/source-inc/gents/issues/1070))
+- [Track C: provenance and projections](schema-audit-track-c.md)
+  ([#1069](https://github.com/source-inc/gents/issues/1069))
+- [Track D: configuration, automation, and placement](schema-audit-track-d.md)
+  ([#1067](https://github.com/source-inc/gents/issues/1067))
+- [Shared retention and erasure lattice](schema-retention-lattice.md)
+- [PR-sized durability roadmap](schema-durability-roadmap.md)
+
+`Provisional` in the inventory means the track has recorded a target direction;
+it does not mean that the schema, proofs, ACP, replication, or retention work is
+implemented.
+
 ## Status vocabulary
 
 - **Unreviewed:** only current schema facts and a preliminary archetype are
@@ -69,70 +86,70 @@ Decision status:
 
 ## Current collection inventory
 
-`Branchable` reflects the current SDL on the #1059 branch. Archetypes are
-starting hypotheses to test, not conclusions.
+`Branchable` reflects the schema root merged by #1059. Archetypes are starting
+hypotheses to test, not conclusions.
 
 ### Conversation, execution, and projections — Tracks A-C
 
 | Collection | Archetype hypothesis | Branchable | Track | Status |
 | --- | --- | ---: | --- | --- |
-| `AgentSession` | Lifecycle envelope | Yes | A | Unreviewed |
-| `AgentConversation` | Materialized UX projection | Yes | A | Unreviewed |
-| `AgentRequest` | Command plus lifecycle envelope | Yes | A/B | In review |
-| `AgentResponse` | Streaming materialization plus terminal result | Yes | B | Unreviewed |
-| `InferenceCall` | Durable provider-attempt fact/ledger | No | B | Unreviewed |
-| `AgentMessage` | Durable transcript fact | Yes | A | Unreviewed |
-| `AgentToolCall` | Tool lifecycle envelope | Yes | A | Unreviewed |
-| `AgentToolResult` | Durable tool-result fact | Yes | A | Unreviewed |
-| `AgentToolApproval` | Durable authorization decision | Yes | A | Unreviewed |
-| `CompactionEntry` | Durable transcript-reduction fact | Yes | A | Unreviewed |
-| `Goal` | Long-lived lifecycle envelope | Yes | A | Unreviewed |
-| `AgentMemory` | Mutable principal knowledge | Yes | A | Unreviewed |
-| `RenderedRequest` | Immutable provider-call fact | Yes | C | In review |
-| `ProjectionAcpBinding` | Desired projection authorization state | No | C/D | Unreviewed |
+| `AgentSession` | Lifecycle envelope | Yes | A | Provisional |
+| `AgentConversation` | Materialized UX projection | Yes | A | Provisional |
+| `AgentRequest` | Command plus lifecycle envelope | Yes | A/B | Provisional |
+| `AgentResponse` | Streaming materialization plus terminal result | Yes | B | Provisional |
+| `InferenceCall` | Durable provider-attempt fact/ledger | No | B | Provisional |
+| `AgentMessage` | Durable transcript fact | Yes | A | Provisional |
+| `AgentToolCall` | Tool lifecycle envelope | Yes | A | Provisional |
+| `AgentToolResult` | Durable tool-result fact | Yes | A | Provisional |
+| `AgentToolApproval` | Durable authorization decision | Yes | A | Provisional |
+| `CompactionEntry` | Durable transcript-reduction fact | Yes | A | Provisional |
+| `Goal` | Long-lived lifecycle envelope | Yes | A | Provisional |
+| `AgentMemory` | Mutable principal knowledge | Yes | A | Provisional |
+| `RenderedRequest` | Immutable provider-call fact | Yes | C | Provisional |
+| `ProjectionAcpBinding` | Desired projection authorization state | No | C/D | Provisional |
 
 ### Agent and inference configuration — Track D
 
 | Collection | Archetype hypothesis | Branchable | Track | Status |
 | --- | --- | ---: | --- | --- |
-| `AgentPrincipal` | Desired identity configuration | No | D | Unreviewed |
-| `AgentBehavior` | Desired behavior configuration | No | D | Unreviewed |
-| `ToolSelection` | Desired capability configuration | No | D | Unreviewed |
-| `Skill` | Desired capability/instruction configuration | No | D | Unreviewed |
-| `InferenceBackend` | Desired backend plus observed health state | No | D | Unreviewed |
-| `InferenceProfile` | Desired inference configuration | No | D | Unreviewed |
-| `OAuthCredential` | Local secret/configuration | No | D | Unreviewed |
-| `WorkspaceRoot` | Local host configuration | No | D | Unreviewed |
-| `AgentRuntime` | Observed deployment state | Yes | D | Unreviewed |
-| `ToolServiceRegistry` | Desired service identity plus observed state | No | D | Unreviewed |
-| `ToolServiceHealthState` | Observed service state | No | D | Unreviewed |
+| `AgentPrincipal` | Desired identity configuration | No | D | Provisional |
+| `AgentBehavior` | Desired behavior configuration | No | D | Provisional |
+| `ToolSelection` | Desired capability configuration | No | D | Provisional |
+| `Skill` | Desired capability/instruction configuration | No | D | Provisional |
+| `InferenceBackend` | Desired backend plus observed health state | No | D | Provisional |
+| `InferenceProfile` | Desired inference configuration | No | D | Provisional |
+| `OAuthCredential` | Local secret/configuration | No | D | Provisional |
+| `WorkspaceRoot` | Local host configuration | No | D | Provisional |
+| `AgentRuntime` | Observed deployment state | Yes | D | Provisional |
+| `ToolServiceRegistry` | Desired service identity plus observed state | No | D | Provisional |
+| `ToolServiceHealthState` | Observed service state | No | D | Provisional |
 
 ### Automation
 
 | Collection | Archetype hypothesis | Branchable | Track | Status |
 | --- | --- | ---: | --- | --- |
-| `Task` | Desired work configuration | Yes | D | Unreviewed |
-| `Schedule` | Desired schedule plus observed firing state | Yes | D | Unreviewed |
-| `EventTrigger` | Desired trigger plus observed firing state | Yes | D | Unreviewed |
-| `PersonaConfigRequest` | Command/intent plus outcome | Yes | D | Unreviewed |
+| `Task` | Desired work configuration | Yes | D | Provisional |
+| `Schedule` | Desired schedule plus observed firing state | Yes | D | Provisional |
+| `EventTrigger` | Desired trigger plus observed firing state | Yes | D | Provisional |
+| `PersonaConfigRequest` | Command/intent plus outcome | Yes | D | Provisional |
 
 ### Network, pairing, and placement
 
 | Collection | Archetype hypothesis | Branchable | Track | Status |
 | --- | --- | ---: | --- | --- |
-| `AgentDirectoryEntry` | Replicated directory projection | Yes | D | Unreviewed |
-| `AgentNetwork` | Durable network configuration | Yes | D | Unreviewed |
-| `NetworkMembership` | Durable authorization/membership fact | Yes | D | Unreviewed |
-| `NetworkJoinRequest` | Command/intent plus outcome | Yes | D | Unreviewed |
-| `PeerEndpoint` | Replicated endpoint configuration | Yes | D | Unreviewed |
-| `PeerRegistry` | Local/desired peer registry | No | D | Unreviewed |
-| `PeerPairingDesired` | Desired local pairing state | No | D | Unreviewed |
-| `DataPlanePairingDesired` | Desired local pairing state | No | D | Unreviewed |
-| `PeerPairingApplied` | Observed local reconciliation state | No | D | Unreviewed |
-| `ConsumedInviteNonce` | Durable replay-prevention fact | No | D | Unreviewed |
-| `ReciprocalConversationIntent` | Desired cross-peer intent | No | D | Unreviewed |
-| `PairingBearerClaim` | Replicated command/claim | Yes | D | Unreviewed |
-| `BearerPairingReady` | Replicated acknowledgement fact | Yes | D | Unreviewed |
+| `AgentDirectoryEntry` | Replicated directory projection | Yes | D | Provisional |
+| `AgentNetwork` | Durable network configuration | Yes | D | Provisional |
+| `NetworkMembership` | Durable authorization/membership fact | Yes | D | Provisional |
+| `NetworkJoinRequest` | Command/intent plus outcome | Yes | D | Provisional |
+| `PeerEndpoint` | Replicated endpoint configuration | Yes | D | Provisional |
+| `PeerRegistry` | Local/desired peer registry | No | D | Provisional |
+| `PeerPairingDesired` | Desired local pairing state | No | D | Provisional |
+| `DataPlanePairingDesired` | Desired local pairing state | No | D | Provisional |
+| `PeerPairingApplied` | Observed local reconciliation state | No | D | Provisional |
+| `ConsumedInviteNonce` | Durable replay-prevention fact | No | D | Provisional |
+| `ReciprocalConversationIntent` | Desired cross-peer intent | No | D | Provisional |
+| `PairingBearerClaim` | Replicated command/claim | Yes | D | Provisional |
+| `BearerPairingReady` | Replicated acknowledgement fact | Yes | D | Provisional |
 
 ## First vertical slice: request provenance
 
@@ -171,11 +188,12 @@ DocumentVersionRef {
    idempotent.
 3. The conditional claim write is the named provider-input boundary. After the
    write, the runtime excludes every composite observed before the mutation,
-   then uses CID time-travel reads to locate the earliest new
-   `processing`/`claimed` snapshot with the claim's timestamp, deadline,
-   behavior, backend, and execution origin. Selecting the earliest new match
-   prevents a later content edit that inherits the claim markers from moving
-   the boundary forward.
+   then uses CID time-travel reads to locate the lowest-height new snapshot
+   whose complete claim marker tuple matches `status = processing`,
+   `lifecycle_state = claimed`, timestamp, deadline, behavior, backend, and
+   execution origin. More than one matching CID at that height fails closed.
+   Selecting that unique boundary prevents a later content edit that inherits
+   the claim markers from moving the boundary forward.
 4. The runtime replaces the watcher-loaded value with that reconstructed
    snapshot before prompt assembly. This closes the watcher-read/claim-write
    race even while request input fields remain mutable in the current schema.
@@ -194,10 +212,11 @@ DocumentVersionRef {
   live-only and is therefore not a sufficient recovery source.
 - `_commits` exposes composite `_C` CIDs and `Collection(cid: [CID])` performs
   an exact historical read. Excluding the pre-mutation history and matching the
-  earliest new claim-state snapshot selects the runtime's claim commit without
-  relying on head order or assuming unchanged marker fields are unique forever.
-- The exact claimed snapshot, before the later `claimed -> processing`
-  transition, is the request source boundary.
+  unique lowest-height new claim-state snapshot selects the runtime's claim
+  commit without relying on head order or assuming unchanged marker fields are
+  unique forever.
+- The exact `status = processing`, `lifecycle_state = claimed` snapshot written
+  by the `pending -> claimed` mutation is the request source boundary.
 - ACP behavior for CID/history reads, signer evidence, and complete
   reconstructibility remain follow-up gates before `Verified` is legal.
 

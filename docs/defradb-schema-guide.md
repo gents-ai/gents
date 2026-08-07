@@ -8,7 +8,10 @@ shape.
 This guide defines the questions that must be answered before a Gents
 collection is added or changed. The accompanying
 [schema decision ledger](schema-decision-ledger.md) records those answers for
-the collections that ship with Gents.
+the collections that ship with Gents. The
+[retention and erasure lattice](schema-retention-lattice.md) is the shared
+vocabulary for archive, legal hold, downgrade, and purge decisions; individual
+collection reviews must not invent incompatible duration guarantees.
 
 ## Design objective
 
@@ -73,14 +76,21 @@ Use `_docID` plus a composite commit CID when provenance must identify the exact
 document version consumed. DefraDB exposes commit metadata through `_version`
 and `_commits`, and accepts `docID`/`cid` for time-travel reads.
 
+CID time-travel is deliberately a flat document read in the pinned version:
+nested relationships are not resolved historically, one-to-many fields are not
+returned, and a CID for another document can yield no row rather than a typed
+wrong-document error. Callers must provide and verify `_docID`, request direct
+fields, and reject an empty or mismatched result.
+
 The runtime must acquire the value and its version reference at one named
 boundary and carry that reference forward. For a plain read, acquire both as
 one consistent observation. When a conditional mutation defines the boundary,
-record the pre-mutation commit set, then locate the earliest new composite with
-that mutation's distinguishing state and reload the value by CID before using
-it. The pre-mutation exclusion matters: later mutations inherit unchanged
-claim fields and can otherwise look like the boundary. Re-querying the current
-head later is a time-correlation race, not provenance.
+record the pre-mutation commit set, then locate the lowest-height new composite
+whose complete marker tuple matches that mutation and reload the value by CID
+before using it. If more than one candidate exists at that height, fail closed.
+The pre-mutation exclusion matters: later mutations inherit unchanged claim
+fields and can otherwise look like the boundary. Re-querying the current head
+later is a time-correlation race, not provenance.
 
 On the pinned DefraDB version, `_version` without a target CID returns every
 reachable composite version and sorts by height. Concurrent heads make
@@ -93,6 +103,14 @@ the resulting `_docID`/CID pair.
 A DID stored in `agent_did` or `requester_did` is a claim made by the document.
 It is not proof of authorship. The ACP caller identity and the identity used by
 DefraDB to sign commit blocks are also distinct inputs.
+
+Commit signing requires a registered node signing identity and is not universal
+across current Gents node constructors. Unsigned blocks are accepted during
+merge. Every request-producing node must therefore enable signing explicitly,
+and legacy or unsigned commits remain unverified. A node-level signer also does
+not prove that a remote requester authored a mutation submitted through that
+node; preserve and verify a requester-signed envelope when storage signer and
+request author differ.
 
 A verified provenance claim requires all of the following:
 
@@ -131,18 +149,50 @@ history, replication, or immutability.
 
 Choose it when at least one of these capabilities is required:
 
-- a late-joining peer must bulk-sync historical collection state through the
-  branchable collection sync path; or
+- a peer must initiate historical catch-up through the branchable collection
+  sync path; or
 - the collection needs collection-scoped ACP decisions over collection commits.
 
 Do not choose it merely because document history matters: document field and
-composite commits already exist. Do not assume it causes a collection to
-replicate: runtime subscription and replication profiles still decide what is
-gossiped.
+composite commits already exist. A newly installed push replicator can push
+existing documents from a non-branchable collection, so ordinary backfill is
+not by itself proof that branchability is needed. Do not assume branchability
+causes a collection to replicate: runtime subscription and replication profiles
+still decide what is gossiped.
 
 Because the pinned DefraDB rejects changes to `is_branchable`, an existing
 non-branchable collection that needs these capabilities requires an explicit
 successor/backfill design unless DefraDB gains a supported migration path.
+
+### Gents default posture
+
+Use branchable roots by default for canonical facts and shared desired
+configuration that must move across authorized machines, support peer-initiated
+catch-up, or later carry collection-scoped policy. Keep deployment-local health,
+leases/cursors, replaceable caches, and secrets nonbranchable unless a concrete
+cross-machine contract says otherwise.
+
+This default does not make branchability part of provenance. Field and composite
+CIDs, commit signatures, and exact document-version manifests work for both
+branchable and nonbranchable collections. Branchability supplies an additional
+collection commit and multi-machine lifecycle capabilities; it does not prove
+which version a runtime consumed.
+
+Before accepting a branchable root, measure and test:
+
+- collection-commit write/storage amplification on hot append and lifecycle
+  paths;
+- concurrent collection-head behavior and repair after partition/rejoin;
+- push replication and peer-initiated catch-up under the intended filters;
+- late-peer authorization, retention, tombstone, and reset/successor behavior;
+  and
+- archive/export behavior when the operational collection has multiple heads.
+
+Lens can add compatible fields, project old versions, select an active version,
+and materialize data, but it cannot change branchability or collection policy.
+Changing either requires a new root (or a deliberate destructive pre-release
+reset), an explicit cutover boundary, and version references that continue to
+resolve for every retained run.
 
 ## Replication and placement
 
@@ -162,6 +212,11 @@ Replication filters and their source fields are security-sensitive schema.
 Filter fields must be immutable so a document cannot move between placement
 scopes after creation.
 
+In the pinned implementation, filters are installed on push replicators rather
+than collection subscriptions, and ACP-derived replication filters are not yet
+implemented. DefraDB requires filter fields to be immutable scalar LWW fields;
+Gents must still test every profile and push direction.
+
 ## ACP and encryption
 
 Replication and authorization answer different questions. Replication decides
@@ -180,6 +235,26 @@ For every collection with a policy, define:
 Never ship a `@policy` directive without proving that the policy and document
 relationships are installed. Under the currently pinned DefraDB behavior, an
 unregistered object can fall through as public rather than fail closed.
+
+A collection policy is immutable in the pinned schema validator, including a
+change from no policy to a policy. Collections designed under the assumption of
+future policies need policy-bearing successor roots later; a runtime policy API
+alone cannot retrofit existing roots. Identity-less genesis writes to a
+protected collection can also create permanently public documents, so successor
+bootstrap must establish identity and relationships before accepting writes.
+
+Normal selects, exact-CID reads, `_commits`, and `_version` do not all share one
+enforcement path. `_commits` applies per-commit checks and CID reads apply
+document checks, while mutation-result `_version` enrichment in the pinned
+implementation can disclose history without an equivalent read check. Treat
+uniform history confidentiality as unproven, test each surface separately, and
+repair that upstream leak before claiming history ACP.
+
+Policy-backed mutations in the pinned implementation also do not preserve the
+implicit all-fields transaction boundary of an unprotected multi-mutation.
+Design lifecycle writes as individually recoverable cuts, or add and verify an
+explicit transaction path; never assume that adding a future policy leaves a
+multi-document finalize operation atomic.
 
 ACP is not at-rest encryption. Replicated-delta encryption, local datastore
 encryption, key custody, key rotation, and archival encryption must be designed
@@ -208,6 +283,11 @@ Prefer component fields and a real composite index when the database and
 migration path support the intended query. If an opaque key is required, its
 canonical encoding and collision assumptions are part of the contract.
 
+Pinned DefraDB's uniqueness implementation handles multiple index fields, but a
+null component bypasses uniqueness. Every component of a correctness-critical
+composite unique key must be non-null, and multi-field uniqueness needs an
+integration test rather than relying only on SDL parser coverage.
+
 ## Uniqueness and concurrent authorship
 
 Every uniqueness claim must state:
@@ -224,6 +304,10 @@ a deterministic indexed winner while the conflicting document remains visible
 to a non-index scan. Code must not use `limit: 1` as a substitute for a conflict
 policy.
 
+The merge conflict outcome is logged rather than persisted as a queryable
+record or event. Gents conflict handling must enumerate the complete set with a
+non-index/application scan and persist its own repair decision.
+
 ## Types, nullability, and indexes
 
 - Use `DateTime` for timestamps unless opaque external text is the real value.
@@ -235,6 +319,14 @@ policy.
 - Add indexes from observed hot queries and declared uniqueness constraints.
   Descriptive fields are not automatically indexes.
 - DefraDB mutations must emit `null`, not `[]`, for an empty nillable array.
+
+Pinned DefraDB supports compatible in-place evolution through nillable field
+patches, Lens read-time migration, active-version selection, and collection
+materialization; `gents-migration` already uses these mechanisms. Use a
+successor collection or deliberate destructive schema-epoch reset when identity,
+archetype, branchability, or policy changes. Do not claim that every schema
+change requires export/re-import, and do not preserve an unsafe mixed archetype
+merely because a compatible patch is technically available.
 
 ## Retention, archival, and sunset
 
@@ -248,6 +340,12 @@ decision must distinguish:
 - logical deletion or sunset visible to replicas;
 - cryptographic erasure through key destruction, where applicable; and
 - coordinated physical purge from peers, archives, and backups.
+
+The selected class and evidence downgrade follow the
+[retention and erasure lattice](schema-retention-lattice.md). In particular,
+destroying a payload or key can preserve commitment evidence while making
+plaintext reconstruction impossible; projections and exports must report that
+downgrade rather than continuing to claim reconstructibility.
 
 A replicated tombstone is not proof that all physical copies were erased.
 Likewise, removing a row from a projection does not remove its source facts.
