@@ -195,7 +195,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred :=
         [ (Surface.operatorCli,
-            "#840 — `trace timeline|project` surfacing of captured requests lands with the projection slice; nothing writes a row yet")
+            "#840 — `trace timeline|project` surfacing of captured requests lands with the projection slice; rows accumulate from this release onward with no reader")
         , (Surface.operatorUi,
             "#840 — the desktop rendered-request view lands with the same projection slice")
         ]

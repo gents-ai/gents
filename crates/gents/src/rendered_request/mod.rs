@@ -37,11 +37,16 @@
 //!
 //! There is no `request_hash`. A stored digest is self-attested: the same code
 //! that chooses the bytes also chooses the digest, so the two always agree and
-//! an auditor learns nothing. `RenderedRequest` is `@branchable`, so DefraDB
-//! writes a per-field commit block for `request_json` whose CID is computed
-//! over the value actually stored. That CID is the content address, it
-//! replicates with the document, and it is what a future Merkle-DAG proof can
-//! attest over.
+//! an auditor learns nothing. DefraDB instead writes a per-field commit block
+//! for `request_json` whose CID is computed over the value actually stored.
+//! That CID is the content address, it replicates with the document, and it is
+//! what a future Merkle-DAG proof can attest over.
+//!
+//! Per-field and composite commit blocks are written for **every** collection;
+//! `@branchable` gates only the additional collection-level block. So the field
+//! CID this record relies on is not a consequence of `@branchable` — that
+//! directive is taken for replication and collection-scoped ACP reasons, which
+//! `rendered_request.graphql` explains.
 //!
 //! `prompt_hash` and `tools_hash` survive only as query indexes — "find every
 //! capture sharing this tool surface". Treating either as proof of content is a
@@ -75,7 +80,7 @@ pub const CAPTURE_VERSION: u32 = 1;
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
 /// `UnsupportedManifest` rather than guessing.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 1;
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 2;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
@@ -231,7 +236,7 @@ pub struct ThreadedToolResult {
 ///    per-turn compaction adds ephemeral content. Compaction is a *sticky*
 ///    mutation
 ///    (`*history = compacted; *new_messages = vec![compacted_prompt]`,
-///    `agent/loop_stream.rs:1274-1275`), so one turn's model-generated summary
+///    `agent/loop_stream.rs:1350-1351`), so one turn's model-generated summary
 ///    governs every later turn of the same request, and that summary is never
 ///    written as an `AgentCompactionEntry`. Re-running the summarizer does not
 ///    produce the same words.
@@ -244,18 +249,25 @@ pub struct ThreadedToolResult {
 /// list from `AgentMessage` rows and needs these as an *overlay* keyed by
 /// position and call id; `effective_messages` is the oracle it checks itself
 /// against. `effective_messages` is present only when that list contains a
-/// rendered request-context message (which can read `now` and live collection
-/// data) or a model-generated per-turn compaction summary. Otherwise the
-/// durable transcript plus these overlays reconstructs it exactly.
+/// rendered request-context message, a model-generated per-turn compaction
+/// summary, or the result of a repair rewrite. Otherwise the durable transcript
+/// plus these overlays reconstructs it exactly.
 ///
 /// ## Size
 ///
-/// Ordinary turns do not duplicate the conversation next to the provider-wire
-/// copy in `request_json`; their native list is reconstructible from durable
-/// rows plus the overlays. Once request-context rendering or per-turn
-/// compaction introduces ephemeral content, the full native list becomes the
-/// oracle and is retained on that and later turns. Compacted lists are bounded
-/// by the context window rather than growing with the unabridged session.
+/// Ordinary turns do not retain the full native message list next to the
+/// provider-wire copy in `request_json`; that list is reconstructible from
+/// durable rows plus the overlays. Once request-context rendering, per-turn
+/// compaction, or a repair introduces content no durable row reproduces, the
+/// full native list becomes the oracle and is retained on that and every later
+/// turn of the request. Compacted lists are bounded by the context window
+/// rather than growing with the unabridged session.
+///
+/// `threaded_tool_results` is carried on **every** turn, compact path included,
+/// because rig joins multi-part tool-result content with `"\n"` on the Chat
+/// Completions wire — the native `Vec<ToolResultContent>` split is genuinely
+/// unrecoverable from `request_json`. So a tool-heavy turn does duplicate its
+/// tool-result payloads; only the surrounding message list is elided.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyTrace {
     pub trace_version: u32,
@@ -381,21 +393,37 @@ pub struct ProvenanceManifest {
     /// Mirrors the `capture_scope` column. Duplicated here so a manifest read
     /// in isolation still identifies which completion loop it describes.
     pub capture_scope: String,
+    /// Scheme and authority the body was actually posted to, observed at the
+    /// seam. `None` only when the URI carried no authority.
+    ///
+    /// This is the one routing fact that is otherwise lost in time. `model_name`
+    /// alone cannot distinguish OpenAI from OpenRouter from a local vLLM from
+    /// Grok, and for daemon requests the answer is recoverable only by joining
+    /// to `InferenceCall.backend_id` — a join that does not exist for one-shot
+    /// runs, which never enter an admission scope. Configuration says where the
+    /// bytes were meant to go; this says where they went.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_endpoint: Option<String>,
     pub assembly_trace: AssemblyTrace,
 }
 
 impl ProvenanceManifest {
     const CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v1 pins no config or transcript versions, so a \
+        "this provenance manifest pins no config or transcript versions, so a \
          reconstruction cannot be verified against this capture";
 
-    pub fn captured_only(capture_scope: String, assembly_trace: AssemblyTrace) -> Self {
+    pub fn captured_only(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
         Self {
             manifest_version: PROVENANCE_MANIFEST_VERSION,
             status: ProvenanceStatus::CapturedOnly,
             status_reason: Self::CAPTURED_ONLY_REASON.to_string(),
             capture_seam: CaptureSeam::TransportBody,
             capture_scope,
+            provider_endpoint,
             assembly_trace,
         }
     }
@@ -508,7 +536,7 @@ pub struct RenderedCompletionRequest {
     /// idempotency key of the sink.
     pub capture_key: String,
     pub capture_version: u32,
-    /// Exact `_docID` of the signed `AgentRequest`. The logical `request_id`
+    /// Exact `_docID` of the durable `AgentRequest`. The logical `request_id`
     /// remains alongside it for user-facing correlation and queries. Empty for
     /// a one-shot run, which has no `AgentRequest` document.
     pub request_doc_id: String,
@@ -549,6 +577,7 @@ pub(crate) fn build_rendered_completion_request(
     context: &RenderedRequestContext,
     capture_scope: &str,
     source: RenderedRequestSource,
+    provider_endpoint: Option<String>,
     turn_index: usize,
     attempt: u32,
     assembly_trace: AssemblyTrace,
@@ -573,8 +602,11 @@ pub(crate) fn build_rendered_completion_request(
         turn_index,
         attempt,
     )?;
-    let manifest =
-        ProvenanceManifest::captured_only(capture_scope.to_string(), assembly_trace.clone());
+    let manifest = ProvenanceManifest::captured_only(
+        capture_scope.to_string(),
+        provider_endpoint,
+        assembly_trace.clone(),
+    );
     let provenance_json = canonical_json(
         &serde_json::to_value(&manifest).context("encoding rendered-request provenance")?,
     );
@@ -620,7 +652,7 @@ pub(crate) fn build_rendered_completion_request(
 /// (`ChatArgs::session_id` has no `value_parser`), and a `"{a}:{b}"` format
 /// would let `("x:y", "z")` and `("x", "y:z")` collide into one fact.
 ///
-/// `request_doc_id` is the DefraDB `_docID` of the signed `AgentRequest`, not its
+/// `request_doc_id` is the DefraDB `_docID` of the durable `AgentRequest`, not its
 /// user-facing `request_id`. The latter is an indexed logical correlation id,
 /// but the document id is the provenance edge that identifies the exact request
 /// fact this capture belongs to.
@@ -738,6 +770,7 @@ mod tests {
             &context(),
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
+            Some("https://api.example.test".to_string()),
             turn_index,
             attempt,
             trace,
@@ -920,6 +953,7 @@ mod tests {
                 &context(),
                 "inference.1",
                 RenderedRequestSource::OpenAiResponses,
+                Some("https://api.example.test".to_string()),
                 0,
                 0,
                 empty_trace(),

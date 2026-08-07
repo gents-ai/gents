@@ -20,10 +20,13 @@
 //!
 //! Writes go through `EmbeddedNode::execute_request_with_retry` with the
 //! agent's DID attached to the `QueryRequest`, not through the identity-less
-//! `EmbeddedNode::execute`. Today that only makes the write attributable —
-//! `RenderedRequest` carries no `@policy`, and ACP is blocked on
-//! defradb.rs#1318 — but it means the write path does not have to change when
-//! a policy can finally be installed. A DID that does not parse degrades to an
+//! `EmbeddedNode::execute`. Today that identity is **inert**: `QueryRequest`'s
+//! identity is an ACP-check input, `RenderedRequest` carries no `@policy`, so
+//! every ACP branch is skipped and no ownership record is written. The row is
+//! attributable only via its `agent_did` column — a self-report by the same
+//! process that wrote the row, which proves nothing to an auditor. The DID is
+//! attached now so owner registration works unchanged once a policy can be
+//! installed (blocked on defradb.rs#1318). A DID that does not parse degrades to an
 //! anonymous write with a warning rather than failing the request: refusing to
 //! capture would refuse the provider call, and a malformed principal is a
 //! configuration defect, not a reason to take the agent offline.

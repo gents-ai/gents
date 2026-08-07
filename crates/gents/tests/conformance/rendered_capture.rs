@@ -147,6 +147,7 @@ fn rendered_in_scope(
         tools_hash: String::new(),
         provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
             capture_scope.to_string(),
+            None,
             assembly_trace.clone(),
         ))
         .expect("provenance manifest"),

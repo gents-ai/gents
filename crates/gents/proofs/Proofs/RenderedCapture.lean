@@ -31,7 +31,7 @@ names two different canonical requests.
   `session_id`, so a delimited encoding is a live defect class here rather than
   a hypothetical one.
 
-* `requestId` is the **DefraDB document identity** of the signed request, widened
+* `requestId` is the **DefraDB document identity** of the durable request, widened
   with the provider-call scope inside that document. It is not the non-unique
   logical `AgentRequest.request_id` field. One request runs several completion loops — the owned
   inference loop, the per-turn compaction summarizer plus its strict-JSON

@@ -82,6 +82,15 @@ enum CaptureDecision {
         pending: PendingCapture,
         source: RenderedRequestSource,
         durable_body_fingerprint: Option<[u8; 32]>,
+        /// Scheme and authority of the URI this body was actually posted to,
+        /// e.g. `https://api.openai.com`. Observed at the seam rather than read
+        /// from configuration, because a backend document can be edited between
+        /// reconcile and send — this says where the bytes went, not where they
+        /// were meant to go. `None` when the URI carries no authority.
+        ///
+        /// Deliberately not the full URI: the path is already implied by
+        /// `source`, and query strings on some providers carry credentials.
+        provider_endpoint: Option<String>,
     },
     /// A completion body inside a request that armed nothing. Refuse.
     Refuse {
@@ -90,7 +99,17 @@ enum CaptureDecision {
     },
 }
 
-fn decide(path: &str) -> CaptureDecision {
+/// Scheme and authority only — never the path or query. The path is implied by
+/// `RenderedRequestSource`, and some providers put credentials in the query.
+fn provider_endpoint_of(scheme: Option<&str>, authority: Option<&str>) -> Option<String> {
+    let authority = authority?;
+    Some(match scheme {
+        Some(scheme) => format!("{scheme}://{authority}"),
+        None => authority.to_string(),
+    })
+}
+
+fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
     let Some(source) = RenderedRequestSource::for_request_path(path) else {
         return CaptureDecision::Forward;
     };
@@ -107,6 +126,7 @@ fn decide(path: &str) -> CaptureDecision {
             pending,
             source,
             durable_body_fingerprint: None,
+            provider_endpoint,
         },
         CaptureClaim::Resend {
             pending,
@@ -116,6 +136,7 @@ fn decide(path: &str) -> CaptureDecision {
             pending,
             source,
             durable_body_fingerprint,
+            provider_endpoint,
         },
         CaptureClaim::Unexplained => CaptureDecision::Refuse {
             scope,
@@ -126,7 +147,7 @@ fn decide(path: &str) -> CaptureDecision {
 
 /// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
-    let (scope, pending, source, durable_body_fingerprint) = match decision {
+    let (scope, pending, source, durable_body_fingerprint, provider_endpoint) = match decision {
         CaptureDecision::Forward => return Ok(()),
         CaptureDecision::Refuse { scope, path } => {
             tracing::error!(
@@ -145,7 +166,14 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             pending,
             source,
             durable_body_fingerprint,
-        } => (scope, pending, source, durable_body_fingerprint),
+            provider_endpoint,
+        } => (
+            scope,
+            pending,
+            source,
+            durable_body_fingerprint,
+            provider_endpoint,
+        ),
     };
 
     let mut hasher = Sha256::new();
@@ -169,7 +197,15 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     let turn_index = pending.turn_index;
     let attempt = pending.attempt;
     let claimed = pending.clone();
-    match scope::capture_body(scope.as_ref(), pending, source, body.as_ref()).await {
+    match scope::capture_body(
+        scope.as_ref(),
+        pending,
+        source,
+        provider_endpoint,
+        body.as_ref(),
+    )
+    .await
+    {
         Ok(()) => {
             scope.mark_claimed_durable(&claimed, body_fingerprint);
             Ok(())
@@ -222,7 +258,13 @@ where
         // returned future: `HttpClientExt::send` returns a `'static` future
         // that the provider client may poll from anywhere, and a task-local is
         // not visible from a task that did not install it.
-        let decision = decide(parts.uri.path());
+        let decision = decide(
+            parts.uri.path(),
+            provider_endpoint_of(
+                parts.uri.scheme_str(),
+                parts.uri.authority().map(|authority| authority.as_str()),
+            ),
+        );
         async move {
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);
@@ -255,7 +297,13 @@ where
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
-        let decision = decide(parts.uri.path());
+        let decision = decide(
+            parts.uri.path(),
+            provider_endpoint_of(
+                parts.uri.scheme_str(),
+                parts.uri.authority().map(|authority| authority.as_str()),
+            ),
+        );
         async move {
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);

@@ -388,6 +388,7 @@ pub(crate) async fn capture_body(
     scope: &RequestCaptureScope,
     pending: PendingCapture,
     source: super::RenderedRequestSource,
+    provider_endpoint: Option<String>,
     body: &[u8],
 ) -> std::result::Result<(), (CaptureFailureStage, anyhow::Error)> {
     let request_json: serde_json::Value = serde_json::from_slice(body)
@@ -397,6 +398,7 @@ pub(crate) async fn capture_body(
         scope.context(),
         &pending.capture_scope,
         source,
+        provider_endpoint,
         pending.turn_index,
         pending.attempt,
         pending.assembly_trace,

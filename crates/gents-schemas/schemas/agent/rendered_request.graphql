@@ -35,7 +35,7 @@ type RenderedRequest @branchable {
     # provider attempt, ever. Reusing this key with a different canonical
     # request is an integrity error, never an update.
     capture_key: String @index(unique: true) @immutable
-    # Exact DefraDB `_docID` of the signed AgentRequest. This is the durable
+    # Exact DefraDB `_docID` of the durable AgentRequest. This is the durable
     # provenance edge; request_id below remains the logical/user-facing id.
     # Empty only for one-shot runs, which do not author an AgentRequest.
     request_doc_id: String @index @immutable

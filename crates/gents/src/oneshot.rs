@@ -263,7 +263,7 @@ where
     M::StreamingResponse: 'static,
 {
     // A one-shot run has no `AgentRequest` document, so `request_doc_id` stays
-    // empty rather than impersonating a signed document. Its random session id
+    // empty rather than impersonating a durable document. Its random session id
     // still gives the capture key a unique durable scope. The session and
     // logical request id are minted before the first provider call, and the
     // session is created eagerly rather than on the hook's first write.

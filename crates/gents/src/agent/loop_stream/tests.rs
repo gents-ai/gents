@@ -1163,9 +1163,107 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         "overlay positions must fit the reconstructible native list"
     );
     assert!(
-        repaired_trace.effective_messages.is_none(),
-        "an ordinary turn must not duplicate the full transcript"
+        repaired_trace.effective_messages.is_some(),
+        "a repaired attempt rewrote the message vectors in place, so the durable transcript no \
+         longer reproduces them and the full native list is the only oracle"
     );
+
+    let first_turn_trace = &captures.first().expect("a first capture").3;
+    assert!(
+        first_turn_trace.effective_messages.is_none(),
+        "a turn before any repair must not duplicate the full transcript"
+    );
+}
+
+/// `repair_provider_input` rewrites `history` and `new_messages` in place, and
+/// both outlive the turn loop, so every turn *after* a repair is assembled from
+/// messages no `AgentMessage` row reproduces. `build_path` resets per turn and
+/// would report `Budgeted` for those turns, so the ephemeral marker is what
+/// stops a reconstructor trusting a list it cannot rebuild.
+///
+/// The sibling test above repairs on the loop's final turn, so it cannot see
+/// this carry-over at all.
+#[tokio::test(start_paused = true)]
+async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
+    let poison = format!("bad{}value", '\u{0007}');
+    let model = ScriptedModel::new_calls(vec![
+        // Turn 0 — a tool call carrying the argument that will need repair.
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-1".to_string(),
+                "echo".to_string(),
+                serde_json::json!({ "note": poison }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        // Turn 1 — rejected twice, then repaired and answered with another tool
+        // call so the loop runs at least one more turn.
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::FailStream(parse_400_error("same")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "call-2".to_string(),
+                "echo".to_string(),
+                serde_json::json!({ "note": "clean" }),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+        // Turn 2 — the turn after the repair. This is the one under test.
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("after repair".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath, AssemblyTrace)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let captures_for_sink = captures.clone();
+    let mut loop_config = config(4);
+    loop_config.on_rendered_request =
+        Some(Arc::new(move |turn_index, attempt, _request, trace| {
+            let captures = captures_for_sink.clone();
+            Box::pin(async move {
+                captures
+                    .lock()
+                    .await
+                    .push((turn_index, attempt, trace.build_path, trace));
+                Ok(())
+            })
+        }));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("use the echo tool"),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    );
+    let collected = collect_scripted_stream(stream).await;
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("after repair"));
+
+    let captures = captures.lock().await;
+    let repair_position = captures
+        .iter()
+        .position(|(_, _, path, _)| *path == AssemblyBuildPath::Repair)
+        .expect("the scripted 400s must have produced a repair");
+    assert!(
+        repair_position + 1 < captures.len(),
+        "the script must run at least one turn after the repair; got {:?}",
+        captures
+            .iter()
+            .map(|(turn, attempt, path, _)| (*turn, *attempt, *path))
+            .collect::<Vec<_>>()
+    );
+
+    for (turn, attempt, _, trace) in captures.iter().skip(repair_position) {
+        assert!(
+            trace.effective_messages.is_some(),
+            "turn {turn} attempt {attempt} was assembled from repaired vectors, so its effective \
+             message list must be carried rather than left for a reconstructor to rebuild"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]

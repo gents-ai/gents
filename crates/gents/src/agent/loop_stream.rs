@@ -243,10 +243,16 @@ where
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
-        // Rendered request context can contain `now` and live collection data;
-        // per-turn compaction can add a model-generated summary. Neither exists
-        // in a durable source row, so this and every later turn must retain the
-        // full native list once either enters these in-memory vectors.
+        // Three in-memory-only transforms can enter these vectors: the rendered
+        // request context, a model-generated per-turn compaction summary, and a
+        // repair rewrite. Once any of them lands, this and every later turn must
+        // retain the full native list.
+        //
+        // The request context *is* persisted (`prompt_hook.rs:28-30`), so the
+        // reason to retain it is not absence — it is that persistence runs under
+        // a configurable `FailurePolicy::FailOpen`, so that row may legitimately
+        // be missing while the request still ships. Capture must not depend on a
+        // subsystem whose failure mode is tolerant.
         let mut effective_messages_are_ephemeral = config.context_message.is_some();
 
         'turns: loop {
@@ -398,6 +404,14 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
+                                    // Repair rewrites `history` and `new_messages` in place, and
+                                    // both are declared outside `'turns`. The durable transcript is
+                                    // never rewritten to match, so every later turn is assembled
+                                    // from messages no `AgentMessage` row reproduces. Mark the
+                                    // effective list ephemeral for the rest of the request, not just
+                                    // this turn — `build_path` resets per turn and would otherwise
+                                    // report `Budgeted` for a turn whose input repair had altered.
+                                    effective_messages_are_ephemeral = true;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Fail { reason } => {
@@ -506,6 +520,10 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
+                                    // See the sibling repair arm above: repair mutates the
+                                    // request-scoped message vectors, so the effective list stays
+                                    // ephemeral for every later turn of this request.
+                                    effective_messages_are_ephemeral = true;
                                     attempt += 1;
                                     continue 'attempts;
                                 }

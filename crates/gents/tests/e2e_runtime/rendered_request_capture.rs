@@ -1163,6 +1163,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         provenance_json: serde_json::to_value(
             gents::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
+                None,
                 assembly_trace.clone(),
             ),
         )
