@@ -20,6 +20,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     top_k
                     seed
                     max_tokens
+                    max_total_tokens
                     metadata
                     execution_origin
                     created_at

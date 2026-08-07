@@ -48,6 +48,9 @@ pub struct SubmitRequestOptions {
     pub seed: Option<i64>,
     /// Sampling override: if set, written to the request's `max_tokens` field.
     pub max_tokens: Option<i64>,
+    /// Positive provider-token allowance shared by every completion call made
+    /// for this durable request.
+    pub max_total_tokens: Option<i64>,
     /// Free-form metadata attached to the request (submitter-defined JSON/string).
     pub metadata: Option<String>,
 }
@@ -68,6 +71,9 @@ pub async fn submit_request(
     let content = normalize_required("content", content)?;
     if options.seed.is_some_and(|seed| seed < 0) {
         bail!("seed must be non-negative");
+    }
+    if options.max_total_tokens.is_some_and(|limit| limit <= 0) {
+        bail!("max_total_tokens must be positive");
     }
     let (content, options) = prepare_prompt_submission(content, options)?;
     let request_id = Uuid::new_v4().to_string();
@@ -332,6 +338,7 @@ async fn retry_request_in_txn(
             top_k: parent.top_k,
             seed: parent.seed,
             max_tokens: parent.max_tokens,
+            max_total_tokens: parent.max_total_tokens,
             metadata: parent.metadata.clone(),
             ..SubmitRequestOptions::default()
         }),
@@ -782,6 +789,9 @@ fn submit_request_extra_fields(options: &SubmitRequestOptions) -> String {
     if let Some(max_tokens) = options.max_tokens {
         override_parts.push(format!("max_tokens: {max_tokens}"));
     }
+    if let Some(max_total_tokens) = options.max_total_tokens {
+        override_parts.push(format!("max_total_tokens: {max_total_tokens}"));
+    }
     if let Some(metadata) = options.metadata.as_deref() {
         override_parts.push(format!(
             r#"metadata: "{}""#,
@@ -905,6 +915,7 @@ pub async fn resend_request(
             top_k: stale.top_k,
             seed: stale.seed,
             max_tokens: stale.max_tokens,
+            max_total_tokens: stale.max_total_tokens,
             metadata: stale.metadata.clone(),
         },
     )
@@ -924,6 +935,7 @@ struct StaleRequestView {
     top_k: Option<i64>,
     seed: Option<i64>,
     max_tokens: Option<i64>,
+    max_total_tokens: Option<i64>,
     metadata: Option<String>,
 }
 
@@ -956,6 +968,7 @@ async fn fetch_request_view(
                 top_k
                 seed
                 max_tokens
+                max_total_tokens
                 metadata
             }}
         }}"#
@@ -1002,6 +1015,7 @@ async fn fetch_request_view(
         top_k: row.get("top_k").and_then(|v| v.as_i64()),
         seed: row.get("seed").and_then(|v| v.as_i64()),
         max_tokens: row.get("max_tokens").and_then(|v| v.as_i64()),
+        max_total_tokens: row.get("max_total_tokens").and_then(|v| v.as_i64()),
         metadata: row
             .get("metadata")
             .and_then(|v| v.as_str())
@@ -1133,6 +1147,7 @@ mod tests {
         top_k: Option<i64>,
         seed: Option<i64>,
         max_tokens: Option<i64>,
+        max_total_tokens: Option<i64>,
         metadata: Option<String>,
         status: String,
         lifecycle_state: String,
@@ -1535,6 +1550,7 @@ mod tests {
             top_k: None,
             seed: None,
             max_tokens: None,
+            max_total_tokens: None,
             metadata: None,
             status: Some(retry_parent_status_for_case(case).to_string()),
             lifecycle_state: Some(case.pre_failed_state.clone()),
@@ -1846,6 +1862,7 @@ mod tests {
                         top_k
                         seed
                         max_tokens
+                        max_total_tokens
                         metadata
                         status
                         lifecycle_state
@@ -2200,6 +2217,7 @@ mod tests {
                     top_k: Some(32),
                     seed: Some(1234),
                     max_tokens: Some(2048),
+                    max_total_tokens: Some(100_000),
                     metadata: Some(metadata.clone()),
                     ..SubmitRequestOptions::default()
                 },
@@ -2222,6 +2240,7 @@ mod tests {
         assert_eq!(parent.top_k, Some(32));
         assert_eq!(parent.seed, Some(1234));
         assert_eq!(parent.max_tokens, Some(2048));
+        assert_eq!(parent.max_total_tokens, Some(100_000));
         assert_eq!(parent.metadata.as_deref(), Some(metadata.as_str()));
 
         let submitted = core.retry_request(&parent).await?;
@@ -2238,6 +2257,7 @@ mod tests {
         assert_eq!(retried.top_k, Some(32));
         assert_eq!(retried.seed, Some(1234));
         assert_eq!(retried.max_tokens, Some(2048));
+        assert_eq!(retried.max_total_tokens, Some(100_000));
         assert_eq!(retried.metadata.as_deref(), Some(metadata.as_str()));
 
         core.shutdown().await?;

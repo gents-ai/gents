@@ -393,6 +393,7 @@ impl RequestLifecycle {
             top_k: None,
             seed: None,
             max_tokens: None,
+            max_total_tokens: None,
             metadata: None,
             execution_origin: Some(execution_origin_str.to_string()),
             created_at,

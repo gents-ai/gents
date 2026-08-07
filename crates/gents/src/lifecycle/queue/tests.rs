@@ -54,6 +54,7 @@ fn parent_request(session_id: &str) -> AgentRequest {
         top_k: None,
         seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: None,
         execution_origin: Some("interactive".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),

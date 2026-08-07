@@ -32,6 +32,7 @@ struct AgentRequestRow {
     top_k: Option<i64>,
     seed: Option<i64>,
     max_tokens: Option<i64>,
+    max_total_tokens: Option<i64>,
     metadata: Option<String>,
     execution_origin: Option<String>,
     created_at: String,
@@ -100,6 +101,7 @@ pub(crate) async fn load_agent_request(
                 top_k
                 seed
                 max_tokens
+                max_total_tokens
                 metadata
                 execution_origin
                 created_at
@@ -136,6 +138,7 @@ pub(crate) async fn load_agent_request(
         top_k: row.top_k,
         seed: row.seed,
         max_tokens: row.max_tokens,
+        max_total_tokens: row.max_total_tokens,
         metadata: row.metadata,
         execution_origin: nonempty(row.execution_origin),
         created_at: row.created_at,

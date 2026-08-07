@@ -13,6 +13,7 @@ import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
+import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
@@ -223,6 +224,8 @@ def snapshotJson : String :=
       ++ captureScopeCasesJson ++ ","
     ++ "\"capture_order_cases\":"
       ++ captureOrderCasesJson ++ ","
+    ++ "\"aggregate_token_budget_cases\":"
+      ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
