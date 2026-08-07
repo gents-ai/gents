@@ -442,7 +442,12 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     )
     .await;
     wait_for_request_state(node.as_ref(), &first_request_doc_id, "processing").await;
-    wait_for_chat_request_count(&mock_endpoint, 1).await;
+    // The property under test starts when the first request owns the sole
+    // backend permit. Waiting for the mock server to observe bytes adds the
+    // unrelated synchronous capture write and HTTP scheduler to test setup;
+    // under the full parallel suite that made this capacity test time out
+    // before it reached its actual assertion (#1060).
+    wait_for_inference_call_state(node.as_ref(), "req-shutdown-running", "running").await;
 
     let queued_request_doc_id = create_agent_request_for_behavior(
         node.as_ref(),

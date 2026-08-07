@@ -18,9 +18,7 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::rendered_request::{
-    RenderedCompletionRequest, RenderedRequestCaptureFactory, RenderedRequestCaptureSink,
-};
+use gents::rendered_request::RenderedCompletionRequest;
 use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
 use serde_json::Value;
 
@@ -112,8 +110,14 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
     assert!(
-        provenance["assembly_trace"]["effective_messages"].is_array(),
-        "the manifest must carry the leak set: {provenance}"
+        provenance["assembly_trace"]
+            .get("effective_messages")
+            .is_none(),
+        "a reconstructible turn must not duplicate its full transcript: {provenance}"
+    );
+    assert_eq!(
+        provenance["assembly_trace"]["effective_message_count"], 1,
+        "the compact trace still validates positional overlays"
     );
 
     agent.shutdown().await;
@@ -138,7 +142,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
         &db,
         "rendered-request-capture-faults",
         backend.endpoint(),
-        Some(failing_capture_factory()),
+        Some("injected rendered-request capture failure"),
     )
     .await;
 
@@ -1167,17 +1171,6 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     }
 }
 
-/// A sink that always fails, standing in for a DefraDB outage or a rejected
-/// integrity check.
-fn failing_capture_factory() -> RenderedRequestCaptureFactory {
-    Arc::new(|_context| {
-        let sink: RenderedRequestCaptureSink = Arc::new(|_rendered| {
-            Box::pin(async { anyhow::bail!("injected rendered-request capture failure") })
-        });
-        sink
-    })
-}
-
 /// How many durable compaction entries a session has — the evidence that the
 /// pre-request summarizer actually summarized rather than being skipped by the
 /// gate.
@@ -1366,9 +1359,9 @@ async fn boot_capture_agent(
     db: &crate::support::TestDb,
     test_name: &str,
     endpoint: &str,
-    capture_factory: Option<RenderedRequestCaptureFactory>,
+    capture_failure: Option<&str>,
 ) -> BootedAgent {
-    boot_capture_agent_with(db, test_name, endpoint, capture_factory, |behavior| {
+    boot_capture_agent_with(db, test_name, endpoint, capture_failure, |behavior| {
         behavior
     })
     .await
@@ -1380,7 +1373,7 @@ async fn boot_capture_agent_with(
     db: &crate::support::TestDb,
     test_name: &str,
     endpoint: &str,
-    capture_factory: Option<RenderedRequestCaptureFactory>,
+    capture_failure: Option<&str>,
     customize: impl FnOnce(BehaviorBuilder) -> BehaviorBuilder,
 ) -> BootedAgent {
     upsert_capture_backend(db.node.as_ref(), endpoint).await;
@@ -1390,8 +1383,8 @@ async fn boot_capture_agent_with(
         .identity(identity)
         .default_behavior_id(CAPTURE_BEHAVIOR_ID)
         .tool_ceiling(ToolCeiling::meta_only());
-    if let Some(factory) = capture_factory {
-        builder = builder.rendered_request_capture_factory(factory);
+    if let Some(message) = capture_failure {
+        builder = builder.fail_rendered_request_capture_for_test(message);
     }
     let behavior = builder
         .behavior(CAPTURE_BEHAVIOR_ID)

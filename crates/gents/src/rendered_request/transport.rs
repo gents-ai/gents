@@ -40,9 +40,9 @@
 //! scope, which means no request is running in this task at all.
 //!
 //! One armed attempt may legitimately produce several outbound bodies — rig's
-//! SSE event source reconnects by re-posting the request — so a send after the
-//! arm was claimed re-captures under the same coordinates. Identical bytes make
-//! that idempotent; changed bytes make it the integrity error it should be.
+//! SSE event source reconnects by re-posting the request. Once the first body
+//! is durable, an exact resend reuses that result; changed bytes go back through
+//! the sink and become the integrity error they should be.
 
 use std::fmt;
 use std::future::Future;
@@ -53,6 +53,7 @@ use rig::http_client::{
     StreamingResponse,
 };
 use rig::wasm_compat::WasmCompatSend;
+use sha2::{Digest, Sha256};
 
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
@@ -80,6 +81,7 @@ enum CaptureDecision {
         scope: std::sync::Arc<RequestCaptureScope>,
         pending: PendingCapture,
         source: RenderedRequestSource,
+        durable_body_fingerprint: Option<[u8; 32]>,
     },
     /// A completion body inside a request that armed nothing. Refuse.
     Refuse {
@@ -100,10 +102,20 @@ fn decide(path: &str) -> CaptureDecision {
         return CaptureDecision::Forward;
     };
     match claim {
-        CaptureClaim::Armed(pending) | CaptureClaim::Resend(pending) => CaptureDecision::Capture {
+        CaptureClaim::Armed(pending) => CaptureDecision::Capture {
             scope,
             pending,
             source,
+            durable_body_fingerprint: None,
+        },
+        CaptureClaim::Resend {
+            pending,
+            durable_body_fingerprint,
+        } => CaptureDecision::Capture {
+            scope,
+            pending,
+            source,
+            durable_body_fingerprint,
         },
         CaptureClaim::Unexplained => CaptureDecision::Refuse {
             scope,
@@ -114,7 +126,7 @@ fn decide(path: &str) -> CaptureDecision {
 
 /// Persist the body, or produce the transport error that refuses the send.
 async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_client::Result<()> {
-    let (scope, pending, source) = match decision {
+    let (scope, pending, source, durable_body_fingerprint) = match decision {
         CaptureDecision::Forward => return Ok(()),
         CaptureDecision::Refuse { scope, path } => {
             tracing::error!(
@@ -132,14 +144,36 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             scope,
             pending,
             source,
-        } => (scope, pending, source),
+            durable_body_fingerprint,
+        } => (scope, pending, source, durable_body_fingerprint),
     };
+
+    let mut hasher = Sha256::new();
+    hasher.update(match source {
+        RenderedRequestSource::OpenAiResponses => [0],
+        RenderedRequestSource::OpenAiChatCompletions => [1],
+    });
+    hasher.update(body.as_ref());
+    let body_fingerprint: [u8; 32] = hasher.finalize().into();
+    if durable_body_fingerprint == Some(body_fingerprint) {
+        tracing::debug!(
+            capture_scope = %pending.capture_scope,
+            turn_index = pending.turn_index,
+            attempt = pending.attempt,
+            "reusing durable rendered-request capture for byte-identical transport resend"
+        );
+        return Ok(());
+    }
 
     let capture_scope = pending.capture_scope.clone();
     let turn_index = pending.turn_index;
     let attempt = pending.attempt;
+    let claimed = pending.clone();
     match scope::capture_body(scope.as_ref(), pending, source, body.as_ref()).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            scope.mark_claimed_durable(&claimed, body_fingerprint);
+            Ok(())
+        }
         Err((stage, error)) => {
             // Never log the payload: this record exists precisely because the
             // body is the whole conversation.
@@ -571,10 +605,10 @@ mod tests {
 
     /// rig's SSE event source reconnects by re-posting the same request. That
     /// second body has no arm of its own, but it is not unexplained: it belongs
-    /// to the attempt already claimed, so it re-captures under the same
-    /// coordinates (idempotent for identical bytes) and is forwarded.
+    /// to the attempt already claimed. Once the first write is durable, an
+    /// exact resend reuses it instead of paying for another synchronous write.
     #[tokio::test]
-    async fn a_transport_resend_recaptures_the_same_attempt_rather_than_being_refused() {
+    async fn a_transport_resend_reuses_the_durable_capture_rather_than_being_refused() {
         let inner = CountingInner::default();
         let client = RenderedRequestCapturingHttpClient::new(inner.clone());
         let (sink, seen) = recording_sink();
@@ -593,13 +627,44 @@ mod tests {
         .await;
 
         let seen = seen.lock().expect("seen");
-        assert_eq!(seen.len(), 2, "both bodies must be offered to the sink");
-        assert_eq!(seen[0].capture_key, seen[1].capture_key);
         assert_eq!(
-            (seen[1].turn_index, seen[1].attempt),
+            seen.len(),
+            1,
+            "an identical resend must not rewrite DefraDB"
+        );
+        assert_eq!(
+            (seen[0].turn_index, seen[0].attempt),
             (2, 1),
             "a resend keeps the coordinates of the attempt it re-posts"
         );
+        assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_changed_transport_resend_still_reaches_the_integrity_sink() {
+        let inner = CountingInner::default();
+        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+        let (sink, seen) = recording_sink();
+        let scope = test_scope(context(), sink);
+
+        scope_request(scope, async {
+            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
+            let _ = HttpClientExt::send_streaming(
+                &client,
+                responses_request(json!({"input": [{"role": "user", "content": "first"}]})),
+            )
+            .await
+            .expect("first send");
+            let _ = HttpClientExt::send_streaming(
+                &client,
+                responses_request(json!({"input": [{"role": "user", "content": "changed"}]})),
+            )
+            .await
+            .expect("recording sink accepts changed test body");
+        })
+        .await;
+
+        assert_eq!(seen.lock().expect("seen").len(), 2);
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 

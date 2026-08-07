@@ -75,8 +75,10 @@ type RenderedRequest @branchable {
     # the loop assembled.
     request_json: String @immutable
     # Query indexes only: dedup, "every capture sharing this tool surface", and
-    # prefix-stability analysis. Explicitly NOT an integrity mechanism — see the
-    # field commit CID note above.
+    # prefix-stability analysis. prompt_hash covers `messages` for Chat
+    # Completions and the complete `instructions` + `input` prompt surface for
+    # Responses. Explicitly NOT an integrity mechanism — see the field commit
+    # CID note above.
     prompt_hash: String @index @immutable
     tools_hash: String @index @immutable
     # Versioned provenance manifest. Never an overloaded empty map: absent

@@ -1158,10 +1158,53 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         vec![ToolResultContent::text("ECHOED")],
         "the trace must carry the threaded tool-result content verbatim"
     );
-    assert!(matches!(
-        repaired_trace.effective_messages[threaded.message_index],
-        Message::User { .. }
+    assert!(
+        repaired_trace.effective_message_count > threaded.message_index,
+        "overlay positions must fit the reconstructible native list"
+    );
+    assert!(
+        repaired_trace.effective_messages.is_none(),
+        "an ordinary turn must not duplicate the full transcript"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn capture_trace_retains_ephemeral_request_context() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let traces: Arc<Mutex<Vec<AssemblyTrace>>> = Arc::new(Mutex::new(Vec::new()));
+    let traces_for_sink = Arc::clone(&traces);
+    let mut loop_config = config(0);
+    loop_config.context_message = Some(Message::user(
+        "<context>\nrendered-at-2026-08-07T00:00:00Z\n</context>",
     ));
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, trace| {
+        let traces = Arc::clone(&traces_for_sink);
+        Box::pin(async move {
+            traces.lock().await.push(trace);
+            Ok(())
+        })
+    }));
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model,
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+    assert_eq!(collected.error, None);
+
+    let traces = traces.lock().await;
+    let effective = traces[0]
+        .effective_messages
+        .as_ref()
+        .expect("dynamic request context requires the native oracle");
+    assert!(effective.iter().any(is_request_context_message));
 }
 
 /// The sibling of the test above for the *other* repair branch.
@@ -1286,6 +1329,52 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
         collected.final_text, None,
         "no turn may complete on a provider response nothing captured"
     );
+}
+
+/// The same backstop must fire when the provider returns EOF without yielding
+/// an item; otherwise the item-level check is never reached and the loop can
+/// misclassify an uncaptured send as an ordinary empty completion.
+#[tokio::test(start_paused = true)]
+async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() {
+    use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
+    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+
+    let model = ScriptedModel::new(Vec::new());
+    let context = RenderedRequestContext {
+        request_doc_id: "doc-empty".to_string(),
+        request_id: "req-empty".to_string(),
+        agent_did: "did:key:agent".to_string(),
+        requester_did: String::new(),
+        behavior_id: "general".to_string(),
+        session_id: "session-empty".to_string(),
+        model_name: "model".to_string(),
+    };
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(context, sink);
+    let mut loop_config = config(0);
+    loop_config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+        CaptureScopeKind::Inference,
+    ));
+
+    let collected = scope_request(scope, async {
+        collect_scripted_stream(run_loop_stream(
+            model,
+            None,
+            Message::user("hi"),
+            Vec::new(),
+            Arc::new(Vec::new()),
+            loop_config,
+        ))
+        .await
+    })
+    .await;
+
+    let error = collected
+        .error
+        .as_deref()
+        .expect("an empty uncaptured response must terminate the turn");
+    assert!(error.contains("missing its capturing transport"), "{error}");
+    assert_eq!(collected.final_text, None);
 }
 
 #[tokio::test(start_paused = true)]

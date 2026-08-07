@@ -304,7 +304,8 @@ session transcript/compaction boundaries, resolved-runtime fingerprint, and a
 versioned leak set sufficient for replay, including #988's effective per-turn
 compaction result and output-token clamp. `prompt_hash` and `tools_hash` remain
 query indexes produced by the existing canonical-JSON hasher; they are not a
-whole-request integrity mechanism.
+whole-request integrity mechanism. For Responses, the prompt index covers both
+top-level `instructions` and `input`; for Chat Completions it covers `messages`.
 
 **Install the capture sink by default.** `rendered_request_capture_factory`
 stops defaulting to `None`.

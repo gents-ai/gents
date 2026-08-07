@@ -243,6 +243,11 @@ where
         let mut aggregated_usage = Usage::new();
         let mut current_turn: usize = 0;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
+        // Rendered request context can contain `now` and live collection data;
+        // per-turn compaction can add a model-generated summary. Neither exists
+        // in a durable source row, so this and every later turn must retain the
+        // full native list once either enters these in-memory vectors.
+        let mut effective_messages_are_ephemeral = config.context_message.is_some();
 
         'turns: loop {
             if current_turn > config.max_turns + 1 {
@@ -263,7 +268,7 @@ where
             current_turn += 1;
 
             let turn_index = current_turn - 1;
-            let mut request = build_budgeted_request(
+            let (mut request, compacted_this_turn) = build_budgeted_request(
                 &model,
                 &mut history,
                 &mut new_messages,
@@ -272,6 +277,7 @@ where
                 turn_index,
             )
             .await?;
+            effective_messages_are_ephemeral |= compacted_this_turn;
 
             let current_prompt = new_messages
                 .last()
@@ -314,10 +320,16 @@ where
                         // message list: post sanitization, post request-context
                         // filtering, and post any per-turn compaction (which
                         // rewrote both vectors in place).
-                        let assembly_trace = AssemblyTrace::from_effective_messages(
-                            build_path,
-                            history.iter().chain(new_messages.iter()).cloned().collect(),
-                        );
+                        let effective_messages =
+                            history.iter().chain(new_messages.iter()).cloned().collect();
+                        let assembly_trace = if effective_messages_are_ephemeral {
+                            AssemblyTrace::from_effective_messages(build_path, effective_messages)
+                        } else {
+                            AssemblyTrace::from_reconstructible_messages(
+                                build_path,
+                                effective_messages,
+                            )
+                        };
                         on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
                             .await
                             .map_err(|error| {
@@ -423,7 +435,7 @@ where
             while let Some(item) = stream.next().await {
                 let item = match item {
                     Ok(item) => {
-                        if !saw_stream_item && crate::rendered_request::scope::pending_is_armed() {
+                        if !saw_stream_item {
                             // A provider response arrived while this attempt's
                             // capture was still waiting to be claimed, which
                             // means the send did not travel through the
@@ -431,13 +443,7 @@ where
                             // stack, and the only honest response is to stop:
                             // silently continuing would produce a turn whose
                             // provider input is not durable anywhere.
-                            Err(StreamingError::Completion(CompletionError::ProviderError(
-                                format!(
-                                    "provider response for turn {turn_index} attempt {attempt} \
-                                     arrived without a durable rendered-request capture; the \
-                                     completion client is missing its capturing transport"
-                                ),
-                            )))?;
+                            ensure_rendered_request_was_captured(turn_index, attempt)?;
                         }
                         saw_stream_item = true;
                         item
@@ -718,6 +724,13 @@ where
                         }
                     }
                 }
+            }
+
+            // An empty stream never enters the item branch above. It is still
+            // proof that `model.stream` dispatched, so it must not reach the
+            // ordinary no-output retry path while this attempt remains armed.
+            if !saw_stream_item {
+                ensure_rendered_request_was_captured(turn_index, attempt)?;
             }
 
             if pending_results.is_empty() && turn_text.trim().is_empty() {
@@ -1276,6 +1289,22 @@ fn completion_request_exceeds_budget(request: &CompletionRequest, config: &LoopC
     )
 }
 
+fn ensure_rendered_request_was_captured(
+    turn_index: usize,
+    attempt: u32,
+) -> Result<(), StreamingError> {
+    if crate::rendered_request::scope::pending_is_armed() {
+        return Err(StreamingError::Completion(CompletionError::ProviderError(
+            format!(
+                "provider response for turn {turn_index} attempt {attempt} \
+                 arrived without a durable rendered-request capture; the \
+                 completion client is missing its capturing transport"
+            ),
+        )));
+    }
+    Ok(())
+}
+
 async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<Message>,
@@ -1283,7 +1312,7 @@ async fn build_budgeted_request<M: CompletionModel>(
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
     turn_index: usize,
-) -> Result<CompletionRequest, StreamingError> {
+) -> Result<(CompletionRequest, bool), StreamingError> {
     let current_prompt = new_messages
         .last()
         .cloned()
@@ -1293,10 +1322,10 @@ async fn build_budgeted_request<M: CompletionModel>(
     clamp_request_output_budget(&mut request, config);
 
     let Some(compactor) = config.turn_compactor.as_ref() else {
-        return Ok(request);
+        return Ok((request, false));
     };
     if !completion_request_exceeds_budget(&request, config) {
-        return Ok(request);
+        return Ok((request, false));
     }
 
     let provider_messages = history
@@ -1351,7 +1380,7 @@ async fn build_budgeted_request<M: CompletionModel>(
         )));
     }
 
-    Ok(rebuilt)
+    Ok((rebuilt, true))
 }
 
 async fn build_request<M: CompletionModel>(

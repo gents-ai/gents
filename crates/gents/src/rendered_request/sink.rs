@@ -381,7 +381,7 @@ fn single_mutation_result(data: &Value) -> Option<&Value> {
 
 /// The production capture factory: one sink per request context, all writing
 /// through the same node under the requesting agent's DID.
-pub fn defra_rendered_request_capture_factory(
+pub(crate) fn defra_rendered_request_capture_factory(
     node: Arc<EmbeddedNode>,
 ) -> RenderedRequestCaptureFactory {
     Arc::new(move |context: RenderedRequestContext| {

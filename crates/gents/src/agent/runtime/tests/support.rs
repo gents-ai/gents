@@ -3,7 +3,7 @@ use super::super::*;
 use crate::identity::KeyIdentity;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -141,8 +141,6 @@ pub(super) struct MockModelEndpoint {
     pub(super) endpoint: String,
     pub(super) port: u16,
     pub(super) stop: Arc<AtomicBool>,
-    pub(super) chat_requests: Arc<AtomicUsize>,
-    pub(super) chat_requests_changed: Arc<tokio::sync::Notify>,
     pub(super) handle: Option<JoinHandle<()>>,
 }
 
@@ -161,10 +159,6 @@ impl MockModelEndpoint {
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = stop.clone();
-        let chat_requests = Arc::new(AtomicUsize::new(0));
-        let chat_requests_for_thread = chat_requests.clone();
-        let chat_requests_changed = Arc::new(tokio::sync::Notify::new());
-        let chat_requests_changed_for_thread = chat_requests_changed.clone();
         let model_name = model_name.to_string();
         let handle = thread::spawn(move || {
             while !stop_for_thread.load(Ordering::Relaxed) {
@@ -178,8 +172,6 @@ impl MockModelEndpoint {
                             }
                         };
                         if request.method == "POST" && request.path == "/v1/chat/completions" {
-                            chat_requests_for_thread.fetch_add(1, Ordering::SeqCst);
-                            chat_requests_changed_for_thread.notify_waiters();
                             if blocking_chat {
                                 while !stop_for_thread.load(Ordering::Relaxed) {
                                     thread::sleep(Duration::from_millis(25));
@@ -211,18 +203,12 @@ impl MockModelEndpoint {
             endpoint: format!("http://127.0.0.1:{port}/v1"),
             port,
             stop,
-            chat_requests,
-            chat_requests_changed,
             handle: Some(handle),
         })
     }
 
     pub(super) fn endpoint(&self) -> &str {
         &self.endpoint
-    }
-
-    pub(super) fn chat_request_count(&self) -> usize {
-        self.chat_requests.load(Ordering::SeqCst)
     }
 }
 
@@ -467,32 +453,6 @@ pub(super) async fn create_agent_request_for_behavior(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .expect("AgentRequest _docID")
-}
-
-pub(super) async fn wait_for_chat_request_count(endpoint: &MockModelEndpoint, expected: usize) {
-    // The full package suite runs more than a thousand tests concurrently. A
-    // ready request may be starved for well over 15 seconds while the unit
-    // tests contend for executor time and DefraDB resources, especially now
-    // that persist-before-send capture adds a write before this condition
-    // becomes observable. This is setup synchronization, not the behavior
-    // under test: the caller keeps the semantic shutdown deadline at two
-    // seconds after the request reaches the endpoint.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    loop {
-        let notified = endpoint.chat_requests_changed.notified();
-        let actual = endpoint.chat_request_count();
-        if actual >= expected {
-            return;
-        }
-        let now = tokio::time::Instant::now();
-        assert!(
-            now < deadline,
-            "timed out waiting for {expected} chat request(s), observed {actual}"
-        );
-        tokio::time::timeout_at(deadline, notified)
-            .await
-            .unwrap_or(());
-    }
 }
 
 pub(super) async fn wait_for_inference_call_state(

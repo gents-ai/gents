@@ -200,11 +200,10 @@ impl Gents {
             process_state_observer: options.process_state_observer,
             runtime_snapshot_observer: options.runtime_snapshot_observer,
             startup_readiness: options.startup_readiness,
-            // Capture is on by default (#840): a provider call with no durable
-            // rendered input is a log entry, not a fact record. The builder
-            // override (`GentsBuilder::rendered_request_capture_factory`) exists
-            // so tests can substitute a recording or fault-injecting sink, not
-            // so production can opt out.
+            // Capture is mandatory (#840): a provider call with no durable
+            // rendered input is a log entry, not a fact record. The public
+            // builder exposes only a fail-closed fault-injection hook, never an
+            // arbitrary sink that could acknowledge without persisting.
             rendered_request_capture_factory: Some(rendered_request_capture_factory),
             manual_trigger_handle: Arc::new(OnceCell::new()),
         })

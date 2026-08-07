@@ -207,6 +207,9 @@ values do not need duplicate columns because they are derivable from
 `prompt_hash` and `tools_hash` are retained **only as query indexes** — finding
 every capture sharing a tool surface, dedup, and prefix-stability analysis for
 #723. They are explicitly *not* the integrity mechanism; see the section above.
+`prompt_hash` covers `messages` for Chat Completions and the complete
+`instructions` + `input` prompt surface for Responses; hashing `input` alone
+would collapse distinct Codex system prompts.
 Anything that treats them as proof of content is a bug. There is deliberately
 no `request_hash`: the field commit for `request_json` is the content address,
 and duplicating it in a column would create a second source of truth that can
@@ -762,9 +765,12 @@ above, this section wins.
      while persistence re-derives from `AgentToolCall.result` with
      `TruncationMode::Head`, different limits, and
      `model_observation_for_tool_result`;
-  3. the full effective post-compaction message list — per-turn compaction is a
-     STICKY mutation (`*history = compacted; *new_messages = vec![…]`,
-     `loop_stream.rs:1274-1275`), so one turn's summary governs every later turn;
+  3. the effective native message list whenever it contains runtime-only
+     content — rendered request context can read `now` and live collection
+     state, and per-turn compaction is a STICKY mutation
+     (`*history = compacted; *new_messages = vec![…]`), so one turn's summary
+     governs every later turn. Ordinary reconstructible turns omit this second
+     full copy and retain only the message count plus positional overlays;
   4. the `build_path` discriminator — repair calls `build_request` directly
      (`loop_stream.rs:353,447`) and never applies the output clamp, so a
      repaired attempt carries raw `max_tokens` while the original carries the

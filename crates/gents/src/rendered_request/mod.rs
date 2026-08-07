@@ -64,7 +64,8 @@ pub mod sink;
 pub(crate) mod transport;
 
 pub use scope::CaptureScopeKind;
-pub use sink::{defra_rendered_request_capture_factory, DefraRenderedRequestSink};
+pub(crate) use sink::defra_rendered_request_capture_factory;
+pub use sink::DefraRenderedRequestSink;
 pub use transport::RenderedRequestCapturingHttpClient;
 
 /// Capture format version stamped onto every row. Bump when the *set of
@@ -79,7 +80,7 @@ pub const PROVENANCE_MANIFEST_VERSION: u32 = 1;
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
 /// gains pinned config CIDs does not have to re-version the trace.
-pub const ASSEMBLY_TRACE_VERSION: u32 = 1;
+pub const ASSEMBLY_TRACE_VERSION: u32 = 2;
 
 /// Prefix on every capture key. Bound to the *key derivation*, not to
 /// `CAPTURE_VERSION`: adding a column must not silently re-key existing facts.
@@ -98,13 +99,13 @@ const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
     ),
 ];
 
-pub type RenderedRequestCaptureSink = Arc<
+pub(crate) type RenderedRequestCaptureSink = Arc<
     dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
         + Send
         + Sync,
 >;
 
-pub type RenderedRequestCaptureFactory =
+pub(crate) type RenderedRequestCaptureFactory =
     Arc<dyn Fn(RenderedRequestContext) -> RenderedRequestCaptureSink + Send + Sync>;
 
 /// The provider wire shape a captured body was actually sent on.
@@ -226,7 +227,9 @@ pub struct ThreadedToolResult {
 /// 1. `assistant_message_ids` — provider-assigned, persisted as `None`.
 /// 2. `threaded_tool_results` — the loop and the persistence path derive
 ///    different text from different sources.
-/// 3. `effective_messages` — per-turn compaction is a *sticky* mutation
+/// 3. `effective_messages` — when a rendered request-context message or
+///    per-turn compaction adds ephemeral content. Compaction is a *sticky*
+///    mutation
 ///    (`*history = compacted; *new_messages = vec![compacted_prompt]`,
 ///    `agent/loop_stream.rs:1274-1275`), so one turn's model-generated summary
 ///    governs every later turn of the same request, and that summary is never
@@ -234,33 +237,38 @@ pub struct ThreadedToolResult {
 ///    produce the same words.
 /// 4. `build_path` — see `AssemblyBuildPath`.
 ///
-/// `assistant_message_ids` and `threaded_tool_results` are projections of
-/// `effective_messages`, derived by the one constructor
-/// (`AssemblyTrace::from_effective_messages`) so they cannot drift from it.
+/// `assistant_message_ids` and `threaded_tool_results` are projections of the
+/// effective message list, derived by the same constructor so they cannot drift
+/// from it.
 /// They are carried explicitly because a reconstructor rebuilds its message
 /// list from `AgentMessage` rows and needs these as an *overlay* keyed by
 /// position and call id; `effective_messages` is the oracle it checks itself
-/// against.
+/// against. `effective_messages` is present only when that list contains a
+/// rendered request-context message (which can read `now` and live collection
+/// data) or a model-generated per-turn compaction summary. Otherwise the
+/// durable transcript plus these overlays reconstructs it exactly.
 ///
 /// ## Size
 ///
-/// `effective_messages` is the conversation again, in native form, next to the
-/// provider-wire copy in `request_json`. That is deliberate — the wire form is
-/// not invertible (ChatGPT-Codex hoists system text into `instructions`, and
-/// reasoning blocks, tool-call signatures, and `additional_params` do not
-/// survive every conversion) — but it roughly doubles an already quadratic
-/// per-turn payload. Compressing or content-addressing the fact record is the
-/// known optimization; dropping the list is not, because nothing else records
-/// a per-turn compaction summary.
+/// Ordinary turns do not duplicate the conversation next to the provider-wire
+/// copy in `request_json`; their native list is reconstructible from durable
+/// rows plus the overlays. Once request-context rendering or per-turn
+/// compaction introduces ephemeral content, the full native list becomes the
+/// oracle and is retained on that and later turns. Compacted lists are bounded
+/// by the context window rather than growing with the unabridged session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyTrace {
     pub trace_version: u32,
     pub build_path: AssemblyBuildPath,
-    /// The full effective provider message list at capture time — post
-    /// sanitization, post request-context filtering, and post any per-turn
-    /// compaction. Native `Message`s, not provider wire shapes: this is the
-    /// *input* to assembly, whereas `request_json` is its output.
-    pub effective_messages: Vec<Message>,
+    /// Number of native messages passed to assembly. This validates positional
+    /// overlays even when the reconstructible common-path list is omitted.
+    pub effective_message_count: usize,
+    /// The full effective provider message list at capture time, retained only
+    /// after request-context rendering or per-turn compaction introduces
+    /// ephemeral content. Native `Message`s, not provider wire shapes: this is
+    /// the *input* to assembly, whereas `request_json` is its output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_messages: Option<Vec<Message>>,
     pub assistant_message_ids: Vec<AssistantMessageId>,
     pub threaded_tool_results: Vec<ThreadedToolResult>,
 }
@@ -272,6 +280,23 @@ impl AssemblyTrace {
     pub fn from_effective_messages(
         build_path: AssemblyBuildPath,
         effective_messages: Vec<Message>,
+    ) -> Self {
+        Self::from_messages(build_path, effective_messages, true)
+    }
+
+    /// Build the compact common-path trace when the native list can be rebuilt
+    /// from durable transcript/configuration documents plus the overlays.
+    pub(crate) fn from_reconstructible_messages(
+        build_path: AssemblyBuildPath,
+        effective_messages: Vec<Message>,
+    ) -> Self {
+        Self::from_messages(build_path, effective_messages, false)
+    }
+
+    fn from_messages(
+        build_path: AssemblyBuildPath,
+        effective_messages: Vec<Message>,
+        retain_effective_messages: bool,
     ) -> Self {
         let mut assistant_message_ids = Vec::new();
         let mut threaded_tool_results = Vec::new();
@@ -301,10 +326,12 @@ impl AssemblyTrace {
             }
         }
 
+        let effective_message_count = effective_messages.len();
         Self {
             trace_version: ASSEMBLY_TRACE_VERSION,
             build_path,
-            effective_messages,
+            effective_message_count,
+            effective_messages: retain_effective_messages.then_some(effective_messages),
             assistant_message_ids,
             threaded_tool_results,
         }
@@ -421,6 +448,10 @@ pub(crate) struct RenderedRequestComponents {
     /// below are query conveniences derived from it.
     pub(crate) request_json: Value,
     pub(crate) messages_json: Value,
+    /// Complete provider prompt surface used for `prompt_hash`. Responses
+    /// carries system text separately in `instructions`; Chat Completions has
+    /// no prompt-bearing field outside `messages`.
+    pub(crate) prompt_json: Value,
     pub(crate) tools_json: Value,
     pub(crate) tool_choice_json: Value,
     pub(crate) sampling_json: Value,
@@ -438,6 +469,13 @@ impl RenderedRequestComponents {
         let field = |name: &str| request_json.get(name).cloned();
         let messages_json =
             field(source.messages_field()).unwrap_or_else(|| Value::Array(Vec::new()));
+        let prompt_json = match source {
+            RenderedRequestSource::OpenAiResponses => json!({
+                "instructions": field("instructions").unwrap_or(Value::Null),
+                "input": messages_json.clone(),
+            }),
+            RenderedRequestSource::OpenAiChatCompletions => messages_json.clone(),
+        };
         let tools_json = field("tools").unwrap_or_else(|| Value::Array(Vec::new()));
         let tool_choice_json = field("tool_choice").unwrap_or(Value::Null);
         let sampling_json = json!({
@@ -455,6 +493,7 @@ impl RenderedRequestComponents {
         Self {
             request_json,
             messages_json,
+            prompt_json,
             tools_json,
             tool_choice_json,
             sampling_json,
@@ -493,7 +532,9 @@ pub struct RenderedCompletionRequest {
     pub tools_json: Value,
     pub tool_choice_json: Value,
     pub sampling_json: Value,
-    /// Query index over `messages_json`. Not an integrity mechanism.
+    /// Query index over the complete provider prompt surface: `messages` for
+    /// Chat Completions, and `instructions` plus `input` for Responses. Not an
+    /// integrity mechanism.
     pub prompt_hash: String,
     /// Query index over `tools_json`. Not an integrity mechanism.
     pub tools_hash: String,
@@ -516,12 +557,13 @@ pub(crate) fn build_rendered_completion_request(
     let RenderedRequestComponents {
         request_json,
         messages_json,
+        prompt_json,
         tools_json,
         tool_choice_json,
         sampling_json,
     } = components;
 
-    let prompt_hash = sha256_canonical_json(&messages_json)?;
+    let prompt_hash = sha256_canonical_json(&prompt_json)?;
     let tools_hash = sha256_canonical_json(&tools_json)?;
     let capture_key = capture_key(
         &context.agent_did,
@@ -871,6 +913,34 @@ mod tests {
         assert_eq!(components.sampling_json["max_tokens"], 4096);
     }
 
+    #[test]
+    fn responses_prompt_hash_includes_hoisted_instructions() {
+        let build_responses = |instructions: &str| {
+            build_rendered_completion_request(
+                &context(),
+                "inference.1",
+                RenderedRequestSource::OpenAiResponses,
+                0,
+                0,
+                empty_trace(),
+                RenderedRequestComponents::from_provider_body(
+                    json!({
+                        "model": "gpt-5.2",
+                        "instructions": instructions,
+                        "input": [{"role": "user", "content": "same input"}],
+                    }),
+                    RenderedRequestSource::OpenAiResponses,
+                ),
+            )
+            .expect("rendered Responses request")
+        };
+
+        let first = build_responses("first system prompt");
+        let second = build_responses("different system prompt");
+        assert_eq!(first.messages_json, second.messages_json);
+        assert_ne!(first.prompt_hash, second.prompt_hash);
+    }
+
     /// Codex deletes `max_output_tokens`, `temperature`, and `top_p` from the
     /// body. The row has to say `null`, not the value the loop assembled.
     #[test]
@@ -1081,16 +1151,20 @@ mod tests {
         let trace =
             AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, messages.clone());
 
-        assert_eq!(trace.effective_messages, messages);
+        let effective_messages = trace
+            .effective_messages
+            .as_ref()
+            .expect("explicit oracle trace");
+        assert_eq!(effective_messages, &messages);
         for overlay in &trace.assistant_message_ids {
             assert!(matches!(
-                &trace.effective_messages[overlay.message_index],
+                &effective_messages[overlay.message_index],
                 Message::Assistant { id: Some(id), .. } if *id == overlay.message_id
             ));
         }
         for overlay in &trace.threaded_tool_results {
             assert!(matches!(
-                &trace.effective_messages[overlay.message_index],
+                &effective_messages[overlay.message_index],
                 Message::User { .. }
             ));
         }
@@ -1109,8 +1183,26 @@ mod tests {
         let trace =
             AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, compacted.clone());
 
-        assert_eq!(trace.effective_messages, compacted);
+        assert_eq!(trace.effective_messages, Some(compacted));
         assert_eq!(trace.trace_version, ASSEMBLY_TRACE_VERSION);
+    }
+
+    #[test]
+    fn reconstructible_trace_does_not_duplicate_message_bodies() {
+        let marker = "ordinary-message-body-".repeat(1_000);
+        let messages = vec![Message::user(marker.clone()), Message::assistant("done")];
+        let compact = AssemblyTrace::from_reconstructible_messages(
+            AssemblyBuildPath::Budgeted,
+            messages.clone(),
+        );
+        let oracle = AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, messages);
+
+        let compact_json = serde_json::to_string(&compact).expect("compact trace");
+        let oracle_json = serde_json::to_string(&oracle).expect("oracle trace");
+        assert_eq!(compact.effective_message_count, 2);
+        assert!(compact.effective_messages.is_none());
+        assert!(!compact_json.contains(&marker));
+        assert!(oracle_json.len() > compact_json.len() + marker.len());
     }
 
     #[test]

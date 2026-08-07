@@ -113,12 +113,16 @@ struct ScopeState {
     /// rig's SSE event source reconnects by re-posting the same request
     /// (`http_client::sse::GenericEventSource::create_response_future`), so one
     /// armed attempt can produce more than one outbound completion body. Those
-    /// resends carry identical bytes, and re-capturing them under the same
-    /// coordinates is idempotent — while a resend whose body *changed* is
-    /// exactly the integrity violation the sink must reject. Without this, a
+    /// resends carry identical bytes, so a successful first capture can be
+    /// reused — while a resend whose body *changed* is exactly the integrity
+    /// violation the sink must reject. Without this, a
     /// resend would be a completion body with no arm, which the transport now
     /// refuses to send.
     claimed: Option<PendingCapture>,
+    /// Fingerprint of the exact transport body whose durable write succeeded
+    /// for `claimed`. A byte-identical SSE reconnect can forward immediately;
+    /// a changed body still reaches the sink and its integrity check.
+    durable_body_fingerprint: Option<[u8; 32]>,
     /// Every arm this scope has seen, in order. Tests need this because an arm
     /// the transport never claims is silently replaced by the next one, so a
     /// test that only reads `pending` cannot see a loop that armed and then was
@@ -173,6 +177,21 @@ impl RequestCaptureScope {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    /// Remember that the exact body for the currently claimed attempt is
+    /// durable. Coordinate checks prevent a late completion from poisoning a
+    /// newer arm's reconnect cache.
+    pub(crate) fn mark_claimed_durable(&self, pending: &PendingCapture, fingerprint: [u8; 32]) {
+        let mut state = self.lock();
+        let still_current = state.claimed.as_ref().is_some_and(|claimed| {
+            claimed.capture_scope == pending.capture_scope
+                && claimed.turn_index == pending.turn_index
+                && claimed.attempt == pending.attempt
+        });
+        if still_current {
+            state.durable_body_fingerprint = Some(fingerprint);
+        }
+    }
 }
 
 tokio::task_local! {
@@ -223,6 +242,7 @@ pub(crate) fn arm(
         // belong to it. Clearing here also keeps at most one `AssemblyTrace` —
         // a whole conversation — alive per scope instead of two.
         state.claimed = None;
+        state.durable_body_fingerprint = None;
         state.pending.replace(pending).is_some()
     };
     if replaced {
@@ -243,9 +263,12 @@ pub(crate) enum CaptureClaim {
     Armed(PendingCapture),
     /// No arm is pending, but this scope has already claimed one: a
     /// transport-level resend of an attempt already captured (an SSE
-    /// reconnect). Re-capture under the same coordinates — identical bytes make
-    /// that a no-op, and changed bytes make it an integrity error.
-    Resend(PendingCapture),
+    /// reconnect). Exact bytes may reuse a proven durable write; changed bytes
+    /// must be re-captured so the sink can report an integrity error.
+    Resend {
+        pending: PendingCapture,
+        durable_body_fingerprint: Option<[u8; 32]>,
+    },
     /// A completion body inside a request that never armed a capture. Nothing
     /// can name this call, so it must not be sent.
     Unexplained,
@@ -267,7 +290,10 @@ pub(crate) fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)
                 CaptureClaim::Armed(pending)
             }
             None => match state.claimed.clone() {
-                Some(claimed) => CaptureClaim::Resend(claimed),
+                Some(claimed) => CaptureClaim::Resend {
+                    pending: claimed,
+                    durable_body_fingerprint: state.durable_body_fingerprint,
+                },
                 None => CaptureClaim::Unexplained,
             },
         }
@@ -527,13 +553,18 @@ mod tests {
             assert!(!pending_is_armed());
 
             // A second completion body for the same attempt — rig's SSE source
-            // reconnecting — reuses the same coordinates so the re-capture is
-            // idempotent rather than unexplained.
+            // reconnecting — reuses the same coordinates and any durable body
+            // fingerprint rather than being unexplained.
             let (_, claim) = claim_pending().expect("scope installed");
-            let CaptureClaim::Resend(pending) = claim else {
+            let CaptureClaim::Resend {
+                pending,
+                durable_body_fingerprint,
+            } = claim
+            else {
                 panic!("a send after the arm was claimed must read as a resend");
             };
             assert_eq!((pending.turn_index, pending.attempt), (7, 2));
+            assert_eq!(durable_body_fingerprint, None);
             assert!(!pending_is_armed());
 
             // The next attempt closes the previous one's resend window: a body
