@@ -201,12 +201,10 @@ impl DefraRenderedRequestSink {
         // not the same as "durable". The field lookup is explicit rather than
         // handing the whole `data` object to `response_has_documents`, which
         // would answer for the envelope instead of for the mutation's result.
-        // A mutation that returns no document wrote nothing, and "no errors" is
-        // not the same as "durable". The result field is looked up by taking the
-        // envelope's single entry rather than by name: DefraDB answers a
-        // `create_RenderedRequest` mutation under the key `add_RenderedRequest`,
-        // and hard-coding either spelling would turn a rename into a silently
-        // unverified write.
+        // That result field is taken as the envelope's single entry rather than
+        // by name: DefraDB answers a `create_RenderedRequest` mutation under the
+        // key `add_RenderedRequest`, and hard-coding either spelling would turn
+        // a rename into a silently unverified write.
         if !response
             .data
             .as_ref()
