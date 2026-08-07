@@ -479,6 +479,7 @@ async fn load_retry_parent_in_txn(
                 temperature
                 top_p
                 top_k
+                seed
                 max_tokens
                 metadata
                 status
