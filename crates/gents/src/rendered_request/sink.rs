@@ -6,8 +6,8 @@
 //! | store state for `capture_key` | outcome | write |
 //! |---|---|---|
 //! | unbound | `fresh` | create |
-//! | bound to the identical canonical `request_json` | `idempotent` | none |
-//! | bound to a *different* canonical `request_json` | `rejected` | none, and an error |
+//! | bound to the identical canonical capture fact | `idempotent` | none |
+//! | bound to a *different* canonical capture fact | `rejected` | none, and an error |
 //!
 //! `capture_rejects_rebinding` is why the third row is an error rather than an
 //! update: one capture key names one provider request for the life of the
@@ -75,7 +75,7 @@ impl DefraRenderedRequestSink {
         Self { node, identity }
     }
 
-    async fn execute(&self, graphql: &str, operation: &str) -> QueryResponse {
+    async fn execute(&self, graphql: &str, operation: &str, warn_on_error: bool) -> QueryResponse {
         let response = self
             .node
             .execute_request_with_retry(
@@ -83,7 +83,7 @@ impl DefraRenderedRequestSink {
                 ExecuteRetryPolicy::default(),
             )
             .await;
-        if response.has_errors() {
+        if warn_on_error && response.has_errors() {
             tracing::warn!(
                 operation = %operation,
                 errors = ?response.errors,
@@ -93,22 +93,37 @@ impl DefraRenderedRequestSink {
         response
     }
 
-    /// The canonical `request_json` already stored under `capture_key`, if any.
+    /// The immutable capture fact already stored under `capture_key`, if any.
     ///
     /// A GraphQL error is an error, never "no rows": treating a failed read as
     /// an unbound key would turn a transient DB fault into a duplicate-key
     /// create and, worse, into a silent rebinding attempt.
-    async fn stored_request_json(&self, capture_key: &str) -> Result<Option<String>> {
+    async fn stored_fact(&self, capture_key: &str) -> Result<Option<Value>> {
         let query = format!(
             r#"query {{
                 {collection}(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
+                    request_doc_id
+                    request_id
+                    session_id
+                    agent_did
+                    requester_did
+                    behavior_id
+                    capture_scope
+                    turn_index
+                    attempt
+                    capture_version
+                    model_name
+                    source
                     request_json
+                    prompt_hash
+                    tools_hash
+                    provenance_json
                 }}
             }}"#,
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(capture_key),
         );
-        let response = self.execute(&query, "rendered_request::lookup").await;
+        let response = self.execute(&query, "rendered_request::lookup", true).await;
         if response.has_errors() {
             return Err(anyhow!(
                 "reading RenderedRequest by capture key failed: {:?}",
@@ -126,13 +141,7 @@ impl DefraRenderedRequestSink {
             })?;
         match rows.len() {
             0 => Ok(None),
-            1 => Ok(Some(
-                rows[0]
-                    .get("request_json")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            )),
+            1 => Ok(Some(rows[0].clone())),
             // The unique index makes this unreachable; if it ever happens the
             // fact record is already ambiguous and must not be extended.
             count => Err(anyhow!(
@@ -141,9 +150,12 @@ impl DefraRenderedRequestSink {
         }
     }
 
-    async fn create(&self, rendered: &RenderedCompletionRequest, request_json: &str) -> Result<()> {
-        let provenance_json = canonical_json_string(&rendered.provenance_json)
-            .context("encoding rendered-request provenance_json")?;
+    async fn create(
+        &self,
+        rendered: &RenderedCompletionRequest,
+        request_json: &str,
+        provenance_json: &str,
+    ) -> Result<()> {
         let source = serde_json::to_value(rendered.source)
             .ok()
             .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -152,6 +164,7 @@ impl DefraRenderedRequestSink {
             r#"mutation {{
                 create_{collection}(input: {{
                     capture_key: "{capture_key}",
+                    request_doc_id: "{request_doc_id}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
@@ -172,6 +185,7 @@ impl DefraRenderedRequestSink {
             }}"#,
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(&rendered.capture_key),
+            request_doc_id = escape_graphql_string(&rendered.request_doc_id),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
             agent_did = escape_graphql_string(&rendered.agent_did),
@@ -186,11 +200,16 @@ impl DefraRenderedRequestSink {
             request_json = escape_graphql_string(request_json),
             prompt_hash = escape_graphql_string(&rendered.prompt_hash),
             tools_hash = escape_graphql_string(&rendered.tools_hash),
-            provenance_json = escape_graphql_string(&provenance_json),
+            provenance_json = escape_graphql_string(provenance_json),
             created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         );
 
-        let response = self.execute(&mutation, "rendered_request::create").await;
+        // A duplicate-key error is an expected input to reconciliation, so the
+        // create itself does not warn. A genuine failure is logged by the
+        // transport after the re-read below cannot establish idempotency.
+        let response = self
+            .execute(&mutation, "rendered_request::create", false)
+            .await;
         if response.has_errors() {
             return Err(anyhow!(
                 "creating RenderedRequest failed: {:?}",
@@ -220,16 +239,20 @@ impl DefraRenderedRequestSink {
 
     /// Persist one capture. See the outcome table at the top of this module.
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
-        // Canonicalize once. The stored bytes, the comparison, and any future
-        // digest all have to be the same string or "identical" means nothing.
+        // Canonicalize once. The stored bytes and the complete-fact comparison
+        // have to use the same representation or "identical" means nothing.
         let request_json = canonical_json_string(&rendered.request_json)
             .context("encoding rendered-request request_json")?;
+        let provenance_json = canonical_json_string(&rendered.provenance_json)
+            .context("encoding rendered-request provenance_json")?;
 
-        if let Some(stored) = self.stored_request_json(&rendered.capture_key).await? {
-            return self.reconcile_existing(&rendered, &request_json, stored, "lookup");
-        }
-
-        match self.create(&rendered, &request_json).await {
+        // Create first. Fresh captures are overwhelmingly the common path, and
+        // now cost one durable statement rather than a lookup plus a mutation.
+        // Only re-delivery and races pay for the conflict read.
+        match self
+            .create(&rendered, &request_json, &provenance_json)
+            .await
+        {
             Ok(()) => {
                 tracing::debug!(
                     capture_key = %rendered.capture_key,
@@ -247,9 +270,9 @@ impl DefraRenderedRequestSink {
                 // lookup and the create. Re-read: an identical value is still
                 // an idempotent success, a different one is still an integrity
                 // violation, and anything else keeps the original error.
-                match self.stored_request_json(&rendered.capture_key).await {
+                match self.stored_fact(&rendered.capture_key).await {
                     Ok(Some(stored)) => {
-                        self.reconcile_existing(&rendered, &request_json, stored, "create_conflict")
+                        self.reconcile_existing(&rendered, stored, "create_conflict")
                     }
                     _ => Err(create_error),
                 }
@@ -260,20 +283,12 @@ impl DefraRenderedRequestSink {
     fn reconcile_existing(
         &self,
         rendered: &RenderedCompletionRequest,
-        request_json: &str,
-        stored: String,
+        stored: Value,
         via: &str,
     ) -> Result<()> {
-        // Compare canonical *values* as well as raw strings: a row written by
-        // an older build could differ only in key order, and that is the same
-        // fact. An unparseable stored value is `None`, never `Value::Null` —
-        // "we could not read it" and "it is null" are different answers and
-        // only the first may be treated as a mismatch.
-        let stored_value = serde_json::from_str::<Value>(&stored)
-            .ok()
-            .map(|value| canonical_json(&value));
-        let incoming_value = canonical_json(&rendered.request_json);
-        if stored == request_json || stored_value.as_ref() == Some(&incoming_value) {
+        let incoming = canonical_capture_fact(rendered)?;
+        let stored = canonical_stored_fact(stored)?;
+        if stored == incoming {
             tracing::debug!(
                 capture_key = %rendered.capture_key,
                 request_id = %rendered.request_id,
@@ -296,19 +311,58 @@ impl DefraRenderedRequestSink {
             attempt = rendered.attempt,
             outcome = "rejected",
             via,
-            stored_bytes = stored.len(),
-            incoming_bytes = request_json.len(),
-            "rendered-request capture key already names a different provider request"
+            stored_bytes = canonical_json_string(&stored).map(|value| value.len()).unwrap_or_default(),
+            incoming_bytes = canonical_json_string(&incoming).map(|value| value.len()).unwrap_or_default(),
+            "rendered-request capture key already names a different immutable fact"
         );
         Err(anyhow!(
             "rendered-request integrity violation: capture key {} already names a different \
-             canonical request (stored {} bytes, incoming {} bytes); a capture key is never \
-             rebound",
+             canonical capture fact; a capture key is never rebound",
             rendered.capture_key,
-            stored.len(),
-            request_json.len(),
         ))
     }
+}
+
+/// Canonical equality surface for idempotency. `created_at` is intentionally
+/// excluded: it records when the winning writer created the row, while every
+/// other immutable column is part of the fact a later projection will trust.
+fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value> {
+    let source =
+        serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
+    Ok(canonical_json(&serde_json::json!({
+        "request_doc_id": rendered.request_doc_id,
+        "request_id": rendered.request_id,
+        "session_id": rendered.session_id,
+        "agent_did": rendered.agent_did,
+        "requester_did": rendered.requester_did,
+        "behavior_id": rendered.behavior_id,
+        "capture_scope": rendered.capture_scope,
+        "turn_index": rendered.turn_index,
+        "attempt": rendered.attempt,
+        "capture_version": rendered.capture_version,
+        "model_name": rendered.model_name,
+        "source": source,
+        "request_json": canonical_json(&rendered.request_json),
+        "prompt_hash": rendered.prompt_hash,
+        "tools_hash": rendered.tools_hash,
+        "provenance_json": canonical_json(&rendered.provenance_json),
+    })))
+}
+
+fn canonical_stored_fact(mut stored: Value) -> Result<Value> {
+    let object = stored
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("stored RenderedRequest fact was not an object"))?;
+    for field in ["request_json", "provenance_json"] {
+        let encoded = object
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("stored RenderedRequest {field} was not a string"))?;
+        let decoded: Value = serde_json::from_str(encoded)
+            .with_context(|| format!("decoding stored RenderedRequest {field}"))?;
+        object.insert(field.to_string(), canonical_json(&decoded));
+    }
+    Ok(canonical_json(&stored))
 }
 
 const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;

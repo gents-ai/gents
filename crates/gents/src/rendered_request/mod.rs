@@ -382,6 +382,11 @@ impl ProvenanceManifest {
 /// happened.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedRequestContext {
+    /// Exact DefraDB document identity for the request being served. Unlike the
+    /// logical `request_id`, this identifies one signed document even if an
+    /// invalid duplicate logical id exists in the collection. Empty only for a
+    /// one-shot run, which does not author an `AgentRequest` document.
+    pub request_doc_id: String,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -398,6 +403,7 @@ pub struct RenderedRequestContext {
 impl RenderedRequestContext {
     pub(crate) fn for_request(request: &crate::watcher::AgentRequest, model_name: String) -> Self {
         Self {
+            request_doc_id: request.doc_id.clone(),
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -458,11 +464,15 @@ impl RenderedRequestComponents {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedCompletionRequest {
-    /// `capture_key(agent_did, session_id, request_id, capture_scope,
+    /// `capture_key(agent_did, session_id, request_doc_id, capture_scope,
     /// turn_index, attempt)`. The unique index on the durable row and the
     /// idempotency key of the sink.
     pub capture_key: String,
     pub capture_version: u32,
+    /// Exact `_docID` of the signed `AgentRequest`. The logical `request_id`
+    /// remains alongside it for user-facing correlation and queries. Empty for
+    /// a one-shot run, which has no `AgentRequest` document.
+    pub request_doc_id: String,
     pub request_id: String,
     /// Which completion loop inside the request issued this call, e.g.
     /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
@@ -516,7 +526,7 @@ pub(crate) fn build_rendered_completion_request(
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
-        &context.request_id,
+        &context.request_doc_id,
         capture_scope,
         turn_index,
         attempt,
@@ -535,6 +545,7 @@ pub(crate) fn build_rendered_completion_request(
     Ok(RenderedCompletionRequest {
         capture_key,
         capture_version: CAPTURE_VERSION,
+        request_doc_id: context.request_doc_id.clone(),
         request_id: context.request_id.clone(),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -567,9 +578,10 @@ pub(crate) fn build_rendered_completion_request(
 /// (`ChatArgs::session_id` has no `value_parser`), and a `"{a}:{b}"` format
 /// would let `("x:y", "z")` and `("x", "y:z")` collide into one fact.
 ///
-/// `agent_did` and `session_id` are load-bearing, not decoration:
-/// `AgentRequest.request_id` is `@index` but **not** `@index(unique: true)`, so
-/// it is not globally unique on its own.
+/// `request_doc_id` is the DefraDB `_docID` of the signed `AgentRequest`, not its
+/// user-facing `request_id`. The latter is an indexed logical correlation id,
+/// but the document id is the provenance edge that identifies the exact request
+/// fact this capture belongs to.
 ///
 /// ## Why the third component is a pair
 ///
@@ -580,14 +592,14 @@ pub(crate) fn build_rendered_completion_request(
 /// `run_loop_stream` whose turn and attempt counters start at zero, so
 /// `(request_id, 0, 0)` would name several different provider calls. The scope
 /// therefore rides *inside* the third component as the nested JSON array
-/// `[request_id, capture_scope]`, which keeps the tuple five components wide
-/// and componentwise-injective — a `"{request_id}#{scope}"` string would
+/// `[request_doc_id, capture_scope]`, which keeps the tuple five components wide
+/// and componentwise-injective — a `"{request_doc_id}#{scope}"` string would
 /// reintroduce exactly the delimiter collision the array encoding exists to
-/// rule out, and `request_id` is caller-supplied.
+/// rule out.
 pub fn capture_key(
     agent_did: &str,
     session_id: &str,
-    request_id: &str,
+    request_doc_id: &str,
     capture_scope: &str,
     turn_index: usize,
     attempt: u32,
@@ -595,7 +607,7 @@ pub fn capture_key(
     let tuple = json!([
         agent_did,
         session_id,
-        [request_id, capture_scope],
+        [request_doc_id, capture_scope],
         turn_index,
         attempt
     ]);
@@ -647,6 +659,7 @@ mod tests {
 
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
+            request_doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),
@@ -932,12 +945,12 @@ mod tests {
 
     #[test]
     fn capture_key_is_stable_and_prefixed() {
-        let key = capture_key("did:key:a", "session-1", "request-1", "inference.1", 3, 2).unwrap();
+        let key = capture_key("did:key:a", "session-1", "doc-1", "inference.1", 3, 2).unwrap();
         assert!(key.starts_with("rendered:v1:"), "unexpected key {key}");
         assert_eq!(key.len(), "rendered:v1:".len() + 64);
         assert_eq!(
             key,
-            capture_key("did:key:a", "session-1", "request-1", "inference.1", 3, 2).unwrap()
+            capture_key("did:key:a", "session-1", "doc-1", "inference.1", 3, 2).unwrap()
         );
     }
 
@@ -946,16 +959,16 @@ mod tests {
     /// `capture_key_determines_request` forbids.
     #[test]
     fn every_capture_key_component_changes_the_key() {
-        let base = capture_key("did:key:a", "session-1", "request-1", "inference.1", 0, 0).unwrap();
+        let base = capture_key("did:key:a", "session-1", "doc-1", "inference.1", 0, 0).unwrap();
 
         for varied in [
-            capture_key("did:key:b", "session-1", "request-1", "inference.1", 0, 0).unwrap(),
-            capture_key("did:key:a", "session-2", "request-1", "inference.1", 0, 0).unwrap(),
-            capture_key("did:key:a", "session-1", "request-2", "inference.1", 0, 0).unwrap(),
-            capture_key("did:key:a", "session-1", "request-1", "inference.2", 0, 0).unwrap(),
-            capture_key("did:key:a", "session-1", "request-1", "compaction.1", 0, 0).unwrap(),
-            capture_key("did:key:a", "session-1", "request-1", "inference.1", 1, 0).unwrap(),
-            capture_key("did:key:a", "session-1", "request-1", "inference.1", 0, 1).unwrap(),
+            capture_key("did:key:b", "session-1", "doc-1", "inference.1", 0, 0).unwrap(),
+            capture_key("did:key:a", "session-2", "doc-1", "inference.1", 0, 0).unwrap(),
+            capture_key("did:key:a", "session-1", "doc-2", "inference.1", 0, 0).unwrap(),
+            capture_key("did:key:a", "session-1", "doc-1", "inference.2", 0, 0).unwrap(),
+            capture_key("did:key:a", "session-1", "doc-1", "compaction.1", 0, 0).unwrap(),
+            capture_key("did:key:a", "session-1", "doc-1", "inference.1", 1, 0).unwrap(),
+            capture_key("did:key:a", "session-1", "doc-1", "inference.1", 0, 1).unwrap(),
         ] {
             assert_ne!(base, varied);
         }
@@ -965,26 +978,24 @@ mod tests {
     /// is caller-supplied and unvalidated, so the encoding — not a convention —
     /// has to rule the collision out. The scope rides inside the third
     /// component as a nested array for exactly the same reason: a
-    /// `"{request_id}#{scope}"` string would be forgeable from a caller-chosen
-    /// `request_id`.
+    /// `"{request_doc_id}#{scope}"` string would lose the component boundary.
     #[test]
     fn capture_key_does_not_collide_across_component_boundaries() {
         assert_ne!(
-            capture_key("did:key:a", "s:1", "request-1", "inference.1", 0, 0).unwrap(),
-            capture_key("did:key:a:s", "1", "request-1", "inference.1", 0, 0).unwrap(),
+            capture_key("did:key:a", "s:1", "doc-1", "inference.1", 0, 0).unwrap(),
+            capture_key("did:key:a:s", "1", "doc-1", "inference.1", 0, 0).unwrap(),
         );
         assert_ne!(
             capture_key("did:key:a", "session", "r:1", "inference.1", 0, 0).unwrap(),
             capture_key("did:key:a", "session:r", "1", "inference.1", 0, 0).unwrap(),
         );
-        // `request_id` is `@index` but not unique, so the same id under two
-        // sessions must stay two facts.
+        // A replicated document id appearing under two session contexts must
+        // stay two facts rather than erasing the session boundary.
         assert_ne!(
             capture_key("did:key:a", "session-1", "shared", "inference.1", 0, 0).unwrap(),
             capture_key("did:key:a", "session-2", "shared", "inference.1", 0, 0).unwrap(),
         );
-        // A caller-chosen request id must not be able to impersonate another
-        // scope's fact.
+        // A document id component must not absorb another scope's boundary.
         assert_ne!(
             capture_key("did:key:a", "s", "req#compaction.1", "inference.1", 0, 0).unwrap(),
             capture_key("did:key:a", "s", "req", "compaction.1", 0, 0).unwrap(),

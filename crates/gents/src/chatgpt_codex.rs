@@ -740,6 +740,7 @@ mod tests {
         });
         let scope = test_scope(
             RenderedRequestContext {
+                request_doc_id: "doc-1".to_string(),
                 request_id: "req-1".to_string(),
                 agent_did: "did:key:agent".to_string(),
                 requester_did: String::new(),

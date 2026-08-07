@@ -186,7 +186,7 @@ def renderedCaptureKeyCases : List RenderedCaptureKeyCase :=
       (contractKey 0 0) { contractKey 0 0 with agentDid := contractAgentDid + 1 }
   , renderedCaptureKeyCase "session_id_separates_facts"
       (contractKey 0 0) { contractKey 0 0 with sessionId := contractSessionId + 1 }
-  , renderedCaptureKeyCase "request_id_separates_facts"
+  , renderedCaptureKeyCase "request_doc_id_separates_facts"
       (contractKey 0 0) { contractKey 0 0 with requestId := contractRequestId + 1 }
   ]
 
@@ -197,7 +197,7 @@ theorem renderedCaptureKeyCases_pinned :
       , ("turn_index_separates_facts", false)
       , ("agent_did_separates_facts", false)
       , ("session_id_separates_facts", false)
-      , ("request_id_separates_facts", false)
+      , ("request_doc_id_separates_facts", false)
       ] := by
   rfl
 

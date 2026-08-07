@@ -21,7 +21,7 @@
 //! components is actually carried on the production capture DTO. The model's
 //! `requestId` component names the provider-call *scope* inside a request, and
 //! production encodes it as the injective JSON pair
-//! `[request_id, capture_scope]`; one request runs several completion loops and
+//! `[request_doc_id, capture_scope]`; one request runs several completion loops and
 //! each starts its turn and attempt counters at zero, so the request document id
 //! alone does not identify a provider attempt. A component
 //! dropped here does not fail loudly at runtime — it silently merges two
@@ -67,14 +67,14 @@ fn session_id(id: u64) -> String {
     format!("session-{id}")
 }
 
-fn request_id(id: u64) -> String {
-    format!("request-{id}")
+fn request_doc_id(id: u64) -> String {
+    format!("bae-request-doc-{id}")
 }
 
 /// Build the production capture DTO for one modeled attempt.
 ///
 /// This is a struct literal on purpose: if a future change drops
-/// `turn_index`, `attempt`, `agent_did`, `session_id`, or `request_id` from
+/// `turn_index`, `attempt`, `agent_did`, `session_id`, or `request_doc_id` from
 /// `RenderedCompletionRequest`, this file stops compiling instead of quietly
 /// collapsing two capture keys.
 fn rendered(
@@ -97,7 +97,7 @@ fn rendered(
 }
 
 /// The scope every generated row uses. The Lean rows vary `requestId`, which
-/// production splits into `(request_id, capture_scope)`; holding the scope fixed
+/// production splits into `(request_doc_id, capture_scope)`; holding the scope fixed
 /// keeps each row varying exactly one modeled component.
 const CAPTURE_SCOPE: &str = "inference.1";
 
@@ -112,7 +112,7 @@ fn rendered_in_scope(
 ) -> RenderedCompletionRequest {
     let agent_did = agent_did(agent);
     let session_id = session_id(session);
-    let request_id = request_id(request);
+    let request_doc_id = request_doc_id(request);
     let assembly_trace =
         AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
 
@@ -120,14 +120,15 @@ fn rendered_in_scope(
         capture_key: derive_capture_key(
             &agent_did,
             &session_id,
-            &request_id,
+            &request_doc_id,
             capture_scope,
             turn_index,
             attempt,
         )
         .expect("capture key"),
         capture_version: CAPTURE_VERSION,
-        request_id,
+        request_doc_id,
+        request_id: format!("logical-request-{request}"),
         capture_scope: capture_scope.to_string(),
         turn_index,
         attempt,
@@ -162,7 +163,10 @@ fn capture_key(
     (
         rendered.agent_did.clone(),
         rendered.session_id.clone(),
-        (rendered.request_id.clone(), rendered.capture_scope.clone()),
+        (
+            rendered.request_doc_id.clone(),
+            rendered.capture_scope.clone(),
+        ),
         rendered.turn_index,
         rendered.attempt,
     )
@@ -289,11 +293,10 @@ fn the_capture_scope_separates_completion_loops_within_one_request() {
 }
 
 /// The scope rides inside the third component as a JSON pair rather than a
-/// delimited string. `request_id` is caller-supplied and unvalidated, so a
-/// `"{request_id}#{scope}"` encoding would let a caller mint a request id that
-/// forges another scope's fact.
+/// delimited string. A `"{request_doc_id}#{scope}"` encoding would let one
+/// component absorb the boundary of the next and forge another scope's fact.
 #[test]
-fn a_caller_chosen_request_id_cannot_forge_another_scopes_key() {
+fn a_request_doc_id_cannot_forge_another_scopes_key() {
     let forged = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));
     let honest = rendered_in_scope(1, 1, 1, "inference.1", 0, 0, json!({"model": "m"}));
     assert_eq!(forged.capture_key, honest.capture_key);
@@ -301,7 +304,7 @@ fn a_caller_chosen_request_id_cannot_forge_another_scopes_key() {
     let sneaky = derive_capture_key(
         &agent_did(1),
         &session_id(1),
-        &format!("{}#compaction.1", request_id(1)),
+        &format!("{}#compaction.1", request_doc_id(1)),
         "inference.1",
         0,
         0,
@@ -310,7 +313,7 @@ fn a_caller_chosen_request_id_cannot_forge_another_scopes_key() {
     let target = derive_capture_key(
         &agent_did(1),
         &session_id(1),
-        &request_id(1),
+        &request_doc_id(1),
         "compaction.1",
         0,
         0,

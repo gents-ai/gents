@@ -253,6 +253,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
     let capture = r#"mutation {
         create_RenderedRequest(input: {
             capture_key: "rendered:v1:aaa"
+            request_doc_id: "bae-req-1"
             request_id: "req-1"
             session_id: "pre-upgrade-session"
             agent_did: "did:key:agent"

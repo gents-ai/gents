@@ -476,6 +476,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
     let context = RenderedRequestContext {
+        request_doc_id: "doc-1".to_string(),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

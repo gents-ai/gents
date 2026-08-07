@@ -262,15 +262,16 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
 where
     M::StreamingResponse: 'static,
 {
-    // A one-shot run has no `AgentRequest` document, so its capture identity is
-    // minted here and the session is created eagerly rather than on the hook's
-    // first write. Both halves of the `(session_id, request_id)` pair have to
-    // exist *before* the first provider call, because they are components of
-    // the capture key.
+    // A one-shot run has no `AgentRequest` document, so `request_doc_id` stays
+    // empty rather than impersonating a signed document. Its random session id
+    // still gives the capture key a unique durable scope. The session and
+    // logical request id are minted before the first provider call, and the
+    // session is created eagerly rather than on the hook's first write.
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = format!("oneshot-{}", uuid::Uuid::new_v4());
     let capture_scope = crate::rendered_request::scope::scope_from_factory(
         crate::rendered_request::RenderedRequestContext {
+            request_doc_id: String::new(),
             request_id,
             agent_did: behavior.agent_did().to_string(),
             requester_did: String::new(),

@@ -31,13 +31,14 @@ names two different canonical requests.
   `session_id`, so a delimited encoding is a live defect class here rather than
   a hypothetical one.
 
-* `requestId` names the **provider-call scope inside a request**, not only the
-  request document. One request runs several completion loops — the owned
+* `requestId` is the **DefraDB document identity** of the signed request, widened
+  with the provider-call scope inside that document. It is not the non-unique
+  logical `AgentRequest.request_id` field. One request runs several completion loops — the owned
   inference loop, the per-turn compaction summarizer plus its strict-JSON
   fallback, conversation title generation — and each starts its own `turnIndex`
   and `attempt` at zero, so the request document id alone does not identify a
   provider attempt. Production encodes this component as the injective JSON pair
-  `[request_id, capture_scope]`, keeping the tuple five components wide;
+  `[request_doc_id, capture_scope]`, keeping the tuple five components wide;
   `crates/gents/tests/conformance/rendered_capture.rs` fences both halves.
 
 * `CanonicalRequest` is opaque, so the model does not say *which* artifact the
@@ -82,7 +83,7 @@ abbrev AgentDid := Nat
 /-- Identity of exactly one provider attempt.
 
 The five components are the ones `RenderedRequestContext` plus the owned loop
-already carry: the agent principal, the session, the request document, the
+already carry: the agent principal, the session, the exact request `_docID`, the
 completion turn, and the attempt within that turn. Equality is componentwise —
 there is no delimiter, and therefore no delimiter collision. -/
 structure CaptureKey where

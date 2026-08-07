@@ -470,12 +470,14 @@ pub(super) async fn create_agent_request_for_behavior(
 }
 
 pub(super) async fn wait_for_chat_request_count(endpoint: &MockModelEndpoint, expected: usize) {
-    // The full package suite runs more than a thousand tests concurrently, and
-    // a ready request may wait several seconds for executor time on a loaded
-    // host before reaching the mock HTTP endpoint. Keep the semantic shutdown
-    // deadline strict in the calling test, but give this precondition enough
-    // time to become observable.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    // The full package suite runs more than a thousand tests concurrently. A
+    // ready request may be starved for well over 15 seconds while the unit
+    // tests contend for executor time and DefraDB resources, especially now
+    // that persist-before-send capture adds a write before this condition
+    // becomes observable. This is setup synchronization, not the behavior
+    // under test: the caller keeps the semantic shutdown deadline at two
+    // seconds after the request reaches the endpoint.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let notified = endpoint.chat_requests_changed.notified();
         let actual = endpoint.chat_request_count();

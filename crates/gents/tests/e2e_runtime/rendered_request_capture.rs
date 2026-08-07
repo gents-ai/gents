@@ -233,7 +233,28 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         commit_set(db.node.as_ref(), &first.capture_key).await,
         anchor,
         "an idempotent redelivery must not write at all: the commit set, and so \
-         the content anchor, must be untouched"
+        the content anchor, must be untouched"
+    );
+
+    // Same key and provider body, different provenance: still a different
+    // immutable fact. A future reconstructor trusts AssemblyTrace just as much
+    // as request_json, so accepting this as idempotent would make a false
+    // projection look verified.
+    let mut provenance_conflict = first.clone();
+    provenance_conflict.provenance_json["status_reason"] =
+        Value::String("conflicting provenance".to_string());
+    let error = sink
+        .capture(provenance_conflict)
+        .await
+        .expect_err("provenance rebinding must be an integrity error");
+    assert!(
+        error.to_string().contains("integrity violation"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &first.capture_key).await,
+        anchor,
+        "a provenance conflict must not mutate the winning fact"
     );
 
     // Same key, different canonical value: integrity error, no write.
@@ -1099,6 +1120,7 @@ fn parse_json(value: &Value) -> Value {
 fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     let agent_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
+    let request_doc_id = "bae-request-idem".to_string();
     let request_id = "req-idem".to_string();
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
@@ -1109,13 +1131,14 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         capture_key: gents::rendered_request::capture_key(
             &agent_did,
             &session_id,
-            &request_id,
+            &request_doc_id,
             &capture_scope,
             0,
             0,
         )
         .expect("capture key"),
         capture_version: gents::rendered_request::CAPTURE_VERSION,
+        request_doc_id,
         request_id,
         capture_scope: capture_scope.clone(),
         turn_index: 0,
@@ -1186,6 +1209,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
         r#"query {{
             RenderedRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 capture_key
+                request_doc_id
                 request_id
                 session_id
                 agent_did

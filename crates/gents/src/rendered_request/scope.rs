@@ -40,7 +40,7 @@
 //! attempt counters at zero: the owned inference loop, the per-turn compaction
 //! summarizer (guided, plus a strict-JSON fallback), and conversation title
 //! generation. Without a discriminator their first calls would all be
-//! `(request_id, turn 0, attempt 0)` — one capture key naming several different
+//! `(request_doc_id, turn 0, attempt 0)` — one capture key naming several different
 //! provider requests, which the sink is required to reject as an integrity
 //! violation. Each loop therefore takes a label like `compaction.2` from this
 //! scope. Allocation keys off the loop's own first arm — every loop arms
@@ -446,6 +446,7 @@ mod tests {
 
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
+            request_doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),

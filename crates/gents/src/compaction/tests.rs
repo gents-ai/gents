@@ -1247,6 +1247,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
     let scope = test_scope(
         RenderedRequestContext {
+            request_doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),
