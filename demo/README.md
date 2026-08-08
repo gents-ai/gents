@@ -63,6 +63,17 @@ When `<pack>/schemas/` exists, **apply registers those SDL/patches first**,
 then agent config (surfaces → selections → behaviors → tasks/triggers). Packs
 do not touch product baseline schemas.
 
+## Operating a node vs embedding one
+
+Packs show how to **operate** a node: config documents applied to a running
+runtime, driven through the CLI. If you instead want to **embed** the runtime
+in your own binary — build an `EmbeddedNode`, create the identity and config
+documents programmatically, and drive `Gents::run` yourself — see
+[`crates/gents/examples/serve_default_behavior.rs`](../crates/gents/examples/serve_default_behavior.rs).
+It is the library-level counterpart to this directory, and it doubles as a
+construction fence: `cargo check --workspace --all-targets` compiles it, so a
+new required field on a public config struct breaks there first.
+
 ## Packs
 
 | Pack | What it shows |
