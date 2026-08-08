@@ -49,12 +49,17 @@ registers `schemas/` first so that name resolves.
    ```bash
    gents config validate --root experiments/pipeline
    gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim \
-     --apply-root experiments/pipeline --apply-prune
+     --apply-root experiments/pipeline
    ```
 
    After ready, the server applies this pack against the **in-process** node
    (`schemas/` first, then desired-state; home DID rebind). The serving JSON
    includes an `apply_root` field with the apply report.
+
+   Add `--apply-prune` only on a home dedicated to this pack: it makes the
+   pack the complete desired state for that home's agent and deletes any
+   config the pack does not declare (other behaviors, selections, skills,
+   surfaces, and their reachable tasks/schedules/triggers).
 
    Equivalent without folding into server:
 

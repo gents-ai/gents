@@ -662,22 +662,29 @@ pub(crate) async fn serve_with_control(
     // Optional pack apply against the same in-process node (schemas/ first,
     // then desired-state). Uses Local access so collection registration works
     // without a separate home open / remote schema API.
-    let pack_apply = if let Some(root) = args.apply_root.as_ref() {
-        Some(
-            apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune)
-                .await
-                .with_context(|| {
-                    format!(
-                        "server --apply-root {} failed; the server is shutting down rather than \
-                     serving without the requested pack. Schema registration is not \
-                     transactional, so schemas/ may be partially applied — fix the pack and \
-                     restart.",
-                        root.display()
-                    )
-                })?,
-        )
-    } else {
-        None
+    let pack_apply = match args.apply_root.as_ref() {
+        Some(root) => {
+            match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
+                Ok(report) => Some(report),
+                Err(error) => {
+                    // Stop the runtime we already started. Dropping the handle
+                    // only detaches the task, which would leave the agent and
+                    // the open node alive for embedded callers of this function.
+                    run_handle.abort();
+                    let _ = (&mut run_handle).await;
+                    return Err(error).with_context(|| {
+                        format!(
+                            "server --apply-root {} failed; the runtime was shut down rather \
+                             than serving without the requested pack. Schema registration is \
+                             not transactional, so schemas/ may be partially applied — fix \
+                             the pack and restart.",
+                            root.display()
+                        )
+                    });
+                }
+            }
+        }
+        None => None,
     };
 
     let output = json!({

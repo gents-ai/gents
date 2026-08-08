@@ -296,12 +296,22 @@ pub(crate) fn merge_write_tools_with_surfaces(
         .datastore_tool_surface_ids
         .as_deref()
         .unwrap_or(&[]);
+    let mut linked_ids: HashSet<&str> = HashSet::new();
     for surface_id in surface_ids {
         let surface_id = surface_id.trim();
         if surface_id.is_empty() {
             bail!(
                 "ToolSelection {} has an empty datastore_tool_surface_ids entry",
                 selection.selection_id
+            );
+        }
+        if !linked_ids.insert(surface_id) {
+            // Expanding twice would trip the tool_name collision check below
+            // and blame the wrong thing.
+            bail!(
+                "ToolSelection {} lists DatastoreToolSurface {} more than once",
+                selection.selection_id,
+                surface_id
             );
         }
         let record = view

@@ -222,6 +222,7 @@ mod tests {
             (Collection::AgentPrincipal, 3, "AgentPrincipal"),
             (Collection::AgentBehavior, 1, "AgentBehavior"),
             (Collection::Skill, 0, "Skill"),
+            (Collection::DatastoreToolSurface, 0, "DatastoreToolSurface"),
             (Collection::ToolSelection, 0, "ToolSelection"),
             (Collection::InferenceBackend, 0, "InferenceBackend"),
             (Collection::InferenceProfile, 0, "InferenceProfile"),

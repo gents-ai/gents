@@ -1276,10 +1276,13 @@ fn validate_datastore_surface_links(
     use gents::{is_reserved_builtin_tool_name, WriteToolDecl};
     use std::collections::{BTreeMap, BTreeSet};
 
+    // Key on the trimmed id: the uniqueness check above and the lookup below
+    // both trim, so an untrimmed key here would report a declared surface as
+    // missing.
     let surfaces: BTreeMap<&str, &DesiredDatastoreToolSurface> = manifest
         .datastore_tool_surfaces
         .iter()
-        .map(|s| (s.surface_id.as_str(), s))
+        .map(|s| (s.surface_id.trim(), s))
         .collect();
 
     let mut merged: Vec<String> = selection.write_tools.clone();
@@ -1290,12 +1293,22 @@ fn validate_datastore_surface_links(
         }
     }
 
+    let mut linked_ids: BTreeSet<&str> = BTreeSet::new();
     for surface_id in &selection.datastore_tool_surface_ids {
         let surface_id = surface_id.trim();
         if surface_id.is_empty() {
             errors.push(format!(
                 "tool selection {} has an empty datastore_tool_surface_ids entry",
                 selection.selection_id
+            ));
+            continue;
+        }
+        if !linked_ids.insert(surface_id) {
+            // Expanding twice would trip the tool_name collision check and
+            // blame the wrong thing.
+            errors.push(format!(
+                "tool selection {} lists DatastoreToolSurface {} more than once",
+                selection.selection_id, surface_id
             ));
             continue;
         }
