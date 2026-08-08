@@ -2961,10 +2961,14 @@ fn validate_rejects_foreign_agent_surface_link() {
 
 #[test]
 fn load_pipeline_two_stage_fixture_with_surface() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");
     assert!(
         root.join("datastore-tool-surfaces/experiment-writes/object.json").is_file(),
         "pipeline fixture must include experiment-writes surface"
+    );
+    assert!(
+        root.join("schemas/experiment_finding.graphql").is_file(),
+        "pipeline pack must be self-contained with pack-local schemas/"
     );
     let (manifest, report) = load_manifest_root(&root);
     assert!(

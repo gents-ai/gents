@@ -58,13 +58,13 @@ pipeline, single GraphQL seed kick, measure with `gents trace` /
 
 ### Task 2 — Pipeline desired-state root — **done**
 
-Single root at `experiments/` (two-stage pipeline + surface). Former draft
+Single pack at `experiments/pipeline/` (two-stage pipeline + surface). Former draft
 arms `single-loop` / `fanout-on-job` removed.
 
 Validate:
 
 ```bash
-gents config validate --root experiments
+gents config validate --root experiments/pipeline
 ```
 
 ### Task 3 — CI e2e wrapper — **deferred (not this PR)**

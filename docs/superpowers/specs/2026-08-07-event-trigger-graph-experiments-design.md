@@ -4,17 +4,19 @@
 
 This design describes the **shipped** experiment surface on branch/PR:
 
-- **One productionized desired-state root** under repo-root `experiments/`
-  (two-stage pipeline: `ExperimentJob` → finding write → `ExperimentFinding`)
+- **Canonical self-contained pack** at `experiments/pipeline/` (schemas +
+  config): `ExperimentJob` → finding write → `ExperimentFinding`
 - Stage-1 create tool via **`DatastoreToolSurface` `experiment-writes`**
   (not inline `write_tools`); stage-2 has **no tools**
-- No CI e2e wrapper, no multi-arm shape matrix, no harness binary
+- **`gents config apply --root experiments/pipeline`** applies pack-local
+  `schemas/` first, then desired-state (surfaces, selections, triggers)
+- No multi-arm shape matrix, no harness binary
 - Inference example targets **DeepSeek V4 Flash** (`d4f`) via OpenAI-compatible
   chat completions on Tailscale peer **workstation-1**
   (`http://100.73.235.38:8000/v1`)
 
 Earlier draft arms (`single-loop`, `fanout-on-job`) were removed in favor of the
-pipeline. CI mock e2e remains an optional **follow-up**.
+pipeline pack. CI mock e2e remains an optional **follow-up**.
 
 ## Problem
 

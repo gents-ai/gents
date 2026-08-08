@@ -2192,7 +2192,11 @@ pub(crate) struct ConfigDiffArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ConfigApplyArgs {
-    #[arg(long, value_name = "ROOT")]
+    #[arg(
+        long,
+        value_name = "ROOT",
+        help = "Desired-state pack root. If ROOT/schemas/ exists, SDL/patches there are applied first (pack-scoped), then agent config (surfaces, selections, triggers, …)"
+    )]
     pub(crate) root: PathBuf,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,

@@ -427,6 +427,9 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) root: String,
     pub(crate) access_mode: String,
     pub(crate) agent_did: String,
+    /// Present when `<root>/schemas/` existed and was applied before config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schemas: Option<crate::commands::schema::PackSchemaPhase>,
     pub(crate) planned: desired_state::DesiredStateDiffCollectionsCounts,
     pub(crate) applied: ConfigApplyCounts,
     pub(crate) pruned: ConfigApplyCounts,
