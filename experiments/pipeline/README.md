@@ -70,9 +70,24 @@ registers `schemas/` first so that name resolves.
      --bind-agent-did home --force-rebind-concrete-did --prune
    ```
 
-3. Wait for EventSource logs: observing `ExperimentJob` **before** seeding
-   (created/first-seen only). Apply-root registers triggers; still wait for
-   the observe log before the first seed.
+3. **Wait up to ~60s for the pack's backend to be probed, then for EventSource
+   to observe the collections.** Both matter, in that order:
+
+   The pack applies *after* the runtime is ready, so `exp-deepseek` is created
+   after the backend prober's first cycle. Until the next cycle (60s interval)
+   it sits at `probe_status: unknown` and both stage behaviors are reported
+   unavailable — the serving JSON says `"status": "serving"` while this is
+   true, so do not treat that as the go-signal. Watch for the reconcile that
+   clears them:
+
+   ```text
+   runtime reconcile applied generation=3 ... proposed_unavailable_behavior_count=0
+   event source now observing source collection source_collection=ExperimentJob
+   ```
+
+   Seeding before the observe log is the one way to get a silent no-op:
+   triggers are `created`/first-seen only, so a doc written earlier is seeded
+   as already-seen and never fires.
 
 4. Kick:
 
@@ -87,8 +102,32 @@ registers `schemas/` first so that name resolves.
    }
    ```
 
-5. Await `caused_by_trigger_id` `exp-stage1` then `exp-stage2`; export with
-   `gents trace timeline --request-id <id> --home <home>`.
+5. Await both stages, then export:
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:19191/api/v0/graphql -H 'content-type: application/json' \
+     -d '{"query":"{ AgentRequest { caused_by_trigger_id caused_by_trigger_kind lifecycle_state } }"}'
+   ```
+
+   A complete run has two `AgentRequest` rows — `exp-stage1` and `exp-stage2`,
+   both `caused_by_trigger_kind: "event"`, both `completed` — plus one
+   `ExperimentFinding` written by stage-1's surface tool.
+
+   ```bash
+   gents trace timeline --request-id <id> --home <home>
+   ```
+
+   For cost, query `InferenceCall { prompt_tokens completion_tokens }` — not
+   `AgentResponse.token_count`, which is a streaming word-count proxy.
+
+### Verified run
+
+Against DeepSeek V4 Flash on workstation-1, one seed produced: stage-1 fired
+and called `write_experiment_finding`; the resulting `ExperimentFinding`
+create fired stage-2; both requests reached `completed`; 3 inference calls,
+1711 prompt + 437 completion tokens. Wall clock from seed to both stages
+complete was a few seconds — the 60s backend probe is the only slow step, and
+it happens once at startup.
 
 ## Design
 
