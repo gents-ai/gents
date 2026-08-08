@@ -1,9 +1,13 @@
 //! R6 background-tool recovery tests.
 
+use std::sync::Arc;
+
 use gents::tool_call_lifecycle::ToolCallLifecycle;
+use gents::AgentIdentity;
 use serde::Deserialize;
 
-use crate::support::{create_request, first_row, test_db, AGENT_DID};
+use crate::support::fixtures::test_identity;
+use crate::support::{create_request_for_agent, first_row, test_db_with_identity};
 
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
@@ -89,11 +93,15 @@ async fn load_wakes(
 
 #[tokio::test]
 async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
-    let db = test_db("r6-background-recovery-live-parent").await;
-    create_request(
+    let identity: Arc<dyn AgentIdentity> =
+        Arc::new(test_identity("r6-background-recovery-live-parent"));
+    let agent_did = identity.did().to_string();
+    let db = test_db_with_identity("r6-background-recovery-live-parent", identity).await;
+    create_request_for_agent(
         &db.node,
         "r6-recovery-parent",
         "r6-recovery-session",
+        &agent_did,
         "processing",
         "2026-05-14T00:00:00Z",
     )
@@ -103,7 +111,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         db.node.clone(),
         "r6-recovery-parent".to_string(),
         "r6-recovery-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "r6-recovery-tool".to_string(),
         1,
         "bash".to_string(),
@@ -112,7 +120,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     );
     lifecycle.start_running().await.unwrap();
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);

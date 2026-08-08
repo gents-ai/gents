@@ -40,16 +40,22 @@ fn signed_test_node_semaphore() -> Arc<tokio::sync::Semaphore> {
         .clone()
 }
 
-async fn signed_test_node_permit(signed: bool) -> Option<tokio::sync::OwnedSemaphorePermit> {
-    if !signed {
-        return None;
-    }
-    Some(
+type SignedTestNodePermit = Arc<tokio::sync::OwnedSemaphorePermit>;
+
+async fn signed_test_node_permits(count: u32) -> SignedTestNodePermit {
+    Arc::new(
         signed_test_node_semaphore()
-            .acquire_owned()
+            .acquire_many_owned(count)
             .await
             .expect("signed test-node semaphore closed"),
     )
+}
+
+async fn signed_test_node_permit(signed: bool) -> Option<SignedTestNodePermit> {
+    if !signed {
+        return None;
+    }
+    Some(signed_test_node_permits(1).await)
 }
 
 pub struct TestDb {
@@ -57,7 +63,8 @@ pub struct TestDb {
     pub process_generation: u64,
     node_identity: Option<Arc<dyn AgentIdentity>>,
     tempdir: TempDir,
-    _signed_node_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    p2p_admission: Option<TestP2pAdmission>,
+    _signed_node_permit: Option<SignedTestNodePermit>,
 }
 
 impl TestDb {
@@ -100,16 +107,31 @@ impl TestDb {
             }
         }
 
-        let mut builder = EmbeddedNode::builder().data_path(&data_path);
-        if let Some(identity) = &self.node_identity {
-            builder = builder.with_node_identity_did(identity.did());
-        }
-        let reopened = builder.build().await.map_err(|e| {
-            anyhow::anyhow!(
-                "simulate_process_crash: reopen durable store at {} failed: {e}",
-                data_path.display()
-            )
-        })?;
+        let reopen_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let reopened = loop {
+            let mut builder = EmbeddedNode::builder().data_path(&data_path);
+            if let Some(admission) = &self.p2p_admission {
+                builder = builder.with_p2p(test_p2p_config(admission));
+            }
+            if let Some(identity) = &self.node_identity {
+                builder = builder.with_node_identity_did(identity.did());
+            }
+            match builder.build().await {
+                Ok(node) => break node,
+                Err(error)
+                    if error.to_string().contains("locked by another process")
+                        && tokio::time::Instant::now() < reopen_deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(error) => {
+                    return Err(anyhow::anyhow!(
+                        "simulate_process_crash: reopen durable store at {} failed: {error}",
+                        data_path.display()
+                    ));
+                }
+            }
+        };
         self.node = Arc::new(reopened);
 
         ensure_runtime_schemas(&self.node)
@@ -148,6 +170,7 @@ async fn build_test_db(name: &str, node_identity: Option<Arc<dyn AgentIdentity>>
         process_generation: 0,
         node_identity,
         tempdir,
+        p2p_admission: None,
         _signed_node_permit: signed_node_permit,
     }
 }
@@ -182,17 +205,30 @@ type AgentConversation @branchable {
 "#;
 
 pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
+    build_duplicate_tolerant_conversation_db(name, None).await
+}
+
+pub async fn test_db_with_duplicate_tolerant_conversations_and_identity(
+    name: &str,
+    identity: Arc<dyn AgentIdentity>,
+) -> TestDb {
+    build_duplicate_tolerant_conversation_db(name, Some(identity)).await
+}
+
+async fn build_duplicate_tolerant_conversation_db(
+    name: &str,
+    node_identity: Option<Arc<dyn AgentIdentity>>,
+) -> TestDb {
+    let signed_node_permit = signed_test_node_permit(node_identity.is_some()).await;
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .build()
-            .await
-            .expect("embedded node"),
-    );
+    let mut builder = EmbeddedNode::builder().data_path(tempdir.path());
+    if let Some(identity) = &node_identity {
+        builder = builder.with_node_identity_did(identity.did());
+    }
+    let node = Arc::new(builder.build().await.expect("embedded node"));
     for schema in gents_protocol::schemas::RUNTIME_ALL
         .iter()
         .chain(gents_protocol::schemas::ALL.iter())
@@ -209,9 +245,10 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
     TestDb {
         node,
         process_generation: 0,
-        node_identity: None,
+        node_identity,
         tempdir,
-        _signed_node_permit: None,
+        p2p_admission: None,
+        _signed_node_permit: signed_node_permit,
     }
 }
 
@@ -225,6 +262,32 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
 pub async fn create_conversation_row(
     node: &EmbeddedNode,
     session_id: &str,
+    title: &str,
+    preview_text: &str,
+    status: &str,
+    created_at: &str,
+    updated_at: &str,
+    latest_request_id: &str,
+) -> String {
+    create_conversation_row_for_agent(
+        node,
+        session_id,
+        AGENT_DID,
+        title,
+        preview_text,
+        status,
+        created_at,
+        updated_at,
+        latest_request_id,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_conversation_row_for_agent(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
     title: &str,
     preview_text: &str,
     status: &str,
@@ -250,7 +313,7 @@ pub async fn create_conversation_row(
         }}"#,
         session_id = escape_graphql_string(session_id),
         agent_name = escape_graphql_string(AGENT_NAME),
-        agent_did = escape_graphql_string(AGENT_DID),
+        agent_did = escape_graphql_string(agent_did),
         behavior_id = escape_graphql_string(AGENT_NAME),
         title = escape_graphql_string(title),
         preview_text = escape_graphql_string(preview_text),
@@ -333,12 +396,60 @@ impl TestP2pAdmission {
     }
 }
 
+fn test_p2p_config(admission: &TestP2pAdmission) -> P2PConfig {
+    P2PConfig {
+        port: 0,
+        bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
+        discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
+        max_concurrent_multipath_paths: None,
+        secret_key_path: None,
+        load_persisted_collections: false,
+        max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
+        max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
+        rate_limit_burst: admission.rate_limit_burst,
+        rate_limit_rate: admission.rate_limit_rate,
+        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+        max_pending_dags: admission.max_pending_dags,
+    }
+}
+
 pub async fn test_p2p_db(name: &str) -> TestDb {
     build_test_p2p_db(name, TestP2pAdmission::default(), None).await
 }
 
 pub async fn test_p2p_db_with_identity(name: &str, identity: Arc<dyn AgentIdentity>) -> TestDb {
     build_test_p2p_db(name, TestP2pAdmission::default(), Some(identity)).await
+}
+
+/// Builds two signed P2P nodes after reserving both concurrency slots atomically.
+///
+/// Acquiring the slots separately can deadlock under the default parallel test
+/// scheduler: several two-node scenarios may each hold their first slot while
+/// all wait for a second. The shared bulk permit remains live until both nodes
+/// have been dropped.
+pub async fn test_p2p_db_pair_with_identity(
+    name_a: &str,
+    identity_a: Arc<dyn AgentIdentity>,
+    name_b: &str,
+    identity_b: Arc<dyn AgentIdentity>,
+) -> (TestDb, TestDb) {
+    let pair_permit = signed_test_node_permits(2).await;
+    let a = build_test_p2p_db_with_permit(
+        name_a,
+        TestP2pAdmission::default(),
+        Some(identity_a),
+        Some(pair_permit.clone()),
+    )
+    .await;
+    let b = build_test_p2p_db_with_permit(
+        name_b,
+        TestP2pAdmission::default(),
+        Some(identity_b),
+        Some(pair_permit),
+    )
+    .await;
+    (a, b)
 }
 
 pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission) -> TestDb {
@@ -351,27 +462,22 @@ async fn build_test_p2p_db(
     node_identity: Option<Arc<dyn AgentIdentity>>,
 ) -> TestDb {
     let signed_node_permit = signed_test_node_permit(node_identity.is_some()).await;
+    build_test_p2p_db_with_permit(name, admission, node_identity, signed_node_permit).await
+}
+
+async fn build_test_p2p_db_with_permit(
+    name: &str,
+    admission: TestP2pAdmission,
+    node_identity: Option<Arc<dyn AgentIdentity>>,
+    signed_node_permit: Option<SignedTestNodePermit>,
+) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
     let mut builder = EmbeddedNode::builder()
         .data_path(tempdir.path())
-        .with_p2p(P2PConfig {
-            port: 0,
-            bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-            relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
-            discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
-            max_concurrent_multipath_paths: None,
-            secret_key_path: None,
-            load_persisted_collections: false,
-            max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
-            max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
-            rate_limit_burst: admission.rate_limit_burst,
-            rate_limit_rate: admission.rate_limit_rate,
-            max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-            max_pending_dags: admission.max_pending_dags,
-        });
+        .with_p2p(test_p2p_config(&admission));
     if let Some(identity) = &node_identity {
         builder = builder.with_node_identity_did(identity.did());
     }
@@ -384,6 +490,7 @@ async fn build_test_p2p_db(
         process_generation: 0,
         node_identity,
         tempdir,
+        p2p_admission: Some(admission),
         _signed_node_permit: signed_node_permit,
     }
 }
@@ -588,8 +695,20 @@ pub async fn upsert_conversation(
     content: &str,
     status: &str,
 ) {
+    upsert_conversation_for_agent(node, session_id, request_id, AGENT_DID, content, status).await
+}
+
+pub async fn upsert_conversation_for_agent(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    agent_did: &str,
+    content: &str,
+    status: &str,
+) {
     let session_id = escape_graphql_string(session_id);
     let request_id = escape_graphql_string(request_id);
+    let agent_did = escape_graphql_string(agent_did);
     let content = escape_graphql_string(content);
     let status = escape_graphql_string(status);
     let now = chrono::Utc::now().to_rfc3339();
@@ -600,7 +719,7 @@ pub async fn upsert_conversation(
                 add: {{
                     session_id: "{session_id}",
                     agent_name: "{AGENT_NAME}",
-                    agent_did: "{AGENT_DID}",
+                    agent_did: "{agent_did}",
                     behavior_id: "{AGENT_NAME}",
                     title: "Test Conversation",
                     preview_text: "{content}",
@@ -611,7 +730,7 @@ pub async fn upsert_conversation(
                 }},
                 update: {{
                     agent_name: "{AGENT_NAME}",
-                    agent_did: "{AGENT_DID}",
+                    agent_did: "{agent_did}",
                     behavior_id: "{AGENT_NAME}",
                     title: "Test Conversation",
                     preview_text: "{content}",

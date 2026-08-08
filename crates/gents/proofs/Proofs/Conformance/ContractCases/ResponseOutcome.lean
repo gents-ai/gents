@@ -54,6 +54,7 @@ private def messageVersion := signed 200 21 7
 private def otherMessageVersion := signed 201 22 7
 private def outcomeVersion := signed 300 31 7
 private def otherOutcomeVersion := signed 301 32 7
+private def foreignOutcomeVersion := signed 302 33 99
 
 private def provenanceA : ExecutionProvenance :=
   { source := requestA, claim := claimA }
@@ -107,6 +108,9 @@ private def interruptedFact : OutcomeFact :=
                    , finalMessage := some assistantMessage
                    , reasonCode := some 52 }
 
+private def foreignSignerFact : OutcomeFact :=
+  { errorFact with version := foreignOutcomeVersion }
+
 private def reboundRequestFact : OutcomeFact :=
   { completeFact with version := otherOutcomeVersion
                     , provenance := { provenanceA with claim := requestANewer }
@@ -129,7 +133,9 @@ private def caseOf (name : String) (store : OutcomeStore)
   , finalMessageCid := fact.finalMessage.map
       (fun message => message.version.version.compositeCommitCid)
   , finalMessageSignerDid := fact.finalMessage.map (fun message => message.version.signerDid)
-  , visibleSiblingCount := (factsForRequestDoc store fact.request.version.docId).length
+  , visibleSiblingCount :=
+      (agentFactsForRequestDoc store fact.request.version.docId
+        fact.request.signerDid).length
   , publishOutcome := result.1.toContract
   , resultingFactCount := result.2.length
   }
@@ -144,6 +150,7 @@ def responseOutcomeCases : List ResponseOutcomeCase :=
   , caseOf "interrupted_with_partial_message_fresh" [] interruptedFact
   , caseOf "same_request_doc_different_version_conflict" [completeFact] reboundRequestFact
   , caseOf "visible_sibling_set_rejected" [completeFact, errorFact] completeFact
+  , caseOf "foreign_signer_sibling_ignored" [foreignSignerFact] completeFact
   ]
 
 private def cutName : PersistenceCut → String

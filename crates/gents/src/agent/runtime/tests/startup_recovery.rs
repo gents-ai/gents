@@ -432,6 +432,37 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_runtime_process_state(node.as_ref(), identity.did(), "ready").await;
 
+    // Keep title generation out of this capacity fixture. It uses the same
+    // backend admission controller and the deliberately blocking endpoint, so
+    // an untitled conversation would consume the sole permit before the
+    // inference call whose shutdown behavior this test exercises.
+    for (session_id, request_id, behavior_id) in [
+        (
+            "session-shutdown-running",
+            "req-shutdown-running",
+            "general",
+        ),
+        ("session-shutdown-waiting", "req-shutdown-waiting", "code"),
+    ] {
+        crate::session::upsert_conversation_from_request_with_identity_and_title(
+            node.as_ref(),
+            session_id,
+            behavior_id,
+            identity.did(),
+            behavior_id,
+            request_id,
+            "hello",
+            "active",
+            None,
+            Some((
+                "shutdown capacity fixture",
+                crate::session::CONVERSATION_TITLE_SOURCE_TASK,
+            )),
+        )
+        .await
+        .unwrap();
+    }
+
     let first_request_doc_id = create_agent_request_for_behavior(
         node.as_ref(),
         identity.did(),

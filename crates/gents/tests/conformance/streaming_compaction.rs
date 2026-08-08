@@ -543,7 +543,17 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
         case.name
     );
 
-    let db = test_db(&format!("streaming-{}", case.name)).await;
+    let recovery_case = case.action == "recover_interrupted";
+    let db = if recovery_case {
+        signed_materializer_test_db(&format!("streaming-{}", case.name)).await
+    } else {
+        test_db(&format!("streaming-{}", case.name)).await
+    };
+    let agent_did = if recovery_case {
+        signed_materializer_agent_did(&db).to_string()
+    } else {
+        AGENT_DID.to_string()
+    };
     let request_id = format!("{}-{}", case.name, uuid::Uuid::new_v4());
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -552,15 +562,30 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
     } else {
         "processing"
     };
-    let request_doc_id = create_request(
-        &db.node,
-        &request_id,
-        &session_id,
-        request_status,
-        &created_at,
-    )
-    .await;
-    let writer = DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(0));
+    let (request_doc_id, recovery_provenance) = if recovery_case {
+        let (doc_id, provenance) = super::recovery_sweeps::create_signed_active_request(
+            &db,
+            &agent_did,
+            &request_id,
+            &session_id,
+            "processing",
+        )
+        .await;
+        (doc_id, Some(provenance))
+    } else {
+        (
+            create_request(
+                &db.node,
+                &request_id,
+                &session_id,
+                request_status,
+                &created_at,
+            )
+            .await,
+            None,
+        )
+    };
+    let writer = DefraStreamWriter::new(db.node.clone(), &agent_did, Duration::from_millis(0));
 
     let doc_id = if case.pre_status == "complete" {
         create_manual_response(
@@ -570,6 +595,17 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
             &case.pre_status,
             case.pre_token_count,
             case.pre_materialized_seq,
+        )
+        .await
+    } else if let Some(provenance) = recovery_provenance.as_ref() {
+        create_signed_streaming_response(
+            &db.node,
+            &agent_did,
+            &request_id,
+            &session_id,
+            provenance,
+            case.pre_token_count,
+            &case.pre_live_tail,
         )
         .await
     } else {
@@ -634,7 +670,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                 .expect("finalize error");
         }
         "recover_interrupted" => {
-            let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+            let report = RequestLifecycle::recover_all(&db.node, &agent_did)
                 .await
                 .expect("recover streaming response");
             assert_eq!(report.responses_recovered, 1, "{}", case.name);
@@ -876,6 +912,80 @@ async fn create_manual_response(
     );
     let resp = node.execute(&query).await;
     support::first_row::<DocIdRow>(&resp, "AgentResponse").doc_id
+}
+
+async fn create_signed_streaming_response(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    provenance: &gents::RequestExecutionProvenance,
+    token_count: usize,
+    live_tail: &str,
+) -> String {
+    let content = if live_tail == "nonEmpty" {
+        tokens(token_count)
+    } else {
+        String::new()
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{response_key}"
+                    request_id: "{request_id}"
+                    request_doc_id: "{request_doc_id}"
+                    request_source_composite_commit_cid: "{source_cid}"
+                    request_source_signer_did: "{source_signer}"
+                    request_claim_composite_commit_cid: "{claim_cid}"
+                    request_claim_signer_did: "{claim_signer}"
+                    agent_did: "{agent_did}"
+                    behavior_id: "{behavior_id}"
+                    session_id: "{session_id}"
+                    content: "{content}"
+                    reasoning: ""
+                    status: "streaming"
+                    error_message: ""
+                    token_count: {token_count}
+                    progress_seq: 0
+                    created_at: "{now}"
+                    completed_at: ""
+                }}) {{ _docID }}
+            }}"#,
+            response_key = escape_graphql_string(request_id),
+            request_id = escape_graphql_string(request_id),
+            request_doc_id = escape_graphql_string(&provenance.source.version.doc_id),
+            source_cid = escape_graphql_string(&provenance.source.version.composite_commit_cid),
+            source_signer = escape_graphql_string(&provenance.source.signer_did),
+            claim_cid = escape_graphql_string(&provenance.claim.version.composite_commit_cid),
+            claim_signer = escape_graphql_string(&provenance.claim.signer_did),
+            agent_did = escape_graphql_string(agent_did),
+            behavior_id = AGENT_NAME,
+            session_id = escape_graphql_string(session_id),
+            content = escape_graphql_string(&content),
+            now = escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create exact streaming response failed: {:?}",
+        response.errors
+    );
+    let query = node
+        .execute(&format!(
+            r#"query {{
+                AgentResponse(filter: {{ response_key: {{ _eq: "{}" }} }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(request_id),
+        ))
+        .await;
+    assert!(
+        !query.has_errors(),
+        "query exact streaming response failed: {:?}",
+        query.errors
+    );
+    support::first_row::<support::DocIdRow>(&query, "AgentResponse").doc_id
 }
 
 async fn mark_materialized(node: std::sync::Arc<EmbeddedNode>, request_id: &str, sequence: u32) {

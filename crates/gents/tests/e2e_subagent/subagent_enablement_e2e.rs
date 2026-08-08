@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, test_db};
+use crate::support::{first_optional_row, test_db_with_identity, TestDb};
 
 struct RunningAgent {
     booted: BootedAgent,
@@ -24,7 +24,9 @@ struct RunningAgent {
 }
 
 async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> RunningAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity = db
+        .node_identity()
+        .unwrap_or_else(|| panic!("{test_name}: self-spawn agent requires a signed TestDb"));
     let agent_did = identity.did().to_string();
     let behavior_id = default_behavior_id_for_agent(&agent_did);
 
@@ -109,6 +111,11 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     }
 }
 
+async fn signed_test_db(name: &str) -> TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(name));
+    test_db_with_identity(name, identity).await
+}
+
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     request_id: String,
@@ -144,7 +151,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
 
 #[tokio::test]
 async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
-    let db = test_db("e2e-subagent-enablement").await;
+    let db = signed_test_db("e2e-subagent-enablement").await;
     let running = boot_self_spawn_agent(&db, "e2e-subagent-enablement").await;
 
     let parent_request_id = "e2e-parent-list";
@@ -172,7 +179,7 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),

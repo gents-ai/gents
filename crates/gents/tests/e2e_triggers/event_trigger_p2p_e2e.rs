@@ -39,7 +39,7 @@ use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_p2p_db;
+use crate::support::test_p2p_db_pair_with_identity;
 
 const TRIGGER_ID: &str = "trigger-p2p-signup";
 const TASK_ID: &str = "task-p2p-signup";
@@ -205,6 +205,16 @@ struct EventTriggerRow {
     concurrency: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EventDeliveryAdmissionRow {
+    request_id: String,
+    agent_did: String,
+    trigger_id: String,
+    source_collection: String,
+    source_doc_id: String,
+    event_kind: String,
+}
+
 async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let query = format!(
@@ -240,6 +250,26 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
         .cloned()
         .expect("EventTrigger row missing");
     serde_json::from_value(row).expect("decode EventTrigger row")
+}
+
+async fn fetch_event_delivery_admission(
+    node: &EmbeddedNode,
+    source_doc_id: &str,
+) -> EventDeliveryAdmissionRow {
+    let source_doc_id = escape_graphql_string(source_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ EventDeliveryAdmission(
+                filter: {{ source_doc_id: {{ _eq: "{source_doc_id}" }} }}
+            ) {{ request_id agent_did trigger_id source_collection source_doc_id event_kind }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["EventDeliveryAdmission"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "expected one durable delivery admission");
+    serde_json::from_value(rows[0].clone()).expect("decode EventDeliveryAdmission row")
 }
 
 async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
@@ -364,15 +394,23 @@ async fn install_one_way_replicator(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn p2p_replicated_doc_fires_event_trigger() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
+    let writer_identity: Arc<dyn AgentIdentity> =
+        Arc::new(test_identity("event-trigger-p2p-writer"));
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("event-trigger-p2p-agent"));
+    let (db_writer, db_agent) = test_p2p_db_pair_with_identity(
+        "event-trigger-p2p-writer",
+        writer_identity,
+        "event-trigger-p2p-agent",
+        identity.clone(),
+    )
+    .await;
+
     // Node A: bare writer node (P2P enabled, no agent).
-    let db_writer = test_p2p_db("event-trigger-p2p-writer").await;
     register_replicated_event_schema(db_writer.node.as_ref()).await;
 
     // Node B: the agent node (P2P enabled).
-    let db_agent = test_p2p_db("event-trigger-p2p-agent").await;
     register_replicated_event_schema(db_agent.node.as_ref()).await;
 
-    let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db_agent.node.as_ref(),
@@ -500,40 +538,27 @@ async fn p2p_replicated_doc_fires_event_trigger() {
         "request_id must be populated: {request:?}"
     );
 
-    // The runtime-owned bookkeeping writeback should also land on B's trigger,
-    // referencing the replicated source doc's id.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let fired = loop {
-        let row = fetch_event_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
-        if row.last_status.as_deref() == Some("fired") {
-            break row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for EventTrigger.last_status=\"fired\" (last row: {row:?})"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let trigger = fetch_event_trigger(db_agent.node.as_ref(), TRIGGER_ID).await;
+    assert_eq!(trigger.fire_count, Some(0));
+    assert_eq!(trigger.last_status, None);
+    assert_eq!(trigger.last_fired_source_doc_id, None);
+    assert_eq!(trigger.last_error, None);
+    assert_eq!(trigger.task_id.as_deref(), Some(TASK_ID));
     assert_eq!(
-        fired.fire_count,
-        Some(1),
-        "fire_count must be 1 after one fire: {fired:?}"
+        trigger.source_collection.as_deref(),
+        Some("ReplicatedEvent")
     );
-    assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
-        Some(source_doc_id.as_str()),
-        "last_fired_source_doc_id should match the replicated ReplicatedEvent docID: {fired:?}"
-    );
-    assert!(
-        fired.last_error.as_deref().unwrap_or("").is_empty(),
-        "last_error must be cleared on a successful fire: {fired:?}"
-    );
-    // Apply-owned fields must not be clobbered by the runtime writeback.
-    assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
-    assert_eq!(fired.source_collection.as_deref(), Some("ReplicatedEvent"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    assert_eq!(trigger.event_kind.as_deref(), Some("created"));
+    assert_eq!(trigger.enabled, Some(true));
+    assert_eq!(trigger.concurrency.as_deref(), Some("serial"));
+
+    let admission = fetch_event_delivery_admission(db_agent.node.as_ref(), &source_doc_id).await;
+    assert_eq!(admission.request_id, request.request_id);
+    assert_eq!(admission.agent_did, agent_did);
+    assert_eq!(admission.trigger_id, TRIGGER_ID);
+    assert_eq!(admission.source_collection, "ReplicatedEvent");
+    assert_eq!(admission.source_doc_id, source_doc_id);
+    assert_eq!(admission.event_kind, "created");
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();

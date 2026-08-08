@@ -16,12 +16,17 @@ use crate::support::interrupt::{
 };
 use crate::support::snapshots::{fetch_request_snapshot, fetch_response_snapshot};
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
-use crate::support::{first_row, test_db};
+use crate::support::{first_row, test_db_with_identity, TestDb};
 
 const RETRY_MODEL: &str = "retry-tape-model";
 const RETRY_BACKEND_ID: &str = "retry-tape-backend";
 const RETRY_BEHAVIOR_ID: &str = "retry-tape";
 const PROD_PARSE_400_BODY: &str = r#"{"object":"error","message":"BadRequestError: Error in processing prompt inputs: Expecting value: line 1 column 28 (char 27)","type":"BadRequestError","code":400}"#;
+
+async fn signed_retry_db(name: &str) -> TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(name));
+    test_db_with_identity(name, identity).await
+}
 
 #[tokio::test]
 async fn backend_restart_cluster_recovers() {
@@ -40,8 +45,8 @@ async fn backend_restart_cluster_recovers() {
         })
         .collect::<Vec<_>>();
     let backend = MockStreamingBackend::start_with_plans(RETRY_MODEL, plans).unwrap();
-    let db = test_db("completion-retry-cluster").await;
-    let agent = boot_retry_agent(&db, "completion-retry-cluster", backend.endpoint(), 3, 30).await;
+    let db = signed_retry_db("completion-retry-cluster").await;
+    let agent = boot_retry_agent(&db, backend.endpoint(), 3, 30).await;
 
     let mut request_doc_ids = Vec::new();
     for index in 0..3 {
@@ -125,16 +130,8 @@ async fn backoff_longer_than_liveness_timeout_recovers() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-backoff-liveness").await;
-    let agent = boot_retry_agent_with_liveness(
-        &db,
-        "completion-retry-backoff-liveness",
-        backend.endpoint(),
-        1,
-        60,
-        Some(1),
-    )
-    .await;
+    let db = signed_retry_db("completion-retry-backoff-liveness").await;
+    let agent = boot_retry_agent_with_liveness(&db, backend.endpoint(), 1, 60, Some(1)).await;
 
     let request_id = "req-backoff-vs-liveness";
     let doc_id = create_runtime_request(
@@ -173,15 +170,8 @@ async fn deadline_tight_fails_cleanly() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deadline-tight").await;
-    let agent = boot_retry_agent(
-        &db,
-        "completion-retry-deadline-tight",
-        backend.endpoint(),
-        1,
-        1,
-    )
-    .await;
+    let db = signed_retry_db("completion-retry-deadline-tight").await;
+    let agent = boot_retry_agent(&db, backend.endpoint(), 1, 1).await;
 
     let started = Instant::now();
     let request_id = "req-deadline-tight";
@@ -238,15 +228,8 @@ async fn interactive_budget_is_quick() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-interactive-budget").await;
-    let agent = boot_retry_agent(
-        &db,
-        "completion-retry-interactive-budget",
-        backend.endpoint(),
-        1,
-        30,
-    )
-    .await;
+    let db = signed_retry_db("completion-retry-interactive-budget").await;
+    let agent = boot_retry_agent(&db, backend.endpoint(), 1, 30).await;
 
     let started = Instant::now();
     let request_id = "req-interactive-budget";
@@ -296,15 +279,8 @@ async fn deterministic_400_tape() {
         )],
     )
     .unwrap();
-    let db = test_db("completion-retry-deterministic-400").await;
-    let agent = build_retry_agent(
-        &db,
-        "completion-retry-deterministic-400",
-        backend.endpoint(),
-        1,
-        30,
-    )
-    .await;
+    let db = signed_retry_db("completion-retry-deterministic-400").await;
+    let agent = build_retry_agent(&db, backend.endpoint(), 1, 30).await;
     let agent_did = agent.agent_did().to_string();
     let request_id = "req-deterministic-400";
     let request_doc_id = create_runtime_request(
@@ -338,25 +314,15 @@ async fn deterministic_400_tape() {
 
 async fn boot_retry_agent(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
     max_concurrent: i64,
     deadline_duration_secs: u64,
 ) -> BootedAgent {
-    boot_retry_agent_with_liveness(
-        db,
-        test_name,
-        endpoint,
-        max_concurrent,
-        deadline_duration_secs,
-        None,
-    )
-    .await
+    boot_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None).await
 }
 
 async fn boot_retry_agent_with_liveness(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
     max_concurrent: i64,
     deadline_duration_secs: u64,
@@ -364,7 +330,6 @@ async fn boot_retry_agent_with_liveness(
 ) -> BootedAgent {
     let agent = build_retry_agent_with_liveness(
         db,
-        test_name,
         endpoint,
         max_concurrent,
         deadline_duration_secs,
@@ -377,32 +342,30 @@ async fn boot_retry_agent_with_liveness(
 
 async fn build_retry_agent(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
     max_concurrent: i64,
     deadline_duration_secs: u64,
 ) -> Gents {
-    build_retry_agent_with_liveness(
-        db,
-        test_name,
-        endpoint,
-        max_concurrent,
-        deadline_duration_secs,
-        None,
-    )
-    .await
+    build_retry_agent_with_liveness(db, endpoint, max_concurrent, deadline_duration_secs, None)
+        .await
 }
 
 async fn build_retry_agent_with_liveness(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
     max_concurrent: i64,
     deadline_duration_secs: u64,
     stream_liveness_timeout_secs: Option<u64>,
 ) -> Gents {
     upsert_retry_backend(db.node.as_ref(), endpoint, max_concurrent).await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity = db
+        .node_identity()
+        .expect("completion retry tape fixture must use a signed node identity");
+    assert_eq!(
+        db.node.node_identity_did(),
+        Some(identity.did()),
+        "completion retry tape runtime must reuse the embedded node signer"
+    );
     let mut behavior = Gents::builder()
         .node(db.node.clone())
         .identity(identity)

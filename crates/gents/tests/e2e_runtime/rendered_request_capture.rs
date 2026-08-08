@@ -19,7 +19,11 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::RenderedCompletionRequest;
-use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
+use gents::{
+    default_behavior_id_for_agent, ensure_agent_principal, load_agent_behavior,
+    load_inference_profile, upsert_agent_behavior, upsert_inference_profile, AgentIdentity,
+    BehaviorBuilder, CompactionStrategy, DocumentRuntimeOptions, Gents, ToolCeiling,
+};
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
@@ -345,13 +349,18 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let db = signed_capture_db("rendered-request-capture-idempotency").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(
-        db.node.clone(),
-        "did:key:z6MkCaptureIdempotency",
-    )
-    .expect("signed rendered-request sink");
+    let agent_did = db
+        .node_identity()
+        .expect("signed capture fixture identity")
+        .did()
+        .to_string();
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone(), &agent_did)
+        .expect("signed rendered-request sink");
 
-    let first = rendered_fixture(serde_json::json!({"model": "m", "messages": [{"role": "user"}]}));
+    let first = rendered_fixture(
+        &agent_did,
+        serde_json::json!({"model": "m", "messages": [{"role": "user"}]}),
+    );
     sink.capture(first.clone()).await.expect("first capture");
     assert_eq!(
         rendered_requests(db.node.as_ref(), &first.request_id)
@@ -443,14 +452,16 @@ async fn capture_rejects_forged_persisted_execution_provenance_without_writing()
     let rows = wait_for_rendered_requests(db.node.as_ref(), "req-forged-provenance", 1).await;
     let row = &rows[0];
 
-    let mut forged = rendered_fixture(serde_json::json!({
-        "model": CAPTURE_MODEL,
-        "messages": [{"role": "user", "content": "forged"}]
-    }));
+    let mut forged = rendered_fixture(
+        &agent.agent_did,
+        serde_json::json!({
+            "model": CAPTURE_MODEL,
+            "messages": [{"role": "user", "content": "forged"}]
+        }),
+    );
     forged.request_doc_id = doc_id;
     forged.request_id = "req-forged-provenance".to_string();
     forged.session_id = "session-forged-provenance".to_string();
-    forged.agent_did = agent.agent_did.clone();
     forged.behavior_id = CAPTURE_BEHAVIOR_ID.to_string();
     forged.requester_did = String::new();
     forged.request_source_commit_cid = row["request_source_commit_cid"]
@@ -1151,19 +1162,12 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     .expect("mock backend");
 
     let db = signed_capture_db("rendered-request-capture-summarizer").await;
-    let agent = boot_capture_agent_with(
+    let (agent, behavior_id) = boot_document_capture_agent(
         &db,
         "rendered-request-capture-summarizer",
         backend.endpoint(),
-        None,
-        |behavior| {
-            behavior
-                .enable_meta_tools(false)
-                .enable_context_budget(false)
-                .context_window(CONTEXT_WINDOW)
-                .compaction_threshold(COMPACTION_THRESHOLD)
-                .compaction_strategy(CompactionStrategy::StripThenSummarize)
-        },
+        CONTEXT_WINDOW,
+        COMPACTION_THRESHOLD,
     )
     .await;
 
@@ -1171,7 +1175,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let seed_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &behavior_id,
         "req-capture-seed",
         session_id,
         &format!("seed the transcript {SEED_MARKER}"),
@@ -1187,13 +1191,19 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.agent_did,
-        CAPTURE_BEHAVIOR_ID,
+        &behavior_id,
         "req-capture-summarized",
         session_id,
         "and now a short follow-up",
     )
     .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &follow_up_doc, "completed").await;
+    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &follow_up_doc).await;
+    let follow_up_snapshot = fetch_request_snapshot(db.node.as_ref(), &follow_up_doc).await;
+    assert_eq!(
+        terminal, "completed",
+        "model-backed compaction request failed: {}",
+        follow_up_snapshot.failure_reason
+    );
 
     let follow_up_bodies = backend.observed_completion_bodies()[seed_bodies..].to_vec();
     assert!(
@@ -1404,8 +1414,8 @@ fn parse_json(value: &Value) -> Value {
     canonical(&serde_json::from_str::<Value>(text).expect("stored column must be valid JSON"))
 }
 
-fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
-    let agent_did = "did:key:z6MkCaptureIdempotency".to_string();
+fn rendered_fixture(agent_did: &str, request_json: Value) -> RenderedCompletionRequest {
+    let agent_did = agent_did.to_string();
     let session_id = "session-idem".to_string();
     // This fixture exercises capture-key idempotence independently of the
     // document-backed provenance gate. One-shot captures intentionally carry
@@ -1750,6 +1760,80 @@ async fn boot_capture_agent_with(
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     BootedAgent::new(shutdown_tx, handle, agent_did)
+}
+
+/// Boot from signed configuration documents so compaction can pin the exact
+/// principal, behavior, profile, and backend facts in its source manifest.
+async fn boot_document_capture_agent(
+    db: &crate::support::TestDb,
+    test_name: &str,
+    endpoint: &str,
+    context_window: usize,
+    compaction_threshold: f64,
+) -> (BootedAgent, String) {
+    upsert_capture_backend(db.node.as_ref(), endpoint).await;
+    let identity = db.node_identity().unwrap_or_else(|| {
+        panic!("{test_name}: rendered-request capture requires a signed TestDb")
+    });
+    assert_eq!(
+        db.node.node_identity_did(),
+        Some(identity.did()),
+        "{test_name}: TestDb identity must configure the embedded node signer"
+    );
+
+    let agent_did = identity.did().to_string();
+    let behavior_id = default_behavior_id_for_agent(&agent_did);
+    let bootstrap = ensure_agent_principal(db.node.as_ref(), &agent_did)
+        .await
+        .expect("bootstrap document-backed capture principal");
+    assert_eq!(bootstrap.default_behavior.behavior_id, behavior_id);
+
+    let profile_id = bootstrap
+        .default_behavior
+        .inference_profile_id
+        .as_deref()
+        .expect("default behavior must reference its inference profile");
+    let mut profile = load_inference_profile(db.node.as_ref(), profile_id)
+        .await
+        .expect("load capture inference profile")
+        .expect("capture inference profile exists");
+    profile.context_window = Some(context_window as i64);
+    profile.stream_batch_ms = Some(0);
+    profile.deadline_duration_secs = Some(30);
+    upsert_inference_profile(db.node.as_ref(), &profile)
+        .await
+        .expect("update capture inference profile");
+
+    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
+        .await
+        .expect("load capture behavior")
+        .expect("capture behavior exists");
+    behavior.backend_id = Some(CAPTURE_BACKEND_ID.to_string());
+    behavior.model_name = Some(CAPTURE_MODEL.to_string());
+    behavior.compaction_strategy = Some("StripThenSummarize".to_string());
+    behavior.compaction_threshold = Some(compaction_threshold);
+    upsert_agent_behavior(db.node.as_ref(), &behavior)
+        .await
+        .expect("update capture behavior");
+
+    let agent = Gents::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("build document-backed rendered-request capture agent");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(agent.run(shutdown_rx));
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+
+    (
+        BootedAgent::new(shutdown_tx, handle, agent_did),
+        behavior_id,
+    )
 }
 
 async fn upsert_capture_backend(node: &EmbeddedNode, endpoint: &str) {

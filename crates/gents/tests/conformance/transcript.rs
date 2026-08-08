@@ -47,12 +47,13 @@ fn transcript_tool_result_message(result_id: &str, text: &str) -> Message {
 
 async fn transcript_hook_fixture(test_name: &str) -> (support::TestDb, DefraSessionHook, String) {
     let db = signed_materializer_test_db(test_name).await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let session_id = format!("{test_name}-session");
     let hook = DefraSessionHook::resume_or_create_with_identity_policy(
         db.node.clone(),
         &session_id,
         AGENT_NAME,
-        AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await

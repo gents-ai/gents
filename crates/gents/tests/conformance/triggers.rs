@@ -10,11 +10,11 @@
 //! cases here pin the corresponding conformance surface:
 //!
 //! * `fires_on_matching_source_doc_create` — a filter-less EventTrigger
-//!   materializes an `AgentRequest` with `caused_by_trigger_kind = "event"`
-//!   and the rendered template in `content`.
+//!   durably admits the exact source document and materializes the admission's
+//!   deterministic `AgentRequest` with `caused_by_trigger_kind = "event"`.
 //! * `does_not_fire_when_source_doc_fails_filter` — an EventTrigger gated by a
 //!   `kind == "signup"` filter does NOT fire for `kind: "other"` source docs,
-//!   and the runtime bookkeeping on the trigger row stays null.
+//!   and no delivery admission is persisted.
 //! * `enabled_false_does_not_fire` — `enabled: false` triggers never
 //!   materialize requests, even for matching source docs.
 //! * `backfill_is_forward_only` — pre-existing source docs are NEVER replayed
@@ -27,9 +27,9 @@
 //! * `latest_only_supersedes_prior_fire` — the supersede mutation the engine
 //!   would run transitions the in-flight event-kind request to
 //!   `superseded`, and a new materialize lands with the same lineage.
-//! * `template_render_failure_records_error_status` — an event-kind render
-//!   failure writes `last_status = "error"` / `last_error = ...` on the
-//!   EventTrigger doc without materializing a request.
+//! * `template_render_failure_records_durable_admission` — an event-kind
+//!   render failure leaves one durable admission, does not materialize a
+//!   request, and does not mutate the desired EventTrigger configuration.
 //! * `two_triggers_same_source_collection_each_evaluate_filter_independently`
 //!   — two triggers on the same `source_collection` apply their own filters
 //!   independently; only the trigger whose filter matches fires.
@@ -44,12 +44,13 @@
 //! gating, latest-only supersession, parallel bypass of in-flight gates, and
 //! lineage shape without depending on wall-clock debounce.
 //!
-//! Cases 6, 7, 8 remain asserted here at the persistence-layer contract (seed
-//! an in-flight `AgentRequest` with the right lineage tuple + simulate the
-//! exact mutation / writeback the production materializer/source produces).
-//! They are still valuable because they pin the DefraDB query/mutation shape
-//! the engine delegates to at runtime, but they are no longer the only
-//! correctness oracle for serial/latest-only trigger behavior.
+//! Cases 6 and 7 remain asserted here at the persistence-layer contract by
+//! seeding an in-flight `AgentRequest` with the right lineage tuple. Event
+//! delivery cases assert the immutable admission and deterministic request
+//! facts directly; EventTrigger is desired configuration and is not a mutable
+//! runtime-status row. These tests pin the DefraDB query/mutation shape the
+//! engine delegates to at runtime, but they are no longer the only correctness
+//! oracle for serial/latest-only trigger behavior.
 //!
 //! Cases 1, 2, 3, 4, 5, 9 boot a real `Gents` so the EventSource loop
 //! actually observes DefraDB events; these are the tests where the
@@ -59,7 +60,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::defra_node::EmbeddedNode;
+use gents::defra_node::{EmbeddedNode, ExecuteRetryPolicy};
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
@@ -117,7 +118,12 @@ async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prom
             }}) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp = node
+        .execute_with_retry(
+            &mutation,
+            ExecuteRetryPolicy::new(64, Duration::from_millis(1), Duration::from_millis(10)),
+        )
+        .await;
     assert!(!resp.has_errors(), "create Task failed: {:?}", resp.errors);
 }
 
@@ -215,7 +221,12 @@ async fn update_event_trigger_source_collection(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp = node
+        .execute_with_retry(
+            &mutation,
+            ExecuteRetryPolicy::new(64, Duration::from_millis(1), Duration::from_millis(10)),
+        )
+        .await;
     assert!(
         !resp.has_errors(),
         "update EventTrigger source_collection failed: {:?}",
@@ -316,6 +327,130 @@ struct EventTriggerRow {
     event_kind: Option<String>,
     concurrency: Option<String>,
     task_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct EventDeliveryAdmissionRow {
+    doc_id: String,
+    request_id: String,
+    source_doc_id: String,
+}
+
+async fn fetch_event_delivery_admissions(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+) -> Vec<EventDeliveryAdmissionRow> {
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let query = format!(
+        r#"{{
+            EventDeliveryAdmission(
+                filter: {{ trigger_id: {{ _eq: "{escaped_trigger_id}" }} }}
+            ) {{
+                _docID
+                request_id
+                source_doc_id
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch EventDeliveryAdmission rows failed: {:?}",
+        resp.errors
+    );
+    resp.data
+        .as_ref()
+        .and_then(|data| data.get("EventDeliveryAdmission"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|row| EventDeliveryAdmissionRow {
+            doc_id: row
+                .get("_docID")
+                .and_then(Value::as_str)
+                .expect("EventDeliveryAdmission._docID")
+                .to_owned(),
+            request_id: row
+                .get("request_id")
+                .and_then(Value::as_str)
+                .expect("EventDeliveryAdmission.request_id")
+                .to_owned(),
+            source_doc_id: row
+                .get("source_doc_id")
+                .and_then(Value::as_str)
+                .expect("EventDeliveryAdmission.source_doc_id")
+                .to_owned(),
+        })
+        .collect()
+}
+
+async fn wait_for_admission_count(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+    expected: usize,
+    timeout: Duration,
+) -> Vec<EventDeliveryAdmissionRow> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let rows = fetch_event_delivery_admissions(node, trigger_id).await;
+        if rows.len() == expected {
+            return rows;
+        }
+        if rows.len() > expected {
+            panic!("over-admission for trigger_id={trigger_id}: expected {expected}, got {rows:?}");
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for admission_count({trigger_id}) == {expected}; got {rows:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn assert_admission_request_materialized(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+    admission: &EventDeliveryAdmissionRow,
+) {
+    let request_id = escape_graphql_string(&admission.request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
+                _docID
+                caused_by_trigger_id
+                caused_by_trigger_kind
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "fetch deterministic AgentRequest failed: {:?}",
+        resp.errors
+    );
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .expect("AgentRequest rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "admission {} must map to exactly one deterministic request",
+        admission.doc_id
+    );
+    assert_eq!(
+        rows[0].get("caused_by_trigger_id").and_then(Value::as_str),
+        Some(trigger_id)
+    );
+    assert_eq!(
+        rows[0]
+            .get("caused_by_trigger_kind")
+            .and_then(Value::as_str),
+        Some("event")
+    );
 }
 
 async fn fetch_event_trigger_row(node: &EmbeddedNode, trigger_id: &str) -> Option<EventTriggerRow> {
@@ -619,30 +754,6 @@ async fn assert_no_request_within(node: &EmbeddedNode, trigger_id: &str, settle:
         count, 0,
         "expected no AgentRequest for trigger_id={trigger_id} but got {count}"
     );
-}
-
-async fn wait_for_last_status(
-    node: &EmbeddedNode,
-    trigger_id: &str,
-    desired: &str,
-    timeout: Duration,
-) -> EventTriggerRow {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if let Some(row) = fetch_event_trigger_row(node, trigger_id).await {
-            if row.last_status.as_deref() == Some(desired) {
-                return row;
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!(
-                "timed out waiting for EventTrigger({trigger_id}).last_status = {desired:?}; \
-                 got {:?}",
-                fetch_event_trigger_row(node, trigger_id).await
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 #[path = "triggers_cases/concurrency_persistence.rs"]

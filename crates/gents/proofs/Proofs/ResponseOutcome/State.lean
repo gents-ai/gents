@@ -106,6 +106,7 @@ structure OutcomeFact where
 
 def OutcomeFact.wellFormed (fact : OutcomeFact) : Bool :=
   fact.version.exact &&
+    fact.version.signerDid == fact.request.signerDid &&
     fact.provenance.exactFor fact.request.version.docId fact.request.signerDid &&
     decide (fact.request = fact.provenance.claim) &&
     fact.terminalizedAt != 0 &&
@@ -121,6 +122,14 @@ abbrev OutcomeStore := List OutcomeFact
 
 def factsForRequestDoc (store : OutcomeStore) (requestDocId : Nat) : List OutcomeFact :=
   store.filter (fun fact => fact.request.version.docId == requestDocId)
+
+/-- Only the target agent's own signed facts participate in terminal authority.
+Foreign signed rows remain visible for audit but cannot block or replace the
+agent's outcome before ACP policies are installed. -/
+def agentFactsForRequestDoc
+    (store : OutcomeStore) (requestDocId agentDid : Nat) : List OutcomeFact :=
+  (factsForRequestDoc store requestDocId).filter
+    (fun fact => fact.version.signerDid == agentDid)
 
 inductive PublishOutcome where
   | fresh
@@ -144,7 +153,8 @@ def publish (store : OutcomeStore) (candidate : OutcomeFact) :
   if !candidate.wellFormed then
     (.rejected, store)
   else
-    match factsForRequestDoc store candidate.request.version.docId with
+    match agentFactsForRequestDoc store candidate.request.version.docId
+        candidate.request.signerDid with
     | [] => (.fresh, candidate :: store)
     | [stored] =>
         if stored = candidate then (.idempotent, store) else (.rejected, store)

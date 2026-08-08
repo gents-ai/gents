@@ -910,6 +910,9 @@ pub(crate) fn authorization_lookup_error(
     let message = error.to_string();
     message.contains(&format!("child AgentRequest {child_request_id} not found"))
         || message.contains(&format!(
+            "child AgentRequest {child_request_id} resolved to 0 physical documents"
+        ))
+        || message.contains(&format!(
             "child AgentRequest {child_request_id} is not linked to parent request {caller_request_id}"
         ))
         || (message.contains("parent AgentToolCall") && message.contains("not found for child"))
@@ -2048,6 +2051,11 @@ mod cross_deployment_timeout_tests {
             "c-1"
         ));
         assert!(authorization_lookup_error(
+            &anyhow!("child AgentRequest c-1 resolved to 0 physical documents"),
+            "p-1",
+            "c-1"
+        ));
+        assert!(authorization_lookup_error(
             &anyhow!("child AgentRequest c-1 is not linked to parent request p-1"),
             "p-1",
             "c-1"
@@ -2061,6 +2069,11 @@ mod cross_deployment_timeout_tests {
         ));
         assert!(!authorization_lookup_error(
             &anyhow!("query child AgentRequest c-1 failed: storage down"),
+            "p-1",
+            "c-1"
+        ));
+        assert!(!authorization_lookup_error(
+            &anyhow!("child AgentRequest c-1 resolved to 2 physical documents"),
             "p-1",
             "c-1"
         ));

@@ -18,7 +18,7 @@ use serde::Deserialize;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, test_db};
+use crate::support::{first_optional_row, test_db_with_identity, TestDb};
 
 struct RunningAgent {
     booted: BootedAgent,
@@ -27,7 +27,9 @@ struct RunningAgent {
 }
 
 async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> RunningAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity = db
+        .node_identity()
+        .unwrap_or_else(|| panic!("{test_name}: self-spawn agent requires a signed TestDb"));
     let agent_did = identity.did().to_string();
     let behavior_id = default_behavior_id_for_agent(&agent_did);
 
@@ -110,6 +112,11 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
         _endpoint: endpoint,
         behavior_id,
     }
+}
+
+async fn signed_test_db(name: &str) -> TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(name));
+    test_db_with_identity(name, identity).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,7 +224,7 @@ async fn fetch_tool_call_state(
 
 #[tokio::test]
 async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
-    let db = test_db("convergence-local-background").await;
+    let db = signed_test_db("convergence-local-background").await;
     let running = boot_self_spawn_agent(&db, "convergence-local-background").await;
 
     let parent_request_id = "convergence-bg-parent";
@@ -245,7 +252,7 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -297,7 +304,7 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
 
 #[tokio::test]
 async fn unmaterialized_background_child_stays_observable_in_list() {
-    let db = test_db("convergence-unmaterialized").await;
+    let db = signed_test_db("convergence-unmaterialized").await;
     let running = boot_self_spawn_agent(&db, "convergence-unmaterialized").await;
 
     let parent_request_id = "unmat-bg-parent";
@@ -328,7 +335,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -462,7 +469,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
 
 #[tokio::test]
 async fn local_foreground_spawn_materializes_child_via_source() {
-    let db = test_db("convergence-local-foreground").await;
+    let db = signed_test_db("convergence-local-foreground").await;
     let running = boot_self_spawn_agent(&db, "convergence-local-foreground").await;
 
     let parent_request_id = "convergence-fg-parent";
@@ -489,7 +496,7 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),

@@ -7,7 +7,7 @@ use gents::{
 };
 
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::test_db_with_identity;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
@@ -90,8 +90,8 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
-    let db = test_db("runtime-observability").await;
     let identity = Arc::new(test_identity("runtime-observability"));
+    let db = test_db_with_identity("runtime-observability", identity.clone()).await;
     bind_default_behavior_backend(
         db.node.as_ref(),
         identity.did(),

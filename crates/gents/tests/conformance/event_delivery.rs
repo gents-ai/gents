@@ -120,7 +120,26 @@ pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation
 
     for trace in traces {
         let source = runtime_event_delivery_source_contract(&trace.instance_name);
-        let mut runtime = ProductionEventDeliveryDriver::new(source, &trace.initial_world).await;
+        // A modeled `drop` happens before the source observes the wake. Do not
+        // publish that initial wake into the live fixture and then discard the
+        // source's output: SubagentSource materializes its durable child before
+        // emitting, so that would model downstream loss instead of subscription
+        // loss and make the subsequent rescan correctly dedupe the child.
+        let dropped_initial_wakes = trace
+            .actions
+            .first()
+            .and_then(|action| match action {
+                LeanEventDeliveryAction::Drop { doc } => Some(doc.clone()),
+                _ => None,
+            })
+            .into_iter()
+            .collect();
+        let mut runtime = ProductionEventDeliveryDriver::new_with_dropped_initial_wakes(
+            source,
+            &trace.initial_world,
+            dropped_initial_wakes,
+        )
+        .await;
         for action in &trace.actions {
             runtime.apply(action).await.unwrap_or_else(|err| {
                 panic!("trace `{}` rejected runtime action: {err}", trace.name)
@@ -272,6 +291,7 @@ struct ProductionEventDeliveryDriver {
     emitted_rx: Option<mpsc::Receiver<String>>,
     emitted_buffer: Vec<String>,
     doc_ids: HashMap<String, String>,
+    dropped_initial_wakes: std::collections::HashSet<String>,
     world: lean_vocab_test::LeanEventDeliveryWorld,
 }
 
@@ -285,6 +305,14 @@ impl ProductionEventDeliveryDriver {
     async fn new(
         source: EventDeliverySourceContract,
         world: &lean_vocab_test::LeanEventDeliveryWorld,
+    ) -> Self {
+        Self::new_with_dropped_initial_wakes(source, world, Default::default()).await
+    }
+
+    async fn new_with_dropped_initial_wakes(
+        source: EventDeliverySourceContract,
+        world: &lean_vocab_test::LeanEventDeliveryWorld,
+        dropped_initial_wakes: std::collections::HashSet<String>,
     ) -> Self {
         let db = signed_materializer_test_db(&format!("event-delivery-{}", source.name)).await;
         let node_agent_did = signed_materializer_agent_did(&db).to_string();
@@ -308,6 +336,7 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: None,
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
+                    dropped_initial_wakes: dropped_initial_wakes.clone(),
                     world: empty_event_delivery_world(),
                 }
             }
@@ -332,6 +361,7 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: Some(emitted_rx),
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
+                    dropped_initial_wakes: dropped_initial_wakes.clone(),
                     world: empty_event_delivery_world(),
                 }
             }
@@ -362,6 +392,7 @@ impl ProductionEventDeliveryDriver {
                     emitted_rx: Some(emitted_rx),
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
+                    dropped_initial_wakes: dropped_initial_wakes.clone(),
                     world: empty_event_delivery_world(),
                 }
             }
@@ -387,7 +418,9 @@ impl ProductionEventDeliveryDriver {
             }
         }
         for doc in &world.subscription_queue {
-            self.publish_update(doc)?;
+            if !self.dropped_initial_wakes.contains(doc) {
+                self.publish_update(doc)?;
+            }
         }
         self.world = world.clone();
         Ok(())
@@ -419,7 +452,9 @@ impl ProductionEventDeliveryDriver {
             | LeanEventDeliveryAction::DeliverFromQueue { doc } => {
                 erase_first(&mut self.world.subscription_queue, doc)
                     .ok_or_else(|| format!("doc {doc:?} is not queued"))?;
-                self.drop_production_delivery(doc).await?;
+                if !self.dropped_initial_wakes.remove(doc) {
+                    self.drop_production_delivery(doc).await?;
+                }
             }
             LeanEventDeliveryAction::RescanTick => {
                 if self.source.rescan_bounded_by == 0 {

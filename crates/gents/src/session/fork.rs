@@ -422,7 +422,7 @@ async fn attach_child_tool_fact(
         _ => anyhow::bail!("unsupported child tool fact kind {kind}"),
     };
     let mutation = format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {doc_field}: "{}", {cid_field}: "{}", {signer_field}: "{}" }}) {{ _docID }} }}"#,
+        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }}, {doc_field}: {{ _eq: null }}, {cid_field}: {{ _eq: null }}, {signer_field}: {{ _eq: null }} }}, input: {{ {doc_field}: "{}", {cid_field}: "{}", {signer_field}: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(child_call_doc_id),
         escape_graphql_string(&fact.version.doc_id),
         escape_graphql_string(&fact.version.composite_commit_cid),
@@ -441,7 +441,35 @@ async fn attach_child_tool_fact(
             _ => false,
         });
     if !updated {
-        anyhow::bail!("attaching child {kind} did not update exactly one call row");
+        let query = format!(
+            r#"query {{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID {doc_field} {cid_field} {signer_field} }} }}"#,
+            escape_graphql_string(child_call_doc_id),
+        );
+        let current = executor.execute_graphql(&query).await?;
+        if current.has_errors() {
+            anyhow::bail!(
+                "loading child call after {kind} attachment CAS failed: {}",
+                render_graphql_errors(&current)
+            );
+        }
+        let rows = current
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let already_attached = matches!(rows.as_slice(), [row]
+            if row.get(doc_field).and_then(Value::as_str) == Some(fact.version.doc_id.as_str())
+                && row.get(cid_field).and_then(Value::as_str)
+                    == Some(fact.version.composite_commit_cid.as_str())
+                && row.get(signer_field).and_then(Value::as_str)
+                    == Some(fact.signer_did.as_str()));
+        if !already_attached {
+            anyhow::bail!(
+                "attaching child {kind} did not update one empty edge or match the exact existing fact"
+            );
+        }
     }
     Ok(())
 }

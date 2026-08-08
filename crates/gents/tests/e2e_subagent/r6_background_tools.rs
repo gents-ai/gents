@@ -5,8 +5,8 @@ use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
 use gents::{
-    interrupt_request, BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook,
-    FailurePolicy,
+    interrupt_request, AgentIdentity, BackgroundExecutionRegistry, BackgroundToolRegistry,
+    DefraSessionHook, FailurePolicy,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Notify;
 
-use crate::support::{first_row, test_db};
+use crate::support::fixtures::test_identity;
+use crate::support::{create_request_for_agent, first_row, test_db_with_identity, TestDb};
 
 struct StaticTool {
     name: &'static str,
@@ -161,13 +162,16 @@ async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
 ) -> (crate::support::TestDb, DefraSessionHook, String, String) {
-    let db = test_db(test_name).await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let agent_did = identity.did().to_string();
+    let db = test_db_with_identity(test_name, identity).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request(
+    create_request_for_agent(
         db.node.as_ref(),
         &request_id,
         &session_id,
+        &agent_did,
         "processing",
         "2026-05-14T00:00:00Z",
     )
@@ -177,7 +181,7 @@ async fn setup_hook(
         db.node.clone(),
         &session_id,
         "r6-background",
-        crate::support::AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -187,6 +191,13 @@ async fn setup_hook(
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
         .await;
     (db, hook, session_id, request_id)
+}
+
+fn signed_agent_did(db: &TestDb) -> String {
+    db.node_identity()
+        .expect("background-tool fixture requires a signed TestDb")
+        .did()
+        .to_string()
 }
 
 async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
@@ -530,13 +541,10 @@ async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
-    let _runs = gents::run_periodic_recovery_sweeps(
-        db.node.as_ref(),
-        crate::support::AGENT_DID,
-        &executions,
-    )
-    .await
-    .unwrap();
+    let _runs =
+        gents::run_periodic_recovery_sweeps(db.node.as_ref(), &signed_agent_did(&db), &executions)
+            .await
+            .unwrap();
     assert_eq!(
         load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
             .await
@@ -576,7 +584,7 @@ async fn periodic_recovery_preserves_registered_worker_after_parent_interrupt() 
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     set_parent_state(db.node.as_ref(), &request_id, "interrupted", "interrupted").await;
-    gents::run_periodic_recovery_sweeps(db.node.as_ref(), crate::support::AGENT_DID, &executions)
+    gents::run_periodic_recovery_sweeps(db.node.as_ref(), &signed_agent_did(&db), &executions)
         .await
         .unwrap();
     assert_eq!(
@@ -609,7 +617,7 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
         db.node.clone(),
         request_id.clone(),
         session_id.clone(),
-        crate::support::AGENT_DID.to_string(),
+        signed_agent_did(&db),
         tool_call_id.to_string(),
         1,
         "slow_tool".to_string(),
@@ -621,7 +629,7 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
 
     gents::run_periodic_recovery_sweeps(
         db.node.as_ref(),
-        crate::support::AGENT_DID,
+        &signed_agent_did(&db),
         &BackgroundExecutionRegistry::default(),
     )
     .await
@@ -643,7 +651,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         db.node.clone(),
         request_id,
         session_id.clone(),
-        crate::support::AGENT_DID.to_string(),
+        signed_agent_did(&db),
         tool_call_id.to_string(),
         1,
         "slow_tool".to_string(),
@@ -661,7 +669,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
                 await_mode: "background"
             }}) {{ _docID }}
         }}"#,
-        escape_graphql_string(crate::support::AGENT_DID)
+        escape_graphql_string(&signed_agent_did(&db))
     );
     let response = db.node.execute(&malformed).await;
     assert!(
@@ -673,7 +681,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     let report =
         gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
             db.node.as_ref(),
-            crate::support::AGENT_DID,
+            &signed_agent_did(&db),
             &BackgroundExecutionRegistry::default(),
         )
         .await
@@ -995,10 +1003,11 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
     let next_request_id = "r6-background-cross-turn-controls-request-2".to_string();
-    crate::support::create_request(
+    create_request_for_agent(
         db.node.as_ref(),
         &next_request_id,
         &session_id,
+        &signed_agent_did(&db),
         "processing",
         "2026-05-14T00:00:01Z",
     )
@@ -1154,7 +1163,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
 
     let escaped_session_id = escape_graphql_string(&session_id);
     let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(crate::support::AGENT_DID);
+    let escaped_agent_did = escape_graphql_string(&signed_agent_did(&db));
     let malformed_rows = format!(
         r#"mutation {{
             null_identity: create_AgentToolCall(input: {{

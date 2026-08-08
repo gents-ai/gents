@@ -120,10 +120,12 @@ fn response_identity(node: &EmbeddedNode, agent_did: &str) -> Result<Did> {
     let node_did = node.node_identity_did().ok_or_else(|| {
         anyhow::anyhow!("AgentResponseOutcome persistence requires a DefraDB node identity")
     })?;
-    if agent_did.trim().is_empty() {
-        anyhow::bail!("AgentResponseOutcome requires a semantic agent DID");
+    if node_did != agent_did {
+        anyhow::bail!(
+            "AgentResponseOutcome agent DID {agent_did} does not match node signing identity {node_did}"
+        );
     }
-    Did::new(node_did).context("parsing AgentResponseOutcome node writer DID")
+    Did::new(agent_did).context("parsing AgentResponseOutcome agent DID")
 }
 
 fn reader_identity(node: &EmbeddedNode) -> Result<Did> {
@@ -197,6 +199,44 @@ async fn load_rows(
         .transpose()
         .map(|rows| rows.unwrap_or_default())
         .context("decoding AgentResponseOutcome siblings")
+}
+
+async fn load_agent_signed_rows(
+    node: &EmbeddedNode,
+    identity: &Did,
+    request_doc_id: &str,
+    agent_did: &str,
+) -> Result<Vec<(ResponseOutcomeRow, SignedDocumentVersionRef)>> {
+    let rows = load_rows(node, identity, request_doc_id).await?;
+    let mut signed = Vec::with_capacity(rows.len());
+    for row in rows {
+        let version =
+            crate::document_version::verified_current_signed_document_version_with_identity(
+                node,
+                "AgentResponseOutcome",
+                &row.doc_id,
+                Some(identity.clone()),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "verifying AgentResponseOutcome {} candidate for request {request_doc_id}",
+                    row.doc_id
+                )
+            })?;
+        if version.signer_did != agent_did {
+            tracing::warn!(
+                outcome_doc_id = %row.doc_id,
+                request_doc_id,
+                signer_did = %version.signer_did,
+                expected_agent_did = agent_did,
+                "ignoring AgentResponseOutcome authored by a different principal",
+            );
+            continue;
+        }
+        signed.push((row, version));
+    }
+    Ok(signed)
 }
 
 fn row_matches(row: &ResponseOutcomeRow, desired: &ResponseOutcomeInput<'_>) -> bool {
@@ -368,20 +408,18 @@ pub(crate) async fn publish_response_outcome(
         verify_final_message(node, &identity, &input, message).await?;
     }
 
-    let existing = load_rows(node, &identity, &input.provenance.source.version.doc_id).await?;
+    let existing = load_agent_signed_rows(
+        node,
+        &identity,
+        &input.provenance.source.version.doc_id,
+        input.agent_did,
+    )
+    .await?;
     match existing.as_slice() {
-        [row] if row_matches(row, &input) => {
-            return crate::document_version::verified_current_signed_document_version_with_identity(
-                node,
-                "AgentResponseOutcome",
-                &row.doc_id,
-                Some(identity),
-            )
-            .await;
-        }
+        [(row, version)] if row_matches(row, &input) => return Ok(version.clone()),
         [] => {}
         rows => anyhow::bail!(
-            "AgentResponseOutcome request _docID={} has {} conflicting visible facts",
+            "AgentResponseOutcome request _docID={} has {} conflicting agent-signed facts",
             input.provenance.source.version.doc_id,
             rows.len()
         ),
@@ -438,23 +476,107 @@ pub(crate) async fn publish_response_outcome(
         );
     }
 
-    let rows = load_rows(node, &identity, &input.provenance.source.version.doc_id).await?;
-    let [row] = rows.as_slice() else {
+    let rows = load_agent_signed_rows(
+        node,
+        &identity,
+        &input.provenance.source.version.doc_id,
+        input.agent_did,
+    )
+    .await?;
+    let [(row, version)] = rows.as_slice() else {
         anyhow::bail!(
-            "AgentResponseOutcome create produced {} visible request siblings",
+            "AgentResponseOutcome create produced {} agent-signed request siblings",
             rows.len()
         );
     };
     if !row_matches(row, &input) {
         anyhow::bail!("created AgentResponseOutcome did not round-trip exact facts");
     }
-    crate::document_version::verified_current_signed_document_version_with_identity(
+    Ok(version.clone())
+}
+
+/// Test-fixture seam for publishing the same immutable completion fact used by
+/// the owned runtime loop.
+///
+/// Integration fixtures cannot call crate-private transcript and claim-history
+/// helpers directly.  Keeping the assembly here ensures they still have to
+/// provide a real signed pending -> claimed request history and a finalized
+/// assistant message; this is not a shortcut around provenance validation.
+#[doc(hidden)]
+pub async fn publish_completed_response_outcome_for_test(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    agent_did: &str,
+    final_message_sequence: u32,
+) -> Result<()> {
+    publish_response_outcome_for_test(
         node,
-        "AgentResponseOutcome",
-        &row.doc_id,
-        Some(identity),
+        request_doc_id,
+        agent_did,
+        "complete",
+        None,
+        Some(final_message_sequence),
     )
     .await
+}
+
+/// General terminal-outcome fixture seam; see
+/// [`publish_completed_response_outcome_for_test`].
+#[doc(hidden)]
+pub async fn publish_response_outcome_for_test(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    agent_did: &str,
+    outcome_kind: &str,
+    reason_code: Option<&str>,
+    final_message_sequence: Option<u32>,
+) -> Result<()> {
+    if !cfg!(debug_assertions) {
+        anyhow::bail!("test response-outcome publication is unavailable outside debug builds");
+    }
+    let kind = ResponseOutcomeKind::from_str(outcome_kind)?;
+    let reconstructed = crate::lifecycle::reconstruct_execution_provenance_from_claim_ancestry(
+        node,
+        request_doc_id,
+        agent_did,
+    )
+    .await?;
+    let request = reconstructed.claimed_request;
+    let behavior_id = request
+        .behavior_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("completed response fixture requires a behavior id"))?;
+    let final_message = match final_message_sequence {
+        Some(sequence) => Some(
+            crate::session::message_fact_ref_for_sequence(
+                node,
+                &request.session_id,
+                sequence,
+                agent_did,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let terminalized_at = chrono::Utc::now().to_rfc3339();
+    publish_response_outcome(
+        node,
+        ResponseOutcomeInput {
+            request_id: &request.request_id,
+            session_id: &request.session_id,
+            agent_did,
+            requester_did: request.requester_did.as_deref(),
+            behavior_id,
+            provenance: &reconstructed.provenance,
+            kind,
+            reason_code,
+            final_message: final_message.as_ref(),
+            terminalized_at: &terminalized_at,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Load the complete visible sibling set and accept exactly one verified fact.
@@ -464,12 +586,12 @@ pub(crate) async fn load_accepted_response_outcome(
     request_doc_id: &str,
 ) -> Result<Option<AcceptedResponseOutcome>> {
     let identity = reader_identity(node)?;
-    let rows = load_rows(node, &identity, request_doc_id).await?;
-    let row = match rows.as_slice() {
+    let rows = load_agent_signed_rows(node, &identity, request_doc_id, agent_did).await?;
+    let (row, outcome_version) = match rows.as_slice() {
         [] => return Ok(None),
         [row] => row,
         rows => anyhow::bail!(
-            "AgentResponseOutcome request _docID={request_doc_id} has {} visible siblings",
+            "AgentResponseOutcome request _docID={request_doc_id} has {} agent-signed siblings",
             rows.len()
         ),
     };
@@ -532,24 +654,12 @@ pub(crate) async fn load_accepted_response_outcome(
         Some(message) => Some(verify_final_message(node, &identity, &input, message).await?),
         None => None,
     };
-    let outcome_version =
-        crate::document_version::verified_current_signed_document_version_with_identity(
-            node,
-            "AgentResponseOutcome",
-            &row.doc_id,
-            Some(identity),
-        )
-        .await?;
-    // The verified signer is the DefraDB principal that authored this exact
-    // outcome version. It need not equal the semantic `agent_did`: a node may
-    // persist facts on behalf of the agent, with ACP authorization enforced by
-    // the database policy layer.
     Ok(Some(AcceptedResponseOutcome {
         request_doc_id: row.request_doc_id.clone(),
         request_id: row.request_id.clone(),
         session_id: row.session_id.clone(),
         provenance,
-        outcome_signer_did: outcome_version.signer_did,
+        outcome_signer_did: outcome_version.signer_did.clone(),
         kind,
         reason_code: row.reason_code.clone(),
         final_message,
@@ -605,7 +715,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn node_writer_may_differ_from_semantic_agent() {
+    async fn node_writer_must_match_semantic_agent() {
         let key_dir = tempfile::tempdir().unwrap();
         let node_identity =
             crate::identity::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None)
@@ -618,7 +728,12 @@ mod tests {
             .unwrap();
         let semantic_agent = "did:key:zSemanticAgent";
 
-        let identity = response_identity(&node, semantic_agent).unwrap();
+        let error = response_identity(&node, semantic_agent)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not match node signing identity"));
+
+        let identity = response_identity(&node, &node_identity.did()).unwrap();
         assert_eq!(identity.to_string(), node_identity.did());
 
         let provenance = RequestExecutionProvenance::new(

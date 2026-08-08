@@ -38,6 +38,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Goals", Module("conformance/goals.rs")),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
+        (
+            "InferenceRenderedCapture",
+            Module("conformance/inference_rendered_capture.rs"),
+        ),
         ("ManagedExec", Module("conformance/managed_exec.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
         (

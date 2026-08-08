@@ -743,7 +743,7 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         .iter()
         .find(|candidate| candidate.name == "bridge_step_complete_child_completed")
         .expect("generated completed bridge case");
-    let (db, _lifecycle, _tool_call_id, child_request_id, parent_session_id) =
+    let (db, _lifecycle, _tool_call_id, child_request_id, parent_session_id, agent_did) =
         seed_bridge_step_fixture(bridge_case).await;
     let parent_request_id = format!("{}-parent", bridge_case.name);
     let child_session_id = fetch_child_session_id(db.node.as_ref(), &child_request_id).await;
@@ -775,7 +775,7 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
                 create_AgentMessage(input: {{
                     message_key: "{escaped_session_id}:1"
                     session_id: "{escaped_session_id}"
-                    agent_did: "{AGENT_DID}"
+                    agent_did: "{agent_did}"
                     request_id: "{escaped_request_id}"
                     sequence: 1
                     role: "assistant"
@@ -792,11 +792,16 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         reserve.errors
     );
 
-    persist_bridge_step_child_completion(db.node.as_ref(), &child_request_id, &child_session_id)
-        .await;
+    persist_bridge_step_child_completion(
+        db.node.clone(),
+        &child_request_id,
+        &child_session_id,
+        &agent_did,
+    )
+    .await;
 
     let outcome =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+        project_background_subagent_completion(db.node.clone(), &child_request_id, &agent_did)
             .await
             .expect("project terminal background completion");
     assert!(
@@ -860,7 +865,7 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
         "completed",
     )
     .await;
-    let mut watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let mut watcher = DefraWatcher::new(db.node.clone(), &agent_did);
     let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
         .await
         .expect("completion wake should become claimable")
@@ -1085,7 +1090,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     assert_eq!(witness.kind_field("child_pre_state"), "processing");
     assert_eq!(witness.kind_field("child_pre_admission"), "executing");
 
-    let (db, hook, session_id, _request_id, _parent_deadline) = setup_background_spawn_fixture(
+    let (db, hook, session_id, request_id, parent_deadline) = setup_background_spawn_fixture(
         "r6-background-theorem-cascade",
         vec![BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID],
         0,
@@ -1093,15 +1098,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     )
     .await;
     let fixture_agent_did = signed_materializer_agent_did(&db).to_string();
-    // After spawn convergence (#377) the child AgentRequest is materialized by
-    // SubagentSource, not synchronously by the hook.  Hold a standalone source
-    // for the lifetime of this test so the bridge row produces a child request.
-    let _source = super::support::fixtures::spawn_subagent_source(
-        db.node.clone(),
-        &fixture_agent_did,
-        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
-        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
-    );
     let args = json!({
         "name": BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
         "prompt": "child for cascade theorem witness",
@@ -1122,6 +1118,22 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         .as_str()
         .expect("child_request_id")
         .to_string();
+    // This theorem witness exercises the cascade transition, not asynchronous
+    // SubagentSource delivery. Materialize the signed child deterministically
+    // so a lossy subscription wake-up cannot make the lifecycle trace flaky.
+    gents::tool_call_lifecycle::create_subagent_request_with_request_id_for_test(
+        db.node.as_ref(),
+        child_request_id.clone(),
+        request_id,
+        "internal-theorem-cascade".to_string(),
+        0,
+        fixture_agent_did.clone(),
+        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID.to_string(),
+        "child for cascade theorem witness".to_string(),
+        Some(parent_deadline),
+    )
+    .await
+    .expect("materialize theorem witness child request");
 
     let tool = fetch_background_theorem_tool_call(
         db.node.as_ref(),
@@ -1135,8 +1147,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         Some(child_request_id.as_str())
     );
 
-    // Wait for SubagentSource to materialize the child (post-convergence #377:
-    // the child is no longer created synchronously by the hook).
     let child = wait_for_background_theorem_child_lifecycle_state(
         db.node.as_ref(),
         &child_request_id,
@@ -1154,10 +1164,7 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         BACKEND_ID,
     );
     assert_eq!(
-        child_lifecycle
-            .claim_without_identity_for_test()
-            .await
-            .unwrap(),
+        child_lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
     child_lifecycle.begin_execution().await.unwrap();
@@ -1808,8 +1815,16 @@ pub(super) async fn generated_bridge_step_cases_drive_bridge_lifecycle() {
 
 async fn seed_bridge_step_fixture(
     case: &lean_vocab_test::LeanBridgeStepCase,
-) -> (support::TestDb, ToolCallLifecycle, String, String, String) {
+) -> (
+    support::TestDb,
+    ToolCallLifecycle,
+    String,
+    String,
+    String,
+    String,
+) {
     let db = signed_materializer_test_db(&format!("bridge-step-{}", case.name)).await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -1819,7 +1834,7 @@ async fn seed_bridge_step_fixture(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.clone(),
             display_name: Some("bridge step parent".to_string()),
             description: None,
             summary: None,
@@ -1843,7 +1858,7 @@ async fn seed_bridge_step_fixture(
         db.node.as_ref(),
         &parent_request_id,
         &parent_session_id,
-        AGENT_DID,
+        &agent_did,
         0,
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
@@ -1864,7 +1879,7 @@ async fn seed_bridge_step_fixture(
         parent_request_id.clone(),
         tool_call_id.clone(),
         0,
-        AGENT_DID.to_string(),
+        agent_did.clone(),
         "bridge-step-child".to_string(),
         format!("prompt for {tool_call_id}"),
         Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
@@ -1881,7 +1896,7 @@ async fn seed_bridge_step_fixture(
         db.node.clone(),
         parent_request_id.clone(),
         parent_session_id.clone(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         tool_call_id.clone(),
         1,
         "spawn_subagent".to_string(),
@@ -1890,7 +1905,7 @@ async fn seed_bridge_step_fixture(
         AwaitMode::Background,
         cancel_policy,
         child_request_id.clone(),
-        "did:test:target".to_string(),
+        agent_did.clone(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -1900,6 +1915,7 @@ async fn seed_bridge_step_fixture(
         tool_call_id,
         child_request_id,
         parent_session_id,
+        agent_did,
     )
 }
 
@@ -1908,16 +1924,17 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
         project_background_subagent_completion, BackgroundCompletionOutcome,
     };
 
-    let (db, _lifecycle, tool_call_id, child_request_id, _parent_session_id) =
+    let (db, _lifecycle, tool_call_id, child_request_id, _parent_session_id, agent_did) =
         seed_bridge_step_fixture(case).await;
     let child_session_id = fetch_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     match case.child_state.as_str() {
         "completed" => {
             persist_bridge_step_child_completion(
-                db.node.as_ref(),
+                db.node.clone(),
                 &child_request_id,
                 &child_session_id,
+                &agent_did,
             )
             .await;
         }
@@ -1931,28 +1948,28 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
             .await;
         }
         "interrupted" => {
-            set_request_status_lifecycle_by_request_id(
-                db.node.as_ref(),
+            persist_bridge_step_child_noncomplete(
+                db.node.clone(),
                 &child_request_id,
-                "interrupted",
+                &agent_did,
                 "interrupted",
             )
             .await;
         }
         "failed" => {
-            set_request_status_lifecycle_by_request_id(
-                db.node.as_ref(),
+            persist_bridge_step_child_noncomplete(
+                db.node.clone(),
                 &child_request_id,
-                "error",
+                &agent_did,
                 "failed",
             )
             .await;
         }
         "dead" => {
-            set_request_status_lifecycle_by_request_id(
-                db.node.as_ref(),
+            persist_bridge_step_child_noncomplete(
+                db.node.clone(),
                 &child_request_id,
-                "dead",
+                &agent_did,
                 "dead",
             )
             .await;
@@ -1961,7 +1978,7 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
     }
 
     let outcome =
-        project_background_subagent_completion(db.node.clone(), &child_request_id, AGENT_DID)
+        project_background_subagent_completion(db.node.clone(), &child_request_id, &agent_did)
             .await
             .expect("project background completion");
     let row_state = fetch_bridge_step_tool_state(db.node.as_ref(), &tool_call_id).await;
@@ -2010,7 +2027,7 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
 }
 
 async fn drive_bridge_step_cascade_case(case: &lean_vocab_test::LeanBridgeStepCase) {
-    let (db, mut lifecycle, _tool_call_id, child_request_id, _parent_session_id) =
+    let (db, mut lifecycle, _tool_call_id, child_request_id, _parent_session_id, _agent_did) =
         seed_bridge_step_fixture(case).await;
     set_request_status_lifecycle_by_request_id(
         db.node.as_ref(),
@@ -2117,14 +2134,86 @@ async fn fetch_bridge_step_tool_state(node: &EmbeddedNode, tool_call_id: &str) -
     first_row::<StateRow>(&node.execute(&query).await, "AgentToolCall").lifecycle_state
 }
 
+async fn claim_bridge_step_child(
+    node: Arc<EmbeddedNode>,
+    child_request_id: &str,
+    agent_did: &str,
+) -> String {
+    #[derive(Deserialize)]
+    struct RequestDocRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+    }
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let request_row = first_row::<RequestDocRow>(
+        &node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }}, limit: 1) {{ _docID }} }}"#
+            ))
+            .await,
+        "AgentRequest",
+    );
+    let request = DefraWatcher::new(node.clone(), agent_did)
+        .try_fetch_request(&request_row.doc_id)
+        .await
+        .expect("load bridge-step child request")
+        .expect("bridge-step child request exists");
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "bridge-step-child",
+        agent_did,
+        request,
+        DEADLINE_SECS,
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle.begin_execution().await.unwrap();
+    request_row.doc_id
+}
+
+async fn persist_bridge_step_child_noncomplete(
+    node: Arc<EmbeddedNode>,
+    child_request_id: &str,
+    agent_did: &str,
+    lifecycle_state: &str,
+) {
+    let request_doc_id = claim_bridge_step_child(node.clone(), child_request_id, agent_did).await;
+    let (status, kind, reason) = match lifecycle_state {
+        "interrupted" => ("interrupted", "interrupted", "interrupted"),
+        "failed" => ("error", "error", "bridge_failure"),
+        "dead" => ("dead", "error", "bridge_dead"),
+        other => panic!("unexpected noncomplete bridge state {other}"),
+    };
+    gents::publish_response_outcome_for_test(
+        node.as_ref(),
+        &request_doc_id,
+        agent_did,
+        kind,
+        Some(reason),
+        None,
+    )
+    .await
+    .expect("publish bridge-step noncomplete outcome");
+    set_request_status_lifecycle_by_request_id(
+        node.as_ref(),
+        child_request_id,
+        status,
+        lifecycle_state,
+    )
+    .await;
+}
+
 async fn persist_bridge_step_child_completion(
-    node: &EmbeddedNode,
+    node: Arc<EmbeddedNode>,
     child_request_id: &str,
     child_session_id: &str,
+    agent_did: &str,
 ) {
-    set_request_status_lifecycle_by_request_id(node, child_request_id, "completed", "completed")
-        .await;
-
+    let request_doc_id = claim_bridge_step_child(node.clone(), child_request_id, agent_did).await;
+    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_request_doc_id = escape_graphql_string(&request_doc_id);
     let assistant = Message::Assistant {
         id: None,
         content: vec![AssistantContent::Text(Text {
@@ -2133,13 +2222,16 @@ async fn persist_bridge_step_child_completion(
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339();
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
                 session_id: "{escaped_child_session_id}",
+                agent_did: "{escaped_agent_did}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -2154,12 +2246,28 @@ async fn persist_bridge_step_child_completion(
         response.errors
     );
 
+    gents::publish_completed_response_outcome_for_test(
+        node.as_ref(),
+        &request_doc_id,
+        agent_did,
+        1,
+    )
+    .await
+    .expect("publish bridge-step child outcome");
+    set_request_status_lifecycle_by_request_id(
+        node.as_ref(),
+        child_request_id,
+        "completed",
+        "completed",
+    )
+    .await;
+
     let create_response = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "bridge-step-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",

@@ -22,7 +22,7 @@ use serde_json::Value;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_p2p_db;
+use crate::support::{test_p2p_db, test_p2p_db_pair_with_identity};
 
 const TRIGGER_ID: &str = "trigger-app-collection-pairing";
 const TASK_ID: &str = "task-app-collection-pairing";
@@ -566,6 +566,16 @@ struct EventTriggerRow {
     concurrency: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EventDeliveryAdmissionRow {
+    request_id: String,
+    agent_did: String,
+    trigger_id: String,
+    source_collection: String,
+    source_doc_id: String,
+    event_kind: String,
+}
+
 async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let query = format!(
@@ -601,6 +611,26 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
         .cloned()
         .expect("EventTrigger row missing");
     serde_json::from_value(row).expect("decode EventTrigger row")
+}
+
+async fn fetch_event_delivery_admission(
+    node: &EmbeddedNode,
+    source_doc_id: &str,
+) -> EventDeliveryAdmissionRow {
+    let source_doc_id = escape_graphql_string(source_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ EventDeliveryAdmission(
+                filter: {{ source_doc_id: {{ _eq: "{source_doc_id}" }} }}
+            ) {{ request_id agent_did trigger_id source_collection source_doc_id event_kind }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["EventDeliveryAdmission"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "expected one durable delivery admission");
+    serde_json::from_value(rows[0].clone()).expect("decode EventDeliveryAdmission row")
 }
 
 async fn write_change_proposed(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
@@ -691,14 +721,19 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     // Compress pairing sweeps for this process (read once at daemon start).
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
-    let db_a = test_p2p_db("app-collection-pairing-a").await;
-    let db_b = test_p2p_db("app-collection-pairing-b").await;
-    register_change_proposed_schema(db_a.node.as_ref()).await;
-    register_change_proposed_schema(db_b.node.as_ref()).await;
-
     let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-agent-a"));
     let identity_b: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-agent-b"));
     let admin: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-admin"));
+    let (db_a, db_b) = test_p2p_db_pair_with_identity(
+        "app-collection-pairing-a",
+        identity_a.clone(),
+        "app-collection-pairing-b",
+        identity_b.clone(),
+    )
+    .await;
+    register_change_proposed_schema(db_a.node.as_ref()).await;
+    register_change_proposed_schema(db_b.node.as_ref()).await;
+
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
 
@@ -906,29 +941,24 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(request.content, format!("fired for {EXTERNAL_ID}"));
     assert!(!request.request_id.is_empty());
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let fired = loop {
-        let row = fetch_event_trigger(db_b.node.as_ref(), TRIGGER_ID).await;
-        if row.last_status.as_deref() == Some("fired") {
-            break row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for EventTrigger.last_status=\"fired\" (last row: {row:?})"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    assert_eq!(fired.fire_count, Some(1));
-    assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
-        Some(source_doc_id.as_str())
-    );
-    assert!(fired.last_error.as_deref().unwrap_or("").is_empty());
-    assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
-    assert_eq!(fired.source_collection.as_deref(), Some("ChangeProposed"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    let trigger = fetch_event_trigger(db_b.node.as_ref(), TRIGGER_ID).await;
+    assert_eq!(trigger.fire_count, Some(0));
+    assert_eq!(trigger.last_status, None);
+    assert_eq!(trigger.last_fired_source_doc_id, None);
+    assert_eq!(trigger.last_error, None);
+    assert_eq!(trigger.task_id.as_deref(), Some(TASK_ID));
+    assert_eq!(trigger.source_collection.as_deref(), Some("ChangeProposed"));
+    assert_eq!(trigger.event_kind.as_deref(), Some("created"));
+    assert_eq!(trigger.enabled, Some(true));
+    assert_eq!(trigger.concurrency.as_deref(), Some("serial"));
+
+    let admission = fetch_event_delivery_admission(db_b.node.as_ref(), &source_doc_id).await;
+    assert_eq!(admission.request_id, request.request_id);
+    assert_eq!(admission.agent_did, did_b);
+    assert_eq!(admission.trigger_id, TRIGGER_ID);
+    assert_eq!(admission.source_collection, "ChangeProposed");
+    assert_eq!(admission.source_doc_id, source_doc_id);
+    assert_eq!(admission.event_kind, "created");
 
     // Idempotence: applied state stable across another sweep window.
     let post = fetch_pairing_applied(db_a.node.as_ref(), &peer_b)
@@ -960,12 +990,17 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
 
-    let db_a = test_p2p_db("app-collection-soft-skip-a").await;
-    let db_b = test_p2p_db("app-collection-soft-skip-b").await;
-
     let identity_a: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-a"));
     let identity_b: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-b"));
     let admin: Arc<dyn AgentIdentity> = Arc::new(test_identity("app-collection-soft-admin"));
+    let (db_a, db_b) = test_p2p_db_pair_with_identity(
+        "app-collection-soft-skip-a",
+        identity_a.clone(),
+        "app-collection-soft-skip-b",
+        identity_b.clone(),
+    )
+    .await;
+
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
 

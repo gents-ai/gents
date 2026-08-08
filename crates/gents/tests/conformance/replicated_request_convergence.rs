@@ -473,38 +473,31 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
 }
 
 pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() {
-    let db = test_db("convergence-terminal-repair").await;
+    let db = signed_materializer_test_db("convergence-terminal-repair").await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
-    let request_doc_id = create_owned_request(
-        &db.node,
+    let (request_doc_id, provenance) = super::recovery_sweeps::create_signed_active_request(
+        &db,
+        &agent_did,
         request_id,
         session_id,
-        OWNER_DID,
-        "processing",
         "processing",
     )
     .await;
+    super::recovery_sweeps::create_signed_terminal_response_and_outcome(
+        &db.node,
+        &agent_did,
+        request_id,
+        session_id,
+        &provenance,
+        "failed",
+        Some("provider_failed"),
+    )
+    .await;
     let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
-    let response_doc_id =
-        create_response_with_status(&db.node, request_id, request_id, session_id, "error").await;
-    let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentResponse(
-                filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
-                input: {{ error_message: "provider failed durably" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = db.node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed terminal reason: {:?}",
-        response.errors
-    );
 
-    let repaired = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+    let repaired = RequestLifecycle::repair_terminal_requests(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(repaired.repaired, 1);
@@ -517,106 +510,69 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     let row = fetch_convergence_row(&db.node, request_id).await;
     assert_eq!(row.status, "error");
     assert_eq!(row.lifecycle_state, "failed");
-    assert_eq!(
-        row.failure_reason.as_deref(),
-        Some("provider failed durably")
-    );
+    assert_eq!(row.failure_reason.as_deref(), Some("provider_failed"));
     assert!(row.terminalized_at.is_some());
     assert_eq!(row.terminal_redrive_attempts, Some(0));
 
-    let duplicate = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+    let duplicate = RequestLifecycle::repair_terminal_requests(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
 
     let provider_request_id = "convergence-provider-interrupted-message";
     let provider_session_id = "convergence-provider-interrupted-session";
-    create_owned_request(
-        &db.node,
-        provider_request_id,
-        provider_session_id,
-        OWNER_DID,
-        "processing",
-        "processing",
-    )
-    .await;
-    let provider_response_doc_id = create_response_with_status(
-        &db.node,
-        provider_request_id,
-        provider_request_id,
-        provider_session_id,
-        "error",
-    )
-    .await;
-    let escaped_provider_response_doc_id = escape_graphql_string(&provider_response_doc_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_provider_response_doc_id}" }} }},
-                    input: {{ error_message: "interrupted" }}
-                ) {{ _docID }}
-            }}"#
-        ))
+    let (_provider_request_doc_id, provider_provenance) =
+        super::recovery_sweeps::create_signed_active_request(
+            &db,
+            &agent_did,
+            provider_request_id,
+            provider_session_id,
+            "processing",
+        )
         .await;
-    assert!(
-        !response.has_errors(),
-        "seed provider interrupted message: {:?}",
-        response.errors
-    );
+    super::recovery_sweeps::create_signed_terminal_response_and_outcome(
+        &db.node,
+        &agent_did,
+        provider_request_id,
+        provider_session_id,
+        &provider_provenance,
+        "failed",
+        Some("stream_error"),
+    )
+    .await;
 
-    let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+    let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(provider_repair.repaired, 1);
     let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
     assert_eq!(provider_row.status, "error");
     assert_eq!(provider_row.lifecycle_state, "failed");
-    assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
+    assert_eq!(provider_row.failure_reason.as_deref(), Some("stream_error"));
 
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
-    create_owned_request(
-        &db.node,
-        runtime_interrupt_request_id,
-        runtime_interrupt_session_id,
-        OWNER_DID,
-        "processing",
-        "processing",
-    )
-    .await;
-    let runtime_interrupt_response_doc_id = create_response_with_status(
-        &db.node,
-        runtime_interrupt_request_id,
-        runtime_interrupt_request_id,
-        runtime_interrupt_session_id,
-        "error",
-    )
-    .await;
-    let escaped_runtime_interrupt_response_doc_id =
-        escape_graphql_string(&runtime_interrupt_response_doc_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_runtime_interrupt_response_doc_id}" }} }},
-                    input: {{
-                        error_message: "interrupted",
-                        interrupted_at: "2026-07-10T00:00:00Z"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        ))
+    let (_runtime_request_doc_id, runtime_provenance) =
+        super::recovery_sweeps::create_signed_active_request(
+            &db,
+            &agent_did,
+            runtime_interrupt_request_id,
+            runtime_interrupt_session_id,
+            "processing",
+        )
         .await;
-    assert!(
-        !response.has_errors(),
-        "seed runtime interrupt stamp: {:?}",
-        response.errors
-    );
+    super::recovery_sweeps::create_signed_terminal_response_and_outcome(
+        &db.node,
+        &agent_did,
+        runtime_interrupt_request_id,
+        runtime_interrupt_session_id,
+        &runtime_provenance,
+        "interrupted",
+        Some("interrupted"),
+    )
+    .await;
 
-    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
+    let runtime_interrupt_repair = RequestLifecycle::repair_terminal_requests(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(runtime_interrupt_repair.repaired, 1);
@@ -630,27 +586,28 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
 }
 
 pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
-    let db = test_db("convergence-recover-claimed").await;
-
-    create_owned_request(
-        &db.node,
+    let db = signed_materializer_test_db("convergence-recover-claimed").await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
+    let (_request_doc_id, provenance) = super::recovery_sweeps::create_signed_active_request(
+        &db,
+        &agent_did,
         "convergence-stuck-claimed",
         "convergence-stuck-claimed-session",
-        OWNER_DID,
-        "claimed",
         "claimed",
     )
     .await;
-    create_response_with_status(
+    super::recovery_sweeps::create_signed_terminal_response_and_outcome(
         &db.node,
-        "convergence-stuck-claimed",
+        &agent_did,
         "convergence-stuck-claimed",
         "convergence-stuck-claimed-session",
-        "error",
+        &provenance,
+        "failed",
+        Some("daemon_restart"),
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, OWNER_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(

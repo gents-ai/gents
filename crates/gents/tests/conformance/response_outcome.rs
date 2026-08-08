@@ -10,7 +10,7 @@ pub(crate) fn generated_cases_pin_exact_immutable_response_outcomes() {
         .iter()
         .map(|case| (case.name.as_str(), case))
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 10);
 
     let complete = cases["complete_exact_message_fresh"];
     assert_eq!(complete.kind, "complete");
@@ -42,6 +42,11 @@ pub(crate) fn generated_cases_pin_exact_immutable_response_outcomes() {
         cases["interrupted_with_partial_message_fresh"].publish_outcome,
         "fresh"
     );
+
+    let foreign = cases["foreign_signer_sibling_ignored"];
+    assert_eq!(foreign.publish_outcome, "fresh");
+    assert_eq!(foreign.visible_sibling_count, 0);
+    assert_eq!(foreign.resulting_fact_count, 2);
 
     let cuts = lean_response_persistence_cut_cases();
     assert_eq!(cuts.len(), 4);

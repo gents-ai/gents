@@ -3,12 +3,11 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
 use gents::{
-    ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver,
-    ProcessLifecycleState, ToolCeiling,
+    AgentIdentity, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
+    ToolCeiling,
 };
 use serde_json::Value;
 use tokio::sync::watch;
@@ -34,9 +33,9 @@ impl ProcessLifecycleObserver for RecordingObserver {
 
 #[tokio::test]
 async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    ensure_runtime_schemas(node.as_ref()).await?;
-    let identity = Arc::new(test_identity("startup-readiness-559"));
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("startup-readiness-559"));
+    let db = support::test_db_with_identity("startup-readiness-559", identity.clone()).await;
+    let node = db.node.clone();
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_behavior_backend(
         node.as_ref(),
@@ -160,9 +159,11 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
         std::env::remove_var(VAR);
     }
 
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    ensure_runtime_schemas(node.as_ref()).await?;
-    let identity = Arc::new(test_identity("startup-readiness-559-transient"));
+    let identity: Arc<dyn AgentIdentity> =
+        Arc::new(test_identity("startup-readiness-559-transient"));
+    let db =
+        support::test_db_with_identity("startup-readiness-559-transient", identity.clone()).await;
+    let node = db.node.clone();
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_behavior_backend(
         node.as_ref(),

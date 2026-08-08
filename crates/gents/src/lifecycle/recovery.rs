@@ -438,6 +438,7 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                 final_message_sequence
                 outcome_terminalized_at
                 content
+                reasoning
             }}
         }}"#
     );
@@ -464,6 +465,7 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
             .and_then(|value| value.as_str())
             .filter(|value| !value.trim().is_empty());
         let existing_content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let existing_reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(request_doc_id) = request_doc_id {
             let identity = recovery_identity(node, agent_did)?;
             let accepted = crate::response_outcome::load_accepted_response_outcome(
@@ -578,6 +580,16 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
             let interrupted_input = interrupted_at
                 .map(|at| format!(r#"interrupted_at: "{}","#, escape_graphql_string(at)))
                 .unwrap_or_default();
+            let recovered_content = if existing_content.trim().is_empty() {
+                "Error: daemon restarted before response could be generated".to_string()
+            } else {
+                format!("{existing_content}\n\n[Response interrupted — daemon restarted]")
+            };
+            let recovered_reasoning = if existing_reasoning.trim().is_empty() {
+                String::new()
+            } else {
+                format!("{existing_reasoning}\n\n[Reasoning interrupted — daemon restarted]")
+            };
             let mutation = format!(
                 r#"mutation {{
                     update_AgentResponse(
@@ -586,8 +598,8 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                             status: {{ _eq: "streaming" }}
                         }},
                         input: {{
-                            content: ""
-                            reasoning: ""
+                            content: "{}"
+                            reasoning: "{}"
                             status: "{}"
                             error_message: "{}"
                             {interrupted_input}
@@ -596,6 +608,8 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                     ) {{ _docID }}
                 }}"#,
                 escape_graphql_string(doc_id),
+                escape_graphql_string(&recovered_content),
+                escape_graphql_string(&recovered_reasoning),
                 status,
                 escape_graphql_string(error_message),
                 escape_graphql_string(&accepted.terminalized_at),

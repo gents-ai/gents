@@ -129,7 +129,12 @@ theorem recovery_missing_response_pins_reconstructed_provenance
 theorem recovery_outcome_retry_idempotent
     (fact : OutcomeFact) (h_well_formed : fact.wellFormed = true) :
     publish [fact] fact = (.idempotent, [fact]) := by
-  simp [publish, h_well_formed, factsForRequestDoc]
+  have h_signer : fact.version.signerDid = fact.request.signerDid := by
+    by_cases h : fact.version.signerDid = fact.request.signerDid
+    · exact h
+    · simp [OutcomeFact.wellFormed, h] at h_well_formed
+  unfold publish
+  simp [h_well_formed, agentFactsForRequestDoc, factsForRequestDoc, h_signer]
 
 theorem request_terminalization_requires_durable_outcome
     {pre post : Machine} (h : Step pre post)

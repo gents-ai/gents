@@ -571,8 +571,10 @@ mod tests {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 15);
+        assert_eq!(t.collections.len(), 17);
         assert!(t.collections.contains(&"AgentRequest"));
+        assert!(t.collections.contains(&"AgentResponseOutcome"));
+        assert!(t.collections.contains(&"AgentToolApproval"));
         assert!(t.collections.contains(&"BearerPairingReady"));
         assert!(t.collections.contains(&"AgentBehavior"));
     }
@@ -769,7 +771,9 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 17);
+        assert_eq!(t.collections.len(), 19);
+        assert!(t.collections.contains(&"AgentResponseOutcome"));
+        assert!(t.collections.contains(&"AgentToolApproval"));
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
         let filters = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:server");
         // Conversation collections stay member-scoped exactly like `conversation`.

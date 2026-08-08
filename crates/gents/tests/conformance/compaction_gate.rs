@@ -16,12 +16,14 @@ use super::*;
 
 use std::time::Duration;
 
+use super::support::fixtures::bind_default_behavior_backend;
 use super::support::interrupt::{create_runtime_request, BootedAgent};
 use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
 
 const GATE_MODEL: &str = "default";
 const GATE_BACKEND_ID: &str = "backend-compaction-gate";
 const GATE_MARKER: &str = "compaction-gate-request";
+const LIVE_FIXTURE_MARKER: &str = "live compaction-gate fixture";
 /// A distinctive slice of `compaction::summary::compaction_prompt()`. It only
 /// ever appears in a body the compactor sent.
 const COMPACTION_MARKER: &str = "supplied structured-output schema";
@@ -48,32 +50,50 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
                 [r#"{"goal": "continue the task", "completed_work": ["earlier turns inspected files"]}"#],
             ),
             StreamScript::completes(GATE_MARKER, ["ok"]),
+            // If the daemon wins a fixture-claim race, let that abandoned
+            // attempt terminate cleanly in its own session before we retry.
+            StreamScript::completes(LIVE_FIXTURE_MARKER, ["fixture-race"]),
         ],
     )
     .expect("start mock streaming backend");
 
+    let agent_did = signed_materializer_agent_did(&db).to_owned();
+    let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
     let agent = boot_compaction_gate_agent(&db, backend.endpoint()).await;
-    let session_id = format!("session-{}", uuid::Uuid::new_v4());
-    seed_bulky_history(db.node.as_ref(), &agent.agent_did, &session_id).await;
+    assert_eq!(agent.agent_did, agent_did);
 
-    // A concurrent request in this session is mid-stream. Its half-written turn
-    // is already in the transcript we just loaded, so reducing now could
-    // summarize away a turn that is still being written.
-    let live_request_id = format!("live-{}", uuid::Uuid::new_v4());
-    upsert_response_status(
+    // A response projection in this session is still mid-stream. Its
+    // half-written turn can still receive more transcript rows, so reducing now
+    // could summarize away a turn that is still being written. The fixture uses
+    // a real signed pending -> claimed request and copies its exact source/claim
+    // provenance into the live projection.
+    let (mut live_lifecycle, live_response_doc_id, session_id) =
+        create_exact_live_response(db.node.clone(), &agent_did, &behavior_id).await;
+    // Model the durable-outcome -> live-projection crash gap. Terminal truth
+    // and the request lifecycle have settled, so this fixture consumes no
+    // execution slot, but the still-streaming projection must conservatively
+    // keep compaction closed until it too converges.
+    gents::publish_response_outcome_for_test(
         db.node.as_ref(),
-        &agent.agent_did,
-        &session_id,
-        &live_request_id,
-        "streaming",
+        &live_lifecycle.request().doc_id,
+        &agent_did,
+        "error",
+        Some("fixture_terminal"),
+        None,
     )
-    .await;
+    .await
+    .expect("publish exact terminal response outcome");
+    live_lifecycle
+        .fail_with_reason("fixture_terminal")
+        .await
+        .expect("terminalize exact live fixture request");
+    seed_bulky_history(db.node.as_ref(), &agent_did, &session_id).await;
 
     let blocked_request_id = format!("blocked-{}", uuid::Uuid::new_v4());
     let blocked_doc_id = create_runtime_request(
         db.node.as_ref(),
         agent.agent_did.as_str(),
-        AGENT_NAME,
+        &behavior_id,
         &blocked_request_id,
         &session_id,
         GATE_MARKER,
@@ -88,21 +108,15 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
          removing the gate from BehaviorDaemon::handle_request fails here"
     );
 
-    // The live response terminalizes; the very next request may reduce.
-    upsert_response_status(
-        db.node.as_ref(),
-        &agent.agent_did,
-        &session_id,
-        &live_request_id,
-        "complete",
-    )
-    .await;
+    // The mutable live projection catches up to its already-durable terminal
+    // truth; the very next request may reduce.
+    terminalize_live_response_projection(db.node.as_ref(), &live_response_doc_id).await;
 
     let allowed_request_id = format!("allowed-{}", uuid::Uuid::new_v4());
     let allowed_doc_id = create_runtime_request(
         db.node.as_ref(),
         agent.agent_did.as_str(),
-        AGENT_NAME,
+        &behavior_id,
         &allowed_request_id,
         &session_id,
         GATE_MARKER,
@@ -129,7 +143,7 @@ pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() 
     let reused_doc_id = create_runtime_request(
         db.node.as_ref(),
         agent.agent_did.as_str(),
-        AGENT_NAME,
+        &behavior_id,
         &reused_request_id,
         &session_id,
         GATE_MARKER,
@@ -221,23 +235,43 @@ async fn boot_compaction_gate_agent(db: &support::TestDb, endpoint: &str) -> Boo
     let identity = db
         .node_identity()
         .expect("compaction gate fixture must use the node signing identity");
-    upsert_gate_backend(db.node.as_ref(), endpoint).await;
-
-    let agent = gents::Gents::builder()
-        .node(db.node.clone())
-        .identity(identity)
-        .default_behavior_id(AGENT_NAME)
-        .tool_ceiling(gents::ToolCeiling::meta_only())
-        .behavior(AGENT_NAME)
-        .backend_id(GATE_BACKEND_ID)
-        .model_name(GATE_MODEL)
-        .stream_batch_ms(0)
-        .context_window(GATE_CONTEXT_WINDOW)
-        .compaction_threshold(GATE_COMPACTION_THRESHOLD)
-        .done()
-        .build()
+    bind_default_behavior_backend(db.node.as_ref(), identity.did(), GATE_BACKEND_ID, endpoint)
+        .await;
+    let behavior_id = gents::default_behavior_id_for_agent(identity.did());
+    let mut behavior = gents::load_agent_behavior(db.node.as_ref(), &behavior_id)
         .await
-        .expect("build compaction-gate agent");
+        .expect("load compaction-gate behavior")
+        .expect("compaction-gate behavior exists");
+    behavior.model_name = Some(GATE_MODEL.to_string());
+    behavior.compaction_threshold = Some(GATE_COMPACTION_THRESHOLD);
+    let profile_id = behavior
+        .inference_profile_id
+        .clone()
+        .expect("default behavior has an inference profile");
+    gents::upsert_agent_behavior(db.node.as_ref(), &behavior)
+        .await
+        .expect("update compaction-gate behavior");
+
+    let mut profile = gents::load_inference_profile(db.node.as_ref(), &profile_id)
+        .await
+        .expect("load compaction-gate inference profile")
+        .expect("compaction-gate inference profile exists");
+    profile.context_window = Some(GATE_CONTEXT_WINDOW as i64);
+    profile.stream_batch_ms = Some(0);
+    gents::upsert_inference_profile(db.node.as_ref(), &profile)
+        .await
+        .expect("update compaction-gate inference profile");
+
+    let agent = gents::Gents::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("build compaction-gate agent");
     let agent_did = agent.agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -366,75 +400,144 @@ async fn insert_message(
     );
 }
 
-async fn upsert_response_status(
-    node: &EmbeddedNode,
+async fn create_exact_live_response(
+    node: Arc<EmbeddedNode>,
     agent_did: &str,
+    behavior_id: &str,
+) -> (RequestLifecycle, String, String) {
+    for attempt in 0..10 {
+        let session_id = format!("session-{}", uuid::Uuid::new_v4());
+        match try_create_exact_live_response(node.clone(), agent_did, behavior_id, &session_id)
+            .await
+        {
+            Ok(Some((lifecycle, response_doc_id))) => {
+                return (lifecycle, response_doc_id, session_id);
+            }
+            Ok(None) => {
+                tokio::time::sleep(Duration::from_millis(10 * (attempt + 1))).await;
+            }
+            Err(error) => panic!("create exact live fixture failed: {error:#}"),
+        }
+    }
+    panic!("daemon won every exact live fixture claim attempt")
+}
+
+async fn try_create_exact_live_response(
+    node: Arc<EmbeddedNode>,
+    agent_did: &str,
+    behavior_id: &str,
     session_id: &str,
-    request_id: &str,
-    status: &str,
-) {
-    let escaped_key = escape_graphql_string(&format!("response:{request_id}"));
-    let escaped_request_id = escape_graphql_string(request_id);
+) -> anyhow::Result<Option<(RequestLifecycle, String)>> {
+    let request_id = format!("live-{}", uuid::Uuid::new_v4());
+    let request_doc_id = create_runtime_request(
+        node.as_ref(),
+        agent_did,
+        behavior_id,
+        &request_id,
+        session_id,
+        "live compaction-gate fixture",
+    )
+    .await;
+    let request = DefraWatcher::new(node.clone(), agent_did)
+        .try_fetch_request(&request_doc_id)
+        .await?;
+    let Some(request) = request else {
+        return Ok(None);
+    };
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        behavior_id,
+        agent_did,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        GATE_BACKEND_ID,
+    );
+    match lifecycle.claim_with_identity().await {
+        Ok(ClaimOutcome::Claimed) => {}
+        Ok(_) => return Ok(None),
+        Err(error)
+            if error.to_string().contains("transaction conflict")
+                || error.to_string().contains("is not pending/pending") =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    }
+    let provenance = lifecycle
+        .execution_provenance()
+        .expect("claimed live fixture has exact provenance");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_status = escape_graphql_string(status);
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_request_doc_id = escape_graphql_string(&provenance.source.version.doc_id);
+    let escaped_source_cid = escape_graphql_string(&provenance.source.version.composite_commit_cid);
+    let escaped_source_signer = escape_graphql_string(&provenance.source.signer_did);
+    let escaped_claim_cid = escape_graphql_string(&provenance.claim.version.composite_commit_cid);
+    let escaped_claim_signer = escape_graphql_string(&provenance.claim.signer_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentResponse(
-                filter: {{ response_key: {{ _eq: "{escaped_key}" }} }},
-                add: {{
-                    response_key: "{escaped_key}",
+            create_AgentResponse(input: {{
+                    response_key: "{escaped_request_id}",
                     request_id: "{escaped_request_id}",
+                    request_doc_id: "{escaped_request_doc_id}",
+                    request_source_composite_commit_cid: "{escaped_source_cid}",
+                    request_source_signer_did: "{escaped_source_signer}",
+                    request_claim_composite_commit_cid: "{escaped_claim_cid}",
+                    request_claim_signer_did: "{escaped_claim_signer}",
                     agent_did: "{escaped_agent_did}",
                     requester_did: "{escaped_agent_did}",
-                    behavior_id: "{AGENT_NAME}",
+                    behavior_id: "{escaped_behavior_id}",
                     session_id: "{escaped_session_id}",
                     content: "partial",
-                    status: "{escaped_status}",
+                    reasoning: "",
+                    status: "streaming",
                     error_message: "",
                     token_count: 1,
                     progress_seq: 1,
+                    reasoning_progress_seq: 0,
                     created_at: "{created_at}"
-                }},
-                update: {{ status: "{escaped_status}" }}
-            ) {{ _docID }}
+            }}) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert AgentResponse status={status} failed: {:?}",
-        response.errors
-    );
+    if response.has_errors() {
+        anyhow::bail!(
+            "create exact live AgentResponse failed: {:?}",
+            response.errors
+        );
+    }
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentResponse(
+                    filter: {{ response_key: {{ _eq: "{escaped_request_id}" }} }},
+                    limit: 1
+                ) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    let row = first_row::<support::DocIdRow>(&response, "AgentResponse");
+    Ok(Some((lifecycle, row.doc_id)))
 }
 
-async fn upsert_gate_backend(node: &EmbeddedNode, endpoint: &str) {
-    let escaped_backend_id = escape_graphql_string(GATE_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model_name = escape_graphql_string(GATE_MODEL);
+async fn terminalize_live_response_projection(node: &EmbeddedNode, response_doc_id: &str) {
+    let response_doc_id = escape_graphql_string(response_doc_id);
+    let completed_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 1,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
+            update_AgentResponse(
+                filter: {{
+                    _docID: {{ _eq: "{response_doc_id}" }},
+                    status: {{ _eq: "streaming" }}
                 }},
-                update: {{
-                    endpoint: "{escaped_endpoint}",
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
+                input: {{
+                    status: "error",
+                    error_message: "fixture_terminal",
+                    completed_at: "{completed_at}"
                 }}
             ) {{ _docID }}
         }}"#
@@ -442,9 +545,14 @@ async fn upsert_gate_backend(node: &EmbeddedNode, endpoint: &str) {
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "upsert compaction-gate backend failed: {:?}",
+        "terminalize exact live AgentResponse projection failed: {:?}",
         response.errors
     );
+    let data = response.data.expect("update AgentResponse data");
+    let rows = data["update_AgentResponse"]
+        .as_array()
+        .expect("update AgentResponse rows");
+    assert_eq!(rows.len(), 1, "live response projection must terminalize");
 }
 
 async fn wait_for_gate_runtime_ready(node: &EmbeddedNode, agent_did: &str) {

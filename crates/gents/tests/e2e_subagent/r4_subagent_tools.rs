@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
@@ -12,15 +13,17 @@ use gents::tool_call_lifecycle::{
     CascadeDispatch, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use gents::{
-    fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
+    fetch_interrupt_requested_at, interrupt_request,
+    lifecycle::{ClaimOutcome, ExecutionOrigin},
+    load_history, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
+    AgentIdentity, DefraSessionHook, DefraWatcher, FailurePolicy, RequestLifecycle,
     ToolSelectionDocument,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::{spawn_subagent_source, SubagentSourceGuard};
-use crate::support::{first_optional_row, first_row, test_db};
+use crate::support::{first_optional_row, first_row, test_db_with_identity};
 
 const PARENT_BEHAVIOR_ID: &str = "r4-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4-child";
@@ -113,8 +116,10 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     background_enabled: bool,
     parent_deadline: chrono::DateTime<chrono::Utc>,
 ) -> SpawnFixture {
-    let db = test_db(test_name).await;
-    let agent_did = format!("did:test:r4-{test_name}");
+    let identity: Arc<dyn AgentIdentity> =
+        Arc::new(crate::support::fixtures::test_identity(test_name));
+    let agent_did = identity.did().to_string();
+    let db = test_db_with_identity(test_name, identity).await;
 
     upsert_tool_selection(
         db.node.as_ref(),
@@ -185,12 +190,13 @@ async fn setup_spawn_fixture_with_flags_and_deadline(
     .await
     .unwrap();
 
-    let source = spawn_subagent_source(
+    let mut source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
         PARENT_BEHAVIOR_ID,
         CHILD_BEHAVIOR_ID,
     );
+    source.wait_ready().await;
 
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
@@ -476,27 +482,43 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 }
 
 async fn persist_child_completion(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     child_request_id: &str,
     child_session_id: &str,
     final_response: &str,
 ) {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let update_request = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
-            ) {{ _docID }}
-        }}"#
+    let request_query = node
+        .execute(&format!(
+            r#"query {{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }}) {{
+                    _docID
+                }}
+            }}"#
+        ))
+        .await;
+    let child_request_doc_id =
+        first_row::<crate::support::DocIdRow>(&request_query, "AgentRequest").doc_id;
+    let request = DefraWatcher::new(node.clone(), agent_did)
+        .try_fetch_request(&child_request_doc_id)
+        .await
+        .expect("load signed child request")
+        .expect("signed child request should be visible");
+    let mut request_lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        CHILD_BEHAVIOR_ID,
+        agent_did,
+        request,
+        crate::support::DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        crate::support::BACKEND_ID,
     );
-    let response = node.execute(&update_request).await;
-    assert!(
-        !response.has_errors(),
-        "update child AgentRequest completed failed: {:?}",
-        response.errors
+    assert_eq!(
+        request_lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
     );
+    request_lifecycle.begin_execution().await.unwrap();
 
     let assistant = Message::Assistant {
         id: None,
@@ -512,12 +534,17 @@ async fn persist_child_completion(
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
                 session_id: "{escaped_child_session_id}",
+                agent_did: "{}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
                 timestamp: "{now}"
             }}) {{ _docID }}
-        }}"#
+        }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(&child_request_doc_id),
     );
     let response = node.execute(&create_message).await;
     assert!(
@@ -526,33 +553,23 @@ async fn persist_child_completion(
         response.errors
     );
 
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
-    let create_response = format!(
+    gents::publish_completed_response_outcome_for_test(node, &child_request_doc_id, agent_did, 1)
+        .await
+        .expect("publish signed child completion outcome");
+
+    let update_request = format!(
         r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{escaped_child_request_id}",
-                request_id: "{escaped_child_request_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_child_session_id}",
-                content: "",
-                reasoning: "",
-                status: "completed",
-                error_message: "",
-                token_count: 0,
-                progress_seq: 0,
-                materialized_message_sequence: 1,
-                materialized_at: "{now}",
-                created_at: "{now}",
-                completed_at: "{now}"
-            }}) {{ _docID }}
-        }}"#
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ status: "completed", lifecycle_state: "completed" }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&child_request_doc_id),
     );
-    let response = node.execute(&create_response).await;
+    let response = node.execute(&update_request).await;
     assert!(
         !response.has_errors(),
-        "create child AgentResponse failed: {:?}",
+        "update child AgentRequest completed failed: {:?}",
         response.errors
     );
 }

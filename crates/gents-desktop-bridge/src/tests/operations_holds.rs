@@ -36,8 +36,15 @@ async fn seed_held_tool_call(core: &gents_desktop_core::client::ClientCore) -> S
     response
         .data
         .as_ref()
-        .and_then(|data| data.get("create_AgentToolCall"))
-        .and_then(|row| row.get("_docID"))
+        .and_then(|data| {
+            data.get("create_AgentToolCall")
+                .or_else(|| data.get("add_AgentToolCall"))
+        })
+        .and_then(|value| {
+            value
+                .get("_docID")
+                .or_else(|| value.as_array()?.first()?.get("_docID"))
+        })
         .and_then(serde_json::Value::as_str)
         .expect("seed held call physical _docID")
         .to_string()

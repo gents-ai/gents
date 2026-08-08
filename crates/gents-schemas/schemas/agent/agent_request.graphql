@@ -1,5 +1,5 @@
 type AgentRequest @branchable {
-    request_id: String @index
+    request_id: String @index @immutable
     agent_did: String @index @immutable
     # DID expected to match the cryptographically verified signer of the
     # source composite commit. This is authorship, not requester attribution or

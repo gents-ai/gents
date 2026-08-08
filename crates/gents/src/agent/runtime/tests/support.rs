@@ -507,15 +507,13 @@ pub(super) async fn wait_for_inference_call_state(
     request_id: &str,
     expected_state: &str,
 ) {
-    let escaped_request_id = escape_graphql_string(request_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let query = format!(
             r#"{{
-                InferenceCall(filter: {{
-                    request_id: {{ _eq: "{escaped_request_id}" }},
-                    call_kind: {{ _eq: "inference" }}
-                }}, limit: 1) {{
+                InferenceCall(filter: {{ call_kind: {{ _eq: "inference" }} }}) {{
+                    call_id
+                    request_id
                     call_state
                     failure_reason
                 }}
@@ -527,27 +525,25 @@ pub(super) async fn wait_for_inference_call_state(
             "InferenceCall query failed: {:?}",
             response.errors
         );
-        let row = response
+        let rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("InferenceCall"))
             .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned();
-        let state = row
-            .as_ref()
-            .and_then(|row| row.get("call_state"))
-            .and_then(Value::as_str)
+            .cloned()
             .unwrap_or_default();
-        if state == expected_state {
+        if rows.iter().any(|row| {
+            row.get("request_id").and_then(Value::as_str) == Some(request_id)
+                && row.get("call_state").and_then(Value::as_str) == Some(expected_state)
+        }) {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for inference-kind InferenceCall request_id={} to reach call_state={}, last row={:?}",
+            "timed out waiting for inference-kind InferenceCall request_id={} to reach call_state={}, rows={:?}",
             request_id,
             expected_state,
-            row
+            rows
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

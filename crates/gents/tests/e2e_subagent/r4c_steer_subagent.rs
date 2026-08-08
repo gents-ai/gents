@@ -1,3 +1,5 @@
+use std::sync::{Arc, LazyLock};
+
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
@@ -6,17 +8,26 @@ use gents::tool_call_lifecycle::{
 };
 use gents::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
+    AgentBehaviorDocument, AgentIdentity, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::spawn_subagent_source;
-use crate::support::test_db;
+use crate::support::fixtures::{spawn_subagent_source, test_identity};
+use crate::support::test_db_with_identity;
 
-const AGENT_DID: &str = "did:test:r4c-steer";
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
+
+fn agent_identity() -> &'static Arc<dyn AgentIdentity> {
+    static IDENTITY: LazyLock<Arc<dyn AgentIdentity>> =
+        LazyLock::new(|| Arc::new(test_identity("r4c-steer")));
+    &IDENTITY
+}
+
+fn agent_did() -> &'static str {
+    agent_identity().did()
+}
 
 #[derive(Debug, Deserialize)]
 struct RequestRow {
@@ -42,15 +53,15 @@ async fn setup_db(
     crate::support::TestDb,
     crate::support::fixtures::SubagentSourceGuard,
 ) {
-    let db = test_db(name).await;
+    let db = test_db_with_identity(name, agent_identity().clone()).await;
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
-                AGENT_DID,
+                agent_did(),
                 CHILD_BEHAVIOR_ID,
                 None,
             )]),
@@ -67,7 +78,7 @@ async fn setup_db(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             display_name: Some("R4c parent".to_string()),
             description: None,
             summary: None,
@@ -91,7 +102,7 @@ async fn setup_db(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             display_name: Some("R4c child".to_string()),
             description: None,
             summary: None,
@@ -113,7 +124,7 @@ async fn setup_db(
     .unwrap();
     let source = spawn_subagent_source(
         db.node.clone(),
-        AGENT_DID,
+        agent_did(),
         PARENT_BEHAVIOR_ID,
         CHILD_BEHAVIOR_ID,
     );
@@ -131,7 +142,7 @@ async fn create_parent_hook(
         db.node.clone(),
         session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        agent_did(),
         FailurePolicy::default(),
     )
     .await
@@ -151,7 +162,7 @@ async fn create_parent_request(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did());
     let created_at = chrono::Utc::now().to_rfc3339();
     let deadline = deadline.to_rfc3339();
     let mutation = format!(
@@ -341,7 +352,7 @@ async fn create_child_session_queued_request(
     metadata: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did());
     let behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let session_id = escape_graphql_string(session_id);
     let execution_origin = escape_graphql_string(execution_origin);
@@ -685,7 +696,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         AwaitMode::Background,
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
-        AGENT_DID.to_string(),
+        agent_did().to_string(),
     );
     descendant_bridge.start_running().await.unwrap();
     let _grandchild_session_id = create_subagent_request_with_request_id_for_test(
@@ -694,7 +705,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         child_request_id.clone(),
         "internal-steer-descendant".to_string(),
         1,
-        AGENT_DID.to_string(),
+        agent_did().to_string(),
         CHILD_BEHAVIOR_ID.to_string(),
         "grandchild prompt".to_string(),
         Some(parent_deadline - chrono::Duration::minutes(1)),

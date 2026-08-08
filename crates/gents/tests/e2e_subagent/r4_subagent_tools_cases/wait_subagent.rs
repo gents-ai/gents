@@ -67,7 +67,7 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     );
 
     persist_child_completion(
-        db.node.as_ref(),
+        &db.node,
         &agent_did,
         &child_request_id,
         &child_session_id,

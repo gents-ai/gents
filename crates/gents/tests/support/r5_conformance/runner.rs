@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
     reconcile_unclaimed_cross_deployment_spawns,
@@ -14,16 +14,33 @@ use serde_json::json;
 
 use std::sync::Arc;
 
-use crate::support::{first_optional_row, test_db_with_identity, TestDb};
+use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::{first_optional_row, test_p2p_db_pair_with_identity, TestDb};
 
 use super::scenario::{Action, NodeId, Scenario};
 
 const NODE_A_DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const NODE_B_DID: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+const R5_P2P_COLLECTIONS: &[&str] = &[
+    "AgentRequest",
+    "AgentResponse",
+    "AgentResponseOutcome",
+    "AgentToolCall",
+    "AgentMessage",
+];
 
 pub struct HarnessNode {
     pub id: NodeId,
     pub db: TestDb,
+}
+
+impl HarnessNode {
+    fn did(&self) -> &str {
+        self.db
+            .node
+            .node_identity_did()
+            .expect("R5 conformance nodes are signed")
+    }
 }
 
 pub struct Harness {
@@ -92,19 +109,27 @@ impl Harness {
             Arc::new(crate::support::fixtures::test_identity("r5-conformance-a"));
         let b_identity: Arc<dyn gents::AgentIdentity> =
             Arc::new(crate::support::fixtures::test_identity("r5-conformance-b"));
+        let (a_db, b_db) = test_p2p_db_pair_with_identity(
+            "r5-conformance-a",
+            a_identity,
+            "r5-conformance-b",
+            b_identity,
+        )
+        .await;
         let a = HarnessNode {
             id: "A".to_string(),
-            db: test_db_with_identity("r5-conformance-a", a_identity).await,
+            db: a_db,
         };
         let b = HarnessNode {
             id: "B".to_string(),
-            db: test_db_with_identity("r5-conformance-b", b_identity).await,
+            db: b_db,
         };
         let mut harness = Self {
             a,
             b,
             history: Vec::new(),
         };
+        prepare_exact_sync_peers(&harness.a, &harness.b).await?;
         harness.record_observation().await?;
         Ok(harness)
     }
@@ -116,7 +141,9 @@ impl Harness {
                 Action::Crash { node } => Some(node.clone()),
                 _ => None,
             };
-            self.apply_action(action).await?;
+            self.apply_action(action)
+                .await
+                .with_context(|| format!("applying R5 action {action:?}"))?;
             self.record_observation_after(crashed).await?;
         }
         Ok(())
@@ -132,7 +159,10 @@ impl Harness {
                 node,
                 peer,
                 collections,
-            } => write_pairing(self.node(node)?, peer, collections).await?,
+            } => {
+                let peer_did = self.node(peer)?.did().to_owned();
+                write_pairing(self.node(node)?, peer, &peer_did, collections).await?
+            }
             Action::WriteAgentRequest {
                 node,
                 request_id,
@@ -142,6 +172,11 @@ impl Harness {
                 caused_by_parent_request_id,
                 caused_by_parent_tool_call_id,
             } => {
+                let agent_did = match agent_did.as_str() {
+                    NODE_A_DID => self.a.did(),
+                    NODE_B_DID => self.b.did(),
+                    other => other,
+                };
                 write_agent_request(
                     self.node(node)?,
                     request_id,
@@ -177,8 +212,7 @@ impl Harness {
                 collection,
                 doc_id,
             } => {
-                let row = export_doc(self.node(from)?, collection, doc_id).await?;
-                import_doc(self.node(to)?, collection, &row).await?;
+                sync_exact_document(self.node(from)?, self.node(to)?, collection, doc_id).await?;
             }
             Action::TerminalizeChildOnB {
                 request_id,
@@ -197,15 +231,17 @@ impl Harness {
             }
             Action::RunCancelMirrorObserverOnB => run_cancel_mirror_on_b(&self.b).await?,
             Action::RunUnclaimedSpawnReconcilerOnA => {
-                let _ =
-                    reconcile_unclaimed_cross_deployment_spawns(self.a.db.node.clone(), NODE_A_DID)
-                        .await?;
+                let _ = reconcile_unclaimed_cross_deployment_spawns(
+                    self.a.db.node.clone(),
+                    self.a.did(),
+                )
+                .await?;
             }
             Action::RunCancelAckObserverOnA => {
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
+                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
             }
             Action::RunRecoverySweepOn { node } => {
-                let did = if node == "A" { NODE_A_DID } else { NODE_B_DID };
+                let did = self.node(node)?.did();
                 let _ =
                     ToolCallLifecycle::recover_all(self.node(node)?.db.node.as_ref(), did).await?;
                 let _ =
@@ -226,7 +262,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
-        let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), NODE_A_DID).await?;
+        let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
         run_cancel_mirror_on_b(&self.b).await?;
         Ok(())
     }
@@ -252,21 +288,27 @@ impl Harness {
     }
 
     async fn crash_node(&mut self, id: &NodeId) -> Result<()> {
-        let node = self.node_mut(id)?;
-        let before = node.db.process_generation;
-        node.db
-            .simulate_process_crash()
-            .await
-            .map_err(|e| anyhow::anyhow!("Crash({id}) failed: {e}"))?;
-        if node.db.process_generation != before + 1 {
-            bail!(
-                "Crash({id}): process_generation did not advance ({before} -> {})",
-                node.db.process_generation
-            );
-        }
+        let generation = {
+            let node = self.node_mut(id)?;
+            let before = node.db.process_generation;
+            node.db
+                .simulate_process_crash()
+                .await
+                .map_err(|e| anyhow::anyhow!("Crash({id}) failed: {e}"))?;
+            if node.db.process_generation != before + 1 {
+                bail!(
+                    "Crash({id}): process_generation did not advance ({before} -> {})",
+                    node.db.process_generation
+                );
+            }
+            node.db.process_generation
+        };
+        // Restart creates a fresh transport identity. Re-establish the exact
+        // collection-topic topology before any post-crash replication action.
+        prepare_exact_sync_peers(&self.a, &self.b).await?;
         tracing::info!(
             node = %id,
-            process_generation = node.db.process_generation,
+            process_generation = generation,
             "R5 harness process crash/reopen completed"
         );
         Ok(())
@@ -292,14 +334,12 @@ impl Harness {
     }
 }
 
-async fn write_pairing(node: &HarnessNode, peer: &str, collections: &[String]) -> Result<()> {
-    let peer_did = if peer == "A" {
-        NODE_A_DID
-    } else if peer == "B" {
-        NODE_B_DID
-    } else {
-        peer
-    };
+async fn write_pairing(
+    node: &HarnessNode,
+    peer: &str,
+    peer_did: &str,
+    collections: &[String],
+) -> Result<()> {
     let peer_id = escape_graphql_string(peer);
     let peer_did = escape_graphql_string(peer_did);
     let collections = collections
@@ -345,9 +385,13 @@ async fn write_agent_request(
 
     let request_id = escape_graphql_string(request_id);
     let agent_did = escape_graphql_string(agent_did);
+    let source_author_did = escape_graphql_string(node.did());
     let behavior_id = escape_graphql_string(behavior_id);
     let session_id = escape_graphql_string(&format!("{request_id}-session"));
-    let status = status_for_lifecycle(state);
+    if state != "processing" {
+        bail!("R5 request fixture only supports processing writes, got {state}");
+    }
+    let subagent_depth = u32::from(parent_request_id.is_some() && parent_tool_call_id.is_some());
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
     let parent_request_field = parent_request_id
@@ -371,14 +415,15 @@ async fn write_agent_request(
                 add: {{
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
+                    source_author_did: "{source_author_did}",
                     behavior_id: "{behavior_id}",
                     session_id: "{session_id}",
                     retry_parent_request: "",
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "r5 scenario request",
-                    status: "{status}",
-                    lifecycle_state: "{state}",
+                    status: "pending",
+                    lifecycle_state: "pending",
                     backend_id: "",
                     execution_origin: "interactive",
                     metadata: "",
@@ -387,22 +432,56 @@ async fn write_agent_request(
                     deadline: "{deadline}",
                     retry_count: 0,
                     max_retries: 3,
-                    subagent_depth: 0
+                    subagent_depth: {subagent_depth}
                     {parent_request_field}
                     {parent_tool_field}
                 }},
                 update: {{
                     agent_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
-                    status: "{status}",
-                    lifecycle_state: "{state}"
+                    status: "pending",
+                    lifecycle_state: "pending"
                     {parent_request_field}
                     {parent_tool_field}
                 }}
             ) {{ _docID }}
         }}"#
     );
-    exec(node, &mutation, "write AgentRequest").await
+    exec(node, &mutation, "write AgentRequest").await?;
+    let row = load_request(node, &request_id).await?;
+    let request = gents::AgentRequest {
+        doc_id: row.doc_id,
+        request_id: row.request_id,
+        agent_did: row.agent_did.clone(),
+        requester_did: None,
+        behavior_id: Some(row.behavior_id.clone()),
+        session_id: row.session_id,
+        content: "r5 scenario request".to_string(),
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        max_tokens: None,
+        metadata: None,
+        execution_origin: Some("interactive".to_string()),
+        created_at: now,
+        deadline: Some(deadline),
+        subagent_depth,
+        caused_by_parent_request_id: parent_request_id.map(ToOwned::to_owned),
+        caused_by_parent_tool_call_id: parent_tool_call_id.map(ToOwned::to_owned),
+    };
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        node.db.node.clone(),
+        &row.behavior_id,
+        &row.agent_did,
+        request,
+        300,
+    );
+    let claim = lifecycle.claim_with_identity().await?;
+    if claim != gents::lifecycle::ClaimOutcome::Claimed {
+        bail!("R5 request {request_id} claim returned {claim:?}");
+    }
+    lifecycle.begin_execution().await?;
+    Ok(())
 }
 
 async fn write_parent_tool_call(
@@ -416,13 +495,7 @@ async fn write_parent_tool_call(
     let agent_did = load_request(node, parent_request_id)
         .await
         .map(|row| row.agent_did)
-        .unwrap_or_else(|_| {
-            if node.id == "A" {
-                NODE_A_DID.to_string()
-            } else {
-                NODE_B_DID.to_string()
-            }
-        });
+        .unwrap_or_else(|_| node.did().to_string());
     let session_id_raw = format!("{parent_request_id}-session");
     let parent_request_id = escape_graphql_string(parent_request_id);
     let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
@@ -483,48 +556,157 @@ async fn write_parent_tool_call(
     exec(node, &mutation, "write AgentToolCall").await
 }
 
+async fn sync_exact_document(
+    source: &HarnessNode,
+    destination: &HarnessNode,
+    collection: &str,
+    logical_id: &str,
+) -> Result<()> {
+    let mut expected = export_doc(source, collection, logical_id).await?;
+    let physical_doc_id = expected
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("{collection} {logical_id} has no physical _docID"))?
+        .to_string();
+    normalize_exported_datetimes(&mut expected);
+    let source_addr = wait_for_listen_addr(source.db.node.as_ref()).await;
+    let destination_p2p = destination
+        .db
+        .node
+        .p2p()
+        .ok_or_else(|| anyhow::anyhow!("R5 destination node has no P2P transport"))?;
+    destination_p2p
+        .connect_peer(&source_addr)
+        .await
+        .map_err(|error| anyhow::anyhow!("connecting R5 destination to source: {error}"))?;
+    wait_for_connected_peer(source.db.node.as_ref()).await;
+    wait_for_connected_peer(destination.db.node.as_ref()).await;
+    source
+        .db
+        .node
+        .p2p()
+        .expect("R5 source P2P")
+        .add_collections(vec![collection.to_string()])
+        .await
+        .map_err(|error| anyhow::anyhow!("adding source collection {collection}: {error}"))?;
+    destination_p2p
+        .add_collections(vec![collection.to_string()])
+        .await
+        .map_err(|error| anyhow::anyhow!("adding destination collection {collection}: {error}"))?;
+    // A reopened node has a fresh transport identity and must announce this
+    // collection topic to the already-running peer before DocSync can see it.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut next_sync = tokio::time::Instant::now();
+    loop {
+        let last_observed = match export_doc(destination, collection, logical_id).await {
+            Ok(mut observed) => {
+                normalize_exported_datetimes(&mut observed);
+                if observed == expected {
+                    return Ok(());
+                }
+                format!("different row: {observed}")
+            }
+            Err(error) => error.to_string(),
+        };
+        if tokio::time::Instant::now() >= next_sync {
+            destination_p2p
+                .sync_documents(collection, vec![physical_doc_id.clone()])
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "syncing exact {collection} {logical_id} from {} to {}: {error}",
+                        source.id,
+                        destination.id
+                    )
+                })?;
+            next_sync = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "exact {collection} {logical_id} ({physical_doc_id}) did not converge from {} to {}; expected={expected}; last_observed={last_observed}",
+                source.id,
+                destination.id
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn prepare_exact_sync_peers(a: &HarnessNode, b: &HarnessNode) -> Result<()> {
+    let a_addr = wait_for_listen_addr(a.db.node.as_ref()).await;
+    b.db.node
+        .p2p()
+        .expect("R5 node B P2P")
+        .connect_peer(&a_addr)
+        .await
+        .map_err(|error| anyhow::anyhow!("connecting R5 exact-sync peers: {error}"))?;
+    wait_for_connected_peer(a.db.node.as_ref()).await;
+    wait_for_connected_peer(b.db.node.as_ref()).await;
+    let collections = R5_P2P_COLLECTIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    a.db.node
+        .p2p()
+        .expect("R5 node A P2P")
+        .add_collections(collections.clone())
+        .await
+        .map_err(|error| anyhow::anyhow!("subscribing R5 node A collections: {error}"))?;
+    b.db.node
+        .p2p()
+        .expect("R5 node B P2P")
+        .add_collections(collections)
+        .await
+        .map_err(|error| anyhow::anyhow!("subscribing R5 node B collections: {error}"))?;
+    // Collection subscriptions use per-version topics. Let both coordinators
+    // announce the full topic set before the first exact DocSync request.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    Ok(())
+}
+
+fn normalize_exported_datetimes(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) {
+                *text = parsed.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                normalize_exported_datetimes(value);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                normalize_exported_datetimes(value);
+            }
+        }
+        _ => {}
+    }
+}
+
 async fn export_doc(
     node: &HarnessNode,
     collection: &str,
     doc_id: &str,
 ) -> Result<serde_json::Value> {
-    let filter = match collection {
-        "AgentRequest" => format!(
-            r#"request_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(doc_id)
-        ),
-        "AgentToolCall" => format!(
-            r#"tool_call_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(doc_id)
-        ),
-        "AgentResponse" => format!(
-            r#"request_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(doc_id)
-        ),
-        "AgentMessage" => {
-            let message_key = if doc_id.contains(':') {
-                doc_id.to_string()
-            } else {
-                format!("{doc_id}-session:1")
-            };
-            format!(
-                r#"message_key: {{ _eq: "{}" }}"#,
-                escape_graphql_string(&message_key)
-            )
-        }
-        other => bail!("unsupported replicate collection {other}"),
-    };
+    let filter = logical_doc_filter(collection, doc_id)?;
     let fields = match collection {
         "AgentRequest" => {
-            "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
+            "_docID request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
         }
         "AgentToolCall" => {
-            "tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
+            "_docID tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
         }
         "AgentResponse" => {
-            "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
+            "_docID response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
         }
-        "AgentMessage" => "message_key session_id sequence role content timestamp",
+        "AgentResponseOutcome" => {
+            "_docID request_doc_id request_id session_id agent_did requester_did behavior_id request_source_composite_commit_cid request_source_signer_did request_claim_composite_commit_cid request_claim_signer_did outcome_kind reason_code final_message_doc_id final_message_composite_commit_cid final_message_signer_did final_message_sequence terminalized_at"
+        }
+        "AgentMessage" => "_docID message_key session_id sequence role content timestamp",
         _ => unreachable!(),
     };
     let query = format!(
@@ -544,6 +726,39 @@ async fn export_doc(
         .and_then(|rows| rows.first())
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("{collection} {doc_id} not found for replication"))
+}
+
+fn logical_doc_filter(collection: &str, doc_id: &str) -> Result<String> {
+    Ok(match collection {
+        "AgentRequest" => format!(
+            r#"request_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(doc_id)
+        ),
+        "AgentToolCall" => format!(
+            r#"tool_call_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(doc_id)
+        ),
+        "AgentResponse" => format!(
+            r#"request_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(doc_id)
+        ),
+        "AgentResponseOutcome" => format!(
+            r#"request_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(doc_id)
+        ),
+        "AgentMessage" => {
+            let message_key = if doc_id.contains(':') {
+                doc_id.to_string()
+            } else {
+                format!("{doc_id}-session:1")
+            };
+            format!(
+                r#"message_key: {{ _eq: "{}" }}"#,
+                escape_graphql_string(&message_key)
+            )
+        }
+        other => bail!("unsupported replicate collection {other}"),
+    })
 }
 
 async fn import_doc(node: &HarnessNode, collection: &str, row: &serde_json::Value) -> Result<()> {
@@ -577,11 +792,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_id = str_field(row, "tool_call_id")?;
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
-    let agent_did = opt_str_field(row, "agent_did").unwrap_or(if node.id == "B" {
-        NODE_B_DID
-    } else {
-        NODE_A_DID
-    });
+    let agent_did = opt_str_field(row, "agent_did").unwrap_or_else(|| node.did());
     let args = escape_graphql_string(str_field(row, "args")?);
     let result = escape_graphql_string(opt_str_field(row, "result").unwrap_or(""));
     let child_request_id =
@@ -758,6 +969,52 @@ async fn terminalize_child_on_b(
     terminal: &str,
     final_response: Option<&str>,
 ) -> Result<()> {
+    let child = load_request(node, request_id).await?;
+    if child.is_terminal() {
+        if child.lifecycle_state != terminal {
+            bail!(
+                "child request {} already terminal as {}, cannot restage as {terminal}",
+                child.request_id,
+                child.lifecycle_state
+            );
+        }
+        // Startup recovery may already have published the immutable terminal
+        // outcome. Replaying this scenario action must preserve that first
+        // terminal fact instead of creating a logical twin.
+        return Ok(());
+    }
+
+    if let Some(final_response) = final_response {
+        create_agent_message(node, &child, final_response)
+            .await
+            .context("persisting child final message")?;
+        gents::publish_response_outcome_for_test(
+            node.db.node.as_ref(),
+            &child.doc_id,
+            &child.agent_did,
+            "complete",
+            None,
+            Some(1),
+        )
+        .await
+        .context("publishing child completion outcome")?;
+    } else {
+        let (kind, reason) = match terminal {
+            "interrupted" => ("interrupted", "interrupted"),
+            _ => ("error", "r5_terminal_failure"),
+        };
+        gents::publish_response_outcome_for_test(
+            node.db.node.as_ref(),
+            &child.doc_id,
+            &child.agent_did,
+            kind,
+            Some(reason),
+            None,
+        )
+        .await
+        .context("publishing child noncomplete outcome")?;
+    }
+
     let status = status_for_lifecycle(terminal);
     let mutation = format!(
         r#"mutation {{
@@ -771,8 +1028,6 @@ async fn terminalize_child_on_b(
     );
     exec(node, &mutation, "terminalize child").await?;
     if let Some(final_response) = final_response {
-        let child = load_request(node, request_id).await?;
-        create_agent_message(node, &child.session_id, final_response).await?;
         create_agent_response(
             node,
             request_id,
@@ -798,7 +1053,7 @@ async fn cancel_parent_on_a(node: &HarnessNode, parent_tool_call_id: &str) -> Re
     lifecycle
         .cancel_during_run(CancelCause::Interrupted)
         .await?;
-    if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(NODE_A_DID).await? {
+    if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(node.did()).await? {
         if let CascadeDispatch::Local(intent) = dispatch {
             interrupt_request(node.db.node.as_ref(), &intent.child_request_id).await?;
         }
@@ -826,7 +1081,7 @@ async fn parent_request_for_tool(node: &HarnessNode, tool_call_id: &str) -> Resu
 async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     for request_id in terminal_child_request_ids(node).await? {
         let _ =
-            project_background_subagent_completion(node.db.node.clone(), &request_id, NODE_A_DID)
+            project_background_subagent_completion(node.db.node.clone(), &request_id, node.did())
                 .await?;
     }
     Ok(())
@@ -843,7 +1098,7 @@ async fn run_cancel_mirror_on_b(node: &HarnessNode) -> Result<()> {
         let Some(child) = load_request_optional(node, child_request_id).await? else {
             continue;
         };
-        if child.agent_did == NODE_B_DID
+        if child.agent_did == node.did()
             && !child.is_terminal()
             && child.interrupt_requested_at.is_none()
         {
@@ -1037,6 +1292,8 @@ async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> 
 
 #[derive(Deserialize)]
 struct RequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     request_id: String,
     agent_did: String,
     behavior_id: String,
@@ -1064,7 +1321,7 @@ async fn load_request_optional(node: &HarnessNode, request_id: &str) -> Result<O
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                request_id agent_did behavior_id session_id lifecycle_state interrupt_requested_at
+                _docID request_id agent_did behavior_id session_id lifecycle_state interrupt_requested_at
             }}
         }}"#,
         escape_graphql_string(request_id)
@@ -1087,21 +1344,31 @@ async fn set_child_interrupt(node: &HarnessNode, request_id: &str, when: &str) -
     exec(node, &mutation, "set child interrupt").await
 }
 
-async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &str) -> Result<()> {
+async fn create_agent_message(
+    node: &HarnessNode,
+    request: &RequestRow,
+    content: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{}:1",
                 session_id: "{}",
+                agent_did: "{}",
+                request_id: "{}",
+                request_doc_id: "{}",
                 sequence: 1,
                 role: "assistant",
                 content: "{}",
                 timestamp: "{now}"
             }}) {{ _docID }}
         }}"#,
-        escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
+        escape_graphql_string(&request.session_id),
+        escape_graphql_string(&request.session_id),
+        escape_graphql_string(&request.agent_did),
+        escape_graphql_string(&request.request_id),
+        escape_graphql_string(&request.doc_id),
         escape_graphql_string(content),
     );
     exec(node, &mutation, "create AgentMessage").await

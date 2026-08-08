@@ -3,8 +3,10 @@ use super::*;
 const GHOST_BEHAVIOR_ID: &str = "r4-ghost-child";
 
 async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
-    let db = test_db(test_name).await;
-    let agent_did = format!("did:test:r4-{test_name}");
+    let identity: Arc<dyn AgentIdentity> =
+        Arc::new(crate::support::fixtures::test_identity(test_name));
+    let agent_did = identity.did().to_string();
+    let db = test_db_with_identity(test_name, identity).await;
 
     upsert_tool_selection(
         db.node.as_ref(),
@@ -49,12 +51,13 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     .await
     .unwrap();
 
-    let source = spawn_subagent_source(
+    let mut source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
         PARENT_BEHAVIOR_ID,
         PARENT_BEHAVIOR_ID,
     );
+    source.wait_ready().await;
 
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");

@@ -305,11 +305,13 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
         set(&[
             "AgentRequest",
             "AgentResponse",
+            "AgentResponseOutcome",
             "AgentMessage",
-            "AgentToolCall"
+            "AgentToolCall",
+            "AgentToolApproval"
         ])
     );
-    assert_eq!(desired.replicator_filter.len(), 4);
+    assert_eq!(desired.replicator_filter.len(), 6);
     for predicate in desired.replicator_filter.values() {
         assert_eq!(predicate.field, "requester_did");
         assert_eq!(predicate.value, "did:key:coord");
@@ -1703,11 +1705,13 @@ fn subagent_host_template_filters_return_projection_to_requester() {
         set(&[
             "AgentRequest",
             "AgentResponse",
+            "AgentResponseOutcome",
             "AgentMessage",
-            "AgentToolCall"
+            "AgentToolCall",
+            "AgentToolApproval"
         ])
     );
-    assert_eq!(desired.replicator_filter.len(), 4);
+    assert_eq!(desired.replicator_filter.len(), 6);
     for predicate in desired.replicator_filter.values() {
         assert_eq!(predicate.field, "requester_did");
         assert_eq!(predicate.value, "did:key:coord");

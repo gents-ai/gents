@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use gents::{
     fetch_interrupt_requested_at,
+    graphql::escape_graphql_string,
     lifecycle::{ClaimOutcome, ExecutionOrigin},
     tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle},
-    RequestLifecycle,
+    AgentIdentity, DefraWatcher, RequestExecutionProvenance, RequestLifecycle,
 };
 use serde::Deserialize;
 
@@ -10,11 +13,223 @@ use crate::support::snapshots::{
     fetch_message_snapshots_for_session, fetch_tool_call_snapshots_for_session,
 };
 use crate::support::{
-    build_request, conversation_status_by_doc_id, create_conversation_row, create_request,
-    create_response_with_content_and_status, create_response_with_status, first_row, test_db,
-    test_db_with_duplicate_tolerant_conversations, upsert_conversation, AGENT_DID, AGENT_NAME,
-    BACKEND_ID, DEADLINE_SECS,
+    build_request, conversation_status_by_doc_id, create_conversation_row,
+    create_conversation_row_for_agent, create_request, create_request_for_agent, first_row,
+    test_db, test_db_with_duplicate_tolerant_conversations,
+    test_db_with_duplicate_tolerant_conversations_and_identity, test_db_with_identity,
+    upsert_conversation_for_agent, TestDb, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
+
+async fn signed_recovery_db(name: &str) -> (TestDb, String) {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(crate::support::fixtures::test_identity(name));
+    let agent_did = identity.did().to_string();
+    (test_db_with_identity(name, identity).await, agent_did)
+}
+
+async fn signed_duplicate_recovery_db(name: &str) -> (TestDb, String) {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(crate::support::fixtures::test_identity(name));
+    let agent_did = identity.did().to_string();
+    (
+        test_db_with_duplicate_tolerant_conversations_and_identity(name, identity).await,
+        agent_did,
+    )
+}
+
+async fn create_signed_active_request(
+    db: &TestDb,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+) -> (String, RequestExecutionProvenance) {
+    let doc_id = crate::support::interrupt::create_runtime_request(
+        db.node.as_ref(),
+        agent_did,
+        AGENT_NAME,
+        request_id,
+        session_id,
+        "recovery fixture",
+    )
+    .await;
+    let request = DefraWatcher::new(db.node.clone(), agent_did)
+        .try_fetch_request(&doc_id)
+        .await
+        .expect("load signed recovery request")
+        .expect("signed recovery request should be visible");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        agent_did,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let provenance = lifecycle
+        .execution_provenance()
+        .expect("signed claim must expose exact provenance")
+        .clone();
+    lifecycle.begin_execution().await.unwrap();
+    (doc_id, provenance)
+}
+
+async fn create_signed_assistant_message(
+    node: &gents::defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    request_doc_id: &str,
+) -> (String, String, String) {
+    let message_key = format!("{session_id}:assistant:1");
+    let now = chrono::Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{}"
+                    session_id: "{}"
+                    agent_did: "{}"
+                    request_id: "{}"
+                    request_doc_id: "{}"
+                    sequence: 1
+                    role: "assistant"
+                    content: "recovered completion"
+                    timestamp: "{}"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&message_key),
+            escape_graphql_string(session_id),
+            escape_graphql_string(agent_did),
+            escape_graphql_string(request_id),
+            escape_graphql_string(request_doc_id),
+            escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create signed assistant message failed: {:?}",
+        response.errors
+    );
+    let message_query = node
+        .execute(&format!(
+            r#"query {{
+                AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&message_key),
+        ))
+        .await;
+    let doc_id = first_row::<crate::support::DocIdRow>(&message_query, "AgentMessage").doc_id;
+    let commits = node
+        .execute(&format!(
+            r#"query {{
+                _commits(
+                    docID: ["{}"]
+                    filter: {{ fieldName: {{ _eq: "_C" }} }}
+                ) {{ cid }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+        ))
+        .await;
+    assert!(
+        !commits.has_errors(),
+        "query message commit failed: {:?}",
+        commits.errors
+    );
+    let rows = commits.data.as_ref().unwrap()["_commits"]
+        .as_array()
+        .expect("_commits array");
+    assert_eq!(
+        rows.len(),
+        1,
+        "immutable message must have one composite commit"
+    );
+    let cid = rows[0]["cid"].as_str().unwrap().to_string();
+    let signer = node
+        .verified_block_signer_did(&cid)
+        .await
+        .expect("verify assistant message signer");
+    (doc_id, cid, signer)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_response(
+    node: &gents::defra_node::EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    provenance: &RequestExecutionProvenance,
+    content: &str,
+    status: &str,
+    final_message: Option<&(String, String, String)>,
+) {
+    let final_message_fields = final_message
+        .map(|(doc_id, cid, signer)| {
+            format!(
+                r#"final_message_doc_id: "{}"
+                   final_message_composite_commit_cid: "{}"
+                   final_message_signer_did: "{}"
+                   final_message_sequence: 1"#,
+                escape_graphql_string(doc_id),
+                escape_graphql_string(cid),
+                escape_graphql_string(signer),
+            )
+        })
+        .unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+    let completed_at = if status == "complete" {
+        now.as_str()
+    } else {
+        ""
+    };
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{}"
+                    request_id: "{}"
+                    request_doc_id: "{}"
+                    request_source_composite_commit_cid: "{}"
+                    request_source_signer_did: "{}"
+                    request_claim_composite_commit_cid: "{}"
+                    request_claim_signer_did: "{}"
+                    agent_did: "{}"
+                    behavior_id: "{}"
+                    session_id: "{}"
+                    content: "{}"
+                    status: "{}"
+                    token_count: 0
+                    progress_seq: 0
+                    created_at: "{}"
+                    completed_at: "{}"
+                    {}
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(request_id),
+            escape_graphql_string(request_id),
+            escape_graphql_string(&provenance.source.version.doc_id),
+            escape_graphql_string(&provenance.source.version.composite_commit_cid),
+            escape_graphql_string(&provenance.source.signer_did),
+            escape_graphql_string(&provenance.claim.version.composite_commit_cid),
+            escape_graphql_string(&provenance.claim.signer_did),
+            escape_graphql_string(agent_did),
+            AGENT_NAME,
+            escape_graphql_string(session_id),
+            escape_graphql_string(content),
+            status,
+            escape_graphql_string(&now),
+            escape_graphql_string(completed_at),
+            final_message_fields,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create exact response failed: {:?}",
+        response.errors
+    );
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusRow {
@@ -25,6 +240,14 @@ struct StatusRow {
 struct ResponseStatusRow {
     status: String,
     content: String,
+    #[serde(default)]
+    reasoning: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResponseOutcomeRow {
+    outcome_kind: String,
+    reason_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,20 +279,14 @@ async fn mark_request_interrupted(node: &gents::defra_node::EmbeddedNode, doc_id
 
 #[tokio::test]
 async fn recover_all_marks_requests_as_error() {
-    let db = test_db("lifecycle-recover-error").await;
-    create_request(
-        &db.node,
-        "stuck-1",
-        "session-1",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
+    let (db, agent_did) = signed_recovery_db("lifecycle-recover-error").await;
+    create_signed_active_request(&db, &agent_did, "stuck-1", "session-1").await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
-    assert_eq!(report.requests_recovered, 1);
+    assert_eq!(report.responses_recovered, 1);
+    assert_eq!(report.requests_recovered, 0);
 
     let resp = db
         .node
@@ -90,33 +307,42 @@ async fn recover_all_marks_requests_as_error() {
 
 #[tokio::test]
 async fn recover_all_preserves_completed_response() {
-    let db = test_db("lifecycle-recover-complete").await;
-    create_request(
+    let (db, agent_did) = signed_recovery_db("lifecycle-recover-complete").await;
+    let (request_doc_id, provenance) =
+        create_signed_active_request(&db, &agent_did, "stuck-complete", "session-complete").await;
+    let final_message = create_signed_assistant_message(
         &db.node,
+        &agent_did,
         "stuck-complete",
         "session-complete",
-        "processing",
-        "2026-03-23T00:00:00Z",
+        &request_doc_id,
     )
     .await;
-    create_response_with_status(
+    gents::publish_completed_response_outcome_for_test(&db.node, &request_doc_id, &agent_did, 1)
+        .await
+        .expect("publish signed completed outcome");
+    create_exact_response(
         &db.node,
-        "stuck-complete",
+        &agent_did,
         "stuck-complete",
         "session-complete",
+        &provenance,
+        "",
         "complete",
+        Some(&final_message),
     )
     .await;
-    upsert_conversation(
+    upsert_conversation_for_agent(
         &db.node,
         "session-complete",
         "stuck-complete",
+        &agent_did,
         "hello",
         "processing",
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.requests_recovered, 1);
@@ -157,34 +383,43 @@ async fn recover_all_preserves_completed_response() {
 
 #[tokio::test]
 async fn recover_all_marks_partial_streams_error_and_reactivates_conversation() {
-    let db = test_db("lifecycle-recover-partial").await;
-    create_request(
+    let (db, agent_did) = signed_recovery_db("lifecycle-recover-partial").await;
+    let (_, provenance) =
+        create_signed_active_request(&db, &agent_did, "stuck-partial", "session-partial").await;
+    create_exact_response(
         &db.node,
+        &agent_did,
         "stuck-partial",
         "session-partial",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    create_response_with_content_and_status(
-        &db.node,
-        "stuck-partial",
-        "stuck-partial",
-        "session-partial",
+        &provenance,
         "partial reply",
         "streaming",
+        None,
     )
     .await;
-    upsert_conversation(
+    let reasoning_update = db
+        .node
+        .execute(
+            r#"mutation {
+                update_AgentResponse(
+                    filter: { response_key: { _eq: "stuck-partial" } },
+                    input: { reasoning: "partial thought" }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!reasoning_update.has_errors());
+    upsert_conversation_for_agent(
         &db.node,
         "session-partial",
         "stuck-partial",
+        &agent_did,
         "hello",
         "processing",
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.responses_recovered, 1);
@@ -198,13 +433,14 @@ async fn recover_all_marks_partial_streams_error_and_reactivates_conversation() 
                 AgentResponse(
                     filter: { response_key: { _eq: "stuck-partial" } },
                     limit: 1
-                ) { status content }
+                ) { status content reasoning }
             }"#,
         )
         .await;
     let response = first_row::<ResponseStatusRow>(&response_resp, "AgentResponse");
     assert_eq!(response.status, "error");
     assert!(response.content.contains("[Response interrupted"));
+    assert!(response.reasoning.contains("[Reasoning interrupted"));
 
     let conversation_resp = db
         .node
@@ -224,48 +460,43 @@ async fn recover_all_marks_partial_streams_error_and_reactivates_conversation() 
 }
 
 #[tokio::test]
-async fn recover_all_creates_error_response_when_response_doc_is_missing() {
-    let db = test_db("lifecycle-recover-missing").await;
-    create_request(
-        &db.node,
-        "stuck-missing",
-        "session-missing",
-        "processing",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    upsert_conversation(
+async fn recover_all_publishes_error_outcome_when_response_doc_is_missing() {
+    let (db, agent_did) = signed_recovery_db("lifecycle-recover-missing").await;
+    create_signed_active_request(&db, &agent_did, "stuck-missing", "session-missing").await;
+    upsert_conversation_for_agent(
         &db.node,
         "session-missing",
         "stuck-missing",
+        &agent_did,
         "hello",
         "processing",
     )
     .await;
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.responses_recovered, 1);
-    assert_eq!(report.requests_recovered, 1);
+    assert_eq!(report.requests_recovered, 0);
     assert_eq!(report.conversations_recovered, 1);
 
-    let response_resp = db
+    let outcome_resp = db
         .node
         .execute(
             r#"{
-                AgentResponse(
-                    filter: { response_key: { _eq: "stuck-missing" } },
+                AgentResponseOutcome(
+                    filter: { request_id: { _eq: "stuck-missing" } },
                     limit: 1
-                ) { status content }
+                ) { outcome_kind reason_code }
             }"#,
         )
         .await;
-    let response = first_row::<ResponseStatusRow>(&response_resp, "AgentResponse");
-    assert_eq!(response.status, "error");
-    assert!(response
-        .content
-        .contains("daemon restarted before response could be generated"));
+    let outcome = first_row::<ResponseOutcomeRow>(&outcome_resp, "AgentResponseOutcome");
+    assert_eq!(outcome.outcome_kind, "error");
+    assert_eq!(
+        outcome.reason_code.as_deref(),
+        Some("daemon_restart_missing_response")
+    );
 }
 
 #[tokio::test]
@@ -308,11 +539,12 @@ async fn recover_all_times_out_expired_running_tool_calls() {
 
 #[tokio::test]
 async fn recover_all_repairs_terminal_background_tool_notification_once() {
-    let db = test_db("tool-call-repair-notification").await;
-    create_request(
+    let (db, agent_did) = signed_recovery_db("tool-call-repair-notification").await;
+    create_request_for_agent(
         &db.node,
         "tool-notification-req",
         "tool-notification-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
@@ -322,7 +554,7 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         db.node.clone(),
         "tool-notification-req".to_string(),
         "tool-notification-session".to_string(),
-        AGENT_DID.to_string(),
+        agent_did.clone(),
         "tool-notification-call".to_string(),
         1,
         "lookup".to_string(),
@@ -342,11 +574,11 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         "the test precondition is a terminal tool with a missing notification"
     );
 
-    let first = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let first = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(first.notifications_repaired, 1);
-    let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let second = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(second.notifications_repaired, 0);
@@ -577,21 +809,37 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
 /// releases by this.
 #[tokio::test]
 async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
-    let db = test_db_with_duplicate_tolerant_conversations("lifecycle-recovery-duplicate").await;
+    let (db, agent_did) = signed_duplicate_recovery_db("lifecycle-recovery-duplicate").await;
 
-    create_request(
+    let (request_doc_id, provenance) =
+        create_signed_active_request(&db, &agent_did, "dup-req", "session-dup").await;
+    let final_message = create_signed_assistant_message(
         &db.node,
+        &agent_did,
         "dup-req",
         "session-dup",
-        "processing",
-        "2026-03-23T00:00:00Z",
+        &request_doc_id,
     )
     .await;
-    create_response_with_status(&db.node, "dup-req", "dup-req", "session-dup", "complete").await;
+    gents::publish_completed_response_outcome_for_test(&db.node, &request_doc_id, &agent_did, 1)
+        .await
+        .expect("publish signed completed outcome");
+    create_exact_response(
+        &db.node,
+        &agent_did,
+        "dup-req",
+        "session-dup",
+        &provenance,
+        "",
+        "complete",
+        Some(&final_message),
+    )
+    .await;
 
-    let canonical = create_conversation_row(
+    let canonical = create_conversation_row_for_agent(
         &db.node,
         "session-dup",
+        &agent_did,
         "Real conversation",
         "hello",
         "processing",
@@ -600,9 +848,10 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
         "dup-req",
     )
     .await;
-    let duplicate = create_conversation_row(
+    let duplicate = create_conversation_row_for_agent(
         &db.node,
         "session-dup",
+        &agent_did,
         "",
         "",
         "processing",
@@ -613,7 +862,7 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
     .await;
     assert_ne!(canonical, duplicate, "the seed must produce two documents");
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .expect("recovery must not fail on a duplicate store");
 
@@ -630,7 +879,7 @@ async fn recover_all_recovers_canonical_conversation_of_a_duplicated_session() {
         "completed",
     );
 
-    let second = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let second = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .expect("second pass");
     assert_eq!(second.conversations_recovered, 0);

@@ -13,13 +13,18 @@ use serde_json::{json, Value};
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::{test_db_with_identity, TestDb};
 
 const DRIFT_SIG: &str = "drift:host-doc:9f2c";
 const SUMMARY: &str = "studio-1 host doc is stale vs runtime";
 const TARGET_PATHS: &str = "infra/hosts/studio-1/host.md";
 const PROMPT_TEMPLATE: &str =
     "drift={{ doc.drift_sig }} summary={{ doc.summary }} paths={{ doc.target_paths }}";
+
+async fn signed_test_db(name: &str) -> TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(name));
+    test_db_with_identity(name, identity).await
+}
 
 async fn register_action_request_schema(node: &EmbeddedNode) {
     let sdl = r#"
@@ -230,7 +235,10 @@ async fn boot_agent_with_action_trigger(
     tokio::task::JoinHandle<anyhow::Result<()>>,
     tokio::sync::watch::Sender<bool>,
 ) {
-    let identity = Arc::new(test_identity(test_name));
+    let identity = db
+        .node_identity()
+        .expect("write-tool trigger fixture must use a signed node identity");
+    assert_eq!(db.node.node_identity_did(), Some(identity.did()));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),
@@ -330,7 +338,7 @@ fn request_action_decl() -> WriteToolDecl {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_field_template_renders_all_referenced_doc_fields() {
-    let db = test_db("write-tool-trigger-multifield").await;
+    let db = signed_test_db("write-tool-trigger-multifield").await;
     register_action_request_schema(db.node.as_ref()).await;
 
     let task_id = "task-b6-multifield";
@@ -367,7 +375,7 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn declared_write_tool_call_fires_event_trigger() {
-    let db = test_db("write-tool-trigger-tooldriven").await;
+    let db = signed_test_db("write-tool-trigger-tooldriven").await;
     register_action_request_schema(db.node.as_ref()).await;
 
     let task_id = "task-b6-tooldriven";

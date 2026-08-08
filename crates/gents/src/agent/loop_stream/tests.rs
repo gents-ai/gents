@@ -2738,9 +2738,13 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
         .unwrap();
     assert!(
         history.iter().any(|message| matches!(message,
-            Message::User { content }
-                if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
-                    if tool_result_text(first_content(&result.content)) == "ECHOED")))),
+        Message::User { content }
+            if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
+                if {
+                    let text = tool_result_text(first_content(&result.content));
+                    text.starts_with("ECHOED")
+                        && text.contains("[Full output: DefraDB doc ")
+                })))),
         "tool-using one-shot must persist the tool-result message; history: {history:?}"
     );
     assert!(

@@ -23,6 +23,12 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
+fn is_spilled_observation(actual: &str, expected: &str) -> bool {
+    actual.strip_prefix(expected).is_some_and(|suffix| {
+        suffix.starts_with("\n[Full output: DefraDB doc ") && suffix.ends_with(']')
+    })
+}
+
 fn session_state_for_test() -> SessionState {
     SessionState {
         session_id: Some("session-1".to_string()),
@@ -734,7 +740,8 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     // request-scoped dedup (keyed on session_id + request_id + content) must
     // keep them exactly-once across attempts.
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
-    let (node, _signing_identity) = signed_test_node(Some(&data_path)).await;
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    let agent_did = signing_identity.did();
     ensure_schemas(&node).await.unwrap();
 
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
@@ -744,7 +751,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let hook1 = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:general",
+        agent_did,
         FailurePolicy::default(),
     );
     hook1
@@ -764,7 +771,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         node.clone(),
         &session_id,
         "general",
-        "did:test:general",
+        agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -1600,7 +1607,8 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         Message::User { content }
             if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.call_id.as_deref() == Some("call-1")
-                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "fn main() {}\n"))
+                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text })
+                        if is_spilled_observation(text, "fn main() {}\n")))
     ));
     assert!(matches!(
         &history[3],
@@ -1644,9 +1652,11 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         row.get("message_sequence").and_then(|value| value.as_u64()),
         Some(2)
     );
-    assert_eq!(
-        row.get("result").and_then(|value| value.as_str()),
-        Some("fn main() {}\n")
+    assert!(
+        row.get("result")
+            .and_then(|value| value.as_str())
+            .is_some_and(|text| is_spilled_observation(text, "fn main() {}\n")),
+        "persisted tool result must retain the observation and signed spill pointer"
     );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
@@ -1853,16 +1863,19 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let ToolResultContent::Text(Text { text }) = first_content(&tool_result.content) else {
         panic!("expected text tool result content");
     };
-    assert_eq!(
-        text,
-        "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
+    let compact_observation = "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma";
+    assert!(
+        is_spilled_observation(text, compact_observation),
+        "model observation must stay compact and retain the signed spill pointer"
     );
     assert!(!text.contains("gents_fs"));
 
     let row = fetch_tool_call_row(&node, &session_id, "internal-read").await;
-    assert_eq!(
-        row.get("result").and_then(|value| value.as_str()),
-        Some(raw_read_output)
+    assert!(
+        row.get("result")
+            .and_then(|value| value.as_str())
+            .is_some_and(|text| is_spilled_observation(text, raw_read_output)),
+        "tool-call row must retain the raw result and signed spill pointer"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1983,7 +1996,8 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
     assert!(matches!(
         first_content(&tool_results[0].content),
-        ToolResultContent::Text(Text { text }) if text == tool_result_text
+        ToolResultContent::Text(Text { text })
+            if is_spilled_observation(text, tool_result_text)
     ));
 
     let resp = node
@@ -2174,9 +2188,11 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         row.get("message_sequence").and_then(|value| value.as_u64()),
         Some(3)
     );
-    assert_eq!(
-        row.get("result").and_then(|value| value.as_str()),
-        Some("second result")
+    assert!(
+        row.get("result")
+            .and_then(|value| value.as_str())
+            .is_some_and(|text| is_spilled_observation(text, "second result")),
+        "persisted tool result must retain the observation and signed spill pointer"
     );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
@@ -2226,7 +2242,8 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         Message::User { content }
             if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.id == "call-2"
-                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text }) if text == "second result"))
+                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text })
+                        if is_spilled_observation(text, "second result")))
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);

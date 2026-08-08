@@ -35,7 +35,7 @@ async fn fires_on_matching_source_doc_create() {
     })
     .await;
 
-    let _source_doc_id = write_webhook_event(db.node.as_ref(), "ext-1", "any").await;
+    let source_doc_id = write_webhook_event(db.node.as_ref(), "ext-1", "any").await;
     wait_for_request_count(
         db.node.as_ref(),
         "trigger-fires",
@@ -44,15 +44,18 @@ async fn fires_on_matching_source_doc_create() {
     )
     .await;
 
-    let fired = wait_for_last_status(
-        db.node.as_ref(),
-        "trigger-fires",
-        "fired",
-        Duration::from_secs(5),
-    )
-    .await;
-    assert_eq!(fired.fire_count, Some(1));
-    assert_eq!(fired.task_id.as_deref(), Some("task-fires"));
+    let admissions =
+        wait_for_admission_count(db.node.as_ref(), "trigger-fires", 1, Duration::from_secs(5))
+            .await;
+    assert_eq!(admissions[0].source_doc_id, source_doc_id);
+    assert_admission_request_materialized(db.node.as_ref(), "trigger-fires", &admissions[0]).await;
+
+    let trigger = fetch_event_trigger_row(db.node.as_ref(), "trigger-fires")
+        .await
+        .expect("EventTrigger doc present");
+    assert_eq!(trigger.last_status, None);
+    assert_eq!(trigger.fire_count, Some(0));
+    assert_eq!(trigger.task_id.as_deref(), Some("task-fires"));
 
     agent.shutdown().await;
 }
@@ -111,6 +114,12 @@ async fn does_not_fire_when_source_doc_fails_filter() {
     assert_eq!(row.last_error, None);
     assert_eq!(row.fire_count.unwrap_or(0), 0);
     assert_eq!(row.last_fired_source_doc_id, None);
+    assert!(
+        fetch_event_delivery_admissions(db.node.as_ref(), "trigger-filter-miss")
+            .await
+            .is_empty(),
+        "filter misses must not create a durable delivery admission"
+    );
 
     agent.shutdown().await;
 }
@@ -158,6 +167,12 @@ async fn enabled_false_does_not_fire() {
         row.fire_count.unwrap_or(0),
         0,
         "disabled trigger must not fire"
+    );
+    assert!(
+        fetch_event_delivery_admissions(db.node.as_ref(), "trigger-disabled")
+            .await
+            .is_empty(),
+        "disabled triggers must not create durable delivery admissions"
     );
 
     agent.shutdown().await;
@@ -209,7 +224,7 @@ async fn backfill_is_forward_only() {
         "backfill must not replay pre-existing source docs"
     );
 
-    let _ = write_webhook_event(db.node.as_ref(), "post-1", "signup").await;
+    let post_source_doc_id = write_webhook_event(db.node.as_ref(), "post-1", "signup").await;
     wait_for_request_count(
         db.node.as_ref(),
         "trigger-backfill",
@@ -218,14 +233,16 @@ async fn backfill_is_forward_only() {
     )
     .await;
 
-    let fired = wait_for_last_status(
+    let admissions = wait_for_admission_count(
         db.node.as_ref(),
         "trigger-backfill",
-        "fired",
+        1,
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(fired.fire_count, Some(1), "exactly one fire recorded");
+    assert_eq!(admissions[0].source_doc_id, post_source_doc_id);
+    assert_admission_request_materialized(db.node.as_ref(), "trigger-backfill", &admissions[0])
+        .await;
 
     agent.shutdown().await;
 }
@@ -333,7 +350,7 @@ async fn subscription_reconciles_on_generation_bump() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn template_render_failure_records_error_status() {
+async fn template_render_failure_records_durable_admission() {
     let db = test_db("trigger-conformance-render-err").await;
     register_webhook_event_schema(db.node.as_ref()).await;
 
@@ -366,29 +383,27 @@ async fn template_render_failure_records_error_status() {
     })
     .await;
 
-    let _ = write_webhook_event(db.node.as_ref(), "ext-render-err", "any").await;
+    let source_doc_id = write_webhook_event(db.node.as_ref(), "ext-render-err", "any").await;
 
-    let errored = wait_for_last_status(
+    let admissions = wait_for_admission_count(
         db.node.as_ref(),
         "trigger-render-err",
-        "error",
+        1,
         Duration::from_secs(10),
     )
     .await;
-    assert!(
-        !errored.last_error.as_deref().unwrap_or("").is_empty(),
-        "last_error must carry a render-failure reason: {errored:?}"
-    );
-    assert_eq!(
-        errored.fire_count.unwrap_or(0),
-        0,
-        "render failure must not bump fire_count"
-    );
+    assert_eq!(admissions[0].source_doc_id, source_doc_id);
     assert_eq!(
         count_agent_requests_for_trigger(db.node.as_ref(), "trigger-render-err", "event").await,
         0,
         "render failure must not materialize an AgentRequest"
     );
+    let trigger = fetch_event_trigger_row(db.node.as_ref(), "trigger-render-err")
+        .await
+        .expect("EventTrigger doc present");
+    assert_eq!(trigger.last_status, None);
+    assert_eq!(trigger.last_error, None);
+    assert_eq!(trigger.fire_count, Some(0));
 
     agent.shutdown().await;
 }
@@ -450,7 +465,7 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
     })
     .await;
 
-    let _ = write_webhook_event(db.node.as_ref(), "ext-signup", "signup").await;
+    let source_doc_id = write_webhook_event(db.node.as_ref(), "ext-signup", "signup").await;
 
     wait_for_request_count(
         db.node.as_ref(),
@@ -461,14 +476,12 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
     .await;
     assert_no_request_within(db.node.as_ref(), "trigger-two-b", Duration::from_secs(2)).await;
 
-    let a = wait_for_last_status(
-        db.node.as_ref(),
-        "trigger-two-a",
-        "fired",
-        Duration::from_secs(5),
-    )
-    .await;
-    assert_eq!(a.fire_count, Some(1));
+    let a_admissions =
+        wait_for_admission_count(db.node.as_ref(), "trigger-two-a", 1, Duration::from_secs(5))
+            .await;
+    assert_eq!(a_admissions[0].source_doc_id, source_doc_id);
+    assert_admission_request_materialized(db.node.as_ref(), "trigger-two-a", &a_admissions[0])
+        .await;
     let b = fetch_event_trigger_row(db.node.as_ref(), "trigger-two-b")
         .await
         .expect("EventTrigger B row present");
@@ -478,6 +491,12 @@ async fn two_triggers_same_source_collection_each_evaluate_filter_independently(
         "trigger B must not have fired for a signup event"
     );
     assert_eq!(b.last_status, None);
+    assert!(
+        fetch_event_delivery_admissions(db.node.as_ref(), "trigger-two-b")
+            .await
+            .is_empty(),
+        "the non-matching trigger must not create a durable admission"
+    );
 
     agent.shutdown().await;
 }

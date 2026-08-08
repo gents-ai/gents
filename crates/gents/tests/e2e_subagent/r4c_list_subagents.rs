@@ -1,19 +1,30 @@
+use std::sync::{Arc, LazyLock};
+
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::ToolCallLifecycle;
 use gents::{
-    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
-    FailurePolicy, ToolSelectionDocument,
+    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
+    DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
 use serde_json::{json, Value};
 
-use crate::support::fixtures::spawn_subagent_source;
-use crate::support::test_db;
+use crate::support::fixtures::{spawn_subagent_source, test_identity};
+use crate::support::test_db_with_identity;
 
-const AGENT_DID: &str = "did:test:r4c-list-subagents";
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
+
+fn agent_identity() -> &'static Arc<dyn AgentIdentity> {
+    static IDENTITY: LazyLock<Arc<dyn AgentIdentity>> =
+        LazyLock::new(|| Arc::new(test_identity("r4c-list-subagents")));
+    &IDENTITY
+}
+
+fn agent_did() -> &'static str {
+    agent_identity().did()
+}
 
 async fn setup_db(
     name: &str,
@@ -21,15 +32,15 @@ async fn setup_db(
     crate::support::TestDb,
     crate::support::fixtures::SubagentSourceGuard,
 ) {
-    let db = test_db(name).await;
+    let db = test_db_with_identity(name, agent_identity().clone()).await;
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
-                AGENT_DID,
+                agent_did(),
                 CHILD_BEHAVIOR_ID,
                 None,
             )]),
@@ -44,7 +55,7 @@ async fn setup_db(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             display_name: Some("R4c parent".to_string()),
             description: None,
             summary: None,
@@ -68,7 +79,7 @@ async fn setup_db(
         db.node.as_ref(),
         &AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did().to_string(),
             display_name: Some("R4c child".to_string()),
             description: None,
             summary: None,
@@ -90,7 +101,7 @@ async fn setup_db(
     .unwrap();
     let source = spawn_subagent_source(
         db.node.clone(),
-        AGENT_DID,
+        agent_did(),
         PARENT_BEHAVIOR_ID,
         CHILD_BEHAVIOR_ID,
     );
@@ -108,7 +119,7 @@ async fn create_parent_hook(
         db.node.clone(),
         session_id,
         PARENT_BEHAVIOR_ID,
-        AGENT_DID,
+        agent_did(),
         FailurePolicy::default(),
     )
     .await
@@ -128,7 +139,7 @@ async fn create_parent_request(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did());
     let created_at = chrono::Utc::now().to_rfc3339();
     let deadline = deadline.to_rfc3339();
     let mutation = format!(
@@ -296,7 +307,7 @@ async fn create_superseded_child_edge(
     let tool_call_id = escape_graphql_string(tool_call_id);
     let child_request_id = escape_graphql_string(&child_request_id);
     let child_session_id = escape_graphql_string(&child_session_id);
-    let agent_did = escape_graphql_string(AGENT_DID);
+    let agent_did = escape_graphql_string(agent_did());
     let behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let mutation = format!(
         r#"mutation {{
@@ -368,7 +379,7 @@ async fn list_subagents_returns_running_children() {
     assert!(ids.contains(&child_a["child_request_id"].as_str().unwrap()));
     assert!(ids.contains(&child_b["child_request_id"].as_str().unwrap()));
     for entry in entries {
-        assert_eq!(entry["deployment_id"].as_str(), Some(AGENT_DID));
+        assert_eq!(entry["deployment_id"].as_str(), Some(agent_did()));
         assert_eq!(entry["await_mode"].as_str(), Some("background"));
         assert_eq!(entry["status"].as_str(), Some("running"));
         assert_eq!(entry["behavior_id"].as_str(), Some(CHILD_BEHAVIOR_ID));

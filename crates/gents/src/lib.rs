@@ -223,6 +223,10 @@ pub use periodic_recovery::{
     PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
+#[doc(hidden)]
+pub use response_outcome::publish_completed_response_outcome_for_test;
+#[doc(hidden)]
+pub use response_outcome::publish_response_outcome_for_test;
 pub use run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,

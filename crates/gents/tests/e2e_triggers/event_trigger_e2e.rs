@@ -41,7 +41,7 @@ use serde_json::Value;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::test_db_with_identity;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
@@ -203,6 +203,16 @@ struct EventTriggerRow {
     concurrency: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EventDeliveryAdmissionRow {
+    request_id: String,
+    agent_did: String,
+    trigger_id: String,
+    source_collection: String,
+    source_doc_id: String,
+    event_kind: String,
+}
+
 async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTriggerRow {
     let escaped_trigger_id = escape_graphql_string(trigger_id);
     let query = format!(
@@ -238,6 +248,26 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
         .cloned()
         .expect("EventTrigger row missing");
     serde_json::from_value(row).expect("decode EventTrigger row")
+}
+
+async fn fetch_event_delivery_admission(
+    node: &EmbeddedNode,
+    source_doc_id: &str,
+) -> EventDeliveryAdmissionRow {
+    let source_doc_id = escape_graphql_string(source_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ EventDeliveryAdmission(
+                filter: {{ source_doc_id: {{ _eq: "{source_doc_id}" }} }}
+            ) {{ request_id agent_did trigger_id source_collection source_doc_id event_kind }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["EventDeliveryAdmission"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "expected one durable delivery admission");
+    serde_json::from_value(rows[0].clone()).expect("decode EventDeliveryAdmission row")
 }
 
 async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
@@ -283,11 +313,11 @@ async fn write_webhook_event(node: &EmbeddedNode, external_id: &str, kind: &str)
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_fires_on_source_doc_create_end_to_end() {
-    let db = test_db("event-trigger-e2e").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("event-trigger-e2e"));
+    let db = test_db_with_identity("event-trigger-e2e", identity.clone()).await;
 
     register_webhook_event_schema(db.node.as_ref()).await;
 
-    let identity = Arc::new(test_identity("event-trigger-e2e"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),
@@ -404,37 +434,24 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         "request_id must be populated: {request:?}"
     );
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    let fired = loop {
-        let row = fetch_event_trigger(db.node.as_ref(), TRIGGER_ID).await;
-        if row.last_status.as_deref() == Some("fired") {
-            break row;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for EventTrigger.last_status=\"fired\" (last row: {row:?})"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    assert_eq!(
-        fired.fire_count,
-        Some(1),
-        "fire_count must be 1 after one fire: {fired:?}"
-    );
-    assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
-        Some(source_doc_id.as_str()),
-        "last_fired_source_doc_id should match the WebhookEvent docID: {fired:?}"
-    );
-    assert!(
-        fired.last_error.as_deref().unwrap_or("").is_empty(),
-        "last_error must be cleared on a successful fire: {fired:?}"
-    );
-    assert_eq!(fired.task_id.as_deref(), Some(TASK_ID));
-    assert_eq!(fired.source_collection.as_deref(), Some("WebhookEvent"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    let trigger = fetch_event_trigger(db.node.as_ref(), TRIGGER_ID).await;
+    assert_eq!(trigger.fire_count, Some(0));
+    assert_eq!(trigger.last_status, None);
+    assert_eq!(trigger.last_fired_source_doc_id, None);
+    assert_eq!(trigger.last_error, None);
+    assert_eq!(trigger.task_id.as_deref(), Some(TASK_ID));
+    assert_eq!(trigger.source_collection.as_deref(), Some("WebhookEvent"));
+    assert_eq!(trigger.event_kind.as_deref(), Some("created"));
+    assert_eq!(trigger.enabled, Some(true));
+    assert_eq!(trigger.concurrency.as_deref(), Some("serial"));
+
+    let admission = fetch_event_delivery_admission(db.node.as_ref(), &source_doc_id).await;
+    assert_eq!(admission.request_id, request.request_id);
+    assert_eq!(admission.agent_did, agent_did);
+    assert_eq!(admission.trigger_id, TRIGGER_ID);
+    assert_eq!(admission.source_collection, "WebhookEvent");
+    assert_eq!(admission.source_doc_id, source_doc_id);
+    assert_eq!(admission.event_kind, "created");
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();

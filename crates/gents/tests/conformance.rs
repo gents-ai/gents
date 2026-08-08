@@ -84,8 +84,8 @@ use support::{
     build_request, conversation_status_by_doc_id, create_agent_session, create_conversation_row,
     create_request, create_response_with_content_and_status, create_response_with_status,
     first_optional_row, first_row, set_interrupt_requested_at, set_request_lifecycle_state,
-    set_valid_until, test_db, test_db_with_duplicate_tolerant_conversations, test_db_with_identity,
-    upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    set_valid_until, test_db, test_db_with_identity, upsert_conversation, AGENT_DID, AGENT_NAME,
+    BACKEND_ID, DEADLINE_SECS,
 };
 
 async fn signed_materializer_test_db(name: &str) -> support::TestDb {

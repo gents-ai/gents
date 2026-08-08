@@ -5,13 +5,13 @@
       "op": "OperatorWritePairing",
       "node": "A",
       "peer": "B",
-      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+      "collections": ["AgentRequest", "AgentResponse", "AgentResponseOutcome", "AgentToolCall", "AgentMessage"]
     },
     {
       "op": "OperatorWritePairing",
       "node": "B",
       "peer": "A",
-      "collections": ["AgentRequest", "AgentResponse", "AgentToolCall", "AgentMessage"]
+      "collections": ["AgentRequest", "AgentResponse", "AgentResponseOutcome", "AgentToolCall", "AgentMessage"]
     },
     {
       "op": "WriteAgentRequest",

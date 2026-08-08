@@ -7,7 +7,7 @@ use gents::{
 };
 
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::test_db;
+use crate::support::test_db_with_identity;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
@@ -172,8 +172,8 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schedule_insert_bumps_active_generation() {
-    let db = test_db("schedule-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("schedule-snapshot-reconcile"));
+    let db = test_db_with_identity("schedule-snapshot-reconcile", identity.clone()).await;
     bind_default_behavior_backend(
         db.node.as_ref(),
         identity.did(),
@@ -250,8 +250,8 @@ async fn schedule_insert_bumps_active_generation() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn event_trigger_insert_bumps_active_generation() {
-    let db = test_db("event-trigger-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
+    let db = test_db_with_identity("event-trigger-snapshot-reconcile", identity.clone()).await;
     bind_default_behavior_backend(
         db.node.as_ref(),
         identity.did(),

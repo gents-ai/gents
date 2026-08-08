@@ -48,12 +48,13 @@ fn user_text_message(text: &str) -> Message {
 async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -67,7 +68,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let request = AgentRequest {
         doc_id: "request-doc".to_string(),
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -87,17 +88,14 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "test-agent",
-        "did:test:test",
+        agent_did,
         request,
         30,
         crate::lifecycle::ExecutionOrigin::Interactive,
         "test-backend",
     );
-    let stream_writer = crate::streaming::DefraStreamWriter::new(
-        node.clone(),
-        "did:test:test",
-        Duration::from_secs(60),
-    );
+    let stream_writer =
+        crate::streaming::DefraStreamWriter::new(node.clone(), agent_did, Duration::from_secs(60));
     // Begin a streaming response so reset_tail (called by persist_partial_turn)
     // has a live buffer to clear.
     let response_doc_id = stream_writer
@@ -148,7 +146,10 @@ async fn create_pending_request(
     request_id: &str,
     session_id: &str,
 ) -> String {
-    create_pending_request_for_agent(node, request_id, session_id, "did:test:test").await
+    let agent_did = node
+        .node_identity_did()
+        .expect("signed stream-processor fixture node identity");
+    create_pending_request_for_agent(node, request_id, session_id, agent_did).await
 }
 
 async fn create_pending_request_for_agent(
@@ -522,13 +523,18 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     assert_eq!(tool_results[0].call_id.as_deref(), Some(model_result_id));
     assert!(matches!(
         first_content(&tool_results[0].content),
-        ToolResultContent::Text(Text { text }) if text == tool_result
+        ToolResultContent::Text(Text { text })
+            if text.starts_with(tool_result)
+                && text.contains("[Full output: DefraDB doc ")
     ));
-    assert_eq!(
+    let persisted_result =
         crate::session::load_tool_call_result(&node, &session_id, stored_call_id)
             .await
-            .unwrap(),
-        tool_result
+            .unwrap();
+    assert!(
+        persisted_result.starts_with(tool_result)
+            && persisted_result.contains("[Full output: DefraDB doc "),
+        "tool-call result must retain its model observation and signed spill pointer"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -540,12 +546,13 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -563,7 +570,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -583,7 +590,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -593,8 +600,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         lifecycle.claim_without_identity_for_test().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+    let stream_writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -663,7 +669,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     crate::session::append_message_with_requester_did(
         &node,
         &session_id,
-        "did:test:test",
+        agent_did,
         None,
         "user",
         &notification,
@@ -748,12 +754,13 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         "agent-stream-processor-multi-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -771,7 +778,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -791,7 +798,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -801,8 +808,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         lifecycle.claim_without_identity_for_test().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+    let stream_writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -888,12 +894,13 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     // must reconcile it (and be idempotent).
     let data_path =
         std::env::temp_dir().join(format!("agent-442-backfill-{}", uuid::Uuid::new_v4()));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -913,7 +920,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -933,7 +940,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -943,8 +950,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         lifecycle.claim_without_identity_for_test().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+    let stream_writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -1206,12 +1212,13 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         "agent-stream-processor-turn-retract-{}",
         uuid::Uuid::new_v4()
     ));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1226,7 +1233,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -1246,7 +1253,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -1257,8 +1264,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         ClaimOutcome::Claimed
     );
 
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+    let stream_writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
@@ -1333,12 +1339,13 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         "agent-stream-processor-corrupt-args-{}",
         uuid::Uuid::new_v4()
     ));
-    let (node, _identity) = signed_test_node(&data_path).await;
+    let (node, identity) = signed_test_node(&data_path).await;
+    let agent_did = identity.did();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         FailurePolicy::default(),
     );
     assert!(matches!(
@@ -1356,7 +1363,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
-        agent_did: "did:test:test".to_string(),
+        agent_did: agent_did.to_string(),
         requester_did: None,
         behavior_id: Some("general".to_string()),
         session_id: session_id.clone(),
@@ -1376,7 +1383,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "general",
-        "did:test:test",
+        agent_did,
         request,
         30,
         ExecutionOrigin::Interactive,
@@ -1386,8 +1393,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         lifecycle.claim_without_identity_for_test().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
+    let stream_writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await

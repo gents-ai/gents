@@ -316,6 +316,12 @@ async fn require_unique_logical_request_in_txn(
     require_unique_logical_request_doc_id(request_id, &doc_ids, expected_doc_id)
 }
 
+fn exact_optional_string_filter(value: Option<&str>) -> String {
+    value
+        .map(|value| format!(r#"{{ _eq: "{}" }}"#, escape_graphql_string(value)))
+        .unwrap_or_else(|| "{ _eq: null }".to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn claim_with_verified_provenance_in_txn(
     node: &EmbeddedNode,
@@ -394,6 +400,9 @@ async fn claim_with_verified_provenance_in_txn(
     let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
+    let interrupt_requested_at_filter =
+        exact_optional_string_filter(source_snapshot.interrupt_requested_at.as_deref());
+    let valid_until_filter = exact_optional_string_filter(source_snapshot.valid_until.as_deref());
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -402,7 +411,9 @@ async fn claim_with_verified_provenance_in_txn(
                     agent_did: {{ _eq: "{}" }},
                     source_author_did: {{ _eq: "{}" }},
                     status: {{ _eq: "pending" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "pending" }},
+                    interrupt_requested_at: {interrupt_requested_at_filter},
+                    valid_until: {valid_until_filter}
                 }},
                 input: {{
                     status: "processing",
@@ -1518,6 +1529,15 @@ mod tests {
     }
 
     #[test]
+    fn exact_optional_string_filter_preserves_null_and_escapes_values() {
+        assert_eq!(exact_optional_string_filter(None), "{ _eq: null }");
+        assert_eq!(
+            exact_optional_string_filter(Some("2026-08-08T00:00:00Z\"")),
+            r#"{ _eq: "2026-08-08T00:00:00Z\"" }"#
+        );
+    }
+
+    #[test]
     fn verified_source_and_claim_build_exact_execution_provenance() {
         let source_commit = composite("source-cid", &[]);
         let claim_commit = composite("claim-cid", &["source-cid"]);
@@ -2069,30 +2089,39 @@ mod tests {
             &agent_did,
         )
         .await;
-        let second = insert_pending_request_for_agent(
+        let _second = insert_pending_request_for_agent(
             node.as_ref(),
-            "duplicate-logical-request-other",
+            "duplicate-logical-request",
             "duplicate-session-b",
             "2026-01-01T00:00:01Z",
             &agent_did,
         )
         .await;
-        assert_ne!(first.doc_id, second.doc_id);
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{}" }} }},
-                    input: {{ request_id: "duplicate-logical-request" }}
-                ) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&second.doc_id),
+
+        let escaped_request_id = escape_graphql_string("duplicate-logical-request");
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "logical request query failed");
+        let doc_ids = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("_docID").and_then(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            doc_ids.len(),
+            2,
+            "separate creates may share an immutable logical request_id"
         );
-        let response = node.execute(&mutation).await;
-        assert!(
-            !response.has_errors(),
-            "creating logical-ID conflict failed: {:?}",
-            response.errors
-        );
+        assert!(doc_ids.contains(&first.doc_id));
+
         let commits_before_claim = current_composite_commit_cids(node.as_ref(), &first.doc_id)
             .await
             .unwrap();
@@ -2304,5 +2333,42 @@ mod tests {
                 .unwrap(),
             expired_commits
         );
+
+        let unexpired = insert_pending_request_for_agent(
+            node.as_ref(),
+            "unexpired-source-request",
+            "unexpired-source-session",
+            "2026-01-01T00:00:00Z",
+            &agent_did,
+        )
+        .await;
+        let mutation = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{}" }} }},
+                    input: {{ valid_until: "2026-01-01T00:10:00Z" }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&unexpired.doc_id),
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "unexpired TTL setup failed: {:?}",
+            response.errors
+        );
+        let (_, _, claimed) = claim_with_verified_provenance(
+            node.as_ref(),
+            &unexpired.doc_id,
+            &agent_did,
+            "2026-01-01T00:00:02Z",
+            "2026-01-01T00:01:02Z",
+            TEST_BEHAVIOR_ID,
+            TEST_BACKEND_ID,
+            "interactive",
+        )
+        .await
+        .expect("an unexpired exact TTL must survive the claim CAS filter");
+        assert_eq!(claimed.request_id, "unexpired-source-request");
     }
 }

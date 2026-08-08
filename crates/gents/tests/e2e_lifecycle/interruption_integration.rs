@@ -13,12 +13,12 @@ use crate::support::interrupt::{
 };
 use crate::support::snapshots::{
     fetch_message_snapshots_for_session, fetch_request_snapshot, fetch_response_content,
-    fetch_response_interrupted_at, fetch_response_snapshot,
+    fetch_response_interrupted_at, fetch_response_snapshot, fetch_runtime_snapshot,
 };
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::{
-    build_request, create_request, create_retry_request, set_valid_until, test_db, AGENT_DID,
-    AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    build_request, create_request, create_retry_request, set_valid_until, test_db,
+    test_db_with_identity, TestDb, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
 const STREAM_MODEL: &str = "default";
@@ -29,6 +29,11 @@ const TARGET_MARKER: &str = "interrupt-target";
 const TARGET_PARTIAL: &str = "partial response content ";
 const SURVIVOR_MARKER: &str = "survivor-target";
 const SURVIVOR_PARTIAL: &str = "survivor partial content ";
+
+async fn signed_streaming_test_db(name: &str) -> TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(name));
+    test_db_with_identity(name, identity).await
+}
 
 #[tokio::test]
 async fn offline_replay_of_stale_requests_does_not_call_backend() {
@@ -199,20 +204,13 @@ async fn inference_call_wait_observes_latest_attempt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
-    let db = test_db("daemon-interrupt-mid-stream").await;
+    let db = signed_streaming_test_db("daemon-interrupt-mid-stream").await;
     let backend = MockStreamingBackend::start(
         STREAM_MODEL,
         vec![StreamScript::paused(TARGET_MARKER, [TARGET_PARTIAL])],
     )
     .unwrap();
-    let agent = boot_streaming_agent(
-        &db,
-        "daemon-interrupt-mid-stream",
-        backend.endpoint(),
-        &[PRIMARY_BEHAVIOR],
-        2,
-    )
-    .await;
+    let agent = boot_streaming_agent(&db, backend.endpoint(), &[PRIMARY_BEHAVIOR], 2).await;
 
     let request_id = "req-daemon-interrupt-mid-stream";
     let session_id = "session-daemon-interrupt-mid-stream";
@@ -270,7 +268,7 @@ async fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupting_one_request_does_not_affect_another() {
-    let db = test_db("daemon-interrupt-isolation").await;
+    let db = signed_streaming_test_db("daemon-interrupt-isolation").await;
     let backend = MockStreamingBackend::start(
         STREAM_MODEL,
         vec![
@@ -281,7 +279,6 @@ async fn interrupting_one_request_does_not_affect_another() {
     .unwrap();
     let agent = boot_streaming_agent(
         &db,
-        "daemon-interrupt-isolation",
         backend.endpoint(),
         &[PRIMARY_BEHAVIOR, SECONDARY_BEHAVIOR],
         4,
@@ -299,6 +296,12 @@ async fn interrupting_one_request_does_not_affect_another() {
         TARGET_MARKER,
     )
     .await;
+    // Establish the target as actively streaming before publishing the second
+    // request. DefraDB update subscriptions are wake hints rather than a
+    // lossless queue; publishing both back-to-back can coalesce the first wake
+    // and defer its durable-scan recovery to the 30-second fallback. This test
+    // is about isolation between two live requests, not subscription delivery.
+    backend.wait_for_chunks(TARGET_MARKER, 1).await;
 
     let survivor_request_id = "req-daemon-survivor";
     let survivor_session_id = "session-daemon-survivor";
@@ -312,7 +315,6 @@ async fn interrupting_one_request_does_not_affect_another() {
     )
     .await;
 
-    backend.wait_for_chunks(TARGET_MARKER, 1).await;
     backend.wait_for_chunks(SURVIVOR_MARKER, 1).await;
 
     let target_response_doc_id =
@@ -379,12 +381,13 @@ async fn interrupting_one_request_does_not_affect_another() {
 
 async fn boot_streaming_agent(
     db: &crate::support::TestDb,
-    test_name: &str,
     endpoint: &str,
     behavior_ids: &[&str],
     max_concurrent: i64,
 ) -> BootedAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity = db
+        .node_identity()
+        .expect("streaming interruption fixture must use a signed node identity");
     upsert_streaming_backend(
         db.node.as_ref(),
         STREAM_BACKEND_ID,
@@ -412,8 +415,32 @@ async fn boot_streaming_agent(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+    wait_for_runnable_behaviors(db.node.as_ref(), &agent_did, behavior_ids.len()).await;
 
     BootedAgent::new(shutdown_tx, handle, agent_did)
+}
+
+async fn wait_for_runnable_behaviors(
+    node: &gents::defra_node::EmbeddedNode,
+    agent_did: &str,
+    expected: usize,
+) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.process_state == "ready"
+                && snapshot.reconcile_phase == "idle"
+                && snapshot.runnable_behavior_count >= expected as i64
+        }) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "agent did not reconcile {expected} runnable behaviors within 30s; last runtime snapshot: {snapshot:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 async fn upsert_streaming_backend(

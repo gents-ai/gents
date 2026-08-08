@@ -36,7 +36,7 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
 
     let child = wait_for_child_request_for_tool(db.node.as_ref(), "internal-spawn-fg").await;
     persist_child_completion(
-        db.node.as_ref(),
+        &db.node,
         &agent_did,
         &child.request_id,
         &child.session_id,

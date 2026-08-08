@@ -360,6 +360,47 @@ pub(crate) struct BridgeAdmissionSnapshot {
     pub unclaimed_deadline_at: Option<String>,
 }
 
+fn equivalent_optional_rfc3339(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) if left == right => true,
+        (Some(left), Some(right)) => {
+            match (
+                DateTime::parse_from_rfc3339(left),
+                DateTime::parse_from_rfc3339(right),
+            ) {
+                (Ok(left), Ok(right)) => left == right,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn bridge_admission_snapshots_match(
+    actual: &BridgeAdmissionSnapshot,
+    expected: &BridgeAdmissionSnapshot,
+) -> bool {
+    actual.request_id == expected.request_id
+        && actual.agent_did == expected.agent_did
+        && actual.tool_call_id == expected.tool_call_id
+        && actual.tool_name == expected.tool_name
+        && actual.args == expected.args
+        && actual.lifecycle_state == expected.lifecycle_state
+        && equivalent_optional_rfc3339(
+            actual.deadline_at.as_deref(),
+            expected.deadline_at.as_deref(),
+        )
+        && actual.await_mode == expected.await_mode
+        && actual.cancel_policy == expected.cancel_policy
+        && actual.child_request_id == expected.child_request_id
+        && actual.spawn_target_did == expected.spawn_target_did
+        && equivalent_optional_rfc3339(
+            actual.unclaimed_deadline_at.as_deref(),
+            expected.unclaimed_deadline_at.as_deref(),
+        )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VerifiedBridgeAdmission {
     pub composite_commit_cid: String,
@@ -544,10 +585,52 @@ pub(crate) async fn verify_current_bridge_admission(
         ),
     };
     let actual = row.admission_snapshot();
-    if &actual != expected {
+    if !bridge_admission_snapshots_match(&actual, expected) {
+        let mismatched_fields = [
+            ("request_id", actual.request_id != expected.request_id),
+            ("agent_did", actual.agent_did != expected.agent_did),
+            ("tool_call_id", actual.tool_call_id != expected.tool_call_id),
+            ("tool_name", actual.tool_name != expected.tool_name),
+            ("args", actual.args != expected.args),
+            (
+                "lifecycle_state",
+                actual.lifecycle_state != expected.lifecycle_state,
+            ),
+            (
+                "deadline_at",
+                !equivalent_optional_rfc3339(
+                    actual.deadline_at.as_deref(),
+                    expected.deadline_at.as_deref(),
+                ),
+            ),
+            ("await_mode", actual.await_mode != expected.await_mode),
+            (
+                "cancel_policy",
+                actual.cancel_policy != expected.cancel_policy,
+            ),
+            (
+                "child_request_id",
+                actual.child_request_id != expected.child_request_id,
+            ),
+            (
+                "spawn_target_did",
+                actual.spawn_target_did != expected.spawn_target_did,
+            ),
+            (
+                "unclaimed_deadline_at",
+                !equivalent_optional_rfc3339(
+                    actual.unclaimed_deadline_at.as_deref(),
+                    expected.unclaimed_deadline_at.as_deref(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(field, mismatched)| mismatched.then_some(field))
+        .collect::<Vec<_>>()
+        .join(", ");
         anyhow::bail!(
-            "AgentToolCall {bridge_doc_id} current signed snapshot {} does not match the admitted parent/tool/child evidence",
-            current.cid
+            "AgentToolCall {bridge_doc_id} current signed snapshot {} does not match the admitted parent/tool/child evidence; mismatched fields: {mismatched_fields}",
+            current.cid,
         );
     }
     let declared_author = actual
@@ -769,6 +852,26 @@ mod tests {
             spawn_target_did: Some(author_did.to_string()),
             unclaimed_deadline_at: None,
         }
+    }
+
+    #[test]
+    fn bridge_admission_treats_equivalent_rfc3339_renderings_as_the_same_snapshot() {
+        let mut actual = bridge_snapshot("did:key:zAuthor", "{}");
+        actual.deadline_at = Some("2026-08-08T16:00:00Z".to_string());
+        let mut expected = actual.clone();
+        expected.deadline_at = Some("2026-08-08T09:00:00-07:00".to_string());
+
+        assert!(bridge_admission_snapshots_match(&actual, &expected));
+    }
+
+    #[test]
+    fn bridge_admission_still_rejects_different_deadline_instants() {
+        let mut actual = bridge_snapshot("did:key:zAuthor", "{}");
+        actual.deadline_at = Some("2026-08-08T16:00:00Z".to_string());
+        let mut expected = actual.clone();
+        expected.deadline_at = Some("2026-08-08T16:00:01Z".to_string());
+
+        assert!(!bridge_admission_snapshots_match(&actual, &expected));
     }
 
     async fn create_bridge(node: &EmbeddedNode, snapshot: &BridgeAdmissionSnapshot) -> String {

@@ -153,6 +153,80 @@ fn row_fields() -> &'static str {
        fork_source_composite_commit_cid fork_source_signer_did"#
 }
 
+fn signed_compaction_snapshot_matches(
+    exact: &CompactionEntryRow,
+    loaded: &CompactionEntryRow,
+) -> bool {
+    exact.doc_id == loaded.doc_id
+        && exact.compaction_key == loaded.compaction_key
+        && exact.session_id == loaded.session_id
+        && exact.agent_did == loaded.agent_did
+        && exact.requester_did == loaded.requester_did
+        && exact.sequence == loaded.sequence
+        && exact.summary == loaded.summary
+        && exact.files_read == loaded.files_read
+        && exact.files_modified == loaded.files_modified
+        && exact.messages_compacted == loaded.messages_compacted
+        && exact.original_tokens == loaded.original_tokens
+        && exact.compacted_tokens == loaded.compacted_tokens
+        && exact.source_manifest_version == loaded.source_manifest_version
+        && exact.source_manifest_json == loaded.source_manifest_json
+        && super::history::rfc3339_instants_equal(&exact.created_at, &loaded.created_at)
+        && exact.fork_source_doc_id == loaded.fork_source_doc_id
+        && exact.fork_source_composite_commit_cid == loaded.fork_source_composite_commit_cid
+        && exact.fork_source_signer_did == loaded.fork_source_signer_did
+}
+
+#[cfg(test)]
+mod signed_snapshot_tests {
+    use super::*;
+
+    fn row(created_at: &str) -> CompactionEntryRow {
+        CompactionEntryRow {
+            doc_id: "doc-1".to_string(),
+            compaction_key: "session-1:1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            requester_did: None,
+            sequence: 1,
+            summary: "summary".to_string(),
+            files_read: "[]".to_string(),
+            files_modified: "[]".to_string(),
+            messages_compacted: 1,
+            original_tokens: 100,
+            compacted_tokens: 20,
+            source_manifest_version: COMPACTION_SOURCE_MANIFEST_VERSION,
+            source_manifest_json: "{}".to_string(),
+            created_at: created_at.to_string(),
+            fork_source_doc_id: None,
+            fork_source_composite_commit_cid: None,
+            fork_source_signer_did: None,
+        }
+    }
+
+    #[test]
+    fn exact_snapshot_accepts_equivalent_created_at_renderings() {
+        let exact = row("2026-08-08T16:00:00Z");
+        let loaded = row("2026-08-08T09:00:00-07:00");
+
+        assert!(signed_compaction_snapshot_matches(&exact, &loaded));
+    }
+
+    #[test]
+    fn exact_snapshot_rejects_different_created_at_instants_and_other_facts() {
+        let exact = row("2026-08-08T16:00:00Z");
+        let later = row("2026-08-08T16:00:01Z");
+        assert!(!signed_compaction_snapshot_matches(&exact, &later));
+
+        let mut changed_summary = exact.clone();
+        changed_summary.summary = "different signed summary".to_string();
+        assert!(!signed_compaction_snapshot_matches(
+            &exact,
+            &changed_summary
+        ));
+    }
+}
+
 fn fork_source_ref(row: &CompactionEntryRow) -> Result<Option<crate::SignedDocumentVersionRef>> {
     match (
         row.fork_source_doc_id.as_deref(),
@@ -603,7 +677,7 @@ async fn verify_compaction_row(
         .transpose()?
         .unwrap_or_default();
     match exact.as_slice() {
-        [exact] if exact == row => {}
+        [exact] if signed_compaction_snapshot_matches(exact, row) => {}
         [exact] => anyhow::bail!(
             "CompactionEntry {} current signed snapshot does not match loaded facts: exact={exact:?}",
             row.doc_id

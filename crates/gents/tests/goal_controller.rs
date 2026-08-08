@@ -12,12 +12,18 @@ mod support;
 
 use support::mock_subscription::MockUpdateSubscriptionSource;
 use support::{
-    create_request, create_response_with_content_and_status, set_request_lifecycle_state, test_db,
-    TestDb, AGENT_DID,
+    create_request, create_response_with_content_and_status, set_request_lifecycle_state,
+    test_db_with_identity, TestDb, AGENT_DID,
 };
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
+
+async fn signed_goal_db(test_name: &str) -> TestDb {
+    let identity: Arc<dyn gents::AgentIdentity> =
+        Arc::new(support::fixtures::test_identity(test_name));
+    test_db_with_identity(test_name, identity).await
+}
 
 fn snapshot() -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
@@ -121,7 +127,7 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
 
 #[tokio::test]
 async fn completed_request_materializes_exactly_one_same_session_goal_child() {
-    let db = test_db("goal-exactly-once").await;
+    let db = signed_goal_db("goal-exactly-once").await;
     seed_completed_request(&db, "parent-complete").await;
     let goal = set_goal(
         db.node.as_ref(),
@@ -166,7 +172,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
 
 #[tokio::test]
 async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session() {
-    let db = test_db("goal-session-idle").await;
+    let db = signed_goal_db("goal-session-idle").await;
     seed_completed_request(&db, "older-complete").await;
     create_request(
         db.node.as_ref(),
@@ -198,7 +204,7 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
 
 #[tokio::test]
 async fn interrupted_terminal_pauses_instead_of_self_continuing() {
-    let db = test_db("goal-interrupted").await;
+    let db = signed_goal_db("goal-interrupted").await;
     create_request(
         db.node.as_ref(),
         "parent-interrupted",
@@ -234,7 +240,7 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
 
 #[tokio::test]
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
-    let db = test_db("goal-budget-wrapup").await;
+    let db = signed_goal_db("goal-budget-wrapup").await;
     seed_completed_request(&db, "parent-budget").await;
     let usage = r#"mutation {
         add_InferenceCall(input: {
@@ -316,7 +322,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
 
 #[tokio::test]
 async fn resume_resets_blocked_audit_identity_and_count() {
-    let db = test_db("goal-resume-audit-reset").await;
+    let db = signed_goal_db("goal-resume-audit-reset").await;
     let goal = set_goal(
         db.node.as_ref(),
         AGENT_DID,
@@ -353,7 +359,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
 
 #[tokio::test]
 async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
-    let db = test_db("goal-provider-usage-limit").await;
+    let db = signed_goal_db("goal-provider-usage-limit").await;
     create_request(
         db.node.as_ref(),
         "usage-limited-request",
@@ -412,7 +418,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
 
 #[tokio::test]
 async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
-    let db = test_db("goal-wrapup-retry-bound").await;
+    let db = signed_goal_db("goal-wrapup-retry-bound").await;
     seed_completed_request(&db, "parent-wrapup-retry").await;
     set_goal(
         db.node.as_ref(),

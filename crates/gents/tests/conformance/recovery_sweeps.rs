@@ -467,24 +467,22 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
 /// Lean: `Recovery.request_before_inference_converges`
 /// (`Proofs/Recovery/StartupOrder.lean`).
 pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
-    let db = test_db("startup-recovery-order-1001").await;
+    let db = signed_materializer_test_db("startup-recovery-order-1001").await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let request_id = "startup-order-1001-request";
     let session_id = "startup-order-1001-session";
-    create_request(
-        &db.node,
-        request_id,
-        session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
-    )
-    .await;
-    insert_inference_call(&db.node, request_id, "running").await;
+    create_signed_active_request(&db, &agent_did, request_id, session_id, "processing").await;
+    insert_inference_call(&db.node, &agent_did, request_id, "running").await;
 
-    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    let outcome = gents::startup_recovery::run_startup_recovery(&db.node, &agent_did).await;
     let requests = outcome.requests.expect("startup request recovery");
-    assert!(
-        requests.requests_recovered >= 1,
-        "crash-stuck parent must terminalize at startup: {requests:?}"
+    assert_eq!(
+        requests.responses_recovered, 1,
+        "missing-response recovery must publish the immutable failure outcome and terminalize the parent before inference recovery: {requests:?}"
+    );
+    assert_eq!(
+        requests.requests_recovered, 0,
+        "the outcome-first missing-response seam already terminalizes the request, so the later repair pass is an idempotent no-op"
     );
     let calls = outcome.inference_calls.expect("startup inference recovery");
     assert_eq!(
@@ -512,7 +510,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         "post-recovery rows must reconstruct zero held slots"
     );
 
-    let second = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+    let second = gents::startup_recovery::run_startup_recovery(&db.node, &agent_did).await;
     assert_eq!(
         second
             .inference_calls
@@ -787,56 +785,272 @@ async fn create_linked_pending_child(
     );
 }
 
+pub(super) async fn create_signed_active_request(
+    db: &support::TestDb,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    lifecycle_state: &str,
+) -> (String, gents::RequestExecutionProvenance) {
+    assert!(matches!(lifecycle_state, "claimed" | "processing"));
+    let doc_id = support::interrupt::create_runtime_request(
+        db.node.as_ref(),
+        agent_did,
+        AGENT_NAME,
+        request_id,
+        session_id,
+        "recovery fixture",
+    )
+    .await;
+    let request = DefraWatcher::new(db.node.clone(), agent_did)
+        .try_fetch_request(&doc_id)
+        .await
+        .expect("load signed recovery request")
+        .expect("signed recovery request should be visible");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        db.node.clone(),
+        AGENT_NAME,
+        agent_did,
+        request,
+        DEADLINE_SECS,
+        ExecutionOrigin::Interactive,
+        BACKEND_ID,
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let provenance = lifecycle
+        .execution_provenance()
+        .expect("signed claim must expose exact provenance")
+        .clone();
+    if lifecycle_state == "processing" {
+        lifecycle.begin_execution().await.unwrap();
+    }
+    (doc_id, provenance)
+}
+
+pub(super) async fn create_signed_terminal_response_and_outcome(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    provenance: &gents::RequestExecutionProvenance,
+    terminal_state: &str,
+    reason_code: Option<&str>,
+) {
+    let (response_status, outcome_kind, interrupted_at) = match terminal_state {
+        "completed" => ("complete", "complete", None),
+        "failed" => ("error", "error", None),
+        "interrupted" => ("error", "interrupted", Some("2026-07-09T00:00:00Z")),
+        other => panic!("unsupported recovery terminal state {other}"),
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let final_message = if terminal_state == "completed" {
+        Some(
+            create_signed_assistant_message(
+                node,
+                agent_did,
+                request_id,
+                session_id,
+                &provenance.source.version.doc_id,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    let final_message_fields = final_message
+        .as_ref()
+        .map(|(doc_id, cid, signer)| {
+            format!(
+                r#"final_message_doc_id: "{}"
+                   final_message_composite_commit_cid: "{}"
+                   final_message_signer_did: "{}"
+                   final_message_sequence: 1"#,
+                escape_graphql_string(doc_id),
+                escape_graphql_string(cid),
+                escape_graphql_string(signer),
+            )
+        })
+        .unwrap_or_default();
+    // Match the production persistence cut: terminal truth is durable before
+    // the replaceable live projection advances to its terminal display state.
+    gents::publish_response_outcome_for_test(
+        node,
+        &provenance.source.version.doc_id,
+        agent_did,
+        outcome_kind,
+        reason_code,
+        final_message.as_ref().map(|_| 1),
+    )
+    .await
+    .expect("publish exact signed response outcome");
+    let interrupted_field = interrupted_at
+        .map(|at| format!(r#"interrupted_at: "{}","#, escape_graphql_string(at)))
+        .unwrap_or_default();
+    let reason = reason_code.unwrap_or_default();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentResponse(input: {{
+                    response_key: "{response_key}"
+                    request_id: "{request_id}"
+                    request_doc_id: "{request_doc_id}"
+                    request_source_composite_commit_cid: "{source_cid}"
+                    request_source_signer_did: "{source_signer}"
+                    request_claim_composite_commit_cid: "{claim_cid}"
+                    request_claim_signer_did: "{claim_signer}"
+                    agent_did: "{agent_did}"
+                    behavior_id: "{behavior_id}"
+                    session_id: "{session_id}"
+                    content: ""
+                    reasoning: ""
+                    status: "{response_status}"
+                    error_message: "{reason}"
+                    token_count: 0
+                    progress_seq: 0
+                    created_at: "{now}"
+                    completed_at: "{now}"
+                    {interrupted_field}
+                    {final_message_fields}
+                }}) {{ _docID }}
+            }}"#,
+            response_key = escape_graphql_string(request_id),
+            request_id = escape_graphql_string(request_id),
+            request_doc_id = escape_graphql_string(&provenance.source.version.doc_id),
+            source_cid = escape_graphql_string(&provenance.source.version.composite_commit_cid),
+            source_signer = escape_graphql_string(&provenance.source.signer_did),
+            claim_cid = escape_graphql_string(&provenance.claim.version.composite_commit_cid),
+            claim_signer = escape_graphql_string(&provenance.claim.signer_did),
+            agent_did = escape_graphql_string(agent_did),
+            behavior_id = AGENT_NAME,
+            session_id = escape_graphql_string(session_id),
+            response_status = response_status,
+            reason = escape_graphql_string(reason),
+            now = escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create exact terminal response failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_signed_assistant_message(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    session_id: &str,
+    request_doc_id: &str,
+) -> (String, String, String) {
+    let message_key = format!("{session_id}:assistant:1");
+    let now = chrono::Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{}"
+                    session_id: "{}"
+                    agent_did: "{}"
+                    request_id: "{}"
+                    request_doc_id: "{}"
+                    sequence: 1
+                    role: "assistant"
+                    content: "recovered completion"
+                    timestamp: "{}"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&message_key),
+            escape_graphql_string(session_id),
+            escape_graphql_string(agent_did),
+            escape_graphql_string(request_id),
+            escape_graphql_string(request_doc_id),
+            escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create signed assistant message failed: {:?}",
+        response.errors
+    );
+    let message_query = node
+        .execute(&format!(
+            r#"query {{
+                AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&message_key),
+        ))
+        .await;
+    assert!(
+        !message_query.has_errors(),
+        "query signed assistant message failed: {:?}",
+        message_query.errors
+    );
+    let doc_id = support::first_row::<support::DocIdRow>(&message_query, "AgentMessage").doc_id;
+    let commits = node
+        .execute(&format!(
+            r#"query {{
+                _commits(
+                    docID: ["{}"]
+                    filter: {{ fieldName: {{ _eq: "_C" }} }}
+                ) {{ cid }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+        ))
+        .await;
+    assert!(
+        !commits.has_errors(),
+        "query message composite commit failed: {:?}",
+        commits.errors
+    );
+    let rows = commits.data.as_ref().unwrap()["_commits"]
+        .as_array()
+        .expect("_commits array");
+    assert_eq!(
+        rows.len(),
+        1,
+        "new immutable message has one composite commit"
+    );
+    let cid = rows[0]["cid"].as_str().unwrap().to_string();
+    let signer = node
+        .verified_block_signer_did(&cid)
+        .await
+        .expect("verify assistant message signer");
+    (doc_id, cid, signer)
+}
+
 async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let db = signed_materializer_test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
-    let doc_id = create_request(
-        &db.node,
+    let (_doc_id, provenance) = create_signed_active_request(
+        &db,
+        &agent_did,
         &request_id,
         &session_id,
-        "processing",
-        RECOVERY_CREATED_AT,
+        case.pre_state.as_str(),
     )
     .await;
-    set_request_lifecycle_state(&db.node, &doc_id, case.pre_state.as_str()).await;
-    let response_status = if case.terminal_state == "completed" {
-        "complete"
-    } else {
-        "error"
+    let reason_code = match case.terminal_state.as_str() {
+        "completed" => None,
+        "interrupted" => Some("interrupted"),
+        _ => Some("daemon_restart"),
     };
-    let response_doc_id = create_response_with_status(
+    create_signed_terminal_response_and_outcome(
         &db.node,
-        &request_id,
+        &agent_did,
         &request_id,
         &session_id,
-        response_status,
+        &provenance,
+        case.terminal_state.as_str(),
+        reason_code,
     )
     .await;
-    if case.terminal_state == "interrupted" {
-        let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
-        let response = db
-            .node
-            .execute(&format!(
-                r#"mutation {{
-                    update_AgentResponse(
-                        filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
-                        input: {{
-                            error_message: "interrupted",
-                            interrupted_at: "2026-07-09T00:00:00Z"
-                        }}
-                    ) {{ _docID }}
-                }}"#
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "seed interrupted response intent failed: {:?}",
-            response.errors
-        );
-    }
 
-    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = RequestLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(
@@ -855,7 +1069,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
 }
 
 async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let db = signed_materializer_test_db(&format!("recovery-sweep-{}", case.name)).await;
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
     create_response_with_status(
@@ -887,11 +1101,13 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
 
 async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let db = signed_materializer_test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
     seed_tool_parent_and_row(
-        db.node.clone(),
+        &db,
+        &agent_did,
         case,
         &parent_request_id,
         &parent_session_id,
@@ -900,7 +1116,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
     .await;
 
     if case.sweep_id == "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" {
-        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+        let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -908,7 +1124,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "live terminal-parent tool case {} should terminalize one tool call",
             case.name
         );
-        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, AGENT_DID)
+        let second = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -918,7 +1134,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         );
     } else if case.sweep_id == "tool_call_lifecycle_reconcile_background_completion_side_effects" {
         let report =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, &agent_did)
                 .await
                 .unwrap();
         assert_eq!(
@@ -927,7 +1143,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             case.name
         );
         let second =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, AGENT_DID)
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, &agent_did)
                 .await
                 .unwrap();
         assert!(
@@ -960,7 +1176,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
         );
         let registry = gents::BackgroundExecutionRegistry::default();
         let report =
-            ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, AGENT_DID, &registry)
+            ToolCallLifecycle::reconcile_orphaned_background_tools(&db.node, &agent_did, &registry)
                 .await
                 .unwrap();
         assert_eq!(
@@ -991,7 +1207,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             ),
         }
     } else {
-        let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(
@@ -1096,7 +1312,7 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
         }
         other => panic!("unhandled inference recovery case {other}"),
     }
-    insert_inference_call(&db.node, &request_id, case.pre_state.as_str()).await;
+    insert_inference_call(&db.node, AGENT_DID, &request_id, case.pre_state.as_str()).await;
 
     let report = InferenceCall::recover_all(&db.node, AGENT_DID)
         .await
@@ -1125,16 +1341,19 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
 }
 
 async fn seed_tool_parent_and_row(
-    node: Arc<EmbeddedNode>,
+    db: &support::TestDb,
+    agent_did: &str,
     case: &lean_vocab_test::LeanRecoverySweepCase,
     parent_request_id: &str,
     parent_session_id: &str,
     tool_call_id: &str,
 ) {
-    let parent_doc_id = create_request(
-        &node,
+    let node = db.node.clone();
+    let parent_doc_id = support::create_request_for_agent(
+        node.as_ref(),
         parent_request_id,
         parent_session_id,
+        agent_did,
         "processing",
         RECOVERY_CREATED_AT,
     )
@@ -1154,7 +1373,7 @@ async fn seed_tool_parent_and_row(
                 format!("{parent_request_id}-missing")
             },
             parent_session_id.to_string(),
-            "did:test:test".to_string(),
+            agent_did.to_string(),
             tool_call_id.to_string(),
             1,
             "spawn_process".to_string(),
@@ -1169,7 +1388,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_process".to_string(),
@@ -1189,12 +1408,12 @@ async fn seed_tool_parent_and_row(
                     "tool_running_child_interrupted_to_cancelled" => "interrupted",
                     _ => unreachable!(),
                 };
-                seed_child_request(&node, &child_request_id, child_state).await;
+                seed_child_request(db, agent_did, &child_request_id, child_state).await;
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1203,7 +1422,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Foreground,
                     CancelPolicy::Cascade,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "detached_bridge_child_completed_to_completed"
@@ -1218,7 +1437,7 @@ async fn seed_tool_parent_and_row(
                     "detached_bridge_child_interrupted_to_cancelled" => "interrupted",
                     _ => "processing",
                 };
-                seed_child_request(&node, &child_request_id, child_state).await;
+                seed_child_request(db, agent_did, &child_request_id, child_state).await;
                 if case.name == "detached_bridge_terminal_parent_to_failed" {
                     set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed")
                         .await;
@@ -1227,7 +1446,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1240,14 +1459,14 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Background,
                     CancelPolicy::Detach,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "tool_running_deadline_exceeded_to_timed_out" => ToolCallLifecycle::new(
                 node.clone(),
                 parent_request_id.to_string(),
                 parent_session_id.to_string(),
-                "did:test:test".to_string(),
+                agent_did.to_string(),
                 tool_call_id.to_string(),
                 1,
                 "slow_tool".to_string(),
@@ -1267,7 +1486,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     if case.name == "live_running_composite_parent_interrupted_to_cancelled" {
@@ -1288,7 +1507,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "slow_tool".to_string(),
@@ -1299,12 +1518,12 @@ async fn seed_tool_parent_and_row(
             "live_detached_bridge_parent_failed_to_failed" => {
                 set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
                 let child_request_id = format!("{tool_call_id}-detached-child");
-                seed_child_request(&node, &child_request_id, "processing").await;
+                seed_child_request(db, agent_did, &child_request_id, "processing").await;
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1313,7 +1532,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Background,
                     CancelPolicy::Detach,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             "tool_running_unclaimed_cross_deployment_spawn_to_failed" => {
@@ -1322,7 +1541,7 @@ async fn seed_tool_parent_and_row(
                     node.clone(),
                     parent_request_id.to_string(),
                     parent_session_id.to_string(),
-                    "did:test:test".to_string(),
+                    agent_did.to_string(),
                     tool_call_id.to_string(),
                     1,
                     "spawn_subagent".to_string(),
@@ -1331,7 +1550,7 @@ async fn seed_tool_parent_and_row(
                     AwaitMode::Background,
                     CancelPolicy::Cascade,
                     child_request_id,
-                    "did:test:target".to_string(),
+                    agent_did.to_string(),
                 )
             }
             other => panic!("unhandled tool recovery case {other}"),
@@ -1363,63 +1582,59 @@ async fn seed_tool_parent_and_row(
     }
 }
 
-async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
+async fn seed_child_request(
+    db: &support::TestDb,
+    agent_did: &str,
+    request_id: &str,
+    lifecycle_state: &str,
+) {
     let session_id = format!("{request_id}-session");
+    let (doc_id, provenance) =
+        create_signed_active_request(db, agent_did, request_id, &session_id, "processing").await;
     match lifecycle_state {
         "completed" => {
-            create_request(
-                node,
+            create_signed_terminal_response_and_outcome(
+                &db.node,
+                agent_did,
                 request_id,
                 &session_id,
+                &provenance,
                 "completed",
-                RECOVERY_CREATED_AT,
+                None,
             )
             .await;
-            create_response_with_content_and_status(
-                node,
-                request_id,
-                request_id,
-                &session_id,
-                "child final answer",
-                "complete",
-            )
-            .await;
+            set_request_status_and_lifecycle(&db.node, &doc_id, "completed", "completed").await;
         }
         "failed" => {
-            create_request(node, request_id, &session_id, "error", RECOVERY_CREATED_AT).await;
+            create_signed_terminal_response_and_outcome(
+                &db.node,
+                agent_did,
+                request_id,
+                &session_id,
+                &provenance,
+                "failed",
+                Some("child_failed"),
+            )
+            .await;
+            set_request_status_and_lifecycle(&db.node, &doc_id, "error", "failed").await;
         }
         "interrupted" => {
-            let doc_id = create_request(
-                node,
+            create_signed_terminal_response_and_outcome(
+                &db.node,
+                agent_did,
                 request_id,
                 &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
+                &provenance,
+                "interrupted",
+                Some("interrupted"),
             )
             .await;
-            set_request_status_and_lifecycle(node, &doc_id, "interrupted", "interrupted").await;
+            set_request_status_and_lifecycle(&db.node, &doc_id, "interrupted", "interrupted").await;
         }
         "dead" => {
-            let doc_id = create_request(
-                node,
-                request_id,
-                &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
-            )
-            .await;
-            set_request_status_and_lifecycle(node, &doc_id, "dead", "dead").await;
+            set_request_status_and_lifecycle(&db.node, &doc_id, "dead", "dead").await;
         }
-        "processing" => {
-            create_request(
-                node,
-                request_id,
-                &session_id,
-                "processing",
-                RECOVERY_CREATED_AT,
-            )
-            .await;
-        }
+        "processing" => {}
         other => panic!("unsupported child lifecycle state {other}"),
     };
 }
@@ -1525,7 +1740,12 @@ fn datetime_update_field(field: &str, value: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state: &str) {
+async fn insert_inference_call(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    call_state: &str,
+) {
     let call_id = format!("{request_id}-call");
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -1537,7 +1757,7 @@ async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state
                 call_seq: 1,
                 backend_id: "{BACKEND_ID}",
                 behavior_id: "{AGENT_NAME}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{agent_did}",
                 call_kind: "inference",
                 attempt: 1,
                 call_state: "{call_state}",
@@ -1551,6 +1771,7 @@ async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state
         }}"#,
         call_id = escape_graphql_string(&call_id),
         request_id = escape_graphql_string(request_id),
+        agent_did = escape_graphql_string(agent_did),
         call_state = escape_graphql_string(call_state),
         now = escape_graphql_string(&now),
     );
@@ -1640,7 +1861,7 @@ async fn fetch_inference_recovery_row(
 }
 
 async fn drive_conversation_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    let db = test_db("generated-conversation-recovery").await;
+    let db = signed_materializer_test_db("generated-conversation-recovery").await;
     let session_id = format!("session-{}", case.name);
     let request_id = format!("request-{}", case.name);
 
@@ -1729,8 +1950,14 @@ async fn drive_duplicate_conversation_outcome_case() {
         .find(|case| case.duplicated && case.write_succeeds && case.expected_recovered == 1)
         .expect("Lean must emit a recovering duplicate-group case");
 
-    let db =
-        test_db_with_duplicate_tolerant_conversations("generated-conversation-duplicate").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(support::fixtures::test_identity(
+        "generated-conversation-duplicate",
+    ));
+    let db = support::test_db_with_duplicate_tolerant_conversations_and_identity(
+        "generated-conversation-duplicate",
+        identity,
+    )
+    .await;
     create_request(
         &db.node,
         "dup-request",
@@ -1826,6 +2053,7 @@ pub(super) async fn generated_restart_disposition_cases_drive_recover_all() {
 
 async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispositionCase) {
     let db = signed_materializer_test_db(&format!("restart-disposition-{}", case.name)).await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -1833,10 +2061,11 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
     // Parent per the Lean observation vocabulary. `missing` seeds no parent
     // row at all: the bridge's request_id resolves to nothing.
     if case.parent_observation != "missing" {
-        let parent_doc_id = create_request(
-            &db.node,
+        let parent_doc_id = support::create_request_for_agent(
+            db.node.as_ref(),
             &parent_request_id,
             &parent_session_id,
+            &agent_did,
             "processing",
             RECOVERY_CREATED_AT,
         )
@@ -1888,12 +2117,12 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         // Non-terminal child: rows reaching the classifier have no durable
         // child terminal (child precedence is covered by the sweep cases).
         let child_request_id = format!("{tool_call_id}-child");
-        seed_child_request(&db.node, &child_request_id, "processing").await;
+        seed_child_request(&db, &agent_did, &child_request_id, "processing").await;
         ToolCallLifecycle::new_subagent(
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "spawn_subagent".to_string(),
@@ -1902,7 +2131,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             await_mode,
             cancel_policy,
             child_request_id,
-            "did:test:target".to_string(),
+            agent_did.clone(),
         )
     } else if await_mode == AwaitMode::Background {
         assert_eq!(
@@ -1913,7 +2142,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "spawn_process".to_string(),
@@ -1925,7 +2154,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             db.node.clone(),
             parent_request_id.clone(),
             parent_session_id.clone(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             tool_call_id.clone(),
             1,
             "slow_tool".to_string(),
@@ -1938,7 +2167,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         set_tool_unclaimed_deadline(&db.node, &tool_call_id, "2020-01-01T00:00:00Z").await;
     }
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     let row = fetch_tool_recovery_row(&db.node, &tool_call_id).await;
@@ -2047,7 +2276,7 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
 
         // Idempotence: a second startup pass finds no running row, appends no
         // duplicate notification, and enqueues no second wake.
-        let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        let second = ToolCallLifecycle::recover_all(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{}", case.name);

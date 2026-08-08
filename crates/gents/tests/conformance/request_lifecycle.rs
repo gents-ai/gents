@@ -62,39 +62,35 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
         return;
     }
 
-    let db = test_db("generated-request-recovery-reachable").await;
+    let db = signed_materializer_test_db("generated-request-recovery-reachable").await;
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle = request_lifecycle_for_case(
+    let (doc_id, provenance) = super::recovery_sweeps::create_signed_active_request(
         &db,
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at.clone(),
-    );
-
-    // Leave the row persisted `claimed`, as a crashed executor would.
-    assert_eq!(
-        lifecycle.claim_without_identity_for_test().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
+        &agent_did,
+        &request_id,
+        &session_id,
+        "claimed",
+    )
+    .await;
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "claimed");
 
-    // The sweep only repairs a stuck request whose durable response already
-    // reached a terminal outcome; without one it reports `awaiting_outcome`.
-    create_response_with_status(
+    // The sweep only repairs a stuck request whose exact immutable response
+    // outcome is already durable; the mutable live response is projection.
+    super::recovery_sweeps::create_signed_terminal_response_and_outcome(
         &db.node,
-        &format!("resp-{request_id}"),
+        &agent_did,
         &request_id,
         &session_id,
-        "complete",
+        &provenance,
+        "completed",
+        None,
     )
     .await;
 
-    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
+    let report = RequestLifecycle::repair_terminal_requests(&db.node, &agent_did)
         .await
         .expect("terminal repair sweep must succeed");
     assert_eq!(
@@ -2492,9 +2488,14 @@ async fn drive_background_completion_notification_creates_no_agent_request(
     case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
 ) {
     let db = signed_materializer_test_db("queue-deadline-coalesce").await;
+    let agent_did = db
+        .node
+        .node_identity_did()
+        .expect("signed queue fixture node DID")
+        .to_string();
     let session_id = case.session_id.to_string();
     let parent_request_id = "queue-deadline-coalesce-parent";
-    install_background_completion_fixture(db.node.as_ref()).await;
+    install_background_completion_fixture(db.node.as_ref(), &agent_did).await;
     create_queue_request(
         db.node.as_ref(),
         parent_request_id,
@@ -2504,6 +2505,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
         "interactive",
         None,
         Some(&(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339()),
+        &agent_did,
     )
     .await;
 
@@ -2523,6 +2525,7 @@ async fn drive_background_completion_notification_creates_no_agent_request(
         &session_id,
         "queue-deadline-coalesce-a",
         1,
+        &agent_did,
     )
     .await;
     let (child_b, child_session_b) = create_background_child_bridge(
@@ -2531,37 +2534,40 @@ async fn drive_background_completion_notification_creates_no_agent_request(
         &session_id,
         "queue-deadline-coalesce-b",
         2,
+        &agent_did,
     )
     .await;
     persist_child_completion(
-        db.node.as_ref(),
+        &db.node,
         &child_a,
         &child_session_a,
+        &agent_did,
         "child A complete",
     )
     .await;
     persist_child_completion(
-        db.node.as_ref(),
+        &db.node,
         &child_b,
         &child_session_b,
+        &agent_did,
         "child B complete",
     )
     .await;
 
-    let first = project_background_subagent_completion(db.node.clone(), &child_a, AGENT_DID)
+    let first = project_background_subagent_completion(db.node.clone(), &child_a, &agent_did)
         .await
         .unwrap();
-    let second = project_background_subagent_completion(db.node.clone(), &child_b, AGENT_DID)
+    let second = project_background_subagent_completion(db.node.clone(), &child_b, &agent_did)
         .await
         .unwrap();
-    assert!(matches!(
-        first,
-        BackgroundCompletionOutcome::Projected { .. }
-    ));
-    assert!(matches!(
-        second,
-        BackgroundCompletionOutcome::Projected { .. }
-    ));
+    assert!(
+        matches!(first, BackgroundCompletionOutcome::Projected { .. }),
+        "unexpected first projection outcome: {first:?}"
+    );
+    assert!(
+        matches!(second, BackgroundCompletionOutcome::Projected { .. }),
+        "unexpected second projection outcome: {second:?}"
+    );
 
     let generated_ids = std::collections::BTreeMap::new();
     let post = fetch_queue_runtime_snapshot(
@@ -2589,6 +2595,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "interactive",
         None,
         None,
+        AGENT_DID,
     )
     .await;
 
@@ -2606,6 +2613,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
             parent_request_id,
         )),
         None,
+        AGENT_DID,
     )
     .await;
     create_queue_request(
@@ -2617,6 +2625,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "scheduled",
         Some(&user_queue_metadata()),
         None,
+        AGENT_DID,
     )
     .await;
 
@@ -2668,6 +2677,7 @@ async fn drive_claim_preserves_explicit_deadline(
         "interactive",
         None,
         Some(&explicit_deadline),
+        AGENT_DID,
     )
     .await;
     let request = request_from_parts(
@@ -2720,6 +2730,7 @@ async fn create_queue_request(
     execution_origin: &str,
     metadata: Option<&str>,
     deadline: Option<&str>,
+    agent_did: &str,
 ) -> String {
     let lifecycle_state = match status {
         "pending" => "pending",
@@ -2735,6 +2746,7 @@ async fn create_queue_request(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let metadata_field = metadata
         .map(|metadata| format!(r#", metadata: "{}""#, escape_graphql_string(metadata)))
         .unwrap_or_default();
@@ -2745,7 +2757,7 @@ async fn create_queue_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{escaped_agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -2807,7 +2819,7 @@ fn user_queue_metadata() -> String {
     .to_string()
 }
 
-async fn install_background_completion_fixture(node: &EmbeddedNode) {
+async fn install_background_completion_fixture(node: &EmbeddedNode, agent_did: &str) {
     const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
@@ -2815,10 +2827,10 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
         node,
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
-                AGENT_DID,
+                agent_did,
                 CHILD_BEHAVIOR_ID,
                 None,
             )]),
@@ -2835,7 +2847,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: AGENT_NAME.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             display_name: Some("Queue deadline parent".to_string()),
             description: None,
             summary: None,
@@ -2859,7 +2871,7 @@ async fn install_background_completion_fixture(node: &EmbeddedNode) {
             skill_refs: Vec::new(),
             skill_excludes: Vec::new(),
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: AGENT_DID.to_string(),
+            agent_did: agent_did.to_string(),
             display_name: Some("Queue deadline child".to_string()),
             description: None,
             summary: None,
@@ -2885,6 +2897,7 @@ async fn create_background_child_bridge(
     parent_session_id: &str,
     tool_call_id: &str,
     message_sequence: u32,
+    agent_did: &str,
 ) -> (String, String) {
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
@@ -2895,7 +2908,7 @@ async fn create_background_child_bridge(
         parent_request_id.to_string(),
         tool_call_id.to_string(),
         0,
-        AGENT_DID.to_string(),
+        agent_did.to_string(),
         CHILD_BEHAVIOR_ID.to_string(),
         format!("prompt for {tool_call_id}"),
         Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
@@ -2908,7 +2921,7 @@ async fn create_background_child_bridge(
         node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        agent_did.to_string(),
         tool_call_id.to_string(),
         message_sequence,
         "spawn_subagent".to_string(),
@@ -2922,7 +2935,7 @@ async fn create_background_child_bridge(
         AwaitMode::Background,
         CancelPolicy::Cascade,
         child_request_id.clone(),
-        AGENT_DID.to_string(),
+        agent_did.to_string(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -2943,26 +2956,38 @@ async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String
 }
 
 async fn persist_child_completion(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     child_request_id: &str,
     child_session_id: &str,
+    child_agent_did: &str,
     final_response: &str,
 ) {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let update_request = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
-            ) {{ _docID }}
-        }}"#
+    let request_doc_id = support::first_row::<support::DocIdRow>(
+        &node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }}) {{ _docID }} }}"#
+            ))
+            .await,
+        "AgentRequest",
     );
-    let response = node.execute(&update_request).await;
-    assert!(
-        !response.has_errors(),
-        "update child AgentRequest completed failed: {:?}",
-        response.errors
+    let request = DefraWatcher::new(node.clone(), child_agent_did)
+        .try_fetch_request(&request_doc_id.doc_id)
+        .await
+        .expect("load queue child request")
+        .expect("queue child request exists");
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "queue-deadline-child",
+        child_agent_did,
+        request,
+        DEADLINE_SECS,
     );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle.begin_execution().await.unwrap();
 
     let assistant = Message::Assistant {
         id: None,
@@ -2972,12 +2997,17 @@ async fn persist_child_completion(
     };
     let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
     let escaped_child_session_id = escape_graphql_string(child_session_id);
+    let escaped_child_agent_did = escape_graphql_string(child_agent_did);
+    let escaped_request_doc_id = escape_graphql_string(&request_doc_id.doc_id);
     let now = chrono::Utc::now().to_rfc3339();
     let create_message = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{escaped_child_session_id}:1",
                 session_id: "{escaped_child_session_id}",
+                agent_did: "{escaped_child_agent_did}",
+                request_id: "{escaped_child_request_id}",
+                request_doc_id: "{escaped_request_doc_id}",
                 sequence: 1,
                 role: "assistant",
                 content: "{escaped_message}",
@@ -2992,12 +3022,36 @@ async fn persist_child_completion(
         response.errors
     );
 
+    gents::publish_completed_response_outcome_for_test(
+        node.as_ref(),
+        &request_doc_id.doc_id,
+        child_agent_did,
+        1,
+    )
+    .await
+    .expect("publish exact queue child completion outcome");
+
+    let update_request = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
+                input: {{ status: "completed", lifecycle_state: "completed" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&update_request).await;
+    assert!(
+        !response.has_errors(),
+        "update child AgentRequest completed failed: {:?}",
+        response.errors
+    );
+
     let create_response = format!(
         r#"mutation {{
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
-                agent_did: "{AGENT_DID}",
+                agent_did: "{escaped_child_agent_did}",
                 behavior_id: "queue-deadline-child",
                 session_id: "{escaped_child_session_id}",
                 content: "",

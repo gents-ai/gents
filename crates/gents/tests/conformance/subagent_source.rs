@@ -567,22 +567,30 @@ async fn subagent_source_bridge_admission_materializes_child_request_from_tool_c
 #[tokio::test]
 async fn subagent_source_rejects_unsigned_bridge_admission() {
     let db = unsigned_test_db("r3-subagent-source-unsigned-bridge").await;
-    let running = boot_agent(&db, "r3-subagent-source-unsigned-bridge").await;
+    let agent_did = "did:test:unsigned-bridge-agent";
+    let behavior_id = "unsigned-bridge-behavior";
     let parent_request_id = "r3-parent-unsigned-bridge";
     let parent_tool_call_id = "r3-tc-unsigned-bridge";
     let child_request_id = "r3-child-unsigned-bridge";
     create_runtime_request(
         db.node.as_ref(),
-        &running.booted.agent_did,
-        &running.behavior_id,
+        agent_did,
+        behavior_id,
         parent_request_id,
         "r3-session-unsigned-bridge",
         "parent prompt",
     )
     .await;
+    let mut source = crate::support::fixtures::spawn_subagent_source(
+        db.node.clone(),
+        agent_did,
+        behavior_id,
+        behavior_id,
+    );
+    source.wait_ready().await;
 
     let args = serde_json::json!({
-        "behavior_id": running.behavior_id.clone(),
+        "behavior_id": behavior_id,
         "prompt": "unsigned bridge must not materialize"
     })
     .to_string();
@@ -590,7 +598,7 @@ async fn subagent_source_rejects_unsigned_bridge_admission() {
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-unsigned-bridge".to_string(),
-        running.booted.agent_did.clone(),
+        agent_did.to_string(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -599,7 +607,7 @@ async fn subagent_source_rejects_unsigned_bridge_admission() {
         AwaitMode::Foreground,
         CancelPolicy::Cascade,
         child_request_id.to_string(),
-        running.booted.agent_did.clone(),
+        agent_did.to_string(),
     );
     lifecycle.start_running().await.unwrap();
 
@@ -609,7 +617,7 @@ async fn subagent_source_rejects_unsigned_bridge_admission() {
         Duration::from_millis(800),
     )
     .await;
-    running.booted.shutdown().await;
+    drop(source);
 }
 
 #[tokio::test]

@@ -256,7 +256,8 @@ impl MockStreamingBackend {
             .await;
         assert!(
             observed >= expected,
-            "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}"
+            "timed out waiting for {expected} chunk(s) for marker {marker}, observed {observed}; completion bodies: {:?}",
+            self.observed_completion_bodies()
         );
     }
 }
