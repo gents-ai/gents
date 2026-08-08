@@ -58,6 +58,12 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) inference_call_exact_target_trace_cases: Vec<LeanInferenceCallExactTargetTraceCase>,
     pub(crate) inference_rendered_capture_cases: Vec<LeanInferenceRenderedCaptureCase>,
+    pub(crate) tool_fact_cases: Vec<LeanToolFactCase>,
+    pub(crate) fork_provenance_cases: Vec<LeanForkProvenanceCase>,
+    pub(crate) compaction_source_manifest_cases: Vec<LeanCompactionSourceManifestCase>,
+    pub(crate) response_outcome_cases: Vec<LeanResponseOutcomeCase>,
+    pub(crate) response_persistence_cut_cases: Vec<LeanResponsePersistenceCutCase>,
+    pub(crate) response_recovery_cut_cases: Vec<LeanResponseRecoveryCutCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
     pub(crate) persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
@@ -183,6 +189,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     #[serde(default)]
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+    #[serde(default)]
+    pub(crate) event_delivery_durable_admission_cases: Vec<LeanDurableEventAdmissionCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -376,10 +384,14 @@ mod client_session;
 mod codex_shim;
 #[path = "command_identity_queue.rs"]
 mod command_identity_queue;
+#[path = "compaction_source_manifest.rs"]
+mod compaction_source_manifest;
 #[path = "composed_invariants.rs"]
 mod composed_invariants;
 #[path = "event_delivery.rs"]
 mod event_delivery;
+#[path = "fork_provenance.rs"]
+mod fork_provenance;
 #[path = "inference_rendered_capture.rs"]
 mod inference_rendered_capture;
 #[path = "prompt_assembly.rs"]
@@ -388,12 +400,16 @@ mod prompt_assembly;
 mod rendered_capture;
 #[path = "request_ingest.rs"]
 mod request_ingest;
+#[path = "response_outcome.rs"]
+mod response_outcome;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
 #[path = "subagent_bridge_admission.rs"]
 mod subagent_bridge_admission;
+#[path = "tool_fact.rs"]
+mod tool_fact;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -403,15 +419,19 @@ pub(crate) use background_transcript::*;
 pub(crate) use client_session::*;
 pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
+pub(crate) use compaction_source_manifest::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
+pub(crate) use fork_provenance::*;
 pub(crate) use inference_rendered_capture::*;
 pub(crate) use prompt_assembly::*;
 pub(crate) use rendered_capture::*;
 pub(crate) use request_ingest::*;
+pub(crate) use response_outcome::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use subagent_bridge_admission::*;
+pub(crate) use tool_fact::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -562,6 +582,31 @@ pub(crate) fn lean_inference_call_exact_target_trace_cases(
 pub(crate) fn lean_inference_rendered_capture_cases() -> &'static [LeanInferenceRenderedCaptureCase]
 {
     &lean_contract_snapshot().inference_rendered_capture_cases
+}
+
+pub(crate) fn lean_tool_fact_cases() -> &'static [LeanToolFactCase] {
+    &lean_contract_snapshot().tool_fact_cases
+}
+
+pub(crate) fn lean_fork_provenance_cases() -> &'static [LeanForkProvenanceCase] {
+    &lean_contract_snapshot().fork_provenance_cases
+}
+
+pub(crate) fn lean_compaction_source_manifest_cases() -> &'static [LeanCompactionSourceManifestCase]
+{
+    &lean_contract_snapshot().compaction_source_manifest_cases
+}
+
+pub(crate) fn lean_response_outcome_cases() -> &'static [LeanResponseOutcomeCase] {
+    &lean_contract_snapshot().response_outcome_cases
+}
+
+pub(crate) fn lean_response_persistence_cut_cases() -> &'static [LeanResponsePersistenceCutCase] {
+    &lean_contract_snapshot().response_persistence_cut_cases
+}
+
+pub(crate) fn lean_response_recovery_cut_cases() -> &'static [LeanResponseRecoveryCutCase] {
+    &lean_contract_snapshot().response_recovery_cut_cases
 }
 
 pub(crate) fn lean_inference_slot_accounting_case(
@@ -957,6 +1002,11 @@ pub(crate) fn lean_event_delivery_source_instances() -> &'static [LeanEventDeliv
 pub(crate) fn lean_event_delivery_convergence_traces(
 ) -> &'static [LeanEventDeliveryConvergenceTrace] {
     &lean_contract_snapshot().event_delivery_convergence_traces
+}
+
+pub(crate) fn lean_event_delivery_durable_admission_cases(
+) -> &'static [LeanDurableEventAdmissionCase] {
+    &lean_contract_snapshot().event_delivery_durable_admission_cases
 }
 
 pub(crate) fn lean_tool_retry_case(name: &str) -> &'static LeanToolRetryCase {

@@ -8,7 +8,9 @@ use crate::session;
 use crate::watcher::AgentRequest;
 
 mod claim;
-pub(crate) use claim::verify_persisted_execution_provenance;
+pub(crate) use claim::{
+    reconstruct_execution_provenance_from_claim_ancestry, verify_persisted_execution_provenance,
+};
 #[doc(hidden)]
 pub mod ingest_contract;
 mod lookup;

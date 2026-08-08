@@ -481,6 +481,7 @@ async fn fetch_tool_call_row(
                     }},
                     limit: 1
                 ) {{
+                    _docID
                     request_id
                     deadline_at
                     lifecycle_state
@@ -488,6 +489,12 @@ async fn fetch_tool_call_row(
                     status
                     tool_failure_class
                     cancel_cause
+                    result_doc_id
+                    result_composite_commit_cid
+                    result_signer_did
+                    approval_doc_id
+                    approval_composite_commit_cid
+                    approval_signer_did
                     await_mode
                     cancel_policy
                 }}
@@ -525,8 +532,14 @@ async fn fetch_tool_result_spill_row(
                     }},
                     limit: 1
                 ) {{
+                    _docID
+                    result_key
+                    tool_call_key
+                    tool_call_doc_id
+                    tool_call_composite_commit_cid
+                    tool_call_signer_did
                     output_text
-                    truncated
+                    model_output_truncated
                     truncation_metadata
                 }}
             }}"#
@@ -953,6 +966,32 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
             .await,
         ToolCallHookAction::Continue
     ));
+    let truncator =
+        crate::truncation::DefraSpillTruncator::new(node.clone(), "did:test:general", &session_id)
+            .with_tool_call_id("internal-oversized");
+    let retained = crate::truncation::Truncator::truncate(
+        &truncator,
+        "oversized",
+        tool_args,
+        &full_output,
+        crate::truncation::tool_result_truncation_mode("oversized"),
+        &hook.truncation_limits,
+        None,
+    )
+    .await
+    .expect("create immutable full-output fact");
+    let replayed = crate::truncation::Truncator::truncate(
+        &truncator,
+        "oversized",
+        tool_args,
+        &full_output,
+        crate::truncation::tool_result_truncation_mode("oversized"),
+        &hook.truncation_limits,
+        None,
+    )
+    .await
+    .expect("identical full-output replay converges");
+    assert_eq!(retained.spill_ref, replayed.spill_ref);
     assert!(matches!(
         hook.on_tool_result(
             "oversized",
@@ -979,8 +1018,69 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     );
 
     let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;
+    let call_doc_id = tool_call
+        .get("_docID")
+        .and_then(|value| value.as_str())
+        .expect("physical tool call document id");
+    let spill_doc_id = spill
+        .get("_docID")
+        .and_then(|value| value.as_str())
+        .expect("physical result document id");
     assert_eq!(
-        spill.get("truncated").and_then(|value| value.as_bool()),
+        spill.get("result_key").and_then(|value| value.as_str()),
+        Some(call_doc_id),
+        "one immutable result fact is keyed by the physical call"
+    );
+    assert_eq!(
+        spill
+            .get("tool_call_doc_id")
+            .and_then(|value| value.as_str()),
+        Some(call_doc_id)
+    );
+    assert_eq!(
+        tool_call
+            .get("result_doc_id")
+            .and_then(|value| value.as_str()),
+        Some(spill_doc_id),
+        "the call must carry the exact forward result edge"
+    );
+    let spill_ref = crate::document_version::verified_current_signed_document_version(
+        &node,
+        "AgentToolResult",
+        spill_doc_id,
+    )
+    .await
+    .expect("cryptographically verified current result fact");
+    assert_eq!(
+        tool_call
+            .get("result_composite_commit_cid")
+            .and_then(|value| value.as_str()),
+        Some(spill_ref.version.composite_commit_cid.as_str())
+    );
+    assert_eq!(
+        tool_call
+            .get("result_signer_did")
+            .and_then(|value| value.as_str()),
+        Some(spill_ref.signer_did.as_str())
+    );
+    let pinned_call_cid = spill
+        .get("tool_call_composite_commit_cid")
+        .and_then(|value| value.as_str())
+        .expect("result pins exact call commit");
+    let pinned_call_signer = spill
+        .get("tool_call_signer_did")
+        .and_then(|value| value.as_str())
+        .expect("result pins exact call signer");
+    assert_eq!(
+        node.verified_block_signer_did(pinned_call_cid)
+            .await
+            .expect("cryptographically verify pinned historical call commit"),
+        pinned_call_signer
+    );
+    assert_eq!(
+        spill
+            .get("model_output_truncated")
+            .and_then(|value| value.as_bool()),
         Some(true)
     );
     assert_eq!(
@@ -2133,37 +2233,26 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
 }
 
 async fn write_approval_document(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     tool_call_id: &str,
     agent_did: &str,
+    approver_did: &str,
     decision: &str,
     reason: &str,
 ) {
-    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
-    let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let escaped_decision = crate::graphql::escape_graphql_string(decision);
-    let escaped_reason = crate::graphql::escape_graphql_string(reason);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolApproval(input: {{
-                approval_id: "approval-{escaped_tool_call_id}",
-                tool_call_id: "{escaped_tool_call_id}",
-                request_id: "req-hold",
-                agent_did: "{escaped_agent_did}",
-                decision: "{escaped_decision}",
-                approver_did: "did:key:operator",
-                reason: "{escaped_reason}",
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create AgentToolApproval failed: {:?}",
-        resp.errors
-    );
+    crate::config_client::write_tool_approval(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ToolApprovalVerdict {
+            tool_call_id: tool_call_id.to_string(),
+            agent_did: agent_did.to_string(),
+            request_id: Some("req-hold".to_string()),
+            approve: decision == "approved",
+            approver_did: approver_did.to_string(),
+            reason: (!reason.is_empty()).then(|| reason.to_string()),
+        },
+    )
+    .await
+    .expect("create exact signed AgentToolApproval fact");
 }
 
 async fn wait_for_lifecycle_state(
@@ -2210,6 +2299,76 @@ async fn wait_for_lifecycle_state(
     panic!("tool call {tool_call_id} never reached lifecycle_state {expected}");
 }
 
+async fn assert_exact_approval_edge(node: &defra_node::EmbeddedNode, call: &serde_json::Value) {
+    let call_doc_id = call
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .expect("physical held call document id");
+    let approval_doc_id = call
+        .get("approval_doc_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("exact approval forward document id");
+    let approval = crate::document_version::verified_current_signed_document_version(
+        node,
+        "AgentToolApproval",
+        approval_doc_id,
+    )
+    .await
+    .expect("cryptographically verified approval fact");
+    assert_eq!(
+        call.get("approval_composite_commit_cid")
+            .and_then(serde_json::Value::as_str),
+        Some(approval.version.composite_commit_cid.as_str())
+    );
+    assert_eq!(
+        call.get("approval_signer_did")
+            .and_then(serde_json::Value::as_str),
+        Some(approval.signer_did.as_str())
+    );
+
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolApproval(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did approver_did }} }}"#,
+            crate::graphql::escape_graphql_string(call_doc_id)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query exact approval fact failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolApproval"))
+        .and_then(serde_json::Value::as_array)
+        .expect("approval fact rows");
+    let [row] = rows.as_slice() else {
+        panic!("approval fact resolved to {} physical rows", rows.len());
+    };
+    assert_eq!(
+        row.get("tool_call_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(call_doc_id)
+    );
+    assert_eq!(
+        node.verified_block_signer_did(
+            row.get("tool_call_composite_commit_cid")
+                .and_then(serde_json::Value::as_str)
+                .expect("pinned approval parent CID")
+        )
+        .await
+        .expect("cryptographically verify approval parent"),
+        row.get("tool_call_signer_did")
+            .and_then(serde_json::Value::as_str)
+            .expect("pinned approval parent signer")
+    );
+    assert_eq!(
+        row.get("approver_did").and_then(serde_json::Value::as_str),
+        Some(approval.signer_did.as_str())
+    );
+}
+
 async fn hook_with_held_tool(
     data_path: &std::path::Path,
     deadline: chrono::DateTime<chrono::Utc>,
@@ -2247,11 +2406,12 @@ async fn held_tool_call_dispatches_after_operator_approval() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-approve-{}", uuid::Uuid::new_v4()));
     let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
-    let (node, hook, session_id, _signing_identity) =
+    let (node, hook, session_id, signing_identity) =
         hook_with_held_tool(&data_path, deadline).await;
 
     let approver_node = node.clone();
     let approver_session = session_id.clone();
+    let approver_did = signing_identity.did().to_string();
     let approver = tokio::spawn(async move {
         wait_for_lifecycle_state(
             &approver_node,
@@ -2264,6 +2424,7 @@ async fn held_tool_call_dispatches_after_operator_approval() {
             &approver_node,
             "internal-approve",
             "did:test:general",
+            &approver_did,
             "approved",
             "",
         )
@@ -2284,6 +2445,7 @@ async fn held_tool_call_dispatches_after_operator_approval() {
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("running")
     );
+    assert_exact_approval_edge(&node, &row).await;
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -2292,11 +2454,12 @@ async fn held_tool_call_dispatches_after_operator_approval() {
 async fn held_tool_call_denied_skips_with_operator_reason() {
     let data_path = std::env::temp_dir().join(format!("agent-hook-deny-{}", uuid::Uuid::new_v4()));
     let deadline = chrono::Utc::now() + chrono::Duration::seconds(60);
-    let (node, hook, session_id, _signing_identity) =
+    let (node, hook, session_id, signing_identity) =
         hook_with_held_tool(&data_path, deadline).await;
 
     let approver_node = node.clone();
     let approver_session = session_id.clone();
+    let approver_did = signing_identity.did().to_string();
     let approver = tokio::spawn(async move {
         wait_for_lifecycle_state(
             &approver_node,
@@ -2309,6 +2472,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
             &approver_node,
             "internal-deny",
             "did:test:general",
+            &approver_did,
             "denied",
             "not on my watch",
         )
@@ -2334,6 +2498,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
         row.get("lifecycle_state").and_then(|value| value.as_str()),
         Some("failed")
     );
+    assert_exact_approval_edge(&node, &row).await;
     assert_eq!(
         row.get("tool_failure_class")
             .and_then(|value| value.as_str()),

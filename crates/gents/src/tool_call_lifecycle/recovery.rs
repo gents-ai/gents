@@ -7,13 +7,15 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::EmbeddedNode;
+use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use identity::Did;
 use serde::Deserialize;
 
 use crate::background_completion::ensure_background_subagent_completion_side_effects;
 use crate::background_tools::{
     child_request_completed, fail_running_subagent_tool_call, load_parent_subagent_authorization,
-    project_child_terminal, subagent_spawn_denial, subagent_tool_not_allowed_payload,
+    project_child_terminal, render_assistant_message_text, subagent_spawn_denial,
+    subagent_tool_not_allowed_payload,
 };
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::interrupt::interrupt_request;
@@ -2026,40 +2028,75 @@ async fn load_child_completion_result(
     child_request_id: &str,
 ) -> Result<Option<String>> {
     #[derive(Deserialize)]
-    struct ResponseRow {
-        content: Option<String>,
+    struct ChildIdentityRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+        request_id: String,
+        session_id: String,
+        agent_did: String,
     }
 
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }}
             ) {{
-                content
+                _docID
+                request_id
+                session_id
+                agent_did
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let reader_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("child completion recovery requires a DefraDB query identity")
+    })?;
+    let identity = Did::new(reader_did).context("parsing child completion reader DID")?;
+    let response = node
+        .execute_request_with_retry(
+            QueryRequest::new(query).with_identity(Some(identity)),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
     if response.has_errors() {
         anyhow::bail!(
-            "query child AgentResponse {child_request_id} for bridge recovery failed: {:?}",
+            "query child AgentRequest {child_request_id} identity for bridge recovery failed: {:?}",
             response.errors
         );
     }
-    let rows: Vec<ResponseRow> = response
+    let rows: Vec<ChildIdentityRow> = response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
+        .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
-    Ok(rows
-        .into_iter()
-        .next()
-        .and_then(|row| row.content)
-        .filter(|content| !content.trim().is_empty()))
+    let child = match rows.as_slice() {
+        [] => return Ok(None),
+        [child] => child,
+        rows => anyhow::bail!(
+            "child AgentRequest {child_request_id} resolved to {} physical documents during bridge recovery",
+            rows.len()
+        ),
+    };
+    let Some(message) = crate::response_outcome::load_verified_complete_response_message(
+        node,
+        &child.agent_did,
+        &child.doc_id,
+        &child.request_id,
+        &child.session_id,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    tracing::debug!(
+        child_request_doc_id = %child.doc_id,
+        final_message_doc_id = %message.fact.doc_id,
+        final_message_composite_commit_cid = %message.fact.composite_commit_cid,
+        "recovered bridge from verified immutable child completion"
+    );
+    Ok(Some(render_assistant_message_text(&message.content)?))
 }
 
 async fn recover_bridge_completed_row(

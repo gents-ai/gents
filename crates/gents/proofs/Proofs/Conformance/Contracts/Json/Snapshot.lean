@@ -3,6 +3,10 @@ import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.InferenceCall
 import Proofs.Conformance.Contracts.Json.InferenceRenderedCapture
+import Proofs.Conformance.Contracts.Json.ToolFact
+import Proofs.Conformance.Contracts.Json.ForkProvenance
+import Proofs.Conformance.Contracts.Json.CompactionSourceManifest
+import Proofs.Conformance.Contracts.Json.ResponseOutcome
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
@@ -84,6 +88,18 @@ def snapshotJson : String :=
         (inferenceCallExactTargetTraceCases.map inferenceCallExactTargetTraceCaseJson) ++ ","
     ++ "\"inference_rendered_capture_cases\":"
       ++ inferenceRenderedCaptureCasesJson ++ ","
+    ++ "\"tool_fact_cases\":"
+      ++ toolFactCasesJson ++ ","
+    ++ "\"fork_provenance_cases\":"
+      ++ forkProvenanceCasesJson ++ ","
+    ++ "\"compaction_source_manifest_cases\":"
+      ++ compactionSourceManifestCasesJson ++ ","
+    ++ "\"response_outcome_cases\":"
+      ++ responseOutcomeCasesJson ++ ","
+    ++ "\"response_persistence_cut_cases\":"
+      ++ responsePersistenceCutCasesJson ++ ","
+    ++ "\"response_recovery_cut_cases\":"
+      ++ responseRecoveryCutCasesJson ++ ","
     ++ "\"fleet_slot_accounting_cases\":"
       ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
     ++ "\"persistence_failure_policy_cases\":"
@@ -261,6 +277,8 @@ def snapshotJson : String :=
       ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
     ++ "\"event_delivery_convergence_traces\":"
       ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
+    ++ "\"event_delivery_durable_admission_cases\":"
+      ++ Conformance.EventDelivery.durableAdmissionCasesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"

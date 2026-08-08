@@ -51,6 +51,7 @@ pub async fn load_history_with_refs(
                 agent_did
                 requester_did
                 request_id
+                request_doc_id
                 sequence
                 role
                 content
@@ -220,6 +221,7 @@ async fn save_message_inner(
             agent_did,
             requester_did,
             request_id,
+            request_doc_id: None,
             sequence,
             role,
             content,
@@ -277,6 +279,7 @@ pub(crate) async fn save_message_draft_with_requester_did_and_request_id(
             agent_did,
             requester_did,
             request_id,
+            request_doc_id: None,
             sequence,
             role,
             content,
@@ -344,6 +347,7 @@ struct DesiredMessageFact<'a> {
     agent_did: &'a str,
     requester_did: Option<&'a str>,
     request_id: Option<&'a str>,
+    request_doc_id: Option<&'a str>,
     sequence: u32,
     role: &'a str,
     content: &'a str,
@@ -361,6 +365,8 @@ struct MessageFactRow {
     requester_did: Option<String>,
     #[serde(default)]
     request_id: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
     sequence: u32,
     role: String,
     content: String,
@@ -386,7 +392,7 @@ struct MessageCompositeCommit {
 struct MessagePersistOutcome {
     sequence: u32,
     created: bool,
-    _fact_ref: MessageFactRef,
+    fact_ref: MessageFactRef,
 }
 
 async fn verify_finalized_message_fact(
@@ -466,7 +472,7 @@ async fn verify_finalized_message_fact(
         .execute(&format!(
             r#"query {{
                 AgentMessage(cid: ["{escaped_cid}"]) {{
-                    _docID message_key session_id agent_did requester_did request_id
+                    _docID message_key session_id agent_did requester_did request_id request_doc_id
                     sequence role content reasoning timestamp
                 }}
             }}"#
@@ -527,6 +533,7 @@ fn signed_snapshot_matches_finalized_fact(
         && exact.agent_did == expected.agent_did
         && exact.requester_did == expected.requester_did
         && exact.request_id == expected.request_id
+        && exact.request_doc_id == expected.request_doc_id
         && exact.sequence == expected.sequence
         && exact.role == expected.role
         && exact.content == expected.content
@@ -554,6 +561,7 @@ fn finalized_fact_matches(row: &MessageFactRow, desired: DesiredMessageFact<'_>)
         && row.agent_did == desired.agent_did
         && normalized(row.requester_did.as_deref()) == normalized(desired.requester_did)
         && normalized(row.request_id.as_deref()) == normalized(desired.request_id)
+        && normalized(row.request_doc_id.as_deref()) == normalized(desired.request_doc_id)
         && row.sequence == desired.sequence
         && row.role == desired.role
         && row.content == desired.content
@@ -566,6 +574,7 @@ fn draft_identity_matches(row: &MessageFactRow, desired: DesiredMessageFact<'_>)
         && row.agent_did == desired.agent_did
         && normalized(row.requester_did.as_deref()) == normalized(desired.requester_did)
         && normalized(row.request_id.as_deref()) == normalized(desired.request_id)
+        && normalized(row.request_doc_id.as_deref()) == normalized(desired.request_doc_id)
         && row.sequence == desired.sequence
         && row.role == desired.role
 }
@@ -579,7 +588,7 @@ async fn load_message_fact_candidates(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_message_key = escape_graphql_string(message_key);
     let fields = r#"
-        _docID message_key session_id agent_did requester_did request_id
+        _docID message_key session_id agent_did requester_did request_id request_doc_id
         sequence role content reasoning timestamp
     "#;
     let query = format!(
@@ -619,6 +628,82 @@ async fn load_message_fact_candidates(
     Ok(by_doc_id.into_values().collect())
 }
 
+/// Resolve one finalized transcript row to its exact current signed version.
+///
+/// This is the response-outcome handoff: callers receive the physical document
+/// id, composite CID, signer, and sequence instead of reconstructing terminal
+/// provenance from the logical sequence later.
+pub(crate) async fn message_fact_ref_for_sequence(
+    node: &EmbeddedNode,
+    session_id: &str,
+    sequence: u32,
+    agent_did: &str,
+) -> Result<MessageFactRef> {
+    let node_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("resolving AgentMessage fact requires a DefraDB node identity")
+    })?;
+    if node_did != agent_did {
+        anyhow::bail!(
+            "AgentMessage fact agent DID {agent_did} does not match node identity {node_did}"
+        );
+    }
+    let identity = identity::Did::new(agent_did).context("parsing AgentMessage query identity")?;
+    let escaped_session_id = escape_graphql_string(session_id);
+    let query = format!(
+        r#"query {{
+            AgentMessage(filter: {{
+                session_id: {{ _eq: "{escaped_session_id}" }},
+                sequence: {{ _eq: {sequence} }}
+            }}) {{
+                _docID message_key session_id agent_did requester_did request_id request_doc_id
+                sequence role content reasoning timestamp
+            }}
+        }}"#
+    );
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(query).with_identity(Some(identity.clone())),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "loading AgentMessage exact fact session_id={session_id} sequence={sequence}: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<MessageFactRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentMessage"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let [row] = rows.as_slice() else {
+        anyhow::bail!(
+            "AgentMessage session_id={session_id} sequence={sequence} resolved to {} rows",
+            rows.len()
+        );
+    };
+    if row.session_id != session_id || row.sequence != sequence || row.agent_did != agent_did {
+        anyhow::bail!("AgentMessage exact fact does not match requested transcript lineage");
+    }
+    let version = crate::document_version::verified_current_signed_document_version_with_identity(
+        node,
+        "AgentMessage",
+        &row.doc_id,
+        Some(identity),
+    )
+    .await?;
+    Ok(MessageFactRef {
+        sequence,
+        doc_id: row.doc_id.clone(),
+        composite_commit_cid: version.version.composite_commit_cid,
+        signer_did: version.signer_did,
+    })
+}
+
 async fn load_message_draft_candidates(
     node: &EmbeddedNode,
     session_id: &str,
@@ -628,7 +713,7 @@ async fn load_message_draft_candidates(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_message_key = escape_graphql_string(message_key);
     let fields = r#"
-        _docID message_key session_id agent_did requester_did request_id
+        _docID message_key session_id agent_did requester_did request_id request_doc_id
         sequence role content reasoning timestamp
     "#;
     let query = format!(
@@ -692,10 +777,74 @@ fn require_one_candidate(
     )
 }
 
+async fn exact_request_doc_id_for_message(
+    node: &EmbeddedNode,
+    request_id: Option<&str>,
+    agent_did: &str,
+) -> Result<Option<String>> {
+    let Some(request_id) = request_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let node_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("request-linked AgentMessage persistence requires a node identity")
+    })?;
+    if node_did != agent_did {
+        anyhow::bail!("AgentMessage agent DID {agent_did} does not match node identity {node_did}");
+    }
+    let identity = identity::Did::new(agent_did).context("parsing AgentMessage identity")?;
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(format!(
+                r#"query {{
+                    AgentRequest(filter: {{
+                        request_id: {{ _eq: "{escaped_request_id}" }},
+                        agent_did: {{ _eq: "{escaped_agent_did}" }}
+                    }}) {{ _docID }}
+                }}"#
+            ))
+            .with_identity(Some(identity)),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "resolving exact AgentRequest for AgentMessage request_id={request_id}: {:?}",
+            response.errors
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .map(|doc_id| Some(doc_id.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("AgentRequest exact lookup returned no _docID")),
+        rows => anyhow::bail!(
+            "AgentMessage request_id={request_id} resolves to {} AgentRequest documents",
+            rows.len()
+        ),
+    }
+}
+
 async fn persist_finalized_message(
     node: &EmbeddedNode,
     desired: DesiredMessageFact<'_>,
 ) -> Result<MessagePersistOutcome> {
+    let request_doc_id =
+        exact_request_doc_id_for_message(node, desired.request_id, desired.agent_did).await?;
+    let desired = DesiredMessageFact {
+        request_doc_id: request_doc_id.as_deref(),
+        ..desired
+    };
     let mut last_create_errors = None;
     for attempt in 1..=MESSAGE_FACT_ATTEMPTS {
         let existing = require_one_candidate(
@@ -715,7 +864,7 @@ async fn persist_finalized_message(
                     return Ok(MessagePersistOutcome {
                         sequence: row.sequence,
                         created: false,
-                        _fact_ref: fact_ref,
+                        fact_ref,
                     });
                 }
                 anyhow::bail!(
@@ -767,7 +916,7 @@ async fn persist_finalized_message(
                     return Ok(MessagePersistOutcome {
                         sequence: desired.sequence,
                         created: true,
-                        _fact_ref: fact_ref,
+                        fact_ref,
                     });
                 }
                 last_create_errors = Some(format!("{:?}", response.errors));
@@ -786,6 +935,12 @@ async fn persist_finalized_message(
 }
 
 async fn persist_draft_message(node: &EmbeddedNode, desired: DesiredMessageFact<'_>) -> Result<()> {
+    let request_doc_id =
+        exact_request_doc_id_for_message(node, desired.request_id, desired.agent_did).await?;
+    let desired = DesiredMessageFact {
+        request_doc_id: request_doc_id.as_deref(),
+        ..desired
+    };
     for attempt in 1..=MESSAGE_FACT_ATTEMPTS {
         if let Some(finalized) = require_one_candidate(
             load_message_fact_candidates(
@@ -916,6 +1071,7 @@ fn create_message_mutation(desired: DesiredMessageFact<'_>, collection: &str) ->
                 agent_did: "{agent_did}",
                 {requester_did_field}
                 request_id: "{request_id}",
+                request_doc_id: {request_doc_id},
                 sequence: {sequence},
                 role: "{role}",
                 content: "{content}",
@@ -927,6 +1083,10 @@ fn create_message_mutation(desired: DesiredMessageFact<'_>, collection: &str) ->
         session_id = escape_graphql_string(desired.session_id),
         agent_did = escape_graphql_string(desired.agent_did),
         request_id = escape_graphql_string(desired.request_id.unwrap_or("")),
+        request_doc_id = desired
+            .request_doc_id
+            .map(|doc_id| format!("\"{}\"", escape_graphql_string(doc_id)))
+            .unwrap_or_else(|| "null".to_string()),
         sequence = desired.sequence,
         role = escape_graphql_string(desired.role),
         content = escape_graphql_string(desired.content),
@@ -1022,7 +1182,16 @@ pub(crate) async fn append_message_with_requester_did(
         )
         .await
         {
-            Ok(outcome) => return Ok(outcome.sequence),
+            Ok(outcome) => {
+                tracing::trace!(
+                    doc_id = %outcome.fact_ref.doc_id,
+                    composite_commit_cid = %outcome.fact_ref.composite_commit_cid,
+                    signer_did = %outcome.fact_ref.signer_did,
+                    sequence = outcome.sequence,
+                    "appended exact finalized AgentMessage fact"
+                );
+                return Ok(outcome.sequence);
+            }
             Err(error) if attempts < 5 => {
                 tracing::debug!(
                     session_id = %session_id,
@@ -1062,6 +1231,7 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
             agent_did,
             requester_did,
             request_id,
+            request_doc_id: None,
             sequence: existing.sequence,
             role,
             content,
@@ -1111,6 +1281,7 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
                         agent_did,
                         requester_did,
                         request_id,
+                        request_doc_id: None,
                         sequence: existing.sequence,
                         role,
                         content,
@@ -1190,7 +1361,7 @@ async fn message_fact_for_key(
                     message_key: {{ _eq: "{escaped_message_key}" }}
                 }},
             ) {{
-                _docID message_key session_id agent_did requester_did request_id
+                _docID message_key session_id agent_did requester_did request_id request_doc_id
                 sequence role content reasoning timestamp
             }}
         }}"#
@@ -1390,6 +1561,7 @@ async fn create_message(
             agent_did,
             requester_did,
             request_id,
+            request_doc_id: None,
             sequence,
             role,
             content,

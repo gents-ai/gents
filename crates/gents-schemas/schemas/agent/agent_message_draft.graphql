@@ -4,6 +4,7 @@ type AgentMessageDraft @branchable {
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     request_id: String @index @immutable
+    request_doc_id: String @index @immutable
     sequence: Int @index @immutable
     role: String @immutable
     content: String

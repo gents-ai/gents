@@ -261,6 +261,25 @@ impl DefraSessionHook {
         Ok(sequence)
     }
 
+    /// Persist a finalized message and return its exact signed DefraDB fact.
+    /// Terminal response publication must use this path; a sequence alone is
+    /// an ordering coordinate, not durable provenance.
+    pub(crate) async fn persist_message_with_fact_ref(
+        &self,
+        message: &Message,
+    ) -> anyhow::Result<crate::MessageFactRef> {
+        let sequence = self.persist_message(message).await?;
+        let session_id = self
+            .state
+            .lock()
+            .await
+            .session_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+        session::message_fact_ref_for_sequence(&self.node, &session_id, sequence, &self.agent_did)
+            .await
+    }
+
     pub async fn persist_stream_tool_result_message(
         &self,
         tool_result: &ToolResult,

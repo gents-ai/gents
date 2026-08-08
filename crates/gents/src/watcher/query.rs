@@ -51,6 +51,22 @@ pub(crate) async fn load_agent_request_at_cid(
     agent_request_snapshot_from_response(response, composite_commit_cid, expected_doc_id)
 }
 
+pub(crate) async fn load_agent_request_at_cid_with_identity(
+    node: &defra_node::EmbeddedNode,
+    composite_commit_cid: &str,
+    expected_doc_id: &str,
+    identity: &identity::Did,
+) -> anyhow::Result<Option<AgentRequestVersionSnapshot>> {
+    let query = agent_request_at_cid_query(composite_commit_cid);
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(query).with_identity(Some(identity.clone())),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    agent_request_snapshot_from_response(response, composite_commit_cid, expected_doc_id)
+}
+
 pub(crate) async fn load_agent_request_at_cid_in_txn(
     node: &defra_node::EmbeddedNode,
     transaction: &defra_node::TransactionHandle,

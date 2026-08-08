@@ -61,6 +61,56 @@ pub(super) fn event_delivery_source_instances_match_runtime() {
     );
 }
 
+pub(super) fn durable_event_admission_cases_match_contract() {
+    let cases = lean_event_delivery_durable_admission_cases()
+        .iter()
+        .map(|case| (case.name.as_str(), case))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(cases.len(), 15);
+    assert_eq!(
+        cases["activation_baselines_current_docs"].disposition,
+        "activated"
+    );
+    assert_eq!(cases["baseline_doc_is_not_fired"].disposition, "baselined");
+    assert!(cases["baseline_doc_is_not_fired"].baseline_contains_source);
+    for name in [
+        "offline_creation_is_admitted_by_rescan",
+        "dropped_wake_is_admitted_by_rescan",
+    ] {
+        assert_eq!(cases[name].disposition, "admitted", "case {name}");
+        assert_eq!(cases[name].durable_deliveries, 1);
+    }
+    assert_eq!(
+        cases["same_trigger_doc_config_change_does_not_readmit"].disposition,
+        "already_delivered"
+    );
+    assert_eq!(
+        cases["source_update_does_not_reclassify_created"].disposition,
+        "already_delivered"
+    );
+    assert_eq!(cases["delivery_twins_fail_closed"].delivery_twins, 2);
+    assert_eq!(
+        cases["admission_durable_request_absent_recovers"].disposition,
+        "recovering_request"
+    );
+    assert_eq!(
+        cases["request_durable_admission_absent_recovers"].disposition,
+        "recovered_admission"
+    );
+    assert_eq!(
+        cases["config_edit_gets_new_activation_snapshot"].disposition,
+        "activated"
+    );
+    for name in [
+        "activation_twins_fail_closed",
+        "unsigned_activation_rejected",
+        "delivery_twins_fail_closed",
+        "unsigned_source_rejected",
+    ] {
+        assert_eq!(cases[name].disposition, "rejected", "case {name}");
+    }
+}
+
 pub(super) async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     let traces = lean_event_delivery_convergence_traces();
     assert!(
@@ -864,6 +914,18 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
     node.add_schema(schema)
         .await
         .expect("add_schema for EventDeliveryDoc");
+    let trigger = format!(
+        r#"mutation {{ create_EventTrigger(input: {{
+            trigger_id: "{EVENT_SOURCE_TRIGGER_ID}"
+            task_id: "{EVENT_SOURCE_TASK_ID}"
+            source_collection: "{EVENT_SOURCE_COLLECTION}"
+            event_kind: "created"
+            enabled: true
+            concurrency: "serial"
+        }}) {{ _docID }} }}"#
+    );
+    let response = node.execute(&trigger).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
 async fn install_subagent_source_fixture(

@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Context as _;
 
@@ -679,6 +679,225 @@ pub(crate) async fn verify_persisted_execution_provenance(
     Ok(claim_snapshot.request)
 }
 
+fn composite_ancestry_cids(
+    evidence: &[CompositeHeadEvidenceRow],
+    current: &CompositeHeadEvidenceRow,
+) -> Result<HashSet<String>> {
+    let by_cid = evidence
+        .iter()
+        .map(|row| (row.cid.as_str(), row))
+        .collect::<HashMap<_, _>>();
+    let mut ancestry = HashSet::new();
+    let mut pending = vec![current.cid.as_str()];
+    while let Some(cid) = pending.pop() {
+        if !ancestry.insert(cid.to_string()) {
+            continue;
+        }
+        let row = by_cid.get(cid).ok_or_else(|| {
+            anyhow::anyhow!("AgentRequest commit ancestry is missing composite commit {cid}")
+        })?;
+        for parent in row
+            .heads
+            .iter()
+            .filter(|parent| parent.field_name.as_deref() == Some("_C"))
+        {
+            if !by_cid.contains_key(parent.cid.as_str()) {
+                anyhow::bail!(
+                    "AgentRequest commit {} references missing composite parent {}",
+                    row.cid,
+                    parent.cid
+                );
+            }
+            pending.push(parent.cid.as_str());
+        }
+    }
+    Ok(ancestry)
+}
+
+/// Reconstruct the exact signed source/claim pair from the ancestry of the
+/// request's sole current composite head.
+///
+/// This is the crash-recovery counterpart of the atomic claim gate. It does
+/// not trust the current mutable row to remember provenance: it time-travels
+/// the current commit ancestry, selects exactly one `processing/claimed`
+/// snapshot, verifies its sole `_C` parent is an exact `pending/pending`
+/// source, cryptographically verifies both signers, and reuses the same
+/// payload-preservation validator as the original claim.
+pub(crate) struct ReconstructedExecutionProvenance {
+    pub(crate) provenance: crate::RequestExecutionProvenance,
+    pub(crate) claimed_request: AgentRequest,
+}
+
+pub(crate) async fn reconstruct_execution_provenance_from_claim_ancestry(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    target_agent_did: &str,
+) -> Result<ReconstructedExecutionProvenance> {
+    if request_doc_id.trim().is_empty() || target_agent_did.trim().is_empty() {
+        anyhow::bail!("claim-ancestry reconstruction requires a request document and target DID");
+    }
+    let node_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("claim-ancestry reconstruction requires a DefraDB query identity")
+    })?;
+    let identity = identity::Did::new(node_did).context("parsing claim-ancestry reader DID")?;
+    let escaped_doc_id = escape_graphql_string(request_doc_id);
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(format!(
+                r#"query {{
+                    _commits(
+                        docID: ["{escaped_doc_id}"],
+                        filter: {{ fieldName: {{ _eq: "_C" }} }}
+                    ) {{
+                        cid
+                        heads {{ cid fieldName }}
+                    }}
+                }}"#
+            ))
+            .with_identity(Some(identity.clone())),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying claim ancestry for AgentRequest {request_doc_id} failed: {:?}",
+            response.errors
+        );
+    }
+    let evidence: Vec<CompositeHeadEvidenceRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let current_heads = current_composite_heads(&evidence);
+    let current = exactly_one_composite(
+        &current_heads,
+        &format!("AgentRequest {request_doc_id} recovery head"),
+    )?;
+    let ancestry = composite_ancestry_cids(&evidence, current)?;
+
+    let mut claim_cids = Vec::new();
+    for cid in &ancestry {
+        let Some(snapshot) = crate::watcher::load_agent_request_at_cid_with_identity(
+            node,
+            cid,
+            request_doc_id,
+            &identity,
+        )
+        .await?
+        else {
+            anyhow::bail!(
+                "composite commit {cid} did not reconstruct AgentRequest {request_doc_id}"
+            );
+        };
+        if snapshot.status == "processing" && snapshot.lifecycle_state.as_deref() == Some("claimed")
+        {
+            claim_cids.push(cid.clone());
+        }
+    }
+    let claim_cid = match claim_cids.as_slice() {
+        [cid] => cid,
+        [] => anyhow::bail!(
+            "AgentRequest {request_doc_id} current ancestry has no exact processing/claimed snapshot"
+        ),
+        cids => anyhow::bail!(
+            "AgentRequest {request_doc_id} current ancestry has {} processing/claimed snapshots",
+            cids.len()
+        ),
+    };
+    let claim_commit = evidence
+        .iter()
+        .find(|row| row.cid == *claim_cid)
+        .ok_or_else(|| anyhow::anyhow!("claim commit {claim_cid} disappeared from ancestry"))?;
+    let composite_parents = claim_commit
+        .heads
+        .iter()
+        .filter(|parent| parent.field_name.as_deref() == Some("_C"))
+        .collect::<Vec<_>>();
+    let [source_parent] = composite_parents.as_slice() else {
+        anyhow::bail!(
+            "claim commit {claim_cid} has {} composite parents; expected exactly one",
+            composite_parents.len()
+        );
+    };
+    let source_commit = evidence
+        .iter()
+        .find(|row| row.cid == source_parent.cid)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "claim commit {claim_cid} source parent {} is not persisted",
+                source_parent.cid
+            )
+        })?;
+    let source_snapshot = crate::watcher::load_agent_request_at_cid_with_identity(
+        node,
+        &source_commit.cid,
+        request_doc_id,
+        &identity,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "source commit {} did not reconstruct AgentRequest {request_doc_id}",
+            source_commit.cid
+        )
+    })?;
+    let claim_snapshot = crate::watcher::load_agent_request_at_cid_with_identity(
+        node,
+        claim_cid,
+        request_doc_id,
+        &identity,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "claim commit {claim_cid} did not reconstruct AgentRequest {request_doc_id}"
+        )
+    })?;
+    if source_snapshot.status != "pending"
+        || source_snapshot.lifecycle_state.as_deref() != Some("pending")
+    {
+        anyhow::bail!(
+            "source commit {} is not an exact pending/pending admission snapshot",
+            source_commit.cid
+        );
+    }
+    let source_signer = node
+        .verified_block_signer_did(&source_commit.cid)
+        .await
+        .with_context(|| {
+            format!(
+                "cryptographically verifying recovered AgentRequest source {}",
+                source_commit.cid
+            )
+        })?;
+    let claim_signer = node
+        .verified_block_signer_did(claim_cid)
+        .await
+        .with_context(|| {
+            format!("cryptographically verifying recovered AgentRequest claim {claim_cid}")
+        })?;
+    let provenance = validate_verified_execution_provenance(
+        source_commit,
+        crate::DocumentVersionRef::new(request_doc_id, &source_commit.cid),
+        &source_signer,
+        &source_snapshot.source_author_did,
+        &source_snapshot.request,
+        claim_commit,
+        crate::DocumentVersionRef::new(request_doc_id, claim_cid),
+        &claim_signer,
+        target_agent_did,
+        &claim_snapshot.request,
+    )?;
+    Ok(ReconstructedExecutionProvenance {
+        provenance,
+        claimed_request: claim_snapshot.request,
+    })
+}
+
 pub(super) async fn current_composite_commit_cids(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -1254,6 +1473,28 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("ambiguous provenance"));
+    }
+
+    #[test]
+    fn recovery_ancestry_walks_only_persisted_composite_parents() {
+        let source = composite("source-cid", &[]);
+        let claim = composite("claim-cid", &["source-cid"]);
+        let processing = composite("processing-cid", &["claim-cid"]);
+        let evidence = vec![source, claim, processing.clone()];
+        let ancestry = composite_ancestry_cids(&evidence, &processing).unwrap();
+        assert_eq!(
+            ancestry,
+            ["source-cid", "claim-cid", "processing-cid"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+
+        let incomplete = vec![composite("processing-cid", &["missing-claim-cid"])];
+        let error = composite_ancestry_cids(&incomplete, &incomplete[0])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing composite parent"));
     }
 
     #[test]

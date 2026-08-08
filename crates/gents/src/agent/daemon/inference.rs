@@ -567,15 +567,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &self,
         request: &crate::watcher::AgentRequest,
         behavior_id: &str,
+        provenance: &crate::RequestExecutionProvenance,
         error: &anyhow::Error,
     ) -> Result<()> {
         let doc_id = self
             .stream_writer
-            .begin_with_requester_did(
+            .begin_document_response(
                 &request.session_id,
                 &request.request_id,
                 behavior_id,
                 request.requester_did.as_deref(),
+                provenance,
             )
             .await?;
         let error_reason = error.to_string();

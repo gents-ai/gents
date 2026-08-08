@@ -27,6 +27,9 @@ import Proofs.ClientShell
 import Proofs.CommandPolicy
 import Proofs.ToolPolicy
 import Proofs.ToolExecution
+import Proofs.ToolFact
+import Proofs.ForkProvenance
+import Proofs.ResponseOutcome
 import Proofs.CompletionRetry
 import Proofs.ManagedExec
 import Proofs.MCPHealth

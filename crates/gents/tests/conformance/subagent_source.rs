@@ -301,14 +301,14 @@ async fn signed_same_node_fixture_admits_targeted_bridge_without_parent_request(
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(coordinator_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let mut source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
         target_behavior_id,
         paired,
     );
-    wait_for_subagent_source_subscription().await;
+    source.wait_ready().await;
 
     write_targeted_cross_deployment_bridge(
         db.node.as_ref(),
@@ -1386,14 +1386,14 @@ async fn signed_same_node_fixture_refuses_paired_child_when_target_flag_off() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let mut source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
         target_behavior_id,
         paired,
     );
-    wait_for_subagent_source_subscription().await;
+    source.wait_ready().await;
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
@@ -1450,14 +1450,14 @@ async fn signed_same_node_fixture_materializes_paired_child_when_target_flag_on(
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let mut source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
         target_behavior_id,
         paired,
     );
-    wait_for_subagent_source_subscription().await;
+    source.wait_ready().await;
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
@@ -1511,14 +1511,14 @@ async fn signed_same_node_fixture_refuses_spawn_targeting_other_host() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let mut source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
         target_behavior_id,
         paired,
     );
-    wait_for_subagent_source_subscription().await;
+    source.wait_ready().await;
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
@@ -1573,14 +1573,14 @@ async fn signed_same_node_fixture_refuses_missing_spawn_target_did() {
 
     let mut paired = std::collections::HashSet::new();
     paired.insert(remote_parent_did.to_string());
-    let _source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
+    let mut source = crate::support::fixtures::spawn_subagent_source_with_paired_peers(
         db.node.clone(),
         &local_did,
         target_behavior_id,
         target_behavior_id,
         paired,
     );
-    wait_for_subagent_source_subscription().await;
+    source.wait_ready().await;
 
     write_cross_deployment_bridge_with_spawn_target(
         db.node.as_ref(),
@@ -2322,10 +2322,6 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
     .await;
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
     assert_tool_call_not_allowed(&tool, "/await_mode", "background");
-}
-
-async fn wait_for_subagent_source_subscription() {
-    tokio::time::sleep(Duration::from_millis(250)).await;
 }
 
 async fn assert_child_not_interrupted(

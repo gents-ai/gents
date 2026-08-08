@@ -232,6 +232,7 @@ async fn dispatch_manual_intent_renders_with_args_and_materializes() {
         doc_vars: None,
         args_vars: Some(serde_json::json!({"name": "Amy"})),
         pre_materialized_request_id: None,
+        materialization_request_id: None,
         on_result: Box::new(|_| {}),
     };
 
@@ -282,6 +283,7 @@ async fn dispatch_rejects_manual_intent_with_trigger_id() {
         doc_vars: None,
         args_vars: Some(serde_json::json!({})),
         pre_materialized_request_id: None,
+        materialization_request_id: None,
         on_result: Box::new(move |r| {
             *capture.lock().unwrap() = Some(r);
         }),

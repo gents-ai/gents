@@ -332,9 +332,20 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         .finalize_existing_request_error(&request.request_id, &error.to_string())
                         .await
                 } else {
-                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
-                        .await
-                        .map(|_| true)
+                    match lifecycle.execution_provenance() {
+                        Some(provenance) => self
+                            .write_error_response(
+                                &request,
+                                lifecycle.behavior_id(),
+                                provenance,
+                                &error,
+                            )
+                            .await
+                            .map(|_| true),
+                        None => Err(anyhow::anyhow!(
+                            "claimed request is missing execution provenance"
+                        )),
+                    }
                 };
                 if let Err(stream_error) = response_written {
                     tracing::error!(
@@ -376,9 +387,15 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     .finalize_existing_request_error(&request.request_id, &error.to_string())
                     .await
             } else {
-                self.write_error_response(&request, lifecycle.behavior_id(), &error)
-                    .await
-                    .map(|_| true)
+                match lifecycle.execution_provenance() {
+                    Some(provenance) => self
+                        .write_error_response(&request, lifecycle.behavior_id(), provenance, &error)
+                        .await
+                        .map(|_| true),
+                    None => Err(anyhow::anyhow!(
+                        "claimed request is missing execution provenance"
+                    )),
+                }
             };
             if let Err(stream_error) = response_written {
                 tracing::error!(
@@ -454,9 +471,20 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         .finalize_existing_request_error(&request.request_id, &error.to_string())
                         .await
                 } else {
-                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
-                        .await
-                        .map(|_| true)
+                    match lifecycle.execution_provenance() {
+                        Some(provenance) => self
+                            .write_error_response(
+                                &request,
+                                lifecycle.behavior_id(),
+                                provenance,
+                                &error,
+                            )
+                            .await
+                            .map(|_| true),
+                        None => Err(anyhow::anyhow!(
+                            "claimed request is missing execution provenance"
+                        )),
+                    }
                 };
                 if let Err(stream_error) = response_written {
                     tracing::error!(

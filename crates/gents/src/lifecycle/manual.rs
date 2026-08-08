@@ -64,6 +64,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
             trigger_kind: Some("manual".to_string()),
         },
         conversation_title,
+        None,
     )
     .await
     .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;

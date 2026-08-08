@@ -53,13 +53,13 @@ use lean_vocab_test::{
     lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
     lean_contract_snapshot, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_call_exact_target_cases,
-    lean_inference_call_exact_target_trace_cases, lean_inference_slot_accounting_case,
-    lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,
-    lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases, lean_process_transition_cases,
-    lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
+    lean_event_delivery_durable_admission_cases, lean_event_delivery_source_instances,
+    lean_event_delivery_transition_cases, lean_fleet_slot_accounting_case,
+    lean_inference_call_exact_target_cases, lean_inference_call_exact_target_trace_cases,
+    lean_inference_slot_accounting_case, lean_inference_slot_accounting_cases,
+    lean_managed_exec_liveness_cases, lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases,
+    lean_process_transition_cases, lean_queue_deadline_case, lean_queue_deadline_cases,
+    lean_r4c_background_work_case, lean_r4c_background_work_cases, lean_r5_cross_deployment_cases,
     lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_equivalence_cases,
     lean_recovery_outcome_cases, lean_recovery_sweep_cases, lean_request_transition_cases,
@@ -115,6 +115,8 @@ mod codex_shim;
 mod command_policy;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
+#[path = "conformance/compaction_source_manifest.rs"]
+mod compaction_source_manifest;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
 #[path = "conformance/composed_invariants.rs"]
@@ -129,6 +131,8 @@ mod directory_projection;
 mod event_delivery;
 #[path = "conformance/fleet.rs"]
 mod fleet;
+#[path = "conformance/fork_provenance.rs"]
+mod fork_provenance;
 #[path = "conformance/goals.rs"]
 mod goals;
 #[path = "conformance/inference_call.rs"]
@@ -157,6 +161,8 @@ mod recovery_sweeps;
 mod replicated_request_convergence;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
+#[path = "conformance/response_outcome.rs"]
+mod response_outcome;
 #[path = "conformance/session_recovery.rs"]
 mod session_recovery;
 #[path = "conformance/startup_readiness.rs"]
@@ -165,6 +171,8 @@ mod startup_readiness;
 mod streaming_compaction;
 #[path = "conformance/tool_call.rs"]
 mod tool_call;
+#[path = "conformance/tool_fact.rs"]
+mod tool_fact;
 #[path = "conformance/transcript.rs"]
 mod transcript;
 #[path = "conformance/workflow_barrier.rs"]
@@ -471,6 +479,26 @@ fn generated_inference_rendered_capture_cases_pin_exact_version_composition() {
     inference_rendered_capture::generated_cases_pin_exact_version_composition();
 }
 
+#[test]
+fn generated_tool_fact_cases_pin_exact_immutable_tool_facts() {
+    tool_fact::generated_cases_pin_exact_immutable_tool_facts();
+}
+
+#[test]
+fn generated_fork_provenance_cases_pin_exact_child_sources() {
+    fork_provenance::generated_cases_pin_exact_fork_sources();
+}
+
+#[test]
+fn generated_compaction_source_manifest_cases_pin_exact_immutable_sources() {
+    compaction_source_manifest::generated_cases_pin_exact_immutable_compaction_sources();
+}
+
+#[test]
+fn generated_response_outcome_cases_pin_exact_immutable_outcomes() {
+    response_outcome::generated_cases_pin_exact_immutable_response_outcomes();
+}
+
 #[tokio::test]
 async fn concurrent_exact_target_cas_serializes_one_winner_and_terminal_absorbs() {
     inference_call::concurrent_exact_target_cas_serializes_one_winner_and_terminal_absorbs().await;
@@ -519,6 +547,11 @@ async fn event_delivery_transition_cases_match_contract() {
 #[test]
 fn event_delivery_source_instances_match_runtime() {
     event_delivery::event_delivery_source_instances_match_runtime();
+}
+
+#[test]
+fn durable_event_admission_cases_match_contract() {
+    event_delivery::durable_event_admission_cases_match_contract();
 }
 
 #[tokio::test]

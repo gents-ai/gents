@@ -881,12 +881,17 @@ pub fn session_shape_query(session_id: &str) -> String {
                 latency_ms
             }}
             AgentToolResult(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
+                result_key
+                tool_call_key
+                tool_call_doc_id
+                tool_call_composite_commit_cid
+                tool_call_signer_did
                 agent_did
                 session_id
                 tool_name
                 tool_input
                 output_text
-                truncated
+                model_output_truncated
                 truncation_metadata
                 conversation_doc_id
                 created_at

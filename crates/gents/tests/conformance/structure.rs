@@ -33,6 +33,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
+        ("ForkProvenance", Module("conformance/fork_provenance.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Goals", Module("conformance/goals.rs")),
         ("Identity", Module("conformance/identity.rs")),
@@ -64,6 +65,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Process", Module("conformance/process.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),
+        ("ResponseOutcome", Module("conformance/response_outcome.rs")),
         (
             "RenderedCapture",
             Module("conformance/rendered_capture.rs"),
@@ -92,6 +94,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             Module("conformance/streaming_compaction.rs"),
         ),
         ("ToolExecution", Module("conformance/tool_execution.rs")),
+        ("ToolFact", Module("conformance/tool_fact.rs")),
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
         ("Triggers", Module("conformance/triggers.rs")),

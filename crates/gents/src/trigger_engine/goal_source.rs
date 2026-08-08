@@ -498,6 +498,7 @@ impl GoalSource {
             doc_vars: None,
             args_vars: None,
             pre_materialized_request_id: Some(child.request_id),
+            materialization_request_id: None,
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } => tracing::info!(
                     %request_id,

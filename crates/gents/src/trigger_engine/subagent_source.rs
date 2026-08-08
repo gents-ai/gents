@@ -1,7 +1,7 @@
 //! Subagent-backed `TriggerSource`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -42,6 +42,7 @@ pub struct SubagentSource {
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     processed_tool_calls: HashSet<String>,
+    pending_intents: Arc<Mutex<VecDeque<FireIntent>>>,
     rescan_tick: tokio::time::Interval,
 }
 
@@ -186,14 +187,20 @@ impl SubagentSource {
         node: Arc<EmbeddedNode>,
         cancel: CancellationToken,
     ) -> Self {
+        // Subscribe during construction, before the engine can be polled or a
+        // producer can publish. Delivery remains a lossy wake-up hint and the
+        // immediate/periodic durable scans remain the correctness path, but
+        // there is no reason to manufacture a startup subscription gap.
+        let subscription = Some(subs.subscribe_updates());
         Self {
             snapshot_rx,
             node,
             subscription_source: subs,
-            subscription: None,
+            subscription,
             cancel,
             collection_id_to_name: HashMap::new(),
             processed_tool_calls: HashSet::new(),
+            pending_intents: Arc::new(Mutex::new(VecDeque::new())),
             rescan_tick: subagent_source_rescan_tick(SUBAGENT_SOURCE_RESCAN_INTERVAL),
         }
     }
@@ -405,6 +412,14 @@ impl SubagentSource {
     }
 
     async fn rescan_running_bridge_rows(&mut self) -> Option<FireIntent> {
+        if let Some(intent) = self
+            .pending_intents
+            .lock()
+            .expect("subagent pending_intents mutex poisoned")
+            .pop_front()
+        {
+            return Some(intent);
+        }
         let doc_ids = match self.load_running_bridge_doc_ids().await {
             Ok(doc_ids) => doc_ids,
             Err(error) => {
@@ -421,9 +436,12 @@ impl SubagentSource {
                 Ok(Some(intent)) => {
                     tracing::info!(
                         doc_id = %doc_id,
-                        "subagent source periodic rescan emitted fire intent",
+                        "subagent source periodic rescan queued fire intent",
                     );
-                    return Some(intent);
+                    self.pending_intents
+                        .lock()
+                        .expect("subagent pending_intents mutex poisoned")
+                        .push_back(intent);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -435,7 +453,10 @@ impl SubagentSource {
                 }
             }
         }
-        None
+        self.pending_intents
+            .lock()
+            .expect("subagent pending_intents mutex poisoned")
+            .pop_front()
     }
 
     async fn fail_unauthorized_tool_call(
@@ -878,6 +899,7 @@ impl SubagentSource {
             doc_vars: None,
             args_vars: None,
             pre_materialized_request_id: Some(request_id),
+            materialization_request_id: None,
             on_result: Box::new(move |result| match result {
                 FireResult::Fired { request_id } => {
                     tracing::debug!(
@@ -912,6 +934,14 @@ impl TriggerSource for SubagentSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
+                if let Some(intent) = self
+                    .pending_intents
+                    .lock()
+                    .expect("subagent pending_intents mutex poisoned")
+                    .pop_front()
+                {
+                    return Some(intent);
+                }
                 let mut message = None;
                 let mut dropped = 0;
                 let mut subscription_closed = false;

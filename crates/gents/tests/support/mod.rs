@@ -877,7 +877,7 @@ pub async fn create_agent_tool_result(
                 tool_name: "{tool_name_escaped}",
                 tool_input: "{tool_input_escaped}",
                 output_text: "{output_text_escaped}",
-                truncated: false,
+                model_output_truncated: false,
                 truncation_metadata: "",
                 conversation_doc_id: "",
                 created_at: "{created_at_escaped}"

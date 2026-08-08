@@ -2188,9 +2188,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         sequence += 1;
     }
 
-    let history = session::load_history(&node, "session-1").await.unwrap();
-    let durable_before = history.clone();
-    let (provider_history, _) = provider_view(history);
+    let loaded_history = session::load_history_with_refs(&node, "session-1")
+        .await
+        .unwrap();
+    let durable_before = loaded_history.messages.clone();
+    let transcript_snapshot = loaded_history.fact_refs;
+    let (provider_history, _) = provider_view(loaded_history.messages);
+    let provider_view_message_count = provider_history.len();
     let result = compactor
         .compact(
             provider_history,
@@ -2206,6 +2210,20 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .unwrap();
 
     let summary = result.summary.clone().unwrap();
+    let behavior_id = "compaction-integration-behavior";
+    let config_provenance = session::create_test_config_provenance(&node, &signer_did, behavior_id)
+        .await
+        .unwrap();
+    let source_manifest = session::CompactionSourceManifest::new(
+        "session-1",
+        behavior_id,
+        transcript_snapshot,
+        config_provenance,
+        Vec::new(),
+        provider_view_message_count,
+        0,
+        provider_view_message_count,
+    );
     session::save_compaction_entry(
         &node,
         "session-1",
@@ -2216,6 +2234,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         result.messages_compacted,
         result.original_token_estimate,
         result.compacted_token_estimate,
+        source_manifest,
     )
     .await
     .unwrap();

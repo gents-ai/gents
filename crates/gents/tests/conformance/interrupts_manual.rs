@@ -8,7 +8,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         create_agent_session,
     };
 
-    let db = test_db("fork-no-lifecycle-transition").await;
+    let db = signed_materializer_test_db("fork-no-lifecycle-transition").await;
 
     let parent_session = uuid::Uuid::new_v4().to_string();
     create_agent_session(

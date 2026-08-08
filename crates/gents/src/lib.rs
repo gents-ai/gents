@@ -113,6 +113,7 @@ pub mod periodic_recovery;
 pub mod prompt;
 pub(crate) mod registry;
 pub mod rendered_request;
+mod response_outcome;
 pub mod retry;
 pub mod run_timeline;
 pub mod run_timeline_fetch;
@@ -285,7 +286,9 @@ pub mod __test_internals {
     pub use crate::lifecycle::queue::{
         drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
     };
-    pub use crate::trigger_engine::run_subagent_source_for_test;
+    pub use crate::trigger_engine::{
+        run_subagent_source_for_test, run_subagent_source_for_test_with_ready,
+    };
 }
 
 #[cfg(test)]

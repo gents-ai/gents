@@ -159,16 +159,11 @@ async fn control_watcher_periodic_rescan_recovers_without_an_update_subscription
 
     tokio::time::advance(CONTROL_FULL_RESCAN_INTERVAL + Duration::from_millis(1)).await;
     tokio::task::yield_now().await;
-    let recovery_started_at = tokio::time::Instant::now();
 
     let snapshot = proposal_rx
         .recv()
         .await
         .expect("periodic rescan must publish the later control write");
-    assert!(
-        recovery_started_at.elapsed() < CONTROL_RECONCILE_DEBOUNCE,
-        "periodic fallback recovery must not incur the live-event debounce"
-    );
     assert_eq!(
         snapshot
             .behaviors
