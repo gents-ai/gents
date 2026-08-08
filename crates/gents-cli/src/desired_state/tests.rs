@@ -2962,6 +2962,43 @@ fn validate_rejects_foreign_agent_surface_link() {
     );
 }
 
+/// The checked-in pack must load with no environment set — `${VAR:-default}`
+/// keeps it runnable as authored — and must honour an override, which is what
+/// lets one pack be compared across models and endpoints.
+#[test]
+fn pipeline_pack_interpolates_endpoint_and_model() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");
+
+    let (manifest, report) = load_manifest_root(&root);
+    assert!(
+        report.errors.is_empty(),
+        "pack must load with no env set: {:?}",
+        report.errors
+    );
+    let manifest = manifest.expect("manifest");
+    let backend = manifest
+        .inference_backends
+        .iter()
+        .find(|b| b.backend_id == "exp-deepseek")
+        .expect("exp-deepseek backend");
+    assert_eq!(
+        backend.endpoint, "http://100.73.235.38:8000/v1",
+        "unset GENTS_EXP_ENDPOINT must fall back to the checked-in default"
+    );
+    assert!(
+        manifest
+            .agent_behaviors
+            .iter()
+            .all(|b| b.model_name.as_deref() == Some("d4f")),
+        "unset GENTS_EXP_MODEL must fall back to d4f: {:?}",
+        manifest.agent_behaviors
+    );
+    assert!(
+        !backend.endpoint.contains("${"),
+        "no unexpanded reference may survive into the manifest"
+    );
+}
+
 #[test]
 fn load_pipeline_two_stage_fixture_with_surface() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");

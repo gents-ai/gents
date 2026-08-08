@@ -7,7 +7,7 @@
   "system_prompt": "./system_prompt.md",
   "request_context_template": null,
   "backend_id": "exp-deepseek",
-  "model_name": "d4f",
+  "model_name": "${GENTS_EXP_MODEL:-d4f}",
   "tool_selection_id": "exp-tools-stage2",
   "inference_profile_id": "exp-profile",
   "compaction_strategy": null,

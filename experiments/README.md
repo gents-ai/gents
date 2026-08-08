@@ -22,6 +22,23 @@ gents config apply --root experiments/<pack> --home <home> \
 > tasks/schedules/triggers are removed. Only pass it on a home dedicated to
 > the pack; never on a home you use for anything else.
 
+## Retargeting a pack
+
+Document JSON supports `${VAR}` and `${VAR:-default}`. The checked-in packs
+default to the shared DeepSeek box, so they run as authored, and any run can be
+retargeted without editing tracked config — which is how one pack is compared
+across models:
+
+```bash
+GENTS_EXP_MODEL=some-other-model gents config apply --root experiments/<pack> ...
+GENTS_EXP_ENDPOINT=http://127.0.0.1:8000/v1 gents server --apply-root experiments/<pack> ...
+```
+
+A `${VAR}` with no default and no value set is an error naming the variable —
+it never silently becomes an empty string. Use `$$` for a literal `$`.
+Interpolation applies to document JSON only; `.md` sidecars keep their runtime
+`{{ }}` templates untouched.
+
 When `<pack>/schemas/` exists, **apply registers those SDL/patches first**,
 then agent config (surfaces → selections → behaviors → tasks/triggers). Packs
 do not touch product baseline schemas.

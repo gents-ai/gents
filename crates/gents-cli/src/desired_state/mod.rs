@@ -1,6 +1,7 @@
 pub(crate) mod apply_bundle;
 pub(crate) mod convert;
 pub(crate) mod diff;
+pub(crate) mod interpolate;
 pub(crate) mod load;
 pub(crate) mod normalize;
 pub(crate) mod prune;
