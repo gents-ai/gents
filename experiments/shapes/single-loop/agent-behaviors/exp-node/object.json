@@ -9,7 +9,7 @@
   "backend_id": "exp-deepseek",
   "model_name": "d4f",
   "tool_selection_id": "exp-tools",
-  "inference_profile_id": null,
+  "inference_profile_id": "exp-profile",
   "compaction_strategy": null,
   "compaction_threshold": null,
   "enabled": true,

@@ -76,8 +76,14 @@ Live path that has been exercised end-to-end against DeepSeek V4 Flash
    gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim
    gents config apply --root experiments/shapes/<arm> --home <home> \
      --graphql http://127.0.0.1:19191/api/v0/graphql \
-     --bind-agent-did home --force-rebind-concrete-did
+     --bind-agent-did home --force-rebind-concrete-did --prune
    ```
+
+   Use `--prune` when switching arms so leftover triggers (e.g. `exp-single`)
+   do not also fire on the next seed. Each behavior must bind an inference
+   profile (`exp-profile` in these arms); otherwise multi-behavior arms only
+   partially reconcile.
+
 
 4. **Wait until the event source observes the seed collection.** Logs should
    show `event source now observing source collection
