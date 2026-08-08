@@ -273,6 +273,7 @@ where
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: String::new(),
             request_provenance: None,
+            transcript_snapshot: Vec::new(),
             request_id,
             agent_did: behavior.agent_did().to_string(),
             requester_did: String::new(),

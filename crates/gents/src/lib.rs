@@ -49,6 +49,38 @@ pub mod xai_oauth_refresh;
 /// Shared in-crate test utilities.
 #[cfg(test)]
 pub(crate) mod test_support {
+    use crate::identity::{AgentIdentity as _, KeyIdentity};
+
+    /// Registered signing identity for tests whose custom node builder must
+    /// produce verifiable DefraDB commits.
+    ///
+    /// The caller owns node construction (plain, persistent, or P2P); this
+    /// fixture only centralizes key registration and retains the key directory
+    /// for the test lifetime.
+    pub(crate) struct SignedTestIdentity {
+        identity: KeyIdentity,
+        _key_dir: tempfile::TempDir,
+    }
+
+    impl SignedTestIdentity {
+        pub(crate) fn did(&self) -> &str {
+            self.identity.did()
+        }
+    }
+
+    pub(crate) fn signed_test_identity(name: &str) -> SignedTestIdentity {
+        let key_dir = tempfile::Builder::new()
+            .prefix(name)
+            .tempdir()
+            .expect("signed test identity tempdir");
+        let identity = KeyIdentity::load_or_create(key_dir.path().join("node.key"), None)
+            .expect("signed test identity");
+        SignedTestIdentity {
+            identity,
+            _key_dir: key_dir,
+        }
+    }
+
     /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
     /// convention in every shape the tests build.
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
@@ -209,11 +241,11 @@ pub use schema::{
     TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use session::load_history;
 pub use session::{
     fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
     GraphqlExecutor, HttpGraphqlExecutor,
 };
+pub use session::{load_history, load_history_with_refs, LoadedHistory, MessageFactRef};
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,

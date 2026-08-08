@@ -23,6 +23,8 @@ pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
 pub const AGENT_RESPONSE: &str = include_str!("../schemas/agent/agent_response.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
+pub const AGENT_MESSAGE_DRAFT_NAME: &str = "AgentMessageDraft";
+pub const AGENT_MESSAGE_DRAFT: &str = include_str!("../schemas/agent/agent_message_draft.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
 pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.graphql");
 pub const GOAL_NAME: &str = "Goal";
@@ -104,6 +106,7 @@ pub const ALL: &[&str] = &[
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
     GOAL,
+    AGENT_MESSAGE_DRAFT,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     AGENT_TOOL_APPROVAL,
@@ -144,6 +147,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
+    AGENT_MESSAGE_DRAFT_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     AGENT_TOOL_APPROVAL_NAME,
@@ -178,6 +182,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
     AGENT_CONVERSATION_NAME,
+    AGENT_MESSAGE_DRAFT_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,

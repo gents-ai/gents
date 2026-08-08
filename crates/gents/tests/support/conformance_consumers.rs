@@ -603,6 +603,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_transcript_cases_drive_agent_message_ordering_contract",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_transcript_finalization_and_provider_history_cases_pin_split_contract",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_transcript_finalization_and_provider_history_cases_pin_split_contract",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_streaming_response_cases_pin_lifecycle_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

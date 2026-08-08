@@ -16,6 +16,7 @@ import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.RequestIngest
 import Proofs.Conformance.Contracts.Json.SubagentBridgeAdmission
+import Proofs.Conformance.Contracts.Json.TranscriptFinalization
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
@@ -208,6 +209,12 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"transcript_finalization_cases\":"
+      ++ jsonArray
+        (transcriptFinalizationCases.map transcriptFinalizationCaseJson) ++ ","
+    ++ "\"transcript_provider_history_cases\":"
+      ++ jsonArray
+        (transcriptProviderHistoryCases.map transcriptProviderHistoryCaseJson) ++ ","
     ++ "\"streaming_response_cases\":"
       ++ jsonArray
         (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","

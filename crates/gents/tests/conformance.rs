@@ -67,7 +67,8 @@ use lean_vocab_test::{
     lean_restart_disposition_cases, lean_runtime_reconcile_case, lean_runtime_reconcile_cases,
     lean_session_recovery_case, lean_startup_readiness_cases, lean_state_machine_contract,
     lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
-    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    lean_transcript_cases, lean_transcript_finalization_cases,
+    lean_transcript_provider_history_cases, lean_vocabulary_values, LeanEventDeliveryAction,
     LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
@@ -308,6 +309,11 @@ fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
 #[tokio::test]
 async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
     transcript::generated_transcript_cases_drive_agent_message_ordering_contract().await;
+}
+
+#[test]
+fn generated_transcript_finalization_and_provider_history_cases_pin_split_contract() {
+    transcript::generated_transcript_finalization_and_provider_history_cases_pin_split_contract();
 }
 
 #[tokio::test]

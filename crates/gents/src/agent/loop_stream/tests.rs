@@ -462,12 +462,18 @@ fn json_value_has_control_char(value: &serde_json::Value) -> bool {
     }
 }
 
-async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
+async fn test_hook() -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::test_support::SignedTestIdentity,
+) {
     let data_path =
         std::env::temp_dir().join(format!("agent-loop-stream-{}", uuid::Uuid::new_v4()));
+    let identity = crate::test_support::signed_test_identity("agent-loop-stream-identity");
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .data_path(&data_path)
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),
@@ -476,15 +482,15 @@ async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
-        "did:test:test",
+        identity.did(),
         FailurePolicy::default(),
     );
-    (node, hook)
+    (node, hook, identity)
 }
 
 #[tokio::test]
 async fn single_turn_no_tools_yields_text_then_final() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("Hello ".to_string()),
         RawStreamingChoice::Message("world".to_string()),
@@ -523,7 +529,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
 #[tokio::test]
 async fn rendered_request_sink_runs_before_provider_stream() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("unreached".to_string()),
         RawStreamingChoice::FinalResponse(()),
@@ -1389,6 +1395,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             "doc-1",
             "did:key:agent",
         )),
+        transcript_snapshot: Vec::new(),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),
@@ -1448,6 +1455,7 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
             "doc-empty",
             "did:key:agent",
         )),
+        transcript_snapshot: Vec::new(),
         request_id: "req-empty".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),
@@ -1854,7 +1862,7 @@ async fn context_message_is_sent_before_prompt() {
 
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let prompt = Message::user("use the echo tool");
 
@@ -1955,7 +1963,7 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
     // stall; the daemon liveness timeout then has something to cancel. The old
     // design collected tool calls and dispatched only after the stream drained,
     // so a mid-stream stall left the tool unrun with nothing to mark.
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let prompt = Message::user("use the echo tool then stall");
 
@@ -2029,7 +2037,7 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
 async fn tool_definition_receives_prompt_rag_text() {
     // P3/compat: tool definitions must be built with the prompt's rag text (rig
     // parity), not String::new(), so prompt-aware tools keep the task context.
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let seen = Arc::new(Mutex::new(None));
     let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
@@ -2062,7 +2070,7 @@ async fn tool_definition_receives_prompt_rag_text() {
 
 #[tokio::test]
 async fn exceeding_max_turns_terminates_with_error() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     let prompt = Message::user("loop");
     ready_hook_for(&hook).await;
 
@@ -2117,7 +2125,7 @@ async fn exceeding_max_turns_terminates_with_error() {
 
 #[tokio::test]
 async fn managed_terminal_tool_result_terminates_loop() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     let prompt = Message::user("run the slow tool");
     ready_hook_for(&hook).await;
 
@@ -2171,7 +2179,7 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
     // follow-up requests reference prior `msg_` ids). Turn 1 emits a MessageId
     // plus a tool call; the tool result drives turn 2, whose request history must
     // contain the assistant tool-call message tagged with that id.
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![
@@ -2225,7 +2233,7 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     // list on every turn; the owned loop must too. The follow-up request after a
     // tool result is folded in (turn 2) must still advertise the toolset, or the
     // provider sees a tool-result conversation with no tools.
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
@@ -2336,7 +2344,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
     // Conformance guard for the loop's own threading: across a multi-tool,
     // multi-turn run, every request's history must pair calls with results and
     // keep assistant content provider-ordered — by construction, no sanitizer.
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![
@@ -2394,7 +2402,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     // — no call site can forget the sanitizer. Feed a dirty history (unpaired
     // call, orphaned result, text-after-call ordering) and assert the request
     // on the wire satisfies the provider invariants.
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     let unpaired_call = crate::llm::message::ToolCall {
@@ -2489,7 +2497,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
 
 #[tokio::test]
 async fn oversized_tool_result_is_bounded_before_threading() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, _identity) = test_hook().await;
     let prompt = Message::user("read the big thing");
     ready_hook_for(&hook).await;
 
@@ -2550,7 +2558,7 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 async fn run_loop_to_text_persists_assistant_reply() {
     // Regression: one-shot (run_loop_to_text) must persist the assistant reply,
     // not just the user prompt.
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("the answer".to_string()),
@@ -2587,7 +2595,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
     // Regression: for tool-using one-shots, both the assistant tool-call turn and
     // the tool-result message must be persisted (tool-result persistence gates on
     // the assistant turn being persisted first).
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
@@ -2637,7 +2645,7 @@ async fn run_loop_to_text_retract_persists_only_the_resample() {
     // durable assistant message becomes "Based onThe answer is 42" — corrupting
     // the transcript that feeds future history and training capture, even though
     // the returned string is correct. This fences that exact regression.
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::TurnWithMidStreamError(
@@ -2870,7 +2878,7 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     // Valid JSON, but missing the required `findings` field: a Malformed parse
@@ -2993,7 +3001,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     // The wire parser could not parse the corrupt bytes, so rig carries them as
@@ -3091,7 +3099,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![

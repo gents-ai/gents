@@ -675,28 +675,17 @@ async fn import_message(node: &HarnessNode, row: &serde_json::Value) -> Result<(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{}" }} }},
-                add: {{
-                    message_key: "{}",
-                    session_id: "{}",
-                    sequence: {sequence},
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }},
-                update: {{
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }}
-            ) {{ _docID }}
+            create_AgentMessage(input: {{
+                message_key: "{}",
+                session_id: "{}",
+                sequence: {sequence},
+                role: "{}",
+                content: "{}",
+                timestamp: "{timestamp}"
+            }}) {{ _docID }}
         }}"#,
         escape_graphql_string(message_key),
-        escape_graphql_string(message_key),
         escape_graphql_string(session_id),
-        escape_graphql_string(role),
-        escape_graphql_string(content),
         escape_graphql_string(role),
         escape_graphql_string(content),
     );
@@ -1102,24 +1091,18 @@ async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &st
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{}:1" }} }},
-                add: {{
-                    message_key: "{}:1",
-                    session_id: "{}",
-                    sequence: 1,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "{now}"
-                }},
-                update: {{ content: "{}", timestamp: "{now}" }}
-            ) {{ _docID }}
+            create_AgentMessage(input: {{
+                message_key: "{}:1",
+                session_id: "{}",
+                sequence: 1,
+                role: "assistant",
+                content: "{}",
+                timestamp: "{now}"
+            }}) {{ _docID }}
         }}"#,
         escape_graphql_string(session_id),
         escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
         escape_graphql_string(content),
-        escape_graphql_string(content)
     );
     exec(node, &mutation, "create AgentMessage").await
 }

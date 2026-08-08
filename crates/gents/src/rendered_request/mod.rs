@@ -52,7 +52,7 @@
 //! capture sharing this tool surface". Treating either as proof of content is a
 //! bug.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -80,7 +80,7 @@ pub const CAPTURE_VERSION: u32 = 3;
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
 /// `UnsupportedManifest` rather than guessing.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 4;
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 5;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest so a manifest that later
@@ -359,7 +359,7 @@ impl AssemblyTrace {
 pub enum ProvenanceStatus {
     /// The rendered request is durable and exact, but not all durable source
     /// versions are pinned alongside it, so a reconstruction cannot yet be
-    /// fully verified. This is the only status version 4 emits.
+    /// fully verified. This is the only status version 5 emits.
     CapturedOnly,
 }
 
@@ -372,16 +372,17 @@ pub enum ProvenanceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureSeam {
     /// The last `HttpClientExt` before the network client. The only seam
-    /// version 4 emits.
+    /// version 5 emits.
     TransportBody,
 }
 
 /// Versioned provenance travelling in the `provenance_json` column.
 ///
-/// Version 4 carries the assembly trace, the seam, the observed provider
-/// endpoint, and the complete signed source/claim chain admitted at request
-/// ingest. Pinned config/transcript CIDs are a later version; older manifests
-/// remain readable as captures without verified request-ingest provenance.
+/// Version 5 carries the assembly trace, the seam, the observed provider
+/// endpoint, the complete signed source/claim chain admitted at request ingest,
+/// and the ordered exact transcript snapshot loaded for request assembly.
+/// Config and compaction source versions remain unpinned, so version 5 still
+/// reports `captured_only` rather than claiming full reconstruction.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
     pub manifest_version: u32,
@@ -414,15 +415,22 @@ pub struct ProvenanceManifest {
     /// manifests only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_provenance: Option<crate::RequestExecutionProvenance>,
+    /// Exact durable finalized transcript snapshot loaded before this request's
+    /// capture scope was constructed, in strictly increasing message sequence.
+    /// Each entry pins both DefraDB physical identity and the signed composite
+    /// version consumed by provider-input assembly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transcript_snapshot: Vec<crate::MessageFactRef>,
     pub assembly_trace: AssemblyTrace,
 }
 
 impl ProvenanceManifest {
     const CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v4 pins the signed source/claim chain but not all config or \
-         transcript versions, so a reconstruction cannot yet be fully verified";
+        "provenance manifest v5 pins the signed source/claim chain and the exact loaded \
+         transcript snapshot but not config or compaction source versions, so a \
+         reconstruction cannot yet be fully verified";
     const ONESHOT_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v4 describes a one-shot run with no request document \
+        "provenance manifest v5 describes a one-shot run with no request document \
          and pins no config or transcript versions, so a reconstruction cannot \
          yet be fully verified";
 
@@ -445,6 +453,22 @@ impl ProvenanceManifest {
         request_provenance: Option<crate::RequestExecutionProvenance>,
         assembly_trace: AssemblyTrace,
     ) -> Self {
+        Self::captured_only_with_request_and_transcript_provenance(
+            capture_scope,
+            provider_endpoint,
+            request_provenance,
+            Vec::new(),
+            assembly_trace,
+        )
+    }
+
+    pub fn captured_only_with_request_and_transcript_provenance(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        request_provenance: Option<crate::RequestExecutionProvenance>,
+        transcript_snapshot: Vec<crate::MessageFactRef>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
         let status_reason = if request_provenance.is_some() {
             Self::CAPTURED_ONLY_REASON
         } else {
@@ -459,6 +483,7 @@ impl ProvenanceManifest {
             provider_endpoint,
             request_version: None,
             request_provenance,
+            transcript_snapshot,
             assembly_trace,
         }
     }
@@ -479,6 +504,10 @@ pub struct RenderedRequestContext {
     pub request_doc_id: String,
     #[serde(default)]
     pub request_provenance: Option<crate::RequestExecutionProvenance>,
+    /// Exact finalized transcript snapshot loaded for every completion loop in
+    /// this request-wide capture context.
+    #[serde(default)]
+    pub transcript_snapshot: Vec<crate::MessageFactRef>,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -496,11 +525,13 @@ impl RenderedRequestContext {
     pub(crate) fn for_request(
         request: &crate::watcher::AgentRequest,
         request_provenance: crate::RequestExecutionProvenance,
+        transcript_snapshot: Vec<crate::MessageFactRef>,
         model_name: String,
     ) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
             request_provenance: Some(request_provenance),
+            transcript_snapshot,
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -508,6 +539,11 @@ impl RenderedRequestContext {
             session_id: request.session_id.clone(),
             model_name,
         }
+    }
+
+    pub(crate) fn without_transcript_snapshot(mut self) -> Self {
+        self.transcript_snapshot.clear();
+        self
     }
 }
 
@@ -625,6 +661,43 @@ pub struct RenderedCompletionRequest {
     pub provenance_json: Value,
 }
 
+fn validate_transcript_snapshot(snapshot: &[crate::MessageFactRef]) -> Result<()> {
+    let mut previous_sequence = None;
+    let mut doc_ids = BTreeSet::new();
+    let mut composite_cids = BTreeSet::new();
+    for fact_ref in snapshot {
+        if fact_ref.doc_id.trim().is_empty()
+            || fact_ref.composite_commit_cid.trim().is_empty()
+            || fact_ref.signer_did.trim().is_empty()
+        {
+            anyhow::bail!(
+                "transcript snapshot reference at sequence {} has incomplete DefraDB provenance",
+                fact_ref.sequence
+            );
+        }
+        if previous_sequence.is_some_and(|previous| fact_ref.sequence <= previous) {
+            anyhow::bail!(
+                "transcript snapshot references are not in canonical sequence order: previous={previous_sequence:?} current={}",
+                fact_ref.sequence
+            );
+        }
+        if !doc_ids.insert(fact_ref.doc_id.as_str()) {
+            anyhow::bail!(
+                "transcript snapshot repeats AgentMessage _docID {}",
+                fact_ref.doc_id
+            );
+        }
+        if !composite_cids.insert(fact_ref.composite_commit_cid.as_str()) {
+            anyhow::bail!(
+                "transcript snapshot repeats AgentMessage composite CID {}",
+                fact_ref.composite_commit_cid
+            );
+        }
+        previous_sequence = Some(fact_ref.sequence);
+    }
+    Ok(())
+}
+
 pub(crate) fn build_rendered_completion_request(
     context: &RenderedRequestContext,
     capture_scope: &str,
@@ -661,6 +734,8 @@ pub(crate) fn build_rendered_completion_request(
             "rendered-request context document {doc_id} has invalid source/claim provenance"
         ),
     }
+    validate_transcript_snapshot(&context.transcript_snapshot)
+        .context("invalid rendered-request transcript snapshot provenance")?;
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
@@ -669,10 +744,11 @@ pub(crate) fn build_rendered_completion_request(
         turn_index,
         attempt,
     )?;
-    let manifest = ProvenanceManifest::captured_only_with_request_provenance(
+    let manifest = ProvenanceManifest::captured_only_with_request_and_transcript_provenance(
         capture_scope.to_string(),
         provider_endpoint,
         context.request_provenance.clone(),
+        context.transcript_snapshot.clone(),
         assembly_trace.clone(),
     );
     let provenance_json = canonical_json(
@@ -770,15 +846,18 @@ impl RenderedCompletionRequest {
         }
 
         // Re-encoding with the current serializer rejects unknown or legacy
-        // fields on a newly-created v4 manifest. In particular, v3's
+        // fields on a newly-created v5 manifest. In particular, v3's
         // `request_version` remains deserialize-only and can never leak into a
         // new canonical row.
         let canonical_manifest = canonical_json(
             &serde_json::to_value(&manifest).context("encoding rendered-request manifest")?,
         );
         if canonical_json(&self.provenance_json) != canonical_manifest {
-            anyhow::bail!("new rendered-request provenance manifest is not canonical v4");
+            anyhow::bail!("new rendered-request provenance manifest is not canonical v5");
         }
+
+        validate_transcript_snapshot(&manifest.transcript_snapshot)
+            .context("invalid rendered-request manifest transcript snapshot provenance")?;
 
         match (&self.request_doc_id, &manifest.request_provenance) {
             (doc_id, Some(provenance)) if !doc_id.is_empty() => {
@@ -914,6 +993,23 @@ mod tests {
 
     use super::*;
 
+    fn transcript_snapshot() -> Vec<crate::MessageFactRef> {
+        vec![
+            crate::MessageFactRef {
+                sequence: 1,
+                doc_id: "message-doc-1".to_string(),
+                composite_commit_cid: "bafy-message-1".to_string(),
+                signer_did: "did:key:test".to_string(),
+            },
+            crate::MessageFactRef {
+                sequence: 2,
+                doc_id: "message-doc-2".to_string(),
+                composite_commit_cid: "bafy-message-2".to_string(),
+                signer_did: "did:key:test".to_string(),
+            },
+        ]
+    }
+
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
@@ -921,6 +1017,7 @@ mod tests {
                 "doc-1",
                 "did:key:test",
             )),
+            transcript_snapshot: transcript_snapshot(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),
@@ -1481,6 +1578,7 @@ mod tests {
         assert_eq!(rendered.request_source_signer_did, "did:key:source");
         assert_eq!(rendered.request_claim_commit_cid, "bafy-claim-1");
         assert_eq!(rendered.request_claim_signer_did, "did:key:test");
+        assert_eq!(manifest.transcript_snapshot, transcript_snapshot());
         assert_eq!(manifest.assembly_trace, trace);
         assert_eq!(rendered.assembly_trace, trace);
     }
@@ -1497,10 +1595,10 @@ mod tests {
         );
     }
 
-    /// Version 4 declares `captured_only` positively. An absent field is never
+    /// Version 5 declares `captured_only` positively. An absent field is never
     /// the evidence — a reader must be able to see the claim, not infer it.
     #[test]
-    fn version_four_provenance_never_claims_full_reconstruction() {
+    fn version_five_provenance_never_claims_full_reconstruction() {
         let rendered = build(0, 0, empty_trace(), components());
 
         assert_eq!(rendered.provenance_json["status"], "captured_only");
@@ -1511,7 +1609,47 @@ mod tests {
         assert!(rendered.provenance_json.get("assembly_trace").is_some());
         assert!(
             rendered.provenance_json.get("request_version").is_none(),
-            "v4 must never emit the legacy single-version field"
+            "v5 must never emit the legacy single-version field"
+        );
+    }
+
+    #[test]
+    fn transcript_snapshot_must_be_canonically_ordered() {
+        let mut context = context();
+        context.transcript_snapshot.swap(0, 1);
+
+        let error = build_rendered_completion_request(
+            &context,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("out-of-order transcript facts must be rejected");
+
+        assert!(
+            format!("{error:#}").contains("canonical sequence order"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn persisted_manifest_rejects_noncanonical_transcript_snapshot() {
+        let mut rendered = build(0, 0, empty_trace(), components());
+        rendered.provenance_json["transcript_snapshot"]
+            .as_array_mut()
+            .expect("transcript snapshot")
+            .swap(0, 1);
+
+        let error = rendered
+            .validate_new_capture()
+            .expect_err("persisted manifest order must be validated independently");
+        assert!(
+            format!("{error:#}").contains("canonical sequence order"),
+            "unexpected error: {error:#}"
         );
     }
 
@@ -1572,6 +1710,32 @@ mod tests {
             reencoded.get("request_version").is_none(),
             "legacy request_version is accepted for decoding but never emitted"
         );
+    }
+
+    #[test]
+    fn version_four_manifest_without_transcript_snapshot_remains_readable() {
+        let mut value =
+            serde_json::to_value(ProvenanceManifest::captured_only_with_request_provenance(
+                "inference.1".to_string(),
+                Some("https://provider.example".to_string()),
+                Some(crate::document_version::test_request_execution_provenance(
+                    "doc-1",
+                    "did:key:test",
+                )),
+                empty_trace(),
+            ))
+            .expect("legacy manifest fixture");
+        value["manifest_version"] = json!(4);
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("transcript_snapshot");
+
+        let decoded: ProvenanceManifest =
+            serde_json::from_value(value).expect("version-four manifest remains readable");
+        assert_eq!(decoded.manifest_version, 4);
+        assert!(decoded.transcript_snapshot.is_empty());
+        assert!(decoded.request_provenance.is_some());
     }
 
     /// The seam is recorded positively so a reader never has to guess whether
@@ -1724,8 +1888,8 @@ mod tests {
         });
         let error = legacy_field
             .validate_new_capture()
-            .expect_err("a new v4 manifest cannot carry request_version");
-        assert!(error.to_string().contains("not canonical v4"));
+            .expect_err("a new v5 manifest cannot carry request_version");
+        assert!(error.to_string().contains("not canonical v5"));
     }
 
     fn agent_request() -> crate::watcher::AgentRequest {
@@ -1758,14 +1922,22 @@ mod tests {
         let context = RenderedRequestContext::for_request(
             &request,
             crate::document_version::test_request_execution_provenance("doc-1", "did:key:test"),
+            transcript_snapshot(),
             "test-model".to_string(),
         );
         assert_eq!(context.requester_did, "");
+        assert_eq!(context.transcript_snapshot, transcript_snapshot());
+        assert!(context
+            .clone()
+            .without_transcript_snapshot()
+            .transcript_snapshot
+            .is_empty());
 
         request.requester_did = Some("did:key:requester".to_string());
         let context = RenderedRequestContext::for_request(
             &request,
             crate::document_version::test_request_execution_provenance("doc-1", "did:key:test"),
+            Vec::new(),
             "test-model".to_string(),
         );
         assert_eq!(context.requester_did, "did:key:requester");

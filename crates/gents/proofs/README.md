@@ -163,6 +163,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, exact-document persistence fencing (#1076), slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
+| `Proofs/Transcript.lean` | Barrel for transcript ordering/pairing plus split mutable-draft and immutable finalized-fact semantics (#1073) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -207,6 +208,7 @@ Semantic submodules:
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `ExactTarget`, `SlotAccounting`, `ControllerBookkeeping` |
+| `Proofs.Transcript` | `State`, `Transition`, `Properties`, `Dedupe`, `Executable`, `Finalization` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -770,6 +772,32 @@ Model → conformance → Rust bindings:
   backgrounding is single-node and carried by Lean).
 
 ### Compaction
+
+### Transcript Fact Finalization
+
+`Proofs/Transcript/Finalization.lean` separates mutable assistant assembly
+checkpoints from immutable finalized transcript facts. A checkpoint is
+explicitly non-authoritative: it may be replaced by physical document identity,
+never enters provider history, and is not a provenance ancestor of the final
+fact. Post-checkpoint publication and direct publication use the same
+create-and-observe rule over desired order/payload plus the resulting exact
+composite CID and cryptographically verified signer. Signer authorization is a
+deferred ACP assumption and deliberately does not require the node signer DID
+to equal an application `agent_did` attribution field. Identical replay is a
+non-mutating observation, while payload, order, or authoritative-final-fact
+rebinding is rejected.
+
+The model does not treat a unique-index winner as consensus. The complete
+visible fact set for `(session_id, sequence)` must be empty before create or
+exactly the selected fact on replay and read. Replicated logical twins fail
+closed even if an index happens to return one deterministic winner. Provider
+assembly is structurally limited to finalized facts and requires exact
+`_docID`/composite-CID references in strict sequence order. The generated
+checkpoint cases pin mutability and publication independence; the publication
+cases pin non-empty final CID/signer evidence, valid signatures, the explicit
+policy-authorization assumption, immutable replay, and conflict rejection.
+Generated fences:
+`generated_transcript_finalization_and_provider_history_cases_pin_split_contract`.
 
 `Proofs/Compaction` models transcript reduction — the one place where the
 durable transcript and the provider view diverge on purpose, and therefore the

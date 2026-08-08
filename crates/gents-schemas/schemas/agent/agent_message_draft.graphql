@@ -1,4 +1,4 @@
-type AgentMessage @branchable {
+type AgentMessageDraft @branchable {
     message_key: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable
@@ -6,7 +6,7 @@ type AgentMessage @branchable {
     request_id: String @index @immutable
     sequence: Int @index @immutable
     role: String @immutable
-    content: String @immutable
-    reasoning: String @immutable
-    timestamp: DateTime @immutable
+    content: String
+    reasoning: String
+    timestamp: DateTime
 }

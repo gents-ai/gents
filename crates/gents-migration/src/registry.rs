@@ -364,6 +364,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreig5hlyzlujmegnnlww6tjt6krquzuq2ltgh2pjqwwzxzjbognuguu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_MESSAGE_DRAFT_NAME,
+        gents_protocol::schemas::AGENT_MESSAGE_DRAFT,
+        "bafyreiampfva4g5ert6d72cvwildo7aqori6dlqm4pc44kev2tm5hqpb4q"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
         "bafyreiemjtuletwxi5p2jvgplanfyzne6pu7a3knkn4n4dbx6kmgxytfre"

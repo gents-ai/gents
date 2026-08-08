@@ -757,6 +757,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "TranscriptConformanceCases".to_string(),
         ));
     }
+    if !lean_transcript_finalization_cases().is_empty() {
+        emitted.insert((
+            "transcript_finalization_cases".to_string(),
+            "TranscriptFinalizationCases".to_string(),
+        ));
+    }
+    if !lean_transcript_provider_history_cases().is_empty() {
+        emitted.insert((
+            "transcript_provider_history_cases".to_string(),
+            "TranscriptProviderHistoryCases".to_string(),
+        ));
+    }
     if !lean_response_transition_cases().is_empty() {
         emitted.insert((
             "streaming_response_cases".to_string(),
@@ -1068,6 +1080,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "bridge_step_cases",
         "subagent_bridge_admission_cases",
         "transcript_cases",
+        "transcript_finalization_cases",
+        "transcript_provider_history_cases",
         "compaction_reducer_cases",
         "prompt_assembly_cases",
         "rendered_capture_cases",

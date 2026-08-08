@@ -137,6 +137,10 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
+    #[serde(default)]
+    pub(crate) transcript_finalization_cases: Vec<LeanTranscriptFinalizationCase>,
+    #[serde(default)]
+    pub(crate) transcript_provider_history_cases: Vec<LeanTranscriptProviderHistoryCase>,
     pub(crate) streaming_response_cases: Vec<LeanResponseTransitionCase>,
     #[serde(default)]
     pub(crate) streaming_response_interrupt_flow_cases: Vec<LeanResponseInterruptFlowCase>,
@@ -847,6 +851,15 @@ pub(crate) fn lean_transcript_case(name: &str) -> &'static LeanTranscriptCase {
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean transcript case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_transcript_finalization_cases() -> &'static [LeanTranscriptFinalizationCase] {
+    &lean_contract_snapshot().transcript_finalization_cases
+}
+
+pub(crate) fn lean_transcript_provider_history_cases(
+) -> &'static [LeanTranscriptProviderHistoryCase] {
+    &lean_contract_snapshot().transcript_provider_history_cases
 }
 
 pub(crate) fn lean_response_transition_cases() -> &'static [LeanResponseTransitionCase] {

@@ -35,13 +35,15 @@ pub use fork::{
     fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
     GraphqlExecutor, HttpGraphqlExecutor,
 };
-pub use history::load_history;
 #[allow(unused_imports)]
 pub(crate) use history::{
-    append_message_once_with_key_and_requester_did, append_message_with_requester_did,
-    mark_response_materialized, message_sequence_for_request_content, save_message,
-    save_message_with_requester_did,
+    append_message_draft_with_requester_did, append_message_once_with_key_and_requester_did,
+    append_message_with_requester_did, mark_response_materialized,
+    message_sequence_for_request_content, save_message, save_message_draft_with_requester_did,
+    save_message_draft_with_requester_did_and_request_id, save_message_with_requester_did,
+    save_message_with_requester_did_and_request_id,
 };
+pub use history::{load_history, load_history_with_refs, LoadedHistory, MessageFactRef};
 pub(crate) use query::{
     load_session_behavior_id, session_has_live_response, session_has_other_live_response,
 };

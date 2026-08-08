@@ -66,6 +66,7 @@ use std::time::Duration;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use gents::retry::execute_graphql_with_conflict_retry;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
 use serde_json::Value;
 
@@ -155,7 +156,13 @@ async fn set_schedule_enabled(
             ) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    // The live schedule reconciler may read/write the same row between the
+    // fixture's read and update. A DefraDB transaction conflict is therefore a
+    // normal optimistic-concurrency result, not evidence that reconfiguration
+    // failed; exercise the same bounded retry boundary as production writers.
+    let resp =
+        execute_graphql_with_conflict_retry(node, &mutation, "set conformance Schedule.enabled")
+            .await;
     assert!(
         !resp.has_errors(),
         "update Schedule.enabled failed: {:?}",

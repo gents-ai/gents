@@ -17,6 +17,25 @@ use crate::streaming::DefraStreamWriter;
 use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
 
+async fn signed_test_node(
+    data_path: &std::path::Path,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    crate::test_support::SignedTestIdentity,
+) {
+    let identity = crate::test_support::signed_test_identity("agent-stream-processor-identity");
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(data_path)
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+    (node, identity)
+}
+
 fn user_text_message(text: &str) -> Message {
     Message::User {
         content: vec![UserContent::Text(Text {
@@ -29,14 +48,7 @@ fn user_text_message(text: &str) -> Message {
 async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -362,14 +374,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         "agent-stream-processor-tool-dedupe-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -524,14 +529,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -604,6 +602,31 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         ))
         .await
         .unwrap();
+
+    let finalized_before_result = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        finalized_before_result.len(),
+        1,
+        "an accumulating tool-call turn must remain outside finalized provider history"
+    );
+    let draft_response = node
+        .execute(&format!(
+            r#"{{
+                AgentMessageDraft(
+                    filter: {{ session_id: {{ _eq: "{}" }} }}
+                ) {{ sequence }}
+            }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(!draft_response.has_errors(), "{:?}", draft_response.errors);
+    assert_eq!(
+        draft_response.data.unwrap()["AgentMessageDraft"],
+        serde_json::json!([{ "sequence": 2 }]),
+        "the in-flight assistant turn must reserve sequence 2 as a mutable draft"
+    );
 
     assert!(matches!(
         hook.on_tool_call(
@@ -714,14 +737,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         "agent-stream-processor-multi-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -861,14 +877,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     // must reconcile it (and be idempotent).
     let data_path =
         std::env::temp_dir().join(format!("agent-442-backfill-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -1024,14 +1033,7 @@ async fn post_tool_resumed_resets_response_tail() {
         "agent-stream-processor-tool-reset-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     // Set up session hook + establish session by persisting user message.
     let hook = crate::hook::DefraSessionHook::with_identity(
@@ -1159,14 +1161,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         "agent-stream-processor-turn-retract-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -1293,14 +1288,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         "agent-stream-processor-corrupt-args-{}",
         uuid::Uuid::new_v4()
     ));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_schemas(&node).await.unwrap();
+    let (node, _identity) = signed_test_node(&data_path).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),

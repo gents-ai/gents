@@ -481,6 +481,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             "doc-1",
             "did:key:agent",
         )),
+        transcript_snapshot: Vec::new(),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

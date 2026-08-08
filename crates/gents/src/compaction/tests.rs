@@ -1252,6 +1252,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
                 "doc-1",
                 "did:key:agent",
             )),
+            transcript_snapshot: Vec::new(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),
@@ -2073,13 +2074,16 @@ fn estimate_tokens_rough() {
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
+    let signed_identity = crate::test_support::signed_test_identity("gents-compactor-identity");
+    let signer_did = signed_identity.did().to_owned();
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
+        .with_node_identity_did(&signer_did)
         .build()
         .await
         .unwrap();
     ensure_schemas(&node).await.unwrap();
-    session::create_session_with_id(&node, "session-1", "general", "did:test:test")
+    session::create_session_with_id(&node, "session-1", "general", &signer_did)
         .await
         .unwrap();
 
@@ -2127,7 +2131,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:test:test",
+            &signer_did,
             sequence,
             "user",
             &serde_json::to_string(&user).unwrap(),
@@ -2140,7 +2144,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:test:test",
+            &signer_did,
             sequence,
             "assistant",
             &serde_json::to_string(&assistant_tool_call).unwrap(),
@@ -2153,7 +2157,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:test:test",
+            &signer_did,
             sequence,
             "user",
             &serde_json::to_string(&tool_result).unwrap(),
@@ -2166,7 +2170,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         session::save_message(
             &node,
             "session-1",
-            "did:test:test",
+            &signer_did,
             sequence,
             "assistant",
             &serde_json::to_string(&assistant).unwrap(),
@@ -2198,7 +2202,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     session::save_compaction_entry(
         &node,
         "session-1",
-        "did:test:test",
+        &signer_did,
         &summary,
         &result.files_read,
         &result.files_modified,

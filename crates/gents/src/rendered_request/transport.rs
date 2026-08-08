@@ -426,6 +426,7 @@ mod tests {
                 "doc-1",
                 "did:key:agent",
             )),
+            transcript_snapshot: Vec::new(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: "did:key:requester".to_string(),

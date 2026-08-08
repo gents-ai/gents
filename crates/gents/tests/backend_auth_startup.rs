@@ -14,6 +14,7 @@ use tokio::sync::watch;
 
 use support::fixtures::{bind_default_behavior_backend, test_behavior, test_identity};
 use support::mock_endpoint::MockModelEndpoint;
+use support::test_db_with_identity;
 use support::waits::wait_for_runtime_process_state;
 
 #[derive(Default)]
@@ -136,8 +137,9 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
 async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     use gents::BackendProviderKind;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let identity = Arc::new(test_identity("openrouter-oneshot-provider-preferences"));
+    let db = test_db_with_identity("openrouter-oneshot-provider-preferences", identity).await;
+    let node = db.node.clone();
     let mock_endpoint = MockModelEndpoint::start_with_required_bearer(
         "openai/gpt-4o-mini",
         Some("openrouter-key"),

@@ -853,6 +853,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "transcript_finalization_cases"
+      "TranscriptFinalizationCases"
+      "conformance::generated_transcript_finalization_and_provider_history_cases_pin_split_contract")
+      "transcript" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "transcript_provider_history_cases"
+      "TranscriptProviderHistoryCases"
+      "conformance::generated_transcript_finalization_and_provider_history_cases_pin_split_contract")
+      "transcript" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases")

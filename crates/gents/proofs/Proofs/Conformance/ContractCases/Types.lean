@@ -637,6 +637,39 @@ structure TranscriptCase where
   expectedStrongDrain : Bool
   deriving Repr
 
+/-- Generated checkpoint/publication witnesses for the draft/fact split. -/
+structure TranscriptFinalizationCase where
+  name : String
+  action : String
+  visibleLogicalFactCount : Nat
+  checkpointPresent : Bool
+  factPresentBefore : Bool
+  factPresentAfter : Bool
+  factCommitCid : Option Nat
+  checkpointPayloadHash : Option Nat
+  writePayloadHash : Nat
+  factPayloadHash : Option Nat
+  writeSignerDid : Option Nat
+  writeSignatureValid : Option Bool
+  writePolicyAuthorized : Option Bool
+  factSignerDid : Option Nat
+  disposition : String
+  checkpointPreserved : Bool
+  siblingIsolated : Bool
+  deriving Repr
+
+/-- Exact provider-history reconstruction witnesses. -/
+structure TranscriptProviderHistoryCase where
+  name : String
+  referenceCount : Nat
+  visibleConflictCount : Nat
+  accepted : Bool
+  outputCount : Nat
+  outputPayloadHashes : List Nat
+  exactFinalizedDomainOnly : Bool
+  strictlyIncreasing : Bool
+  deriving Repr
+
 def boolString (value : Bool) : String :=
   if value then "true" else "false"
 

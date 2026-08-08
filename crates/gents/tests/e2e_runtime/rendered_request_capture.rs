@@ -128,10 +128,10 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["capture_seam"], "transport_body");
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
-    assert_eq!(provenance["manifest_version"], 4);
+    assert_eq!(provenance["manifest_version"], 5);
     assert!(
         provenance.get("request_version").is_none(),
-        "a v4 manifest must not emit the legacy request_version field: {provenance}"
+        "a v5 manifest must not emit the legacy request_version field: {provenance}"
     );
     assert_eq!(
         provenance["request_provenance"]["source"]["version"]["doc_id"],

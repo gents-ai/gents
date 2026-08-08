@@ -40,7 +40,7 @@ impl DefraSessionHook {
 
         let sequence = match building_sequence {
             Some(sequence) => {
-                session::save_message_with_requester_did(
+                session::save_message_draft_with_requester_did_and_request_id(
                     &self.node,
                     &session_id,
                     &self.agent_did,
@@ -49,12 +49,13 @@ impl DefraSessionHook {
                     "assistant",
                     &content,
                     reasoning.as_deref(),
+                    current_request_id.as_deref(),
                 )
                 .await?;
                 sequence
             }
             None => {
-                session::append_message_with_requester_did(
+                session::append_message_draft_with_requester_did(
                     &self.node,
                     &session_id,
                     &self.agent_did,
@@ -245,7 +246,7 @@ impl DefraSessionHook {
             }
         };
 
-        session::save_message_with_requester_did(
+        session::save_message_with_requester_did_and_request_id(
             &self.node,
             &session_id,
             &self.agent_did,
@@ -254,6 +255,7 @@ impl DefraSessionHook {
             role,
             &content,
             reasoning,
+            current_request_id.as_deref(),
         )
         .await?;
         Ok(sequence)

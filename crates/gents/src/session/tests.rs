@@ -1,5 +1,6 @@
 use super::*;
 use crate::ensure_schemas;
+use crate::identity::{AgentIdentity as _, KeyIdentity};
 use crate::llm::message::{AssistantContent, Text, UserContent};
 use crate::test_support::first_content;
 use gents_protocol::transcript::decode_persisted_message;
@@ -39,6 +40,213 @@ fn test_load_history_deserializes_legacy_assistant_content() {
                 && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
                 && matches!(content.get(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
     ));
+}
+
+#[test]
+fn signed_snapshot_timestamps_compare_as_rfc3339_instants() {
+    assert!(super::history::rfc3339_instants_equal(
+        "2026-08-08T07:46:17.76087Z",
+        "2026-08-08T07:46:17.760870Z"
+    ));
+    assert!(super::history::rfc3339_instants_equal(
+        "2026-08-08T07:46:17.760870Z",
+        "2026-08-08T00:46:17.760870-07:00"
+    ));
+    assert!(!super::history::rfc3339_instants_equal(
+        "2026-08-08T07:46:17.760870Z",
+        "2026-08-08T07:46:17.760871Z"
+    ));
+    assert!(!super::history::rfc3339_instants_equal(
+        "not-a-timestamp",
+        "not-a-timestamp"
+    ));
+}
+
+async fn message_test_node() -> (defra_node::EmbeddedNode, String, tempfile::TempDir) {
+    let key_dir = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap();
+    let did = identity.did().to_owned();
+    let node = defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(&did)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+    (node, did, key_dir)
+}
+
+async fn message_row(
+    node: &defra_node::EmbeddedNode,
+    collection: &str,
+    session_id: &str,
+) -> serde_json::Value {
+    let response = node
+        .execute(&format!(
+            r#"{{
+                {collection}(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
+                    _docID message_key sequence role content reasoning
+                }}
+            }}"#,
+            crate::graphql::escape_graphql_string(session_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()[collection][0].clone()
+}
+
+#[tokio::test]
+async fn agent_message_draft_finalizes_exactly_once_and_final_fact_is_immutable() {
+    let (node, signer_did, _key_dir) = message_test_node().await;
+    let draft = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Text(Text {
+            text: "draft".to_owned(),
+        })],
+    };
+    let finalized = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Text(Text {
+            text: "final".to_owned(),
+        })],
+    };
+    let draft_json = serde_json::to_string(&draft).unwrap();
+    let finalized_json = serde_json::to_string(&finalized).unwrap();
+
+    save_message_draft_with_requester_did(
+        &node,
+        "finalized-message-session",
+        &signer_did,
+        None,
+        1,
+        "assistant",
+        &draft_json,
+        None,
+    )
+    .await
+    .unwrap();
+    let draft_row = message_row(&node, "AgentMessageDraft", "finalized-message-session").await;
+    let draft_doc_id = draft_row["_docID"].as_str().unwrap().to_owned();
+    assert!(load_history(&node, "finalized-message-session")
+        .await
+        .unwrap()
+        .is_empty());
+
+    save_message_draft_with_requester_did(
+        &node,
+        "finalized-message-session",
+        &signer_did,
+        None,
+        1,
+        "assistant",
+        &finalized_json,
+        None,
+    )
+    .await
+    .unwrap();
+    let updated_draft = message_row(&node, "AgentMessageDraft", "finalized-message-session").await;
+    assert_eq!(updated_draft["_docID"], draft_doc_id);
+    assert_eq!(updated_draft["content"], finalized_json);
+
+    save_message_with_requester_did(
+        &node,
+        "finalized-message-session",
+        &signer_did,
+        None,
+        1,
+        "assistant",
+        &finalized_json,
+        None,
+    )
+    .await
+    .unwrap();
+    let finalized_row = message_row(&node, "AgentMessage", "finalized-message-session").await;
+    let finalized_doc_id = finalized_row["_docID"].as_str().unwrap().to_owned();
+    assert_ne!(finalized_doc_id, draft_doc_id);
+    let loaded = load_history_with_refs(&node, "finalized-message-session")
+        .await
+        .unwrap();
+    assert_eq!(loaded.messages, vec![finalized.clone()]);
+    assert_eq!(loaded.fact_refs.len(), 1);
+    assert_eq!(loaded.fact_refs[0].sequence, 1);
+    assert_eq!(loaded.fact_refs[0].doc_id, finalized_doc_id);
+    assert!(!loaded.fact_refs[0].composite_commit_cid.is_empty());
+    assert_eq!(loaded.fact_refs[0].signer_did, signer_did);
+
+    save_message_with_requester_did(
+        &node,
+        "finalized-message-session",
+        &signer_did,
+        None,
+        1,
+        "assistant",
+        &finalized_json,
+        None,
+    )
+    .await
+    .expect("identical finalized replay is idempotent");
+    let conflict = save_message_with_requester_did(
+        &node,
+        "finalized-message-session",
+        &signer_did,
+        None,
+        1,
+        "assistant",
+        &draft_json,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        conflict
+            .to_string()
+            .contains("AgentMessage finalized fact conflict"),
+        "{conflict:#}"
+    );
+    let unchanged = message_row(&node, "AgentMessage", "finalized-message-session").await;
+    assert_eq!(unchanged["_docID"], finalized_doc_id);
+    assert_eq!(unchanged["content"], finalized_json);
+}
+
+#[tokio::test]
+async fn provider_history_rejects_duplicate_finalized_order() {
+    let (node, signer_did, _key_dir) = message_test_node().await;
+    let content = serde_json::to_string(&Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "hello".to_owned(),
+        })],
+    })
+    .unwrap();
+    for key in ["duplicate-order-a", "duplicate-order-b"] {
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentMessage(input: {{
+                        message_key: "{key}"
+                        session_id: "duplicate-order-session"
+                        agent_did: "{signer_did}"
+                        request_id: ""
+                        sequence: 1
+                        role: "user"
+                        content: "{}"
+                        reasoning: ""
+                        timestamp: "2026-08-07T00:00:00Z"
+                    }}) {{ _docID }}
+                }}"#,
+                crate::graphql::escape_graphql_string(&content)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+
+    let error = load_history(&node, "duplicate-order-session")
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("provider history rejected ambiguous AgentMessage facts"),
+        "{error:#}"
+    );
 }
 
 #[tokio::test]
