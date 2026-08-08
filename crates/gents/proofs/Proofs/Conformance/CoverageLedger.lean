@@ -539,6 +539,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "inference_exact_target_cases"
+      "InferenceCallExactTarget"
+      "conformance::generated_inference_call_exact_target_cases_drive_fenced_updates")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "inference_exact_target_trace_cases"
+      "InferenceCallExactTargetTraces"
+      "conformance::generated_inference_call_exact_target_cases_drive_fenced_updates")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "completion_retry_cases"
       "completionRetry"
       "conformance::completion_retry_lean_witness_cases_hold")

@@ -557,6 +557,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "InferenceCallSlotAccounting".to_string(),
         ));
     }
+    if !snapshot.inference_call_exact_target_cases.is_empty() {
+        emitted.insert((
+            "inference_exact_target_cases".to_string(),
+            "InferenceCallExactTarget".to_string(),
+        ));
+    }
+    if !snapshot.inference_call_exact_target_trace_cases.is_empty() {
+        emitted.insert((
+            "inference_exact_target_trace_cases".to_string(),
+            "InferenceCallExactTargetTraces".to_string(),
+        ));
+    }
     if !snapshot.fleet_slot_accounting_cases.is_empty() {
         emitted.insert(("fleet_cases".to_string(), "FleetSlotAccounting".to_string()));
     }
@@ -1031,6 +1043,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "self_config_cases",
         "session_recovery_cases",
         "slot_cases",
+        "inference_exact_target_cases",
+        "inference_exact_target_trace_cases",
         "fleet_cases",
         "persistence_policy_cases",
         "storage_observation_cases",

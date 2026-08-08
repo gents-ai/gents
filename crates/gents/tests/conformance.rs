@@ -54,7 +54,8 @@ use lean_vocab_test::{
     lean_command_sandbox_case, lean_compaction_reducer_cases, lean_composed_invariant_witnesses,
     lean_contract_snapshot, lean_event_delivery_convergence_traces,
     lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_fleet_slot_accounting_case, lean_inference_slot_accounting_case,
+    lean_fleet_slot_accounting_case, lean_inference_call_exact_target_cases,
+    lean_inference_call_exact_target_trace_cases, lean_inference_slot_accounting_case,
     lean_inference_slot_accounting_cases, lean_managed_exec_liveness_cases,
     lean_managed_exec_tool_boundary_cases, lean_mcp_health_cases, lean_process_transition_cases,
     lean_queue_deadline_case, lean_queue_deadline_cases, lean_r4c_background_work_case,
@@ -450,6 +451,16 @@ fn generated_process_transition_cases_cover_runtime_status_policy_shape() {
 async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
     inference_call::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction()
         .await;
+}
+
+#[tokio::test]
+async fn generated_inference_call_exact_target_cases_drive_fenced_updates() {
+    inference_call::generated_inference_call_exact_target_cases_drive_fenced_updates().await;
+}
+
+#[tokio::test]
+async fn concurrent_exact_target_cas_serializes_one_winner_and_terminal_absorbs() {
+    inference_call::concurrent_exact_target_cas_serializes_one_winner_and_terminal_absorbs().await;
 }
 
 #[test]

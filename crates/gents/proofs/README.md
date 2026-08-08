@@ -162,7 +162,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, exact-document persistence fencing (#1076), slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -206,7 +206,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
-| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `ExactTarget`, `SlotAccounting`, `ControllerBookkeeping` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -991,6 +991,35 @@ unrelated concurrent calls live.
 System-generated `InferenceCall.failure_reason` values used by admission and
 interrupt/drop paths are mirrored by `InferenceCallTerminalReason`; provider
 error strings remain open and are not treated as a closed Lean vocabulary.
+
+`Proofs/InferenceCall/ExactTarget.lean` lifts those lifecycle edges onto a
+physical-document store. A persisted transition names the DefraDB `_docID`
+returned by creation, requires the expected source state plus owner/epoch
+fences, and delegates the requested edge to the executable lifecycle step. It
+proves missing/stale writes are rejected, a successful write is legal, sibling
+documents are unchanged even when they share logical call identity, and
+terminal documents cannot be reopened or rebound to another terminal outcome.
+Strict CAS success and an idempotent reload that merely observes the desired
+state are distinct outcomes.
+
+Physical isolation is not logical admission: if replication exposes two
+physical documents for one logical call, exact `_docID` CAS could advance each
+independently. The model therefore requires the complete visible logical
+conflict set to contain exactly the selected target; a sibling conflict rejects
+both admission and idempotent observation before mutation. The generated finite
+and two-write cases are driven against real `InferenceCall` rows by
+`generated_inference_call_exact_target_cases_drive_fenced_updates`.
+
+The concurrent conformance witness pins the storage-engine refinement used by
+that model. DefraDB's query-plan update revalidates the mutation filter and
+captures the expected document (`crates/query-plan/src/plan/mutation/update.rs`);
+the auto-commit mutator then acquires the per-document write queue, reloads
+under the guard, and compares the complete expected document
+(`crates/db/src/auto_commit_mutator/update.rs`). Transaction-conflict retry
+reruns the filter. The test races same-row queued-to-running writes and
+different terminal outcomes, requiring exactly one winner and an absorbing
+terminal result. Subscription delivery and cross-host conflict-set discovery
+remain outside this per-document refinement and may require broader design.
 
 ## What Is Not Proven
 

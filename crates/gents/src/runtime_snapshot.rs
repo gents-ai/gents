@@ -466,10 +466,12 @@ fn configuration_fingerprint(
         let behavior = behaviors
             .get(&behavior_id)
             .expect("behavior id came from behaviors map");
+        let mut normalized_behavior = behavior.as_ref().clone();
+        crate::skills::sort_skills_canonically(&mut normalized_behavior.skills);
         fingerprint.push_str("behavior:");
         fingerprint.push_str(&behavior_id);
         fingerprint.push('=');
-        fingerprint.push_str(&format!("{behavior:?}"));
+        fingerprint.push_str(&format!("{normalized_behavior:?}"));
         fingerprint.push('\n');
     }
 

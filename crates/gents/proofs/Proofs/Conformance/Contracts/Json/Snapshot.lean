@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.Scheduling
+import Proofs.Conformance.Contracts.Json.InferenceCall
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
@@ -73,6 +74,12 @@ def snapshotJson : String :=
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"
       ++ jsonArray (inferenceSlotAccountingCases.map inferenceSlotAccountingCaseJson) ++ ","
+    ++ "\"inference_call_exact_target_cases\":"
+      ++ jsonArray
+        (inferenceCallExactTargetCases.map inferenceCallExactTargetCaseJson) ++ ","
+    ++ "\"inference_call_exact_target_trace_cases\":"
+      ++ jsonArray
+        (inferenceCallExactTargetTraceCases.map inferenceCallExactTargetTraceCaseJson) ++ ","
     ++ "\"fleet_slot_accounting_cases\":"
       ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
     ++ "\"persistence_failure_policy_cases\":"

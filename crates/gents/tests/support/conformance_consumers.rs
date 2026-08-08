@@ -119,6 +119,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_inference_slot_accounting_cases_drive_db_backed_reconstruction",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::generated_inference_call_exact_target_cases_drive_fenced_updates",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "generated_inference_call_exact_target_cases_drive_fenced_updates",
+        },
+        ConformanceConsumer::RustTest {
             id: "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
             package: "gents",
             source_path: "crates/gents/src/admission/tests.rs",

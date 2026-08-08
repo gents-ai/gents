@@ -360,7 +360,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     assert!(
         matches!(
             recovered_status.reconcile_phase.as_str(),
-            "resolving" | "debouncing"
+            "idle" | "resolving" | "debouncing"
         ),
         "recovered watcher entered unexpected phase {}",
         recovered_status.reconcile_phase

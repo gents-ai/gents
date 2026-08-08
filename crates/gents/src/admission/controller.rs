@@ -183,11 +183,12 @@ impl BackendAdmissionController {
             node: node.clone(),
             controller: self.clone(),
             call: call.clone(),
+            doc_id: None,
             persist_on_drop: false,
         };
         let doc_id = match super::persistence::persist_call_queued(node.clone(), &call).await {
             Ok(doc_id) => {
-                queued_guard.arm();
+                queued_guard.arm(doc_id.clone());
                 doc_id
             }
             Err(error) => {
@@ -200,7 +201,9 @@ impl BackendAdmissionController {
                 drop(queued_guard.disarm());
                 if let Err(error) = persist_existing_call_terminal(
                     node,
+                    &doc_id,
                     &call,
+                    "queued",
                     "cancelled",
                     Some("BackendGone"),
                     None,
@@ -218,7 +221,7 @@ impl BackendAdmissionController {
         // A failure here leaves the durable row `queued` with no terminal
         // write; that is intentional — queued rows hold no reconstructed slot
         // and the startup inference-call sweep terminalizes them.
-        if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
+        if let Err(error) = persist_existing_call_running(node.clone(), &doc_id, &call).await {
             // Permit before in-flight release, as in `start_permit`.
             drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
@@ -333,11 +336,13 @@ pub(super) struct QueuedCallGuard {
     node: Arc<EmbeddedNode>,
     controller: Arc<BackendAdmissionController>,
     call: InferenceCallRecord,
+    doc_id: Option<String>,
     persist_on_drop: bool,
 }
 
 impl QueuedCallGuard {
-    fn arm(&mut self) {
+    fn arm(&mut self, doc_id: String) {
+        self.doc_id = Some(doc_id);
         self.persist_on_drop = true;
     }
 
@@ -386,10 +391,21 @@ impl Drop for QueuedCallGuard {
         }
         let node = self.node.clone();
         let call = self.call.clone();
+        let Some(doc_id) = self.doc_id.clone() else {
+            tracing::error!(call_id = %call.call_id, "armed queued InferenceCall guard lost its _docID");
+            return;
+        };
         spawn_persistence(async move {
-            if let Err(error) =
-                persist_existing_call_terminal(node, &call, "cancelled", Some("Cancelled"), None)
-                    .await
+            if let Err(error) = persist_existing_call_terminal(
+                node,
+                &doc_id,
+                &call,
+                "queued",
+                "cancelled",
+                Some("Cancelled"),
+                None,
+            )
+            .await
             {
                 tracing::warn!(call_id = %call.call_id, error = %error, "failed to persist cancelled queued inference call");
             }

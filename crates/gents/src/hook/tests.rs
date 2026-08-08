@@ -2496,7 +2496,18 @@ async fn flushed_sequence_commit_cannot_resurrect_removed_live_output() {
     state.record_flushed_seq_if_live("removed-tool", 7).await;
     assert!(!state.flushed_seq.lock().await.contains_key("removed-tool"));
 
-    let _writer = state.writer_for("live-tool").await;
+    let _writer = state
+        .writer_for(
+            "live-tool",
+            LiveOutputRowTarget {
+                doc_id: "doc-live".to_string(),
+                request_id: "request-live".to_string(),
+                session_id: "session-live".to_string(),
+                agent_did: "did:test:live".to_string(),
+            },
+        )
+        .await
+        .unwrap();
     state.record_flushed_seq_if_live("live-tool", 9).await;
     assert_eq!(
         state.flushed_seq.lock().await.get("live-tool").copied(),
@@ -2504,6 +2515,160 @@ async fn flushed_sequence_commit_cannot_resurrect_removed_live_output() {
     );
     state.remove("live-tool").await;
     assert!(!state.flushed_seq.lock().await.contains_key("live-tool"));
+}
+
+async fn fetch_live_output_row_by_doc_id(
+    node: &defra_node::EmbeddedNode,
+    doc_id: &str,
+) -> serde_json::Value {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{
+                    _docID
+                    lifecycle_state
+                    partial_output_tail
+                    partial_output_seq
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query exact AgentToolCall failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("exact AgentToolCall row")
+}
+
+#[tokio::test]
+async fn live_output_flush_updates_only_registered_physical_row_when_tool_call_ids_collide() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-live-output-exact-row-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run a tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("request-live-target".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    assert!(matches!(
+        hook.on_tool_call(
+            "read_file",
+            Some("provider-collision".to_string()),
+            "provider-collision",
+            "{}"
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let target = {
+        let lifecycles = hook.in_flight_lifecycles.lock().await;
+        LiveOutputRowTarget::from_lifecycle(
+            lifecycles
+                .get("provider-collision")
+                .expect("target lifecycle"),
+        )
+        .unwrap()
+    };
+    let mut sibling = ToolCallLifecycle::new(
+        node.clone(),
+        "request-live-sibling".to_string(),
+        "session-live-sibling".to_string(),
+        "did:test:general".to_string(),
+        "provider-collision".to_string(),
+        1,
+        "read_file".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    );
+    sibling.start_running().await.unwrap();
+    let sibling_doc_id = sibling.doc_id().expect("sibling doc id").to_string();
+
+    // Keep the periodic worker parked so this test can drive one deterministic
+    // flush while still exercising the production foreground registration
+    // path that captures the lifecycle's physical row identity.
+    hook.background_live_outputs
+        .flusher_running
+        .store(true, Ordering::Release);
+    let writer = hook
+        .foreground_live_output_writer("provider-collision")
+        .await
+        .expect("live output writer");
+    writer
+        .append(
+            crate::background_tools::LiveOutputStream::Stdout,
+            b"target output only",
+        )
+        .await;
+
+    assert_eq!(hook.flush_live_output_tails().await.unwrap(), 1);
+
+    let target_row = fetch_live_output_row_by_doc_id(&node, &target.doc_id).await;
+    assert_eq!(
+        target_row
+            .get("partial_output_tail")
+            .and_then(serde_json::Value::as_str),
+        Some("target output only")
+    );
+    assert_eq!(
+        target_row
+            .get("partial_output_seq")
+            .and_then(serde_json::Value::as_i64),
+        Some(18)
+    );
+
+    let sibling_row = fetch_live_output_row_by_doc_id(&node, &sibling_doc_id).await;
+    assert_eq!(
+        sibling_row
+            .get("partial_output_tail")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default(),
+        ""
+    );
+    assert_eq!(
+        sibling_row
+            .get("partial_output_seq")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default(),
+        0
+    );
+
+    hook.release_live_output("provider-collision").await;
+    hook.background_live_outputs
+        .flusher_running
+        .store(false, Ordering::Release);
+    drop(hook);
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
 }
 
 /// Issue #1002 defect 2: the parent-deadline sweep must not fabricate child

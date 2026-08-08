@@ -14,7 +14,7 @@ pub(crate) struct AdmissionPermit {
     controller: Arc<BackendAdmissionController>,
     permit: Option<OwnedSemaphorePermit>,
     call: InferenceCallRecord,
-    _doc_id: String,
+    doc_id: String,
     terminal: Option<PermitTerminal>,
     finished: bool,
     cancel_observer: Option<CancellationToken>,
@@ -43,7 +43,7 @@ impl AdmissionPermit {
             controller,
             permit: Some(permit),
             call,
-            _doc_id: doc_id,
+            doc_id,
             terminal: None,
             finished: false,
             cancel_observer,
@@ -98,7 +98,9 @@ impl AdmissionPermit {
         });
         if let Err(error) = persist_existing_call_terminal(
             self.node.clone(),
+            &self.doc_id,
             &self.call,
+            "running",
             terminal.call_state,
             terminal.failure_reason.as_deref(),
             terminal.usage,
@@ -177,12 +179,15 @@ impl Drop for AdmissionPermit {
             }
         });
         let node = self.node.clone();
+        let doc_id = self.doc_id.clone();
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
+                &doc_id,
                 &call,
+                "running",
                 terminal.call_state,
                 terminal.failure_reason.as_deref(),
                 terminal.usage,

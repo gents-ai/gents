@@ -53,6 +53,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
     pub(crate) session_recovery_cases: Vec<LeanSessionRecoveryCase>,
     pub(crate) inference_slot_accounting_cases: Vec<LeanInferenceSlotAccountingCase>,
+    #[serde(default)]
+    pub(crate) inference_call_exact_target_cases: Vec<LeanInferenceCallExactTargetCase>,
+    #[serde(default)]
+    pub(crate) inference_call_exact_target_trace_cases: Vec<LeanInferenceCallExactTargetTraceCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
     pub(crate) persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
@@ -535,6 +539,16 @@ pub(crate) fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClient
 
 pub(crate) fn lean_inference_slot_accounting_cases() -> &'static [LeanInferenceSlotAccountingCase] {
     &lean_contract_snapshot().inference_slot_accounting_cases
+}
+
+pub(crate) fn lean_inference_call_exact_target_cases() -> &'static [LeanInferenceCallExactTargetCase]
+{
+    &lean_contract_snapshot().inference_call_exact_target_cases
+}
+
+pub(crate) fn lean_inference_call_exact_target_trace_cases(
+) -> &'static [LeanInferenceCallExactTargetTraceCase] {
+    &lean_contract_snapshot().inference_call_exact_target_trace_cases
 }
 
 pub(crate) fn lean_inference_slot_accounting_case(
