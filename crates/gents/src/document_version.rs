@@ -1,4 +1,125 @@
+use std::collections::HashSet;
+
+use anyhow::{anyhow, Result};
+use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use identity::Did;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommitParentRow {
+    cid: String,
+    #[serde(rename = "fieldName")]
+    field_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CompositeHeadEvidenceRow {
+    cid: String,
+    #[serde(default)]
+    heads: Vec<CommitParentRow>,
+}
+
+fn sole_current_composite_head<'a>(
+    rows: &'a [CompositeHeadEvidenceRow],
+    collection: &str,
+    doc_id: &str,
+) -> Result<&'a CompositeHeadEvidenceRow> {
+    let nested_composite_cids = rows
+        .iter()
+        .flat_map(|row| row.heads.iter())
+        .filter(|head| head.field_name.as_deref() == Some("_C"))
+        .map(|head| head.cid.as_str())
+        .collect::<HashSet<_>>();
+    let current = rows
+        .iter()
+        .filter(|row| !nested_composite_cids.contains(row.cid.as_str()))
+        .collect::<Vec<_>>();
+    match current.as_slice() {
+        [current] => Ok(*current),
+        [] => anyhow::bail!("{collection} {doc_id} has no current composite head"),
+        current => anyhow::bail!(
+            "{collection} {doc_id} has {} current composite heads; refusing ambiguous provenance",
+            current.len()
+        ),
+    }
+}
+
+/// Resolve the sole current composite version of one DefraDB document and
+/// cryptographically verify the signer of that exact commit.
+///
+/// This is intentionally collection-agnostic. Callers remain responsible for
+/// reloading the CID and validating collection-specific facts such as lifecycle
+/// state and logical ownership before treating the version as admitted input.
+pub(crate) async fn verified_current_signed_document_version(
+    node: &EmbeddedNode,
+    collection: &str,
+    doc_id: &str,
+) -> Result<SignedDocumentVersionRef> {
+    verified_current_signed_document_version_with_identity(node, collection, doc_id, None).await
+}
+
+/// Identity-aware variant used by correctness paths that will later be ACP
+/// protected. The query identity is authorization context only; signer
+/// verification below remains the authorship proof.
+pub(crate) async fn verified_current_signed_document_version_with_identity(
+    node: &EmbeddedNode,
+    collection: &str,
+    doc_id: &str,
+    identity: Option<Did>,
+) -> Result<SignedDocumentVersionRef> {
+    let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let query = format!(
+        r#"query {{
+            _commits(
+                docID: ["{escaped_doc_id}"],
+                filter: {{ fieldName: {{ _eq: "_C" }} }}
+            ) {{
+                cid
+                heads {{ cid fieldName }}
+            }}
+        }}"#
+    );
+    let response = node
+        .execute_request_with_retry(
+            QueryRequest::new(query).with_identity(identity),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying {collection} {doc_id} composite evidence failed: {:?}",
+            response.errors
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .map(serde_json::from_value::<Vec<CompositeHeadEvidenceRow>>)
+        .transpose()?
+        .unwrap_or_default();
+    let current = sole_current_composite_head(&rows, collection, doc_id)?;
+    let signer_did = node
+        .verified_block_signer_did(&current.cid)
+        .await
+        .map_err(|error| {
+            anyhow!(
+                "cryptographically verifying {collection} {doc_id} composite commit {}: {error}",
+                current.cid
+            )
+        })?;
+    if signer_did.trim().is_empty() {
+        anyhow::bail!(
+            "cryptographically verifying {collection} {doc_id} composite commit {} returned an empty signer DID",
+            current.cid
+        );
+    }
+    Ok(SignedDocumentVersionRef::new(
+        DocumentVersionRef::new(doc_id, &current.cid),
+        signer_did,
+    ))
+}
 
 /// An immutable point in one DefraDB document's history.
 ///
@@ -227,6 +348,44 @@ pub(crate) fn test_request_execution_provenance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn head(cid: &str, parents: &[&str]) -> CompositeHeadEvidenceRow {
+        CompositeHeadEvidenceRow {
+            cid: cid.to_string(),
+            heads: parents
+                .iter()
+                .map(|cid| CommitParentRow {
+                    cid: (*cid).to_string(),
+                    field_name: Some("_C".to_string()),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn exact_provenance_requires_one_current_composite_head() {
+        let empty = sole_current_composite_head(&[], "Skill", "doc-skill")
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("no current composite head"));
+
+        let ambiguous_rows = [head("bafy-left", &[]), head("bafy-right", &[])];
+        let ambiguous = sole_current_composite_head(&ambiguous_rows, "Skill", "doc-skill")
+            .unwrap_err()
+            .to_string();
+        assert!(ambiguous.contains("2 current composite heads"));
+
+        let linear_rows = [
+            head("bafy-parent", &[]),
+            head("bafy-child", &["bafy-parent"]),
+        ];
+        assert_eq!(
+            sole_current_composite_head(&linear_rows, "Skill", "doc-skill")
+                .unwrap()
+                .cid,
+            "bafy-child"
+        );
+    }
 
     fn fact(collection: &str, logical_id: &str) -> ConfigFactRef {
         ConfigFactRef::new(

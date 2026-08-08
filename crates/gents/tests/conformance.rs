@@ -133,6 +133,8 @@ mod fleet;
 mod goals;
 #[path = "conformance/inference_call.rs"]
 mod inference_call;
+#[path = "conformance/inference_rendered_capture.rs"]
+mod inference_rendered_capture;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
 #[path = "conformance/managed_exec.rs"]
@@ -462,6 +464,11 @@ async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstructio
 #[tokio::test]
 async fn generated_inference_call_exact_target_cases_drive_fenced_updates() {
     inference_call::generated_inference_call_exact_target_cases_drive_fenced_updates().await;
+}
+
+#[test]
+fn generated_inference_rendered_capture_cases_pin_exact_version_composition() {
+    inference_rendered_capture::generated_cases_pin_exact_version_composition();
 }
 
 #[tokio::test]

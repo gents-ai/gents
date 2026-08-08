@@ -672,7 +672,7 @@ mod tests {
             let seen = Arc::clone(&sink_seen);
             Box::pin(async move {
                 seen.lock().expect("seen").push(rendered);
-                Ok(())
+                Ok(crate::rendered_request::test_static_rendered_request_version())
             })
         });
         let scope = test_scope(
@@ -684,6 +684,8 @@ mod tests {
                         "did:key:agent",
                     ),
                 ),
+                inference_call_provenance_scope:
+                    crate::rendered_request::InferenceCallProvenanceScope::StaticOrTest,
                 transcript_snapshot: Vec::new(),
                 config_provenance_scope:
                     crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,

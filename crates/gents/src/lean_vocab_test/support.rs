@@ -57,6 +57,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) inference_call_exact_target_cases: Vec<LeanInferenceCallExactTargetCase>,
     #[serde(default)]
     pub(crate) inference_call_exact_target_trace_cases: Vec<LeanInferenceCallExactTargetTraceCase>,
+    pub(crate) inference_rendered_capture_cases: Vec<LeanInferenceRenderedCaptureCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
     pub(crate) persistence_failure_policy_cases: Vec<LeanPersistenceFailurePolicyCase>,
     pub(crate) storage_observation_runtime_cases: Vec<LeanStorageObservationRuntimeCase>,
@@ -379,6 +380,8 @@ mod command_identity_queue;
 mod composed_invariants;
 #[path = "event_delivery.rs"]
 mod event_delivery;
+#[path = "inference_rendered_capture.rs"]
+mod inference_rendered_capture;
 #[path = "prompt_assembly.rs"]
 mod prompt_assembly;
 #[path = "rendered_capture.rs"]
@@ -402,6 +405,7 @@ pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use composed_invariants::*;
 pub(crate) use event_delivery::*;
+pub(crate) use inference_rendered_capture::*;
 pub(crate) use prompt_assembly::*;
 pub(crate) use rendered_capture::*;
 pub(crate) use request_ingest::*;
@@ -553,6 +557,11 @@ pub(crate) fn lean_inference_call_exact_target_cases() -> &'static [LeanInferenc
 pub(crate) fn lean_inference_call_exact_target_trace_cases(
 ) -> &'static [LeanInferenceCallExactTargetTraceCase] {
     &lean_contract_snapshot().inference_call_exact_target_trace_cases
+}
+
+pub(crate) fn lean_inference_rendered_capture_cases() -> &'static [LeanInferenceRenderedCaptureCase]
+{
+    &lean_contract_snapshot().inference_rendered_capture_cases
 }
 
 pub(crate) fn lean_inference_slot_accounting_case(

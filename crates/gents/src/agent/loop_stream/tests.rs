@@ -1498,6 +1498,8 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             "doc-1",
             "did:key:agent",
         )),
+        inference_call_provenance_scope:
+            crate::rendered_request::InferenceCallProvenanceScope::StaticOrTest,
         transcript_snapshot: Vec::new(),
         config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
         config_provenance: None,
@@ -1508,7 +1510,9 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
         session_id: "session-1".to_string(),
         model_name: "model".to_string(),
     };
-    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| {
+        Box::pin(async { Ok(crate::rendered_request::test_static_rendered_request_version()) })
+    });
     let scope = test_scope(context, sink);
 
     let mut loop_config = config(0);
@@ -1560,6 +1564,8 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
             "doc-empty",
             "did:key:agent",
         )),
+        inference_call_provenance_scope:
+            crate::rendered_request::InferenceCallProvenanceScope::StaticOrTest,
         transcript_snapshot: Vec::new(),
         config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
         config_provenance: None,
@@ -1570,7 +1576,9 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
         session_id: "session-empty".to_string(),
         model_name: "model".to_string(),
     };
-    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| {
+        Box::pin(async { Ok(crate::rendered_request::test_static_rendered_request_version()) })
+    });
     let scope = test_scope(context, sink);
     let mut loop_config = config(0);
     loop_config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(

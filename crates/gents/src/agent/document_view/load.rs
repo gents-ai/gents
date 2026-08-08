@@ -12,101 +12,6 @@ use crate::document_config::{
 
 use super::{DocumentRecord, DocumentRuntimeView, UnversionedDocumentRecord};
 
-#[derive(Debug, Clone, serde::Deserialize)]
-struct CommitParentRow {
-    cid: String,
-    #[serde(rename = "fieldName")]
-    field_name: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct CompositeHeadEvidenceRow {
-    cid: String,
-    #[serde(default)]
-    heads: Vec<CommitParentRow>,
-}
-
-fn sole_current_composite_head<'a>(
-    rows: &'a [CompositeHeadEvidenceRow],
-    collection: &str,
-    doc_id: &str,
-) -> Result<&'a CompositeHeadEvidenceRow> {
-    use std::collections::HashSet;
-
-    let nested_composite_cids = rows
-        .iter()
-        .flat_map(|row| row.heads.iter())
-        .filter(|head| head.field_name.as_deref() == Some("_C"))
-        .map(|head| head.cid.as_str())
-        .collect::<HashSet<_>>();
-    let current = rows
-        .iter()
-        .filter(|row| !nested_composite_cids.contains(row.cid.as_str()))
-        .collect::<Vec<_>>();
-    match current.as_slice() {
-        [current] => Ok(*current),
-        [] => anyhow::bail!("{collection} {doc_id} has no current composite head"),
-        current => anyhow::bail!(
-            "{collection} {doc_id} has {} current composite heads; refusing ambiguous provenance",
-            current.len()
-        ),
-    }
-}
-
-async fn verified_current_version(
-    node: &EmbeddedNode,
-    collection: &str,
-    doc_id: &str,
-) -> Result<crate::SignedDocumentVersionRef> {
-    let escaped_doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let query = format!(
-        r#"query {{
-            _commits(
-                docID: ["{escaped_doc_id}"],
-                filter: {{ fieldName: {{ _eq: "_C" }} }}
-            ) {{
-                cid
-                heads {{ cid fieldName }}
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying {collection} {doc_id} composite evidence failed: {:?}",
-            response.errors
-        );
-    }
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("_commits"))
-        .cloned()
-        .map(serde_json::from_value::<Vec<CompositeHeadEvidenceRow>>)
-        .transpose()?
-        .unwrap_or_default();
-    let current = sole_current_composite_head(&rows, collection, doc_id)?;
-    let signer_did = node
-        .verified_block_signer_did(&current.cid)
-        .await
-        .map_err(|error| {
-            anyhow!(
-                "cryptographically verifying {collection} {doc_id} composite commit {}: {error}",
-                current.cid
-            )
-        })?;
-    if signer_did.trim().is_empty() {
-        anyhow::bail!(
-            "cryptographically verifying {collection} {doc_id} composite commit {} returned an empty signer DID",
-            current.cid
-        );
-    }
-    Ok(crate::SignedDocumentVersionRef::new(
-        crate::DocumentVersionRef::new(doc_id, &current.cid),
-        signer_did,
-    ))
-}
-
 fn exact_record<T>(
     collection: &str,
     logical_id: String,
@@ -142,7 +47,12 @@ pub(super) async fn load_verified_principal_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<AgentPrincipal>> {
-    let source = verified_current_version(node, "AgentPrincipal", doc_id).await?;
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "AgentPrincipal",
+        doc_id,
+    )
+    .await?;
     let snapshot = load_agent_principal_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
@@ -155,7 +65,12 @@ pub(super) async fn load_verified_behavior_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<AgentBehavior>> {
-    let source = verified_current_version(node, "AgentBehavior", doc_id).await?;
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "AgentBehavior",
+        doc_id,
+    )
+    .await?;
     let snapshot = load_agent_behavior_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
@@ -168,7 +83,12 @@ pub(super) async fn load_verified_tool_selection_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<ToolSelectionDocument>> {
-    let source = verified_current_version(node, "ToolSelection", doc_id).await?;
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "ToolSelection",
+        doc_id,
+    )
+    .await?;
     let snapshot = load_tool_selection_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
@@ -181,7 +101,12 @@ pub(super) async fn load_verified_profile_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<InferenceProfile>> {
-    let source = verified_current_version(node, "InferenceProfile", doc_id).await?;
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "InferenceProfile",
+        doc_id,
+    )
+    .await?;
     let snapshot =
         load_inference_profile_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
@@ -195,7 +120,12 @@ pub(super) async fn load_verified_backend_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<crate::backend_registry::InferenceBackend>> {
-    let source = verified_current_version(node, "InferenceBackend", doc_id).await?;
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "InferenceBackend",
+        doc_id,
+    )
+    .await?;
     let snapshot = lookup_backend_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
@@ -208,7 +138,9 @@ pub(super) async fn load_verified_skill_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<DocumentRecord<SkillDocument>> {
-    let source = verified_current_version(node, "Skill", doc_id).await?;
+    let source =
+        crate::document_version::verified_current_signed_document_version(node, "Skill", doc_id)
+            .await?;
     let snapshot = load_skill_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
@@ -542,47 +474,4 @@ async fn find_tool_selection_by_scan(
         );
     }
     Ok(found)
-}
-
-#[cfg(test)]
-mod provenance_tests {
-    use super::*;
-
-    fn head(cid: &str, parents: &[&str]) -> CompositeHeadEvidenceRow {
-        CompositeHeadEvidenceRow {
-            cid: cid.to_string(),
-            heads: parents
-                .iter()
-                .map(|cid| CommitParentRow {
-                    cid: (*cid).to_string(),
-                    field_name: Some("_C".to_string()),
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn exact_config_admission_requires_one_current_composite_head() {
-        let empty = sole_current_composite_head(&[], "Skill", "doc-skill")
-            .unwrap_err()
-            .to_string();
-        assert!(empty.contains("no current composite head"));
-
-        let ambiguous_rows = [head("bafy-left", &[]), head("bafy-right", &[])];
-        let ambiguous = sole_current_composite_head(&ambiguous_rows, "Skill", "doc-skill")
-            .unwrap_err()
-            .to_string();
-        assert!(ambiguous.contains("2 current composite heads"));
-
-        let linear_rows = [
-            head("bafy-parent", &[]),
-            head("bafy-child", &["bafy-parent"]),
-        ];
-        assert_eq!(
-            sole_current_composite_head(&linear_rows, "Skill", "doc-skill")
-                .unwrap()
-                .cid,
-            "bafy-child"
-        );
-    }
 }

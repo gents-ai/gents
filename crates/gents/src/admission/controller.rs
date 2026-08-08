@@ -221,18 +221,26 @@ impl BackendAdmissionController {
         // A failure here leaves the durable row `queued` with no terminal
         // write; that is intentional — queued rows hold no reconstructed slot
         // and the startup inference-call sweep terminalizes them.
-        if let Err(error) = persist_existing_call_running(node.clone(), &doc_id, &call).await {
-            // Permit before in-flight release, as in `start_permit`.
-            drop(permit);
-            return Err(super::persistence::completion_persistence_error(error));
-        }
+        let running_call = match persist_existing_call_running(node.clone(), &doc_id, &call).await {
+            Ok(running_call) => running_call,
+            Err(error) => {
+                // Permit before in-flight release, as in `start_permit`.
+                drop(permit);
+                return Err(super::persistence::completion_persistence_error(error));
+            }
+        };
         in_flight.disarm();
+        let provenance = super::provenance::RunningInferenceCallProvenance::new(
+            node.clone(),
+            call.clone(),
+            running_call,
+        );
         Ok(AdmissionPermit::new(
             node,
             self,
             permit,
             call,
-            doc_id,
+            provenance,
             cancel_observer,
             terminal_failure_observer,
         ))
@@ -247,8 +255,8 @@ impl BackendAdmissionController {
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        let doc_id = match persist_call_started(node.clone(), &call).await {
-            Ok(doc_id) => doc_id,
+        let running_call = match persist_call_started(node.clone(), &call).await {
+            Ok(running_call) => running_call,
             Err(error) => {
                 // Return the permit before `in_flight` drops and releases:
                 // parameters drop in reverse declaration order, which would
@@ -258,12 +266,17 @@ impl BackendAdmissionController {
             }
         };
         in_flight.disarm();
+        let provenance = super::provenance::RunningInferenceCallProvenance::new(
+            node.clone(),
+            call.clone(),
+            running_call,
+        );
         Ok(AdmissionPermit::new(
             node,
             self,
             permit,
             call,
-            doc_id,
+            provenance,
             cancel_observer,
             terminal_failure_observer,
         ))

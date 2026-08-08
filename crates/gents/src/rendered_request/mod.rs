@@ -73,18 +73,26 @@ pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 pub use transport::RenderedRequestCapturingHttpClient;
 
+#[cfg(test)]
+pub(crate) fn test_static_rendered_request_version() -> crate::SignedDocumentVersionRef {
+    crate::SignedDocumentVersionRef::new(
+        crate::DocumentVersionRef::new("rendered-doc-test", "bafy-rendered-test"),
+        "did:key:test",
+    )
+}
+
 /// Capture format version stamped onto every row. Bump when the *set of
 /// columns* a reader must understand changes.
-pub const CAPTURE_VERSION: u32 = 3;
+pub const CAPTURE_VERSION: u32 = 4;
 
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
 /// `UnsupportedManifest` rather than guessing.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 6;
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 7;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
 /// changes. Versioned independently of the manifest: adding exact config
-/// provenance to manifest v6 did not change the assembly trace.
+/// provenance to later manifest versions did not change the assembly trace.
 pub const ASSEMBLY_TRACE_VERSION: u32 = 2;
 
 /// Prefix on every capture key. Bound to the *key derivation*, not to
@@ -105,7 +113,9 @@ const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
 ];
 
 pub(crate) type RenderedRequestCaptureSink = Arc<
-    dyn Fn(RenderedCompletionRequest) -> Pin<Box<dyn Future<Output = Result<()>> + Send>>
+    dyn Fn(
+            RenderedCompletionRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::SignedDocumentVersionRef>> + Send>>
         + Send
         + Sync,
 >;
@@ -359,7 +369,7 @@ impl AssemblyTrace {
 pub enum ProvenanceStatus {
     /// The rendered request is durable and exact, but not all durable source
     /// versions are pinned alongside it, so a reconstruction cannot yet be
-    /// fully verified. This is the only status version 6 emits.
+    /// fully verified. This is the only status version 7 emits.
     CapturedOnly,
 }
 
@@ -372,7 +382,7 @@ pub enum ProvenanceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureSeam {
     /// The last `HttpClientExt` before the network client. The only seam
-    /// version 6 emits.
+    /// version 7 emits.
     TransportBody,
 }
 
@@ -390,15 +400,31 @@ pub enum ConfigProvenanceScope {
     StaticOrOneShot,
 }
 
+/// Whether a capture is required to be bound to a durable running
+/// `InferenceCall` admission fact.
+///
+/// Production document and one-shot runtime contexts always use
+/// [`Self::AdmittedProviderCall`]. The static variant is deliberately
+/// explicit so transport tests and one-shot builders cannot accidentally
+/// claim that the body was admitted by a durable call record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceCallProvenanceScope {
+    AdmittedProviderCall,
+    #[default]
+    StaticOrTest,
+}
+
 /// Versioned provenance travelling in the `provenance_json` column.
 ///
-/// Version 6 carries the assembly trace, the seam, the observed provider
+/// Version 7 carries the assembly trace, the seam, the observed provider
 /// endpoint, the complete signed source/claim chain admitted at request ingest,
+/// the exact signed running `InferenceCall` that authorized the provider send,
 /// the ordered exact transcript snapshot loaded for request assembly, and,
 /// when the request uses a reconciled document runtime, the exact signed core
 /// configuration versions that produced that resolved behavior generation.
 /// The complete skill-candidate set, MCP availability, the host tool ceiling,
-/// and compaction source versions remain unpinned, so version 6 still reports
+/// and compaction source versions remain unpinned, so version 7 still reports
 /// `captured_only` rather than claiming full reconstruction.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
@@ -432,6 +458,15 @@ pub struct ProvenanceManifest {
     /// manifests only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_provenance: Option<crate::RequestExecutionProvenance>,
+    /// Whether this capture was required to come from the admitted document
+    /// runtime or was intentionally produced by a static/test path.
+    #[serde(default)]
+    pub inference_call_provenance_scope: InferenceCallProvenanceScope,
+    /// Exact signed running `InferenceCall` version consumed at the transport
+    /// seam. Required for `admitted_provider_call`, absent for
+    /// `static_or_test`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_call_provenance: Option<crate::SignedDocumentVersionRef>,
     /// Exact durable finalized transcript snapshot loaded before this request's
     /// capture scope was constructed, in strictly increasing message sequence.
     /// Each entry pins both DefraDB physical identity and the signed composite
@@ -452,36 +487,49 @@ pub struct ProvenanceManifest {
 
 impl ProvenanceManifest {
     const RECONCILED_CORE_CONFIG_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v6 records a reconciled document-runtime capture and pins the signed \
-         source/claim chain, exact loaded transcript snapshot, and exact resolved core config \
+        "provenance manifest v7 records a reconciled document-runtime capture and pins the signed \
+         source/claim chain, exact running inference-call admission, exact loaded transcript snapshot, and exact resolved core config \
          documents, but not the complete skill-candidate set, MCP availability, the host tool \
          ceiling, or compaction source versions, so reconstruction cannot yet be fully verified";
     const STATIC_CORE_CONFIG_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v6 records a static or one-shot config path and pins the signed \
-         source/claim chain, exact loaded transcript snapshot, and supplied exact core config \
+        "provenance manifest v7 records an explicit static/test capture with no durable \
+         inference-call admission and pins any supplied source/claim chain, exact loaded transcript snapshot, and supplied exact core config \
          documents, but not the complete skill-candidate set, MCP availability, the host tool \
          ceiling, or compaction source versions, so reconstruction cannot yet be fully verified";
+    const STATIC_UNPINNED_CONFIG_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v7 records an explicit static/test capture with no durable \
+         inference-call admission and no resolved core config provenance; it does not pin MCP \
+         availability, the complete skill-candidate set, the host tool ceiling, or compaction \
+         source versions, so reconstruction cannot yet be fully verified";
     const UNPINNED_CONFIG_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v6 pins the signed source/claim chain and exact loaded transcript \
+        "provenance manifest v7 pins the signed source/claim chain and exact running inference-call admission and exact loaded transcript \
          snapshot but has no resolved core config provenance and does not pin MCP availability, \
          the complete skill-candidate set, the host tool ceiling, or compaction source versions, \
          so reconstruction cannot yet be fully verified";
     const ONESHOT_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v6 describes a one-shot run with no request document provenance \
-         and does not pin the complete skill-candidate set, MCP availability, the host tool \
+        "provenance manifest v7 describes a one-shot run with no request document provenance \
+         but pins its exact running inference-call admission; it does not pin the complete skill-candidate set, MCP availability, the host tool \
          ceiling, or compaction source versions; resolved core config provenance may also be \
          absent, so reconstruction cannot yet be fully verified";
     const ONESHOT_WITH_CONFIG_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v6 records a static or one-shot config path with no request document \
-         provenance and pins supplied exact core config documents, but not the complete \
+        "provenance manifest v7 records a static or one-shot config path with no request document \
+         provenance, pins its exact running inference-call admission and supplied exact core config documents, but not the complete \
          skill-candidate set, MCP availability, the host tool ceiling, or compaction source \
          versions, so reconstruction cannot yet be fully verified";
 
     fn captured_only_reason(
         request_provenance: Option<&crate::RequestExecutionProvenance>,
+        inference_call_provenance_scope: InferenceCallProvenanceScope,
         config_provenance_scope: ConfigProvenanceScope,
         config_provenance: Option<&crate::ResolvedBehaviorConfigProvenance>,
     ) -> &'static str {
+        if inference_call_provenance_scope == InferenceCallProvenanceScope::StaticOrTest {
+            return if config_provenance.is_some() {
+                Self::STATIC_CORE_CONFIG_CAPTURED_ONLY_REASON
+            } else {
+                Self::STATIC_UNPINNED_CONFIG_CAPTURED_ONLY_REASON
+            };
+        }
         match (
             request_provenance,
             config_provenance_scope,
@@ -572,8 +620,34 @@ impl ProvenanceManifest {
         config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
         assembly_trace: AssemblyTrace,
     ) -> Self {
+        Self::captured_only_with_admission_and_scoped_config_provenance(
+            capture_scope,
+            provider_endpoint,
+            request_provenance,
+            transcript_snapshot,
+            InferenceCallProvenanceScope::StaticOrTest,
+            None,
+            config_provenance_scope,
+            config_provenance,
+            assembly_trace,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn captured_only_with_admission_and_scoped_config_provenance(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        request_provenance: Option<crate::RequestExecutionProvenance>,
+        transcript_snapshot: Vec<crate::MessageFactRef>,
+        inference_call_provenance_scope: InferenceCallProvenanceScope,
+        inference_call_provenance: Option<crate::SignedDocumentVersionRef>,
+        config_provenance_scope: ConfigProvenanceScope,
+        config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
         let status_reason = Self::captured_only_reason(
             request_provenance.as_ref(),
+            inference_call_provenance_scope,
             config_provenance_scope,
             config_provenance.as_ref(),
         );
@@ -586,6 +660,8 @@ impl ProvenanceManifest {
             provider_endpoint,
             request_version: None,
             request_provenance,
+            inference_call_provenance_scope,
+            inference_call_provenance,
             transcript_snapshot,
             config_provenance_scope,
             config_provenance,
@@ -609,6 +685,10 @@ pub struct RenderedRequestContext {
     pub request_doc_id: String,
     #[serde(default)]
     pub request_provenance: Option<crate::RequestExecutionProvenance>,
+    /// Explicitly separates admitted runtime calls from static/unit transport
+    /// construction. Production callers must not select the static scope.
+    #[serde(default)]
+    pub inference_call_provenance_scope: InferenceCallProvenanceScope,
     /// Exact finalized transcript snapshot loaded for every completion loop in
     /// this request-wide capture context.
     #[serde(default)]
@@ -647,6 +727,7 @@ impl RenderedRequestContext {
         Self {
             request_doc_id: request.doc_id.clone(),
             request_provenance: Some(request_provenance),
+            inference_call_provenance_scope: InferenceCallProvenanceScope::AdmittedProviderCall,
             transcript_snapshot,
             config_provenance_scope,
             config_provenance,
@@ -746,6 +827,11 @@ pub struct RenderedCompletionRequest {
     pub request_claim_commit_cid: String,
     /// DID derived only after cryptographic verification of the claim commit.
     pub request_claim_signer_did: String,
+    /// Exact signed running `InferenceCall` snapshot which admitted this send.
+    /// Empty only under an explicit static/test capture scope.
+    pub inference_call_doc_id: String,
+    pub inference_call_composite_commit_cid: String,
+    pub inference_call_signer_did: String,
     pub request_id: String,
     /// Which completion loop inside the request issued this call, e.g.
     /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
@@ -833,8 +919,35 @@ fn validate_config_provenance(
     Ok(())
 }
 
+fn validate_inference_call_provenance(
+    scope: InferenceCallProvenanceScope,
+    provenance: Option<&crate::SignedDocumentVersionRef>,
+) -> Result<()> {
+    match (scope, provenance) {
+        (InferenceCallProvenanceScope::AdmittedProviderCall, Some(provenance)) => {
+            if provenance.version.doc_id.trim().is_empty()
+                || provenance.version.composite_commit_cid.trim().is_empty()
+                || provenance.signer_did.trim().is_empty()
+            {
+                anyhow::bail!(
+                    "admitted provider-call capture has incomplete signed InferenceCall provenance"
+                );
+            }
+            Ok(())
+        }
+        (InferenceCallProvenanceScope::AdmittedProviderCall, None) => anyhow::bail!(
+            "admitted provider-call capture has no signed running InferenceCall provenance"
+        ),
+        (InferenceCallProvenanceScope::StaticOrTest, None) => Ok(()),
+        (InferenceCallProvenanceScope::StaticOrTest, Some(_)) => anyhow::bail!(
+            "static/test rendered-request capture cannot claim InferenceCall provenance"
+        ),
+    }
+}
+
 pub(crate) fn build_rendered_completion_request(
     context: &RenderedRequestContext,
+    inference_call_provenance: Option<crate::SignedDocumentVersionRef>,
     capture_scope: &str,
     source: RenderedRequestSource,
     provider_endpoint: Option<String>,
@@ -878,6 +991,11 @@ pub(crate) fn build_rendered_completion_request(
         &context.agent_did,
     )
     .context("invalid rendered-request resolved config provenance")?;
+    validate_inference_call_provenance(
+        context.inference_call_provenance_scope,
+        inference_call_provenance.as_ref(),
+    )
+    .context("invalid rendered-request inference-call provenance")?;
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
@@ -886,11 +1004,13 @@ pub(crate) fn build_rendered_completion_request(
         turn_index,
         attempt,
     )?;
-    let manifest = ProvenanceManifest::captured_only_with_scoped_config_provenance(
+    let manifest = ProvenanceManifest::captured_only_with_admission_and_scoped_config_provenance(
         capture_scope.to_string(),
         provider_endpoint,
         context.request_provenance.clone(),
         context.transcript_snapshot.clone(),
+        context.inference_call_provenance_scope,
+        inference_call_provenance.clone(),
         context.config_provenance_scope,
         context.config_provenance.clone(),
         assembly_trace.clone(),
@@ -927,6 +1047,18 @@ pub(crate) fn build_rendered_completion_request(
             .request_provenance
             .as_ref()
             .map(|provenance| provenance.claim.signer_did.clone())
+            .unwrap_or_default(),
+        inference_call_doc_id: inference_call_provenance
+            .as_ref()
+            .map(|provenance| provenance.version.doc_id.clone())
+            .unwrap_or_default(),
+        inference_call_composite_commit_cid: inference_call_provenance
+            .as_ref()
+            .map(|provenance| provenance.version.composite_commit_cid.clone())
+            .unwrap_or_default(),
+        inference_call_signer_did: inference_call_provenance
+            .as_ref()
+            .map(|provenance| provenance.signer_did.clone())
             .unwrap_or_default(),
         request_id: context.request_id.clone(),
         capture_scope: capture_scope.to_string(),
@@ -1002,8 +1134,43 @@ impl RenderedCompletionRequest {
             &self.agent_did,
         )
         .context("invalid rendered-request manifest resolved config provenance")?;
+        validate_inference_call_provenance(
+            manifest.inference_call_provenance_scope,
+            manifest.inference_call_provenance.as_ref(),
+        )
+        .context("invalid rendered-request manifest inference-call provenance")?;
+        match manifest.inference_call_provenance.as_ref() {
+            Some(provenance) => {
+                let row_provenance = (
+                    self.inference_call_doc_id.as_str(),
+                    self.inference_call_composite_commit_cid.as_str(),
+                    self.inference_call_signer_did.as_str(),
+                );
+                let manifest_provenance = (
+                    provenance.version.doc_id.as_str(),
+                    provenance.version.composite_commit_cid.as_str(),
+                    provenance.signer_did.as_str(),
+                );
+                if row_provenance != manifest_provenance {
+                    anyhow::bail!(
+                        "rendered-request inference-call columns disagree with the provenance manifest"
+                    );
+                }
+            }
+            None => {
+                if !self.inference_call_doc_id.is_empty()
+                    || !self.inference_call_composite_commit_cid.is_empty()
+                    || !self.inference_call_signer_did.is_empty()
+                {
+                    anyhow::bail!(
+                        "static/test rendered-request capture cannot carry inference-call columns"
+                    );
+                }
+            }
+        }
         let expected_status_reason = ProvenanceManifest::captured_only_reason(
             manifest.request_provenance.as_ref(),
+            manifest.inference_call_provenance_scope,
             manifest.config_provenance_scope,
             manifest.config_provenance.as_ref(),
         );
@@ -1014,14 +1181,14 @@ impl RenderedCompletionRequest {
         }
 
         // Re-encoding with the current serializer rejects unknown or legacy
-        // fields on a newly-created v6 manifest. In particular, v3's
+        // fields on a newly-created v7 manifest. In particular, v3's
         // `request_version` remains deserialize-only and can never leak into a
         // new canonical row.
         let canonical_manifest = canonical_json(
             &serde_json::to_value(&manifest).context("encoding rendered-request manifest")?,
         );
         if canonical_json(&self.provenance_json) != canonical_manifest {
-            anyhow::bail!("new rendered-request provenance manifest is not canonical v6");
+            anyhow::bail!("new rendered-request provenance manifest is not canonical v7");
         }
 
         validate_transcript_snapshot(&manifest.transcript_snapshot)
@@ -1229,6 +1396,13 @@ mod tests {
         }
     }
 
+    fn inference_call_provenance() -> crate::SignedDocumentVersionRef {
+        crate::SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new("inference-call-doc", "bafy-inference-running"),
+            "did:key:test",
+        )
+    }
+
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
@@ -1236,6 +1410,7 @@ mod tests {
                 "doc-1",
                 "did:key:test",
             )),
+            inference_call_provenance_scope: InferenceCallProvenanceScope::StaticOrTest,
             transcript_snapshot: transcript_snapshot(),
             config_provenance_scope: ConfigProvenanceScope::ReconciledDocumentRuntime,
             config_provenance: Some(config_provenance()),
@@ -1273,6 +1448,7 @@ mod tests {
     ) -> RenderedCompletionRequest {
         build_rendered_completion_request(
             &context(),
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             Some("https://api.example.test".to_string()),
@@ -1456,6 +1632,7 @@ mod tests {
         let build_responses = |instructions: &str| {
             build_rendered_completion_request(
                 &context(),
+                None,
                 "inference.1",
                 RenderedRequestSource::OpenAiResponses,
                 Some("https://api.example.test".to_string()),
@@ -1789,6 +1966,14 @@ mod tests {
         assert_eq!(manifest.capture_scope, "inference.1");
         assert_eq!(manifest.request_version, None);
         assert_eq!(
+            manifest.inference_call_provenance_scope,
+            InferenceCallProvenanceScope::StaticOrTest
+        );
+        assert_eq!(manifest.inference_call_provenance, None);
+        assert!(rendered.inference_call_doc_id.is_empty());
+        assert!(rendered.inference_call_composite_commit_cid.is_empty());
+        assert!(rendered.inference_call_signer_did.is_empty());
+        assert_eq!(
             manifest.request_provenance,
             Some(crate::document_version::test_request_execution_provenance(
                 "doc-1",
@@ -1807,7 +1992,7 @@ mod tests {
         assert_eq!(manifest.config_provenance, Some(config_provenance()));
         assert!(manifest
             .status_reason
-            .contains("reconciled document-runtime"));
+            .contains("explicit static/test capture"));
         assert!(manifest.status_reason.contains("MCP availability"));
         assert!(manifest.status_reason.contains("host tool ceiling"));
         assert!(manifest
@@ -1829,10 +2014,10 @@ mod tests {
         );
     }
 
-    /// Version 6 declares `captured_only` positively. An absent field is never
+    /// Version 7 declares `captured_only` positively. An absent field is never
     /// the evidence — a reader must be able to see the claim, not infer it.
     #[test]
-    fn version_six_provenance_never_claims_full_reconstruction() {
+    fn version_seven_provenance_never_claims_full_reconstruction() {
         let rendered = build(0, 0, empty_trace(), components());
 
         assert_eq!(rendered.provenance_json["status"], "captured_only");
@@ -1843,9 +2028,86 @@ mod tests {
         assert!(rendered.provenance_json.get("assembly_trace").is_some());
         assert!(
             rendered.provenance_json.get("request_version").is_none(),
-            "v6 must never emit the legacy single-version field"
+            "v7 must never emit the legacy single-version field"
         );
         assert!(rendered.provenance_json.get("config_provenance").is_some());
+    }
+
+    #[test]
+    fn admitted_capture_requires_and_pins_exact_running_call_provenance() {
+        let mut admitted = context();
+        admitted.inference_call_provenance_scope =
+            InferenceCallProvenanceScope::AdmittedProviderCall;
+        let call = inference_call_provenance();
+        let rendered = build_rendered_completion_request(
+            &admitted,
+            Some(call.clone()),
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect("admitted capture");
+
+        assert_eq!(rendered.inference_call_doc_id, call.version.doc_id);
+        assert_eq!(
+            rendered.inference_call_composite_commit_cid,
+            call.version.composite_commit_cid
+        );
+        assert_eq!(rendered.inference_call_signer_did, call.signer_did);
+        let manifest: ProvenanceManifest =
+            serde_json::from_value(rendered.provenance_json.clone()).expect("manifest");
+        assert_eq!(
+            manifest.inference_call_provenance_scope,
+            InferenceCallProvenanceScope::AdmittedProviderCall
+        );
+        assert_eq!(manifest.inference_call_provenance, Some(call));
+        rendered
+            .validate_new_capture()
+            .expect("canonical admitted capture");
+    }
+
+    #[test]
+    fn admitted_capture_fails_closed_without_running_call_and_rejects_column_drift() {
+        let mut admitted = context();
+        admitted.inference_call_provenance_scope =
+            InferenceCallProvenanceScope::AdmittedProviderCall;
+        let missing = build_rendered_completion_request(
+            &admitted,
+            None,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("admitted capture without a running call must fail");
+        assert!(format!("{missing:#}").contains("no signed running InferenceCall provenance"));
+
+        let mut rendered = build_rendered_completion_request(
+            &admitted,
+            Some(inference_call_provenance()),
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect("admitted capture");
+        rendered.inference_call_composite_commit_cid = "bafy-forged".to_string();
+        let drift = rendered
+            .validate_new_capture()
+            .expect_err("row/manifest inference-call drift must fail");
+        assert!(drift
+            .to_string()
+            .contains("inference-call columns disagree"));
     }
 
     #[test]
@@ -1855,6 +2117,7 @@ mod tests {
 
         let error = build_rendered_completion_request(
             &context,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2021,6 +2284,7 @@ mod tests {
             .logical_id = "other-behavior".to_string();
         let error = build_rendered_completion_request(
             &wrong_behavior,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2055,6 +2319,7 @@ mod tests {
             .swap(0, 1);
         let error = build_rendered_completion_request(
             &context,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2075,6 +2340,7 @@ mod tests {
         missing_at_build.config_provenance = None;
         let error = build_rendered_completion_request(
             &missing_at_build,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2100,12 +2366,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_static_and_oneshot_contexts_may_omit_config_provenance() {
+    fn explicit_static_test_contexts_may_omit_config_provenance() {
         let mut legacy_static = context();
         legacy_static.config_provenance_scope = ConfigProvenanceScope::StaticOrOneShot;
         legacy_static.config_provenance = None;
         let rendered = build_rendered_completion_request(
             &legacy_static,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2126,6 +2393,7 @@ mod tests {
         oneshot.transcript_snapshot.clear();
         let rendered = build_rendered_completion_request(
             &oneshot,
+            None,
             "oneshot.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2134,11 +2402,11 @@ mod tests {
             empty_trace(),
             components(),
         )
-        .expect("one-shot context may omit config provenance");
+        .expect("one-shot-shaped static fixture may omit config provenance");
         assert!(rendered.provenance_json.get("config_provenance").is_none());
         assert!(rendered.provenance_json["status_reason"]
             .as_str()
-            .is_some_and(|reason| reason.contains("one-shot run")));
+            .is_some_and(|reason| reason.contains("explicit static/test capture")));
     }
 
     /// The seam is recorded positively so a reader never has to guess whether
@@ -2157,6 +2425,7 @@ mod tests {
         missing.request_provenance = None;
         let error = build_rendered_completion_request(
             &missing,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2180,6 +2449,7 @@ mod tests {
             .doc_id = "another-doc".to_string();
         let error = build_rendered_completion_request(
             &mismatched,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2205,6 +2475,7 @@ mod tests {
             .clear();
         let error = build_rendered_completion_request(
             &empty_source_cid,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2237,6 +2508,7 @@ mod tests {
             .composite_commit_cid = claim_cid;
         let error = build_rendered_completion_request(
             &reused_cid,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2260,6 +2532,7 @@ mod tests {
             .signer_did = "did:key:another-agent".to_string();
         let error = build_rendered_completion_request(
             &wrong_claim_signer,
+            None,
             "inference.1",
             RenderedRequestSource::OpenAiChatCompletions,
             None,
@@ -2291,8 +2564,8 @@ mod tests {
         });
         let error = legacy_field
             .validate_new_capture()
-            .expect_err("a new v6 manifest cannot carry request_version");
-        assert!(error.to_string().contains("not canonical v6"));
+            .expect_err("a new v7 manifest cannot carry request_version");
+        assert!(error.to_string().contains("not canonical v7"));
     }
 
     fn agent_request() -> crate::watcher::AgentRequest {

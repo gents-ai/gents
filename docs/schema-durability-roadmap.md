@@ -65,6 +65,18 @@ Two post-ingest checkpoints are now layered onto that foundation:
   effective skill versions used to build the active slot. A CID-only change
   rotates the runtime generation, and the same bundle is captured before send.
 
+The next checkpoint implements the provider-attempt edge from #1075. A normal
+or one-off provider call creates a signed running `InferenceCall` version V1.
+The immutable `RenderedRequest` pins V1 by `_docID`, composite CID, and verified
+signer DID; before the transport may send, an exact conditional mutation
+creates `InferenceCall` V2 that pins that rendered document/version in return.
+The terminal V3 preserves that binding, with the V2-to-V3 transition carried by
+DefraDB's composite-version DAG instead of another application hash. Capture
+failure blocks the send, network failure retains the render and terminalizes
+the call as failed, and queue rejection or cancellation before admission has no
+render. A persisted V2 proves send authorization, not network transmission or
+provider receipt; crash recovery must not upgrade it into such a claim.
+
 This is bounded direct evidence, not the immutable published
 `ResolvedAgentGeneration` described in Slice 6. The manifest remains
 `CapturedOnly`: it does not yet prove completeness of the skill candidate set,
@@ -199,7 +211,7 @@ idempotency, pair closure, multi-writer sequence conflict, fork lineage, and
 spill failure. Then replace message/compaction fact upserts with create-and-
 compare, declare order scope, and make the full output edge explicit.
 
-### Slice 4: exact provider-attempt edge
+### Slice 4: exact provider-attempt edge (active in #1075)
 
 **Guarantee:** every provider send is associated with one running
 `InferenceCall` version and one immutable `RenderedRequest`, and queue-only
@@ -209,6 +221,13 @@ Compose the `InferenceCall` and `RenderedCapture` models. Persist request,
 attempt, render, backend, and profile `DocumentVersionRef`s; make terminal call
 state write-once; and extend #1066's central reader/timeline path. A logical
 call id, ordinal, timestamp, or fingerprint is not the relationship.
+
+The implemented checkpoint covers the bidirectional, signer-verified
+`InferenceCall V1 -> RenderedRequest -> InferenceCall V2 -> terminal V3`
+provider-send fence, including explicit one-off calls. The central reader and
+timeline integration remain #1066 follow-up work. Until a later transport
+receipt fact exists, projections must distinguish `rendered/send-authorized`
+from `sent`, `received`, or `processed`.
 
 ### Slice 5: request intent and execution authority
 

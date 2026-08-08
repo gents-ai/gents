@@ -106,6 +106,19 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
         Some(agent.agent_did.as_str()),
         "the claim signer column must carry the target agent's verified DID"
     );
+    let inference_call_doc_id = row["inference_call_doc_id"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .expect("production capture must pin its running InferenceCall _docID");
+    let inference_call_cid = row["inference_call_composite_commit_cid"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .expect("production capture must pin its running InferenceCall CID");
+    assert_eq!(
+        row["inference_call_signer_did"].as_str(),
+        Some(agent.agent_did.as_str()),
+        "running InferenceCall signer must be cryptographically attributed to the agent"
+    );
     assert_eq!(row["turn_index"], 0);
     assert_eq!(row["attempt"], 0);
     assert_eq!(row["source"], "openai_chat_completions");
@@ -128,10 +141,13 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["capture_seam"], "transport_body");
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
-    assert_eq!(provenance["manifest_version"], 5);
+    assert_eq!(
+        provenance["manifest_version"],
+        gents::rendered_request::PROVENANCE_MANIFEST_VERSION
+    );
     assert!(
         provenance.get("request_version").is_none(),
-        "a v5 manifest must not emit the legacy request_version field: {provenance}"
+        "a current manifest must not emit the legacy request_version field: {provenance}"
     );
     assert_eq!(
         provenance["request_provenance"]["source"]["version"]["doc_id"],
@@ -140,6 +156,18 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(
         provenance["request_provenance"]["claim"]["version"]["doc_id"],
         doc_id
+    );
+    assert_eq!(
+        provenance["inference_call_provenance_scope"],
+        "admitted_provider_call"
+    );
+    assert_eq!(
+        provenance["inference_call_provenance"]["version"]["doc_id"],
+        inference_call_doc_id
+    );
+    assert_eq!(
+        provenance["inference_call_provenance"]["version"]["composite_commit_cid"],
+        inference_call_cid
     );
     assert_eq!(
         provenance["request_provenance"]["source"]["version"]["composite_commit_cid"],
@@ -320,7 +348,8 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let sink = gents::rendered_request::DefraRenderedRequestSink::new(
         db.node.clone(),
         "did:key:z6MkCaptureIdempotency",
-    );
+    )
+    .expect("signed rendered-request sink");
 
     let first = rendered_fixture(serde_json::json!({"model": "m", "messages": [{"role": "user"}]}));
     sink.capture(first.clone()).await.expect("first capture");
@@ -464,7 +493,8 @@ async fn capture_rejects_forged_persisted_execution_provenance_without_writing()
     .expect("forged manifest");
 
     let sink =
-        gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone(), &agent.agent_did);
+        gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone(), &agent.agent_did)
+            .expect("signed rendered-request sink");
     let mut signer_forged = forged.clone();
     signer_forged.request_source_signer_did = "did:key:z6MkForgedSourceSigner".to_string();
     signer_forged.provenance_json["request_provenance"]["source"]["signer_did"] =
@@ -1403,6 +1433,9 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         request_source_signer_did: String::new(),
         request_claim_commit_cid: String::new(),
         request_claim_signer_did: String::new(),
+        inference_call_doc_id: String::new(),
+        inference_call_composite_commit_cid: String::new(),
+        inference_call_signer_did: String::new(),
         request_id,
         capture_scope: capture_scope.clone(),
         turn_index: 0,
@@ -1469,6 +1502,9 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 request_source_signer_did
                 request_claim_commit_cid
                 request_claim_signer_did
+                inference_call_doc_id
+                inference_call_composite_commit_cid
+                inference_call_signer_did
                 request_id
                 session_id
                 agent_did

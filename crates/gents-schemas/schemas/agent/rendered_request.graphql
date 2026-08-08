@@ -51,6 +51,13 @@ type RenderedRequest @branchable {
     # exactly request_source_commit_cid as its sole composite parent.
     request_claim_commit_cid: String @immutable
     request_claim_signer_did: String @index @immutable
+    # Exact signed running InferenceCall snapshot whose admission permit
+    # authorized this provider send. These are empty only for explicit test or
+    # static fixtures; every production send, including one-shot, fails closed
+    # before the transport when this evidence is unavailable.
+    inference_call_doc_id: String @index @immutable
+    inference_call_composite_commit_cid: String @immutable
+    inference_call_signer_did: String @index @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable

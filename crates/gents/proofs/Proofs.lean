@@ -13,6 +13,7 @@ import Proofs.Transcript
 import Proofs.Compaction
 import Proofs.PromptAssembly
 import Proofs.RenderedCapture
+import Proofs.InferenceRenderedCapture
 import Proofs.RequestIngest
 import Proofs.SubagentBridgeAdmission
 import Proofs.RuntimeReconcile

@@ -1244,7 +1244,9 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     ));
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
 
-    let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
+    let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| {
+        Box::pin(async { Ok(crate::rendered_request::test_static_rendered_request_version()) })
+    });
     let scope = test_scope(
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
@@ -1252,6 +1254,8 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
                 "doc-1",
                 "did:key:agent",
             )),
+            inference_call_provenance_scope:
+                crate::rendered_request::InferenceCallProvenanceScope::StaticOrTest,
             transcript_snapshot: Vec::new(),
             config_provenance_scope:
                 crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,

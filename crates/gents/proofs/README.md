@@ -163,6 +163,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, exact-document persistence fencing (#1076), slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
+| `Proofs/InferenceRenderedCapture.lean` | Composition fence for inference-call and rendered-request provenance (#1075): exact running call V1 → immutable render R → reverse-bound pre-send call V2 → one HTTP send → terminal call V3 preserving R; capture failure and crash-before-send cannot claim a send. Generated cases include fresh/idempotent capture, conflict rejection, recovery, network failure, and the one-shot path. |
 | `Proofs/Transcript.lean` | Barrel for transcript ordering/pairing plus split mutable-draft and immutable finalized-fact semantics (#1073) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
@@ -208,6 +209,7 @@ Semantic submodules:
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `ExactTarget`, `SlotAccounting`, `ControllerBookkeeping` |
+| `Proofs.InferenceRenderedCapture` | `State`, `Transition`, `Properties` |
 | `Proofs.Transcript` | `State`, `Transition`, `Properties`, `Dedupe`, `Executable`, `Finalization` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |

@@ -495,6 +495,34 @@ match the decisions above at creation time.
 
 ## Prioritized child-issue candidates
 
+### Active checkpoint: #1075 exact provider-attempt edge
+
+The first Track B implementation checkpoint uses a bidirectional exact-version
+contract instead of the logical/ordinal joins described in the original
+inventory:
+
+```text
+signed running InferenceCall V1
+    -> immutable RenderedRequest pins V1
+    -> conditional InferenceCall V2 pins that RenderedRequest
+    -> one HTTP send attempt
+    -> terminal InferenceCall V3 preserves the binding
+```
+
+Each edge carries `_docID`, composite CID, and the verified commit signer DID.
+All reads and writes on this path attach the node actor identity; signature
+verification, rather than the query actor alone, supplies authorship evidence.
+The binding write null-CASes all render fields and a zero-row result is accepted
+only when exact reload observes the identical V2, so a concurrent different
+render cannot be overwritten or mistaken for idempotency. One-off calls create
+the same running call fact explicitly rather than bypassing provenance.
+
+This checkpoint proves durable render and send authorization. It does not prove
+that bytes reached the network, that the provider received or processed them,
+or that a response belongs to the attempt; those require later transport and
+response facts. `AgentResponseLive`/`AgentResponseOutcome` remains the next
+broader Track B redesign, including subscription and crash-cut semantics.
+
 1. **P0 — Formalize the response fact split and exact materialization edge.**
    Define live/outcome/message states in Lean; prove crash-cut convergence and
    terminal immutability; generate conformance cases.

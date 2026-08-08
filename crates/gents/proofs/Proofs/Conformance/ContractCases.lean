@@ -1,6 +1,7 @@
 import Proofs.Conformance.ContractCases.Runtime
 import Proofs.Conformance.ContractCases.SlotAccounting
 import Proofs.Conformance.ContractCases.InferenceCallExactTarget
+import Proofs.Conformance.ContractCases.InferenceRenderedCapture
 import Proofs.Conformance.ContractCases.SessionRecovery
 import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.ContractCases.LifecycleTransitions

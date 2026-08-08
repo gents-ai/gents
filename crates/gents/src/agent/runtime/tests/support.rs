@@ -512,7 +512,10 @@ pub(super) async fn wait_for_inference_call_state(
     loop {
         let query = format!(
             r#"{{
-                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                InferenceCall(filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    call_kind: {{ _eq: "inference" }}
+                }}, limit: 1) {{
                     call_state
                     failure_reason
                 }}
@@ -541,7 +544,7 @@ pub(super) async fn wait_for_inference_call_state(
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for InferenceCall request_id={} to reach call_state={}, last row={:?}",
+            "timed out waiting for inference-kind InferenceCall request_id={} to reach call_state={}, last row={:?}",
             request_id,
             expected_state,
             row
