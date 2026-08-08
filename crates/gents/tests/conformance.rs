@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
@@ -21,9 +22,9 @@ use gents::tool_call_lifecycle::{
 };
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
-    write_manual_agent_request, AgentBehaviorDocument, BackgroundToolRegistry, DefraSessionHook,
-    DefraStreamWriter, DefraWatcher, FailurePolicy, InferenceCall, RequestLifecycle,
-    ToolSelectionDocument, Watcher,
+    write_manual_agent_request, AgentBehaviorDocument, AgentIdentity, BackgroundToolRegistry,
+    DefraSessionHook, DefraStreamWriter, DefraWatcher, FailurePolicy, InferenceCall,
+    RequestLifecycle, ToolSelectionDocument, Watcher,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -81,9 +82,20 @@ use support::{
     build_request, conversation_status_by_doc_id, create_agent_session, create_conversation_row,
     create_request, create_response_with_content_and_status, create_response_with_status,
     first_optional_row, first_row, set_interrupt_requested_at, set_request_lifecycle_state,
-    set_valid_until, test_db, test_db_with_duplicate_tolerant_conversations, upsert_conversation,
-    AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    set_valid_until, test_db, test_db_with_duplicate_tolerant_conversations, test_db_with_identity,
+    upsert_conversation, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
+
+async fn signed_materializer_test_db(name: &str) -> support::TestDb {
+    let identity: Arc<dyn AgentIdentity> = Arc::new(support::fixtures::test_identity(name));
+    test_db_with_identity(name, identity).await
+}
+
+fn signed_materializer_agent_did(db: &support::TestDb) -> &str {
+    db.node
+        .node_identity_did()
+        .expect("signed materializer fixture must configure a node identity")
+}
 
 #[path = "conformance/backend_health.rs"]
 mod backend_health;
@@ -488,6 +500,11 @@ fn event_delivery_source_instances_match_runtime() {
 #[tokio::test]
 async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn event_delivery_sources_reopen_closed_subscriptions() {
+    event_delivery::event_delivery_sources_reopen_closed_subscriptions().await;
 }
 
 #[path = "conformance/apply_reconcile.rs"]

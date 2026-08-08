@@ -12,7 +12,9 @@ use gents::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::support::{first_optional_row, test_db, TestDb};
+use std::sync::Arc;
+
+use crate::support::{first_optional_row, test_db_with_identity, TestDb};
 
 use super::scenario::{Action, NodeId, Scenario};
 
@@ -86,13 +88,17 @@ impl RequestObservation {
 
 impl Harness {
     pub async fn start_two_nodes() -> Result<Self> {
+        let a_identity: Arc<dyn gents::AgentIdentity> =
+            Arc::new(crate::support::fixtures::test_identity("r5-conformance-a"));
+        let b_identity: Arc<dyn gents::AgentIdentity> =
+            Arc::new(crate::support::fixtures::test_identity("r5-conformance-b"));
         let a = HarnessNode {
             id: "A".to_string(),
-            db: test_db("r5-conformance-a").await,
+            db: test_db_with_identity("r5-conformance-a", a_identity).await,
         };
         let b = HarnessNode {
             id: "B".to_string(),
-            db: test_db("r5-conformance-b").await,
+            db: test_db_with_identity("r5-conformance-b", b_identity).await,
         };
         let mut harness = Self {
             a,

@@ -22,6 +22,10 @@ structure RequestIngestCase where
   sourceSignerDid : Nat
   expectedSourceSignerDid : Nat
   sourceSignatureValid : Bool
+  sourceClaimable : Bool
+  logicalMatchCount : Nat
+  sourceDocId : Nat
+  observedDocId : Nat
   sourceHeadCount : Nat
   observedSourceCid : Nat
   sourceCid : Nat
@@ -57,6 +61,10 @@ private def requestIngestCase
   , sourceSignerDid := source.sourceSignerDid
   , expectedSourceSignerDid := source.expectedSigner
   , sourceSignatureValid := source.sourceSignatureValid
+  , sourceClaimable := source.sourceClaimable
+  , logicalMatchCount := source.logicalMatchCount
+  , sourceDocId := source.sourceDocId
+  , observedDocId := source.observedDocId
   , sourceHeadCount := source.sourceHeadCount
   , observedSourceCid := source.observedSourceCid
   , sourceCid := source.sourceCid
@@ -76,6 +84,10 @@ private def externalSource : SourceEvidence :=
   , targetAgentDid := 11
   , sourceSignerDid := 7
   , sourceSignatureValid := true
+  , sourceClaimable := true
+  , logicalMatchCount := 1
+  , sourceDocId := 41
+  , observedDocId := 41
   , sourceHeadCount := 1
   , observedSourceCid := 101
   , sourceCid := 101
@@ -97,6 +109,12 @@ def requestIngestCases : List RequestIngestCase :=
       { externalSource with sourceSignatureValid := false } 11 true 101 303
   , requestIngestCase "unexpected_source_signer"
       { externalSource with sourceSignerDid := 19 } 11 true 101 303
+  , requestIngestCase "replayed_or_restarted_claim"
+      { externalSource with sourceClaimable := false } 11 true 101 303
+  , requestIngestCase "duplicate_logical_request_documents"
+      { externalSource with logicalMatchCount := 2 } 11 true 101 303
+  , requestIngestCase "selected_request_document_mismatch"
+      { externalSource with observedDocId := 42 } 11 true 101 303
   , requestIngestCase "missing_source_head"
       { externalSource with sourceHeadCount := 0 } 11 true 101 303
   , requestIngestCase "ambiguous_source_heads"
@@ -121,6 +139,9 @@ theorem requestIngestCases_pinned :
       [ ("valid_external_request", 7, true, "admitted")
       , ("invalid_source_signature", 7, false, "sourceRejected")
       , ("unexpected_source_signer", 7, false, "sourceRejected")
+      , ("replayed_or_restarted_claim", 7, false, "sourceRejected")
+      , ("duplicate_logical_request_documents", 7, false, "sourceRejected")
+      , ("selected_request_document_mismatch", 7, false, "sourceRejected")
       , ("missing_source_head", 7, false, "sourceRejected")
       , ("ambiguous_source_heads", 7, false, "sourceRejected")
       , ("source_cid_does_not_match_selected_head", 7, false, "sourceRejected")

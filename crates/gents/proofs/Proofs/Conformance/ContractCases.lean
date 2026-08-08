@@ -16,3 +16,4 @@ import Proofs.Conformance.ContractCases.ManagedExec
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Conformance.ContractCases.RenderedCapture
 import Proofs.Conformance.ContractCases.RequestIngest
+import Proofs.Conformance.ContractCases.SubagentBridgeAdmission

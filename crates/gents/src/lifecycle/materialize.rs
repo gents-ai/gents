@@ -90,6 +90,10 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 
     let escaped_request_id = escape_graphql_string(&request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let source_author_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("pending AgentRequest creation requires a configured node signing identity")
+    })?;
+    let escaped_source_author_did = escape_graphql_string(source_author_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(&session_id);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
@@ -121,6 +125,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                source_author_did: "{escaped_source_author_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
@@ -241,6 +246,7 @@ impl RequestLifecycle {
             failure_reason: None,
             request,
             request_version: None,
+            execution_provenance: None,
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
@@ -263,140 +269,43 @@ impl RequestLifecycle {
     ) -> Result<Self> {
         let backend_id = backend_id.into();
         let behavior_id = agent_name.to_string();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let session_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now();
-        let created_at = now.to_rfc3339();
-        let claimed_at = created_at.clone();
-        let deadline_at = now + chrono::Duration::seconds(deadline_duration_secs as i64);
-        let deadline = deadline_at.to_rfc3339();
-
-        session::create_session_with_behavior_id(
+        let enqueued = write_pending_agent_request_with_lineage_and_conversation_title(
             node.as_ref(),
-            &session_id,
-            agent_name,
             agent_did,
             &behavior_id,
-        )
-        .await?;
-
-        let escaped_request_id = escape_graphql_string(&request_id);
-        let escaped_agent_did = escape_graphql_string(agent_did);
-        let escaped_behavior_id = escape_graphql_string(&behavior_id);
-        let escaped_session_id = escape_graphql_string(&session_id);
-        let escaped_content = escape_graphql_string(content);
-        let escaped_backend_id = escape_graphql_string(&backend_id);
-        let escaped_retry_root_request = graphql_retry_root_request(None, &request_id);
-        let escaped_created_at = escape_graphql_string(&created_at);
-        let escaped_claimed_at = escape_graphql_string(&claimed_at);
-        let escaped_deadline = escape_graphql_string(&deadline);
-        let execution_origin_str = execution_origin.as_str();
-        let lineage_fields = trigger_lineage_graphql_fields(&trigger_lineage);
-
-        let mutation = format!(
-            r#"mutation {{
-                add_AgentRequest(input: {{
-                    request_id: "{escaped_request_id}",
-                    agent_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
-                    session_id: "{escaped_session_id}",
-                    retry_parent_request: "",
-                    retry_root_request: "{escaped_retry_root_request}",
-                    superseded_by_request: "",
-                    content: "{escaped_content}",
-                    status: "processing",
-                    lifecycle_state: "{lifecycle_state}",
-                    backend_id: "{escaped_backend_id}",
-                    execution_origin: "{execution_origin_str}",{lineage_fields}
-                    failure_reason: "",
-                    created_at: "{escaped_created_at}",
-                    claimed_at: "{escaped_claimed_at}",
-                    deadline: "{escaped_deadline}",
-                    retry_count: 0,
-                    max_retries: {max_retries}
-                }}) {{ _docID }}
-            }}"#,
-            lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
-            max_retries = DEFAULT_REQUEST_MAX_RETRIES,
-        );
-
-        let resp = node.execute(&mutation).await;
-        if resp.has_errors() {
-            anyhow::bail!("creating claimed AgentRequest failed: {:?}", resp.errors);
-        }
-
-        let doc_id = resolve_created_agent_request_doc_id(
-            node.as_ref(),
-            &resp,
-            "add_AgentRequest",
-            &escaped_request_id,
-            "querying created AgentRequest doc id failed",
-            "add_AgentRequest returned no _docID",
-        )
-        .await?;
-        let escaped_doc_id = escape_graphql_string(&doc_id);
-
-        let lineage_mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{
-                        retry_parent_request: "",
-                        retry_root_request: "{escaped_retry_root_request}",
-                        superseded_by_request: ""
-                    }}
-                ) {{ _docID }}
-            }}"#,
-        );
-        let lineage_resp = node.execute(&lineage_mutation).await;
-        if lineage_resp.has_errors() {
-            anyhow::bail!(
-                "persisting request lineage for materialized AgentRequest failed: {:?}",
-                lineage_resp.errors
-            );
-        }
-
-        let (request_version, request) = super::claim::resolve_claimed_request_version(
-            node.as_ref(),
-            &doc_id,
-            &claimed_at,
-            &deadline,
-            &behavior_id,
-            &backend_id,
-            execution_origin_str,
-            &std::collections::HashSet::new(),
-        )
-        .await?;
-
-        session::upsert_conversation_from_request_with_identity(
-            node.as_ref(),
-            &session_id,
-            agent_name,
-            agent_did,
-            &behavior_id,
-            &request_id,
             content,
-            "processing",
+            execution_origin,
+            trigger_lineage,
+            None,
         )
         .await?;
-
-        Ok(Self {
+        let request = crate::watcher::DefraWatcher::new(Arc::clone(&node), agent_did)
+            .try_fetch_request(&enqueued.doc_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "new pending AgentRequest {} was not claimable",
+                    enqueued.request_id
+                )
+            })?;
+        let mut lifecycle = Self::new_with_execution_binding(
             node,
-            agent_name: agent_name.to_string(),
-            agent_did: agent_did.to_string(),
-            behavior_id,
+            agent_name,
+            agent_did,
+            request,
+            deadline_duration_secs,
             execution_origin,
             backend_id,
-            failure_reason: None,
-            request,
-            request_version: Some(request_version),
-            response_doc_id: None,
-            progress_seq: 0,
-            deadline_duration_secs,
-            claimed_deadline_at: Some(deadline_at),
-            state: LocalLifecycleState::Claimed,
-            valid_until_at_claim: None,
-        })
+        );
+        match lifecycle.claim_with_identity().await? {
+            ClaimOutcome::Claimed => {}
+            outcome => anyhow::bail!(
+                "new pending AgentRequest {} was not claimed: {outcome:?}",
+                enqueued.request_id
+            ),
+        }
+        lifecycle.prepare_session_with_identity().await?;
+        Ok(lifecycle)
     }
 
     pub fn request(&self) -> &AgentRequest {
@@ -417,6 +326,7 @@ impl RequestLifecycle {
 
     pub async fn prepare_session_with_identity(&self) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Claimed], "prepare_session")?;
+        self.require_execution_provenance("prepare the execution session")?;
         session::ensure_session_with_behavior_id_and_requester_did(
             &self.node,
             &self.request.session_id,

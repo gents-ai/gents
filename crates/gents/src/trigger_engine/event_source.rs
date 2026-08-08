@@ -30,6 +30,7 @@ use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDelivery
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::UpdateSubscriptionSource;
 
+use super::subscription_source::UPDATE_SUBSCRIPTION_REOPEN_DELAY;
 use super::{FireIntent, TriggerKind, TriggerSource};
 
 /// Cap for the one-shot existing-docs seed query run when a collection is
@@ -786,6 +787,7 @@ impl TriggerSource for EventSource {
                 // above, so we can take a &mut borrow for the recv poll.
                 let mut message = None;
                 let mut dropped = 0;
+                let mut subscription_closed = false;
                 let rescan_due = {
                     let subscription = self
                         .subscription
@@ -794,13 +796,13 @@ impl TriggerSource for EventSource {
                     let rescan_due = tokio::select! {
                         biased;
                         _ = self.cancel.cancelled() => return None,
+                        _ = self.rescan_tick.tick() => true,
                         res = self.snapshot_rx.changed() => {
                             if res.is_err() {
                                 return None;
                             }
                             continue;
                         }
-                        _ = self.rescan_tick.tick() => true,
                         msg = subscription.recv() => {
                             match msg {
                                 Some(m) => {
@@ -808,11 +810,8 @@ impl TriggerSource for EventSource {
                                     false
                                 }
                                 None => {
-                                    tracing::warn!(
-                                        "event source subscription channel closed; \
-                                         source exiting",
-                                    );
-                                    return None;
+                                    subscription_closed = true;
+                                    false
                                 }
                             }
                         }
@@ -822,6 +821,28 @@ impl TriggerSource for EventSource {
                     }
                     rescan_due
                 };
+                if subscription_closed {
+                    self.subscription = None;
+                    tracing::warn!(
+                        "event source subscription channel closed; reopening after durable rescan",
+                    );
+                    if let Some(intent) = self.rescan_created_docs().await {
+                        return Some(intent);
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return None,
+                        _ = tokio::time::sleep(UPDATE_SUBSCRIPTION_REOPEN_DELAY) => {}
+                    }
+                    if !self.desired_collections.is_empty() {
+                        self.subscription = Some(self.subscription_source.subscribe_updates());
+                        tracing::info!(
+                            collections = self.desired_collections.len(),
+                            "event source reopened global Update subscription",
+                        );
+                    }
+                    continue;
+                }
                 if rescan_due {
                     if let Some(intent) = self.rescan_created_docs().await {
                         return Some(intent);

@@ -18,7 +18,7 @@ use cooldown::{
     mark_processed, prune_processed_requests, request_is_cooling_down,
     take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL, PROCESSED_REQUEST_COOLDOWN,
 };
-pub(crate) use query::load_agent_request_at_cid;
+pub(crate) use query::{load_agent_request_at_cid, load_agent_request_at_cid_in_txn};
 
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
@@ -92,6 +92,7 @@ pub trait Watcher: Send + Sync {
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
     agent_did: String,
+    subscription_source: Arc<dyn UpdateSubscriptionSource>,
     subscription: events::Subscription,
     processed_request_ids: HashMap<String, Instant>,
 }
@@ -110,6 +111,7 @@ impl DefraWatcher {
         Self {
             node,
             agent_did: agent_did.to_string(),
+            subscription_source: subs,
             subscription,
             processed_request_ids: HashMap::new(),
         }
@@ -161,15 +163,26 @@ impl Watcher for DefraWatcher {
                 Err(e) => return Some(Err(e)),
             }
 
-            let msg =
-                match tokio::time::timeout(GOSSIP_FALLBACK_POLL, self.subscription.recv()).await {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => return None,
-                    Err(_timeout) => {
-                        tracing::trace!("gossip quiet, polling for pending requests");
-                        continue;
-                    }
-                };
+            let msg = match tokio::time::timeout(GOSSIP_FALLBACK_POLL, self.subscription.recv())
+                .await
+            {
+                Ok(Some(msg)) => msg,
+                Ok(None) => {
+                    tracing::warn!(
+                        "request watcher subscription channel closed; reopening after durable poll"
+                    );
+                    tokio::time::sleep(
+                            crate::trigger_engine::subscription_source::UPDATE_SUBSCRIPTION_REOPEN_DELAY,
+                        )
+                        .await;
+                    self.subscription = self.subscription_source.subscribe_updates();
+                    continue;
+                }
+                Err(_timeout) => {
+                    tracing::trace!("gossip quiet, polling for pending requests");
+                    continue;
+                }
+            };
 
             let Some(update) = request_update_wakeup(&msg) else {
                 continue;

@@ -148,7 +148,9 @@ pub use document_config::{
     AgentBehavior as AgentBehaviorDocument, InferenceProfile, PrincipalBootstrap, SubagentTarget,
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
-pub use document_version::DocumentVersionRef;
+pub use document_version::{
+    DocumentVersionRef, RequestExecutionProvenance, SignedDocumentVersionRef,
+};
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
     ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,

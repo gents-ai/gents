@@ -164,6 +164,10 @@ pub(crate) async fn apply_control_update(
         if schedule.schedule_id.trim().is_empty() {
             return Ok(ControlUpdateOutcome::Irrelevant);
         }
+        let configuration_changed = view
+            .schedules
+            .get(&schedule.schedule_id)
+            .is_none_or(|record| !same_schedule_configuration(&record.value, &schedule));
         view.remove_schedule_by_doc_id(doc_id);
         view.schedules.insert(
             schedule.schedule_id.clone(),
@@ -172,7 +176,14 @@ pub(crate) async fn apply_control_update(
                 value: schedule,
             },
         );
-        return Ok(ControlUpdateOutcome::Applied);
+        return Ok(if configuration_changed {
+            ControlUpdateOutcome::Applied
+        } else {
+            // ScheduleSource persists bookkeeping on the same document after
+            // every fire attempt. Keep the cached document current, but do
+            // not restart the configuration debounce for runtime-only fields.
+            ControlUpdateOutcome::Irrelevant
+        });
     }
     if view.has_schedule_doc_id(doc_id) {
         view.remove_schedule_by_doc_id(doc_id);
@@ -224,4 +235,18 @@ pub(crate) async fn apply_control_update(
     }
 
     Ok(ControlUpdateOutcome::Irrelevant)
+}
+
+fn same_schedule_configuration(
+    previous: &crate::document_config::Schedule,
+    current: &crate::document_config::Schedule,
+) -> bool {
+    previous.schedule_id == current.schedule_id
+        && previous.task_id == current.task_id
+        && previous.interval_secs == current.interval_secs
+        && previous.cron == current.cron
+        && previous.timezone == current.timezone
+        && previous.missed_run_policy == current.missed_run_policy
+        && previous.enabled == current.enabled
+        && previous.concurrency == current.concurrency
 }

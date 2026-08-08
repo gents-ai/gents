@@ -477,7 +477,10 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
     let context = RenderedRequestContext {
         request_doc_id: "doc-1".to_string(),
-        request_version: Some(crate::DocumentVersionRef::new("doc-1", "bafy-claim-1")),
+        request_provenance: Some(crate::document_version::test_request_execution_provenance(
+            "doc-1",
+            "did:key:agent",
+        )),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

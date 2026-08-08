@@ -86,10 +86,25 @@ mod tests {
     use serde_json::Value;
 
     use super::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
+    use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_schemas;
 
     async fn test_node() -> Arc<EmbeddedNode> {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let identity = KeyIdentity::load_or_create(
+            std::env::temp_dir().join(format!(
+                "manual-lifecycle-node-{}.key",
+                uuid::Uuid::new_v4()
+            )),
+            None,
+        )
+        .unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_schemas(node.as_ref()).await.unwrap();
         node
     }

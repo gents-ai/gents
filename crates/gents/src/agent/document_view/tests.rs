@@ -956,6 +956,84 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
 }
 
 #[tokio::test]
+async fn apply_control_update_ignores_schedule_runtime_only_writebacks() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-schedule-runtime-writeback"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-document-view-schedule-writeback",
+        "http://127.0.0.1:8130/v1",
+    )
+    .await;
+    create_schedule(node.as_ref(), "schedule-writeback", "task-writeback").await;
+
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view should load");
+    let doc_id = view
+        .schedules
+        .get("schedule-writeback")
+        .expect("schedule-writeback present")
+        .doc_id
+        .clone();
+
+    crate::document_config::update_schedule_runtime_fields(
+        node.as_ref(),
+        "schedule-writeback",
+        crate::document_config::ScheduleRuntimeUpdate {
+            next_run_at: Some("2030-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let runtime_only = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "schedule",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(runtime_only, ControlUpdateOutcome::Irrelevant);
+    assert_eq!(
+        view.schedules["schedule-writeback"]
+            .value
+            .next_run_at
+            .as_deref(),
+        Some("2030-01-01T00:00:00Z"),
+        "runtime-only writes should still refresh the cached document"
+    );
+
+    let mutation = r#"mutation {
+        update_Schedule(
+            filter: { schedule_id: { _eq: "schedule-writeback" } },
+            input: { enabled: false }
+        ) { _docID }
+    }"#;
+    let response = node.execute(mutation).await;
+    assert!(
+        !response.has_errors(),
+        "disable Schedule failed: {:?}",
+        response.errors
+    );
+    let configuration_update = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "schedule",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .unwrap();
+    assert_eq!(configuration_update, ControlUpdateOutcome::Applied);
+    assert!(!view.schedules["schedule-writeback"].value.enabled);
+}
+
+#[tokio::test]
 async fn load_document_runtime_view_populates_event_triggers() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

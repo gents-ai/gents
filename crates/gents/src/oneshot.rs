@@ -272,7 +272,7 @@ where
     let capture_scope = crate::rendered_request::scope::scope_from_factory(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: String::new(),
-            request_version: None,
+            request_provenance: None,
             request_id,
             agent_did: behavior.agent_did().to_string(),
             requester_did: String::new(),

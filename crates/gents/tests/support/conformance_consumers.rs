@@ -659,6 +659,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_request_ingest_cases_fence_provenance_invariants",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::subagent_source::generated_bridge_admission_cases_require_signed_exact_parent_evidence",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/subagent_source.rs",
+            module_path: "conformance::subagent_source",
+            function: "generated_bridge_admission_cases_require_signed_exact_parent_evidence",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests.rs",

@@ -27,6 +27,7 @@ use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTa
 use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
 
+use super::subscription_source::UPDATE_SUBSCRIPTION_REOPEN_DELAY;
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
@@ -740,32 +741,50 @@ impl TriggerSource for GoalSource {
         Box::pin(async move {
             self.ensure_subscription();
             loop {
-                let subscription = self
-                    .subscription
-                    .as_mut()
-                    .expect("goal source subscription opened before polling");
-                tokio::select! {
-                    biased;
-                    _ = self.cancel.cancelled() => return None,
-                    changed = self.snapshot_rx.changed() => {
-                        if changed.is_err() {
-                            return None;
+                let subscription_closed = {
+                    let subscription = self
+                        .subscription
+                        .as_mut()
+                        .expect("goal source subscription opened before polling");
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return None,
+                        _ = self.rescan_tick.tick() => false,
+                        changed = self.snapshot_rx.changed() => {
+                            if changed.is_err() {
+                                return None;
+                            }
+                            false
+                        }
+                        message = subscription.recv() => {
+                            if message.is_none() {
+                                true
+                            } else {
+                                let dropped = subscription.check_and_reset_dropped();
+                                if dropped > 0 {
+                                    tracing::warn!(dropped, "goal source dropped updates; durable rescan is recovering");
+                                }
+                                false
+                            }
                         }
                     }
-                    _ = self.rescan_tick.tick() => {}
-                    message = subscription.recv() => {
-                        if message.is_none() {
-                            tracing::warn!("goal source subscription channel closed; source exiting");
-                            return None;
-                        }
-                        let dropped = subscription.check_and_reset_dropped();
-                        if dropped > 0 {
-                            tracing::warn!(dropped, "goal source dropped updates; durable rescan is recovering");
-                        }
-                    }
+                };
+                if subscription_closed {
+                    self.subscription = None;
+                    tracing::warn!(
+                        "goal source subscription channel closed; reopening after durable rescan"
+                    );
                 }
                 if let Some(intent) = self.rescan().await {
                     return Some(intent);
+                }
+                if subscription_closed {
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => return None,
+                        _ = tokio::time::sleep(UPDATE_SUBSCRIPTION_REOPEN_DELAY) => {}
+                    }
+                    self.ensure_subscription();
                 }
             }
         })

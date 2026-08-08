@@ -13,10 +13,11 @@ new provenance or treats a new CID as the old one.
 ## Active milestone: signed request-ingest provenance
 
 The active milestone is intentionally narrower than the full durability
-backlog. It proves that one incoming request was authored by its claimed
-requester, that the runtime selected one exact immutable version of that
-request, and that lifecycle processing and provider capture stayed bound to
-that version.
+backlog. It proves that one incoming request was authored by its declared
+immediate author, that the runtime selected one exact immutable version of
+that request, and that lifecycle processing and provider capture stayed bound
+to that version. `requester_did` remains attribution and is not treated as
+commit-authorship evidence.
 
 For this milestone, assume that target collections will receive appropriate
 DefraDB policies in a later policy workstream and that sensitive fields and
@@ -49,15 +50,17 @@ The active dependency chain is:
    only when the ingress signature is verified. The overall rendered manifest
    remains `CapturedOnly` until its other evidence dimensions are complete.
 
-The existing #1065 request-version slice implements most of steps 2 and 4 but
-deliberately remains `CapturedOnly` because step 1 is unresolved in #1064.
-The next implementation work is therefore the narrow request-ingress portion of
-#1064 plus request-specific conflict/fencing cases from #1076. It does not wait
-for the broader request intent/execution redesign in #1071.
+#1065 now implements this signed-ingest milestone end to end, with the embedded
+DefraDB signing/runtime support carried by DefraDB #1325. Request producers
+declare the actual node signer separately from requester attribution and target
+agent identity; atomic claim verifies the exact source and claim commits; and
+provider capture re-verifies the durable chain. The rendered manifest remains
+`CapturedOnly` for configuration/transcript dimensions that belong to later
+slices.
 
 ### Active milestone acceptance
 
-- unsigned, malformed, unauthorized, claimed-requester-mismatched, replayed,
+- unsigned, malformed, declared-author-mismatched, replayed,
   and ambiguous duplicate requests fail before prompt assembly or tool use;
 - the value processed is loaded from the verified `_docID`/composite CID, not a
   later logical-ID/current-head query;
@@ -77,6 +80,11 @@ Transcript/config provenance additionally requires an immutable manifest of
 every consumed `(collection, _docID, composite CID)` and signature status. A
 node signature proves authorship of each named commit; the manifest proves that
 those exact commits contributed to the provider request.
+
+This milestone does not claim cross-host single-executor safety. Two hosts can
+independently extend the same replicated pending head before convergence; the
+resulting fork is rejected on later admission, but preventing both executions
+requires the deployment assignment and lease epoch in Slice 7.
 
 ## Deferred platform assumptions and cross-cutting gates
 
@@ -130,6 +138,38 @@ documents that share a logical ID.
 
 No schema split is required to begin this slice, so it is the highest-leverage
 runtime hardening and the prerequisite for later exact-version graphs.
+
+Implement it in this order so each checkpoint removes one complete ambiguity
+class instead of scattering `_docID` plumbing across the runtime:
+
+1. **InferenceCall identity:** retain the `_docID` already returned at create
+   time and use it for every permit, terminal write, and recovery decision.
+2. **Request/response outcome edge:** persist the physical parent request
+   identity on responses; remove create fallbacks and recovery joins that pick
+   one logical `request_id` match.
+3. **Subagent bridge/child/result graph:** persist exact parent, bridge, child,
+   response, and result edges so one duplicate cannot supply another row's
+   terminal state or content. Add a true two-node conformance fixture in which
+   a remote signer authors the bridge, Defra P2P replicates that exact signed
+   commit, and the target host verifies it before signing the local child; the
+   current same-store fixtures cover admission and policy only, not multi-host
+   replication.
+   The two-node conformance fixture now verifies a remote signed bridge and
+   exactly-once child materialization. DefraDB #1325 also moves signed query
+   execution onto a stable runtime so spawned replication work survives query
+   completion and caller-runtime cancellation.
+4. **Session and transcript identity:** replace `limit: 1` selection with an
+   explicit duplicate policy and carry physical identities through forks and
+   message deduplication.
+5. **Memory identity:** validate the immutable owner/key tuple and update the
+   selected `_docID`, failing closed on ambiguous writers.
+6. **Timeline root and traversal:** accept an exact root `_docID`, traverse the
+   physical edges established above, and label legacy logical joins as
+   heuristic rather than provenance.
+
+Goals are lower priority: their duplicate policy already loads the full set,
+orders it deterministically, and mutates exact `_docID`s. Existence probes that
+only answer a conservative boolean are likewise not physical-identity defects.
 
 ## Deferred fact graph foundation
 

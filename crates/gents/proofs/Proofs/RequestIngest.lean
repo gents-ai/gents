@@ -6,20 +6,24 @@ processed. Access policy and encryption are intentionally outside its scope:
 they can be layered on after the signed source and the target agent's claim are
 known to be authentic and bound to the same immutable request fact.
 
-The source fact is admitted only when its signature comes from the expected
-author, its composite view has exactly one head, and that head is the exact CID
-selected for processing. A claim is admitted only when the target agent signs
-it, names that source CID as its parent, and preserves the source payload.
+The source fact is admitted only when its signature comes from the immutable
+`sourceAuthorDid` declared on the request, its composite view has exactly one
+head, and that head is the exact CID selected for processing. A claim is
+admitted only when the target agent signs it, names that source CID as its
+parent, and preserves the source payload.
 
-Internal requests keep requester attribution separate from authorship. Their
-expected source signer is the creating agent, so a request can carry a distinct
-requester without pretending that requester signed the materialized document.
+Requester attribution and authorship are separate. A desktop principal can
+author its own request, while an agent node can honestly author a proxied,
+triggered, or subagent request that carries a distinct requester. Production
+must read `sourceAuthorDid` from the exact source snapshot; it may not infer the
+writer from scheduling origin or parent fields.
 -/
 
 namespace RequestIngest
 
 abbrev Did := Nat
 abbrev Cid := Nat
+abbrev DocId := Nat
 abbrev Payload := Nat
 
 inductive Origin where
@@ -34,6 +38,10 @@ structure SourceEvidence where
   targetAgentDid : Did
   sourceSignerDid : Did
   sourceSignatureValid : Bool
+  sourceClaimable : Bool
+  logicalMatchCount : Nat
+  sourceDocId : DocId
+  observedDocId : DocId
   sourceHeadCount : Nat
   observedSourceCid : Cid
   sourceCid : Cid
@@ -42,17 +50,19 @@ structure SourceEvidence where
 
 namespace SourceEvidence
 
-/-- External sources are authored by the requester. Internal materializations
-are authored by the agent that created the document. -/
+/-- The expected signer is explicit immutable request data. `origin` and
+`requesterDid` describe intent and attribution; neither is cryptographic proof
+of who wrote the DefraDB document. -/
 def expectedSigner (source : SourceEvidence) : Did :=
-  match source.origin with
-  | .external => source.requesterDid
-  | .internal => source.sourceAuthorDid
+  source.sourceAuthorDid
 
 /-- The complete source-side provenance gate. -/
 def admitted (source : SourceEvidence) : Bool :=
   source.sourceSignatureValid &&
     source.sourceSignerDid == source.expectedSigner &&
+    source.sourceClaimable &&
+    source.logicalMatchCount == 1 &&
+    source.observedDocId == source.sourceDocId &&
     source.sourceHeadCount == 1 &&
     source.observedSourceCid == source.sourceCid
 
@@ -60,19 +70,27 @@ theorem admitted_iff (source : SourceEvidence) :
     source.admitted = true ↔
       source.sourceSignatureValid = true ∧
       source.sourceSignerDid = source.expectedSigner ∧
+      source.sourceClaimable = true ∧
+      source.logicalMatchCount = 1 ∧
+      source.observedDocId = source.sourceDocId ∧
       source.sourceHeadCount = 1 ∧
       source.observedSourceCid = source.sourceCid := by
   constructor
   · intro h
     have grouped :
-        ((source.sourceSignatureValid = true ∧
+        (((((source.sourceSignatureValid = true ∧
           source.sourceSignerDid = source.expectedSigner) ∧
+          source.sourceClaimable = true) ∧
+          source.logicalMatchCount = 1) ∧
+          source.observedDocId = source.sourceDocId) ∧
           source.sourceHeadCount = 1) ∧
           source.observedSourceCid = source.sourceCid := by
       simpa [admitted] using h
-    exact ⟨grouped.1.1.1, grouped.1.1.2, grouped.1.2, grouped.2⟩
-  · rintro ⟨hsig, hsigner, hhead, hcid⟩
-    simp [admitted, hsig, hsigner, hhead, hcid]
+    exact ⟨grouped.1.1.1.1.1.1, grouped.1.1.1.1.1.2,
+      grouped.1.1.1.1.2, grouped.1.1.1.2, grouped.1.1.2,
+      grouped.1.2, grouped.2⟩
+  · rintro ⟨hsig, hsigner, hclaimable, hlogical, hdoc, hhead, hcid⟩
+    simp [admitted, hsig, hsigner, hclaimable, hlogical, hdoc, hhead, hcid]
 
 theorem admitted_has_valid_signature (source : SourceEvidence)
     (h : source.admitted = true) : source.sourceSignatureValid = true := by
@@ -83,14 +101,33 @@ theorem admitted_has_expected_signer (source : SourceEvidence)
     source.sourceSignerDid = source.expectedSigner := by
   exact (source.admitted_iff.mp h).2.1
 
+theorem admitted_is_first_claim (source : SourceEvidence)
+    (h : source.admitted = true) : source.sourceClaimable = true := by
+  exact (source.admitted_iff.mp h).2.2.1
+
+theorem admitted_has_unique_logical_document (source : SourceEvidence)
+    (h : source.admitted = true) : source.logicalMatchCount = 1 := by
+  exact (source.admitted_iff.mp h).2.2.2.1
+
+theorem admitted_uses_exact_document (source : SourceEvidence)
+    (h : source.admitted = true) : source.observedDocId = source.sourceDocId := by
+  exact (source.admitted_iff.mp h).2.2.2.2.1
+
 theorem admitted_has_unique_head (source : SourceEvidence)
     (h : source.admitted = true) : source.sourceHeadCount = 1 := by
-  exact (source.admitted_iff.mp h).2.2.1
+  exact (source.admitted_iff.mp h).2.2.2.2.2.1
 
 theorem admitted_pins_exact_cid (source : SourceEvidence)
     (h : source.admitted = true) :
     source.observedSourceCid = source.sourceCid := by
-  exact (source.admitted_iff.mp h).2.2.2
+  exact (source.admitted_iff.mp h).2.2.2.2.2.2
+
+/-- Once the durable claim consumes the pending source, replaying that exact
+request after redelivery, crash, or restart cannot admit a second execution. -/
+theorem consumed_source_replay_is_rejected (source : SourceEvidence)
+    (_h : source.admitted = true) :
+    ({ source with sourceClaimable := false }).admitted = false := by
+  simp [admitted]
 
 end SourceEvidence
 
@@ -189,6 +226,9 @@ theorem admitted_provenance (claim : ClaimEvidence)
     (h : evaluate claim = .admitted) :
     claim.source.sourceSignatureValid = true ∧
     claim.source.sourceSignerDid = claim.source.expectedSigner ∧
+    claim.source.sourceClaimable = true ∧
+    claim.source.logicalMatchCount = 1 ∧
+    claim.source.observedDocId = claim.source.sourceDocId ∧
     claim.source.sourceHeadCount = 1 ∧
     claim.source.observedSourceCid = claim.source.sourceCid ∧
     claim.claimSignatureValid = true ∧
@@ -198,11 +238,12 @@ theorem admitted_provenance (claim : ClaimEvidence)
   have admitted :=
     (ClaimEvidence.admitted_iff claim).mp ((evaluate_admitted_iff claim).mp h)
   have source := (SourceEvidence.admitted_iff claim.source).mp admitted.1
-  exact ⟨source.1, source.2.1, source.2.2.1, source.2.2.2,
+  exact ⟨source.1, source.2.1, source.2.2.1, source.2.2.2.1,
+    source.2.2.2.2.1, source.2.2.2.2.2.1, source.2.2.2.2.2.2,
     admitted.2.1, admitted.2.2.1, admitted.2.2.2.1, admitted.2.2.2.2⟩
 
 /-- A distinct requester on an internal request remains attribution, not proof
-of authorship: the target agent's source signature is the accepted author. -/
+of authorship: the explicitly declared source author signs the source fact. -/
 theorem internal_request_with_distinct_requester_is_admitted :
     let source : SourceEvidence :=
       { origin := .internal
@@ -211,6 +252,10 @@ theorem internal_request_with_distinct_requester_is_admitted :
       , targetAgentDid := 11
       , sourceSignerDid := 13
       , sourceSignatureValid := true
+      , sourceClaimable := true
+      , logicalMatchCount := 1
+      , sourceDocId := 41
+      , observedDocId := 41
       , sourceHeadCount := 1
       , observedSourceCid := 101
       , sourceCid := 101

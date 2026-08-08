@@ -153,6 +153,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     #[serde(default)]
     pub(crate) request_ingest_cases: Vec<LeanRequestIngestCase>,
+    #[serde(default)]
+    pub(crate) subagent_bridge_admission_cases: Vec<LeanSubagentBridgeAdmissionCase>,
     pub(crate) follow_up_hooks: Vec<String>,
     pub(crate) coverage_ledger: Vec<LeanCoverageEntry>,
     pub(crate) feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -379,6 +381,8 @@ mod request_ingest;
 mod self_config;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
+#[path = "subagent_bridge_admission.rs"]
+mod subagent_bridge_admission;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -395,6 +399,7 @@ pub(crate) use rendered_capture::*;
 pub(crate) use request_ingest::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
+pub(crate) use subagent_bridge_admission::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -891,6 +896,10 @@ pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCapture
 
 pub(crate) fn lean_request_ingest_cases() -> &'static [LeanRequestIngestCase] {
     &lean_contract_snapshot().request_ingest_cases
+}
+
+pub(crate) fn lean_subagent_bridge_admission_cases() -> &'static [LeanSubagentBridgeAdmissionCase] {
+    &lean_contract_snapshot().subagent_bridge_admission_cases
 }
 
 pub(crate) fn lean_compaction_reducer_case(name: &str) -> &'static LeanCompactionReducerCase {

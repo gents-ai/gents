@@ -20,8 +20,11 @@ use crate::interrupt::interrupt_request;
 use crate::session::execute_mutation_with_retry;
 
 use super::{
-    subagent_request::create_subagent_request_with_request_id, AwaitMode, CancelCause,
-    CancelPolicy, ChildTerminal, FailureClass, ToolCallState,
+    subagent_request::{
+        create_subagent_request_with_request_id, verify_current_bridge_admission,
+        BridgeAdmissionSnapshot,
+    },
+    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallState,
 };
 
 #[derive(Debug, Default)]
@@ -116,6 +119,25 @@ struct RunningToolCallRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     unclaimed_deadline_at: Option<String>,
+}
+
+impl RunningToolCallRow {
+    fn bridge_admission_snapshot(&self) -> BridgeAdmissionSnapshot {
+        BridgeAdmissionSnapshot {
+            request_id: self.request_id.clone(),
+            agent_did: self.agent_did.clone(),
+            tool_call_id: self.tool_call_id.clone(),
+            tool_name: self.tool_name.clone(),
+            args: self.args.clone(),
+            lifecycle_state: self.lifecycle_state.clone(),
+            deadline_at: self.deadline_at.clone(),
+            await_mode: self.await_mode.clone(),
+            cancel_policy: self.cancel_policy.clone(),
+            child_request_id: self.child_request_id.clone(),
+            spawn_target_did: self.spawn_target_did.clone(),
+            unclaimed_deadline_at: self.unclaimed_deadline_at.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -725,6 +747,44 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
         {
             continue;
         }
+
+        let bridge_admission = match verify_current_bridge_admission(
+            node,
+            &row.doc_id,
+            &row.bridge_admission_snapshot(),
+        )
+        .await
+        {
+            Ok(admission) if admission.signer_did == agent_did => admission,
+            Ok(admission) => {
+                let error = anyhow::anyhow!(
+                    "bridge signer {} does not match recovering agent {agent_did}",
+                    admission.signer_did
+                );
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    tool_call_id = %row.tool_call_id,
+                    %error,
+                    "cannot materialize orphan subagent child from foreign-signed bridge"
+                );
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    tool_call_id = %row.tool_call_id,
+                    %error,
+                    "cannot materialize orphan subagent child without exact signed bridge admission"
+                );
+                continue;
+            }
+        };
+        tracing::debug!(
+            doc_id = %row.doc_id,
+            bridge_commit_cid = %bridge_admission.composite_commit_cid,
+            bridge_signer_did = %bridge_admission.signer_did,
+            "verified orphan subagent bridge admission"
+        );
 
         let parent_request_id = match row
             .request_id

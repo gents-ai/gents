@@ -19,9 +19,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let request_version = lifecycle.request_version().cloned().ok_or_else(|| {
+        let request_provenance = lifecycle.execution_provenance().cloned().ok_or_else(|| {
             anyhow::anyhow!(
-                "claimed AgentRequest {} has no composite commit provenance",
+                "claimed AgentRequest {} has no verified source/claim provenance",
                 request.doc_id
             )
         })?;
@@ -54,7 +54,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let capture_scope = crate::rendered_request::scope::scope_from_factory(
             crate::rendered_request::RenderedRequestContext::for_request(
                 &request,
-                request_version.clone(),
+                request_provenance.clone(),
                 self.behavior.model_name.clone(),
             ),
             self.rendered_request_capture_factory.as_ref(),
@@ -62,7 +62,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         let handled = admission::scope_request(admission_context, async {
             self.spawn_conversation_title_generation(
                 &request,
-                request_version,
+                request_provenance,
                 title_admission_context,
             );
 
@@ -287,7 +287,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
-            lifecycle.set_response_doc_id(&doc_id);
+            lifecycle.set_response_doc_id(&doc_id)?;
             lifecycle.advance().await?;
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();

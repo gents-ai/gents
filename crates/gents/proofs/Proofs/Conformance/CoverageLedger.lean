@@ -150,7 +150,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
         ]
     }
   , { feature := "subagents-cross-deployment"
-    , required := [Surface.agentFacing, Surface.api, Surface.operatorUi]
+    , required := [Surface.agentFacing, Surface.api, Surface.operatorUi, Surface.runtimeInternal]
     , deferred := []
     }
   , { feature := "interrupt-and-cancel"
@@ -927,6 +927,11 @@ def caseCoverage : List CoverageEntry :=
       "RequestIngestCases"
       "conformance::request_ingest::generated_request_ingest_cases_fence_provenance_invariants")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "subagent_bridge_admission_cases"
+      "SubagentBridgeAdmissionCases"
+      "conformance::subagent_source::generated_bridge_admission_cases_require_signed_exact_parent_evidence")
+      "subagents-cross-deployment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"

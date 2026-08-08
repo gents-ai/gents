@@ -811,6 +811,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RequestIngestCases".to_string(),
         ));
     }
+    if !snapshot.subagent_bridge_admission_cases.is_empty() {
+        emitted.insert((
+            "subagent_bridge_admission_cases".to_string(),
+            "SubagentBridgeAdmissionCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_delivery_transition_case_count,
         snapshot.event_delivery_transition_cases.len(),
@@ -1046,6 +1052,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "restart_disposition_cases",
         "tool_output_paging_cases",
         "bridge_step_cases",
+        "subagent_bridge_admission_cases",
         "transcript_cases",
         "compaction_reducer_cases",
         "prompt_assembly_cases",

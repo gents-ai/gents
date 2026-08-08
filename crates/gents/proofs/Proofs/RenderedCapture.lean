@@ -68,8 +68,8 @@ names two different canonical requests.
 * `capture_idempotent`, `capture_rejects_rebinding` — redelivery of an identical
   capture succeeds without a write; a conflicting one is an integrity error and
   never an update.
-* `capture_rejects_source_version_rebinding` — identical provider bytes do not
-  make two different request-document versions the same fact.
+* `capture_rejects_request_provenance_rebinding` — identical provider bytes do
+  not make different signed source/claim chains the same fact.
 * `capture_failure_blocks_send` — a rejected capture leaves the store unchanged
   and makes `sent` unreachable forever. This is the fail-closed property the
   sink must satisfy; the implementation is not free to choose fail-open after
@@ -106,17 +106,35 @@ structure DocumentVersionRef where
   compositeCommitCid : Nat
   deriving DecidableEq, Repr
 
+/-- One exact DefraDB version together with the DID derived from its verified
+commit signature. Signature validity is established by `RequestIngest`; this
+record carries the evidence selected at that gate without reinterpreting it. -/
+structure SignedDocumentVersionRef where
+  version : DocumentVersionRef
+  signerDid : AgentDid
+  deriving DecidableEq, Repr
+
+/-- The immutable request chain admitted by `RequestIngest`: the signed source
+fact accepted before claiming and the signed target-agent claim descended from
+that exact source. Both references are required because the claim snapshot is
+the value executed while the source snapshot establishes who supplied it. -/
+structure RequestExecutionProvenance where
+  source : SignedDocumentVersionRef
+  claim : SignedDocumentVersionRef
+  deriving DecidableEq, Repr
+
 /-- The canonical provider request and the request-document snapshot from which
 the runtime executed it.
 
 `value` is opaque on purpose: the only operation the model performs on provider
-bytes is equality. `requestVersion` is `none` only for a one-shot run, which has
-no `AgentRequest` document. A document-backed capture compares the source
-version as part of the immutable fact, so equal bytes from different versions
-cannot be accepted as an idempotent redelivery. -/
+bytes is equality. `requestProvenance` is `none` only for a one-shot run, which
+has no `AgentRequest` document. A document-backed capture compares the complete
+signed source/claim chain as part of the immutable fact, so equal bytes from a
+different source, claim, or signer cannot be accepted as an idempotent
+redelivery. -/
 structure CanonicalRequest where
   value : Nat
-  requestVersion : Option DocumentVersionRef := none
+  requestProvenance : Option RequestExecutionProvenance := none
   deriving DecidableEq, Repr
 
 /-! ## Durable capture table -/
@@ -200,17 +218,17 @@ theorem capture_rejects_rebinding (s : Store) (k : CaptureKey)
     capture s k r = (.rejected, s) := by
   simp [capture, h, h_conflict]
 
-/-- A source-version change is a fact change even when the rendered provider
-body is byte-identical. This prevents an idempotency key from laundering a
-different request snapshot into an existing capture. -/
-theorem capture_rejects_source_version_rebinding (s : Store) (k : CaptureKey)
+/-- A source/claim provenance change is a fact change even when the rendered
+provider body is byte-identical. This prevents an idempotency key from
+laundering a different signed request chain into an existing capture. -/
+theorem capture_rejects_request_provenance_rebinding (s : Store) (k : CaptureKey)
     (stored r : CanonicalRequest) (h : s k = some stored)
-    (h_version : stored.requestVersion ≠ r.requestVersion) :
+    (h_provenance : stored.requestProvenance ≠ r.requestProvenance) :
     capture s k r = (.rejected, s) := by
   apply capture_rejects_rebinding s k stored r h
   intro h_request
-  apply h_version
-  exact congrArg CanonicalRequest.requestVersion h_request
+  apply h_provenance
+  exact congrArg CanonicalRequest.requestProvenance h_request
 
 /-- Capture is total and its three outcomes are mutually exclusive. -/
 theorem capture_outcome_classified (s : Store) (k : CaptureKey) (r : CanonicalRequest) :

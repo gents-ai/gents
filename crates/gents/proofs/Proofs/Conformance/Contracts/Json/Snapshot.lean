@@ -14,6 +14,7 @@ import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.RequestIngest
+import Proofs.Conformance.Contracts.Json.SubagentBridgeAdmission
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.ClientShell.Contracts
@@ -222,6 +223,8 @@ def snapshotJson : String :=
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"request_ingest_cases\":"
       ++ requestIngestCasesJson ++ ","
+    ++ "\"subagent_bridge_admission_cases\":"
+      ++ subagentBridgeAdmissionCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

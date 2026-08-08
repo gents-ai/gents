@@ -475,7 +475,10 @@ mod tests {
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
-            request_version: Some(crate::DocumentVersionRef::new("doc-1", "bafy-claim-1")),
+            request_provenance: Some(crate::document_version::test_request_execution_provenance(
+                "doc-1",
+                "did:key:agent",
+            )),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),

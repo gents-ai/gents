@@ -13,11 +13,36 @@ use super::super::DocumentResolveContext;
 pub(super) const CONTROL_RECONCILE_DEBOUNCE: Duration = Duration::from_secs(5);
 const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(1);
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
+pub(super) const CONTROL_FULL_RESCAN_INTERVAL: Duration = Duration::from_secs(10);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    mut subscription: events::Subscription,
+    subscription: events::Subscription,
+    agent_did: String,
+    resolve_context: DocumentResolveContext,
+    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
+    runtime_status: RuntimeStatusHandle,
+    health_events_rx: mpsc::Receiver<()>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    run_control_watcher_inner(
+        node,
+        Some(subscription),
+        agent_did,
+        resolve_context,
+        proposals_tx,
+        runtime_status,
+        health_events_rx,
+        shutdown,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_control_watcher_inner(
+    node: Arc<defra_node::EmbeddedNode>,
+    mut subscription: Option<events::Subscription>,
     agent_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
@@ -29,14 +54,46 @@ pub(super) async fn run_control_watcher(
         document_view::load_document_runtime_view(node.as_ref(), &agent_did).await?;
     let sleep = tokio::time::sleep(CONTROL_WATCHER_IDLE_SLEEP);
     tokio::pin!(sleep);
+    let mut full_rescan = tokio::time::interval(CONTROL_FULL_RESCAN_INTERVAL);
+    full_rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // `interval` ticks immediately once. Consume that tick so the fallback is
+    // genuinely periodic and does not manufacture a startup reconcile.
+    full_rescan.tick().await;
     let mut dirty = false;
     let mut pending_visibility = false;
     let mut settle_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
+    let mut subscription_open = subscription.is_some();
 
     loop {
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
+            _ = full_rescan.tick() => {
+                match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                    Ok(reloaded) => {
+                        document_view = reloaded;
+                        pending_visibility = document_view.has_unresolved_behavior_references();
+                        dirty = true;
+                        settle_deadline = pending_visibility.then(|| {
+                            tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_WINDOW
+                        });
+                        runtime_status
+                            .set_reconcile_phase(ReconcilePhase::Debouncing)
+                            .await;
+                        sleep.as_mut().reset(
+                            tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            agent_did = %agent_did,
+                            error = %error,
+                            "runtime control watcher periodic full rescan failed"
+                        );
+                        runtime_status.publish_error(&format!("{error:#}")).await;
+                    }
+                }
+            }
             _ = &mut sleep, if dirty => {
                 if pending_visibility || settle_deadline.is_some() {
                     match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
@@ -138,12 +195,26 @@ pub(super) async fn run_control_watcher(
                     .await;
                 sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE);
             }
-            message = subscription.recv() => {
+            message = async {
+                subscription
+                    .as_mut()
+                    .expect("open control subscription must be present")
+                    .recv()
+                    .await
+            }, if subscription_open => {
                 let Some(message) = message else {
-                    return Ok(());
+                    tracing::warn!(
+                        agent_did = %agent_did,
+                        "runtime control update subscription closed; periodic full rescan remains active"
+                    );
+                    subscription_open = false;
+                    continue;
                 };
 
-                let dropped = subscription.check_and_reset_dropped();
+                let dropped = subscription
+                    .as_mut()
+                    .expect("open control subscription must be present")
+                    .check_and_reset_dropped();
                 if dropped > 0 {
                     tracing::warn!(
                         agent_did = %agent_did,

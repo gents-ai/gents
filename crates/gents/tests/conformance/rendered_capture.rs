@@ -52,7 +52,7 @@ use gents::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
     RenderedCompletionRequest, RenderedRequestSource, CAPTURE_VERSION,
 };
-use gents::DocumentVersionRef;
+use gents::{DocumentVersionRef, RequestExecutionProvenance, SignedDocumentVersionRef};
 use serde_json::{json, Value};
 
 use crate::lean_vocab_test::{lean_rendered_capture_cases, lean_rendered_capture_key_cases};
@@ -114,9 +114,23 @@ fn rendered_in_scope(
     let agent_did = agent_did(agent);
     let session_id = session_id(session);
     let request_doc_id = request_doc_id(request);
-    let request_version = DocumentVersionRef {
+    let source_version = DocumentVersionRef {
+        doc_id: request_doc_id.clone(),
+        composite_commit_cid: format!("bafy-source-{request}"),
+    };
+    let claim_version = DocumentVersionRef {
         doc_id: request_doc_id.clone(),
         composite_commit_cid: format!("bafy-claim-{request}"),
+    };
+    let request_provenance = RequestExecutionProvenance {
+        source: SignedDocumentVersionRef {
+            version: source_version.clone(),
+            signer_did: "did:key:z6Mk-source".to_string(),
+        },
+        claim: SignedDocumentVersionRef {
+            version: claim_version.clone(),
+            signer_did: agent_did.clone(),
+        },
     };
     let assembly_trace =
         AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new());
@@ -133,7 +147,10 @@ fn rendered_in_scope(
         .expect("capture key"),
         capture_version: CAPTURE_VERSION,
         request_doc_id,
-        request_commit_cid: request_version.composite_commit_cid.clone(),
+        request_source_commit_cid: source_version.composite_commit_cid.clone(),
+        request_source_signer_did: "did:key:z6Mk-source".to_string(),
+        request_claim_commit_cid: claim_version.composite_commit_cid.clone(),
+        request_claim_signer_did: agent_did.clone(),
         request_id: format!("logical-request-{request}"),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -152,10 +169,10 @@ fn rendered_in_scope(
         prompt_hash: String::new(),
         tools_hash: String::new(),
         provenance_json: serde_json::to_value(
-            ProvenanceManifest::captured_only_with_request_version(
+            ProvenanceManifest::captured_only_with_request_provenance(
                 capture_scope.to_string(),
                 None,
-                Some(request_version),
+                Some(request_provenance),
                 assembly_trace.clone(),
             ),
         )
@@ -179,6 +196,15 @@ fn capture_key(
         ),
         rendered.turn_index,
         rendered.attempt,
+    )
+}
+
+fn request_provenance(rendered: &RenderedCompletionRequest) -> (String, String, String, String) {
+    (
+        rendered.request_source_commit_cid.clone(),
+        rendered.request_source_signer_did.clone(),
+        rendered.request_claim_commit_cid.clone(),
+        rendered.request_claim_signer_did.clone(),
     )
 }
 
@@ -330,6 +356,48 @@ fn a_request_doc_id_cannot_forge_another_scopes_key() {
     )
     .expect("capture key");
     assert_ne!(sneaky, target);
+}
+
+/// `RenderedCapture.capture_rejects_request_provenance_rebinding` quantifies
+/// over the complete signed source/claim chain, not just the claim snapshot the
+/// runtime consumed. Keep every member on the production DTO while confirming
+/// that provenance changes do not silently change the provider-attempt key.
+#[test]
+fn complete_signed_request_provenance_is_part_of_the_capture_fact() {
+    let original = rendered(1, 1, 1, 0, 0, json!({"model": "m"}));
+    let original_key = capture_key(&original);
+    let original_provenance = request_provenance(&original);
+
+    let mut variants = Vec::new();
+
+    let mut source_cid = original.clone();
+    source_cid.request_source_commit_cid = "bafy-other-source".to_string();
+    variants.push(source_cid);
+
+    let mut source_signer = original.clone();
+    source_signer.request_source_signer_did = "did:key:z6Mk-other-source".to_string();
+    variants.push(source_signer);
+
+    let mut claim_cid = original.clone();
+    claim_cid.request_claim_commit_cid = "bafy-other-claim".to_string();
+    variants.push(claim_cid);
+
+    let mut claim_signer = original.clone();
+    claim_signer.request_claim_signer_did = "did:key:z6Mk-other-agent".to_string();
+    variants.push(claim_signer);
+
+    for variant in variants {
+        assert_eq!(
+            capture_key(&variant),
+            original_key,
+            "provenance is canonical fact data, not provider-attempt key data"
+        );
+        assert_ne!(
+            request_provenance(&variant),
+            original_provenance,
+            "every signed source/claim component must survive on the DTO"
+        );
+    }
 }
 
 /// The emitted rows must never describe a fail-open capture. This guards the

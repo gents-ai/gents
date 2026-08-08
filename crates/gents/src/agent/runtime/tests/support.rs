@@ -20,6 +20,18 @@ pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
 }
 
+pub(super) async fn test_node_with_identity(
+    identity: &dyn AgentIdentity,
+) -> Arc<defra_node::EmbeddedNode> {
+    Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    )
+}
+
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
     KeyIdentity::load_or_create(path, None).unwrap()
@@ -398,6 +410,7 @@ pub(super) async fn create_agent_request_for_behavior(
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_source_author_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(behavior_id.unwrap_or_default());
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_content = escape_graphql_string(content);
@@ -407,6 +420,7 @@ pub(super) async fn create_agent_request_for_behavior(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
+                source_author_did: "{escaped_source_author_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",

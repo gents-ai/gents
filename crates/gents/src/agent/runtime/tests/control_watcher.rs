@@ -101,6 +101,80 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     watcher_task.await.unwrap().unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn control_watcher_periodic_rescan_recovers_without_an_update_subscription() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-periodic-rescan"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-control-rescan",
+        "http://127.0.0.1:8119/v1",
+    )
+    .await;
+    let agent = crate::Gents::from_default_behavior_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+
+    let watcher_task = tokio::spawn(run_control_watcher_inner(
+        node.clone(),
+        None,
+        agent.agent_did().to_string(),
+        resolve_context,
+        proposal_tx,
+        runtime_status,
+        mpsc::channel::<()>(1).1,
+        shutdown_rx,
+    ));
+    tokio::task::yield_now().await;
+
+    let mut default_behavior =
+        crate::load_agent_behavior(node.as_ref(), agent.default_behavior_id())
+            .await
+            .unwrap()
+            .expect("default behavior document");
+    default_behavior.system_prompt = Some("recovered by periodic rescan".to_string());
+    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
+        .await
+        .unwrap();
+
+    tokio::time::advance(CONTROL_FULL_RESCAN_INTERVAL + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+
+    let snapshot = proposal_rx
+        .recv()
+        .await
+        .expect("periodic rescan must publish the later control write");
+    assert_eq!(
+        snapshot
+            .behaviors
+            .get(agent.default_behavior_id())
+            .expect("default behavior in snapshot")
+            .system_prompt,
+        "recovered by periodic rescan"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
 /// #640: a measured-health flip must re-resolve the snapshot without any
 /// document changing — demoting the behavior and marking the admission
 /// config while the backend is measured unhealthy, and restoring both after
@@ -280,7 +354,14 @@ async fn control_watcher_recovers_after_resolve_error() {
     let snapshot = proposal_rx.recv().await.expect("recovered snapshot");
     assert_eq!(snapshot.default_behavior_id, agent.default_behavior_id());
     let recovered_status = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
-    assert_eq!(recovered_status.reconcile_phase, "resolving");
+    assert!(
+        matches!(
+            recovered_status.reconcile_phase.as_str(),
+            "resolving" | "debouncing"
+        ),
+        "recovered watcher entered unexpected phase {}",
+        recovered_status.reconcile_phase
+    );
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();

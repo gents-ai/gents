@@ -416,7 +416,10 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
@@ -424,7 +427,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
@@ -577,14 +580,17 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -764,14 +770,17 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -910,14 +919,17 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -1071,7 +1083,7 @@ async fn post_tool_resumed_resets_response_tail() {
     );
 
     // Claim → Streaming so advance() calls will work.
-    let outcome = lifecycle.claim().await.unwrap();
+    let outcome = lifecycle.claim_without_identity_for_test().await.unwrap();
     assert_eq!(outcome, ClaimOutcome::Claimed, "expected Claimed outcome");
 
     // Use 0 ms batch interval so write_tokens flushes immediately to DB.
@@ -1081,7 +1093,7 @@ async fn post_tool_resumed_resets_response_tail() {
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
@@ -1200,7 +1212,10 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
@@ -1208,7 +1223,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -1334,14 +1349,17 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         ExecutionOrigin::Interactive,
         "test-backend",
     );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    assert_eq!(
+        lifecycle.claim_without_identity_for_test().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let response_doc_id = stream_writer
         .begin(&session_id, &request_id, "general")
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
+    lifecycle.set_response_doc_id(&response_doc_id).unwrap();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 

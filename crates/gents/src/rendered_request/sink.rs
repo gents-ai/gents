@@ -106,7 +106,10 @@ impl DefraRenderedRequestSink {
             r#"query {{
                 {collection}(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
                     request_doc_id
-                    request_commit_cid
+                    request_source_commit_cid
+                    request_source_signer_did
+                    request_claim_commit_cid
+                    request_claim_signer_did
                     request_id
                     session_id
                     agent_did
@@ -169,7 +172,10 @@ impl DefraRenderedRequestSink {
                 create_{collection}(input: {{
                     capture_key: "{capture_key}",
                     request_doc_id: "{request_doc_id}",
-                    request_commit_cid: "{request_commit_cid}",
+                    request_source_commit_cid: "{request_source_commit_cid}",
+                    request_source_signer_did: "{request_source_signer_did}",
+                    request_claim_commit_cid: "{request_claim_commit_cid}",
+                    request_claim_signer_did: "{request_claim_signer_did}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
@@ -191,7 +197,10 @@ impl DefraRenderedRequestSink {
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(&rendered.capture_key),
             request_doc_id = escape_graphql_string(&rendered.request_doc_id),
-            request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
+            request_source_commit_cid = escape_graphql_string(&rendered.request_source_commit_cid),
+            request_source_signer_did = escape_graphql_string(&rendered.request_source_signer_did),
+            request_claim_commit_cid = escape_graphql_string(&rendered.request_claim_commit_cid),
+            request_claim_signer_did = escape_graphql_string(&rendered.request_claim_signer_did),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
             agent_did = escape_graphql_string(&rendered.agent_did),
@@ -245,6 +254,46 @@ impl DefraRenderedRequestSink {
 
     /// Persist one capture. See the outcome table at the top of this module.
     pub async fn capture(&self, rendered: RenderedCompletionRequest) -> Result<()> {
+        rendered.validate_new_capture()?;
+        if !rendered.request_doc_id.is_empty() {
+            let provenance = crate::RequestExecutionProvenance::new(
+                crate::SignedDocumentVersionRef::new(
+                    crate::DocumentVersionRef::new(
+                        &rendered.request_doc_id,
+                        &rendered.request_source_commit_cid,
+                    ),
+                    &rendered.request_source_signer_did,
+                ),
+                crate::SignedDocumentVersionRef::new(
+                    crate::DocumentVersionRef::new(
+                        &rendered.request_doc_id,
+                        &rendered.request_claim_commit_cid,
+                    ),
+                    &rendered.request_claim_signer_did,
+                ),
+            );
+            let admitted_request = crate::lifecycle::verify_persisted_execution_provenance(
+                &self.node,
+                &provenance,
+                &rendered.request_doc_id,
+                &rendered.agent_did,
+            )
+            .await
+            .context("re-verifying rendered-request execution provenance")?;
+            let admitted_requester_did = admitted_request.requester_did.as_deref().unwrap_or("");
+            let admitted_behavior_id = admitted_request.behavior_id.as_deref().unwrap_or("");
+            if rendered.request_id != admitted_request.request_id
+                || rendered.session_id != admitted_request.session_id
+                || rendered.agent_did != admitted_request.agent_did
+                || rendered.requester_did != admitted_requester_did
+                || rendered.behavior_id != admitted_behavior_id
+            {
+                anyhow::bail!(
+                    "rendered-request capture identity fields disagree with the exact admitted claim snapshot"
+                );
+            }
+        }
+
         // Canonicalize once. The stored bytes and the complete-fact comparison
         // have to use the same representation or "identical" means nothing.
         let request_json = canonical_json_string(&rendered.request_json)
@@ -337,7 +386,10 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
     Ok(canonical_json(&serde_json::json!({
         "request_doc_id": rendered.request_doc_id,
-        "request_commit_cid": rendered.request_commit_cid,
+        "request_source_commit_cid": rendered.request_source_commit_cid,
+        "request_source_signer_did": rendered.request_source_signer_did,
+        "request_claim_commit_cid": rendered.request_claim_commit_cid,
+        "request_claim_signer_did": rendered.request_claim_signer_did,
         "request_id": rendered.request_id,
         "session_id": rendered.session_id,
         "agent_did": rendered.agent_did,
