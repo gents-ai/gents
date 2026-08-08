@@ -1,18 +1,12 @@
 //! Environment interpolation for desired-state document files.
 //!
-//! Packs are checked in, but the things that make them portable — an inference
-//! endpoint, a model name — differ per host and per experiment. `${VAR}` lets a
-//! single pack target the shared backend by default and a different model or
-//! endpoint on demand, which is what makes model-to-model comparison possible
-//! without editing tracked config.
-//!
-//! Syntax, applied to document JSON only (never to `.md` sidecars, whose
-//! `{{ }}` prompt templates are rendered later by the runtime):
+//! Applies to document JSON only. `.md` sidecars carry runtime `{{ }}` prompt
+//! templates and are hydrated untouched, so the two substitution systems never
+//! meet.
 //!
 //! - `${VAR}` — required; an unset variable is an error, never an empty string.
 //! - `${VAR:-default}` — falls back to `default` when unset or empty.
 //! - `$$` — a literal `$`, so `$${VAR}` survives as the text `${VAR}`.
-
 /// Expand `${VAR}` references using `lookup`. Returns every unresolved
 /// variable name rather than the first, so one pass reports all of them.
 pub(crate) fn interpolate_with(
@@ -34,7 +28,6 @@ pub(crate) fn interpolate_with(
             continue;
         }
 
-        // `$$` escapes a literal dollar sign.
         if bytes.get(i + 1) == Some(&b'$') {
             out.push('$');
             i += 2;

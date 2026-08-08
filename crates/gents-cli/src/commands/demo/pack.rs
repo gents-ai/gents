@@ -1,17 +1,13 @@
 //! Non-interactive pack runs: `gents demo run <pack>`.
 //!
 //! A pack is a self-contained desired-state root (its own `schemas/` plus the
-//! config documents) with an `experiment.json` describing how to drive it. The
-//! interactive demo shell is the same machinery with a human at the wheel;
-//! this is the version CI can gate on, so it returns a non-zero exit code and
-//! writes its artifacts under `<pack>/runs/<job_id>/`.
+//! config documents) with an `experiment.json` describing how to drive it.
 //!
-//! The hand-run sequence this replaces is eight steps with two traps: the pack
-//! applies *after* the runtime is ready, so its backend is unprobed for up to
-//! one probe interval and the behaviors read as unavailable while the server
-//! reports `serving`; and seeding before the event source observes the seed
-//! collection is a silent no-op, because triggers are created/first-seen only.
-
+//! Two orderings are load-bearing and neither is visible from the outside: the
+//! pack applies *after* the runtime is ready, so its backend is unprobed for up
+//! to one probe interval while the server already reports `serving`; and a seed
+//! written before the event source observes its collection is dropped in
+//! silence, because triggers are created/first-seen only.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -272,6 +268,17 @@ async fn await_stages(
         if done.len() == trigger_ids.len() {
             return Ok(done);
         }
+        // A trigger that fired and failed to materialize will never retry:
+        // created/first-seen means the source document is already marked seen.
+        // Surface its own last_error instead of waiting out the deadline.
+        for trigger_id in trigger_ids {
+            if done.iter().any(|s| &s.trigger_id == trigger_id) {
+                continue;
+            }
+            if let Some(error) = trigger_error(graphql, trigger_id).await {
+                bail!("trigger {trigger_id} fired but did not materialize: {error}");
+            }
+        }
         if started.elapsed() >= deadline {
             let seen: Vec<&str> = done.iter().map(|s| s.trigger_id.as_str()).collect();
             bail!(
@@ -283,6 +290,25 @@ async fn await_stages(
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
+}
+
+/// The trigger's own `last_error`, when it recorded a failed fire.
+async fn trigger_error(graphql: &str, trigger_id: &str) -> Option<String> {
+    let query = format!(
+        r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
+        escape_graphql_string(trigger_id)
+    );
+    let resp = post_graphql(graphql, &query).await.ok()?;
+    let row = resp.pointer("/data/EventTrigger/0")?;
+    if row.get("last_status").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    Some(
+        row.get("last_error")
+            .and_then(Value::as_str)
+            .unwrap_or("(no last_error recorded)")
+            .to_string(),
+    )
 }
 
 async fn count_rows(graphql: &str, collection: &str) -> u64 {
@@ -323,14 +349,20 @@ async fn token_totals(graphql: &str) -> (u64, u64) {
     })
 }
 
+/// Timestamped so `runs/` sorts chronologically and two runs never collide.
+fn default_job_id() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    format!("exp-{secs}")
+}
+
 pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
     let manifest = load_manifest(&pack)?;
-    let job_id = args
-        .job_id
-        .clone()
-        .unwrap_or_else(|| format!("exp-{}", std::process::id()));
+    let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
         .prompt
         .clone()
@@ -339,13 +371,17 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         bail!("no prompt: pass --prompt or give the pack a default_prompt");
     }
 
+    // Everything a run produces lands under <pack>/runs/<job_id>/ — home, log,
+    // and artifacts together, so a failed run is debuggable from one place.
+    let run_dir = pack.join("runs").join(&job_id);
+    std::fs::create_dir_all(&run_dir)
+        .with_context(|| format!("creating run directory {}", run_dir.display()))?;
+
     // A fresh home per run by default. Triggers are first-seen, so a reused
     // home can silently skip a stage whose source rows already existed.
-    let temp_home = args.home.is_none();
-    let home = args.home.clone().unwrap_or_else(|| {
-        std::env::temp_dir().join(format!("gents-pack-{}-{job_id}", manifest.name))
-    });
-    if temp_home && home.exists() {
+    let owned_home = args.home.is_none();
+    let home = args.home.clone().unwrap_or_else(|| run_dir.join("home"));
+    if owned_home && home.exists() {
         std::fs::remove_dir_all(&home).ok();
     }
     std::fs::create_dir_all(&home)
@@ -353,7 +389,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
 
     println!("pack     {} ({})", manifest.name, pack.display());
     println!("job_id   {job_id}");
-    println!("home     {}", home.display());
+    println!("run dir  {}", run_dir.display());
     println!("endpoint {}", manifest.init.inference_url);
     println!("model    {}", manifest.init.model_name);
 
@@ -386,7 +422,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
 
     let port = args.http_port;
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
-    let log = home.join("server.log");
+    let log = run_dir.join("server.log");
     let started = Instant::now();
 
     let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack)?;
@@ -456,8 +492,6 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         }
     }
 
-    let run_dir = pack.join("runs").join(&job_id);
-    std::fs::create_dir_all(&run_dir).ok();
     let meta = json!({
         "pack": manifest.name,
         "job_id": job_id,
@@ -497,7 +531,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         elapsed.as_secs()
     );
     println!("  artifacts    {}", meta_path.display());
-    if temp_home && !args.keep_home {
+    if owned_home && !args.keep_home {
         std::fs::remove_dir_all(&home).ok();
     } else {
         println!("  home         {}", home.display());

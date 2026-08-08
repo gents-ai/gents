@@ -1276,9 +1276,7 @@ fn validate_datastore_surface_links(
     use gents::{is_reserved_builtin_tool_name, WriteToolDecl};
     use std::collections::{BTreeMap, BTreeSet};
 
-    // Key on the trimmed id: the uniqueness check above and the lookup below
-    // both trim, so an untrimmed key here would report a declared surface as
-    // missing.
+    // Trimmed to match the uniqueness check above and the lookup below.
     let surfaces: BTreeMap<&str, &DesiredDatastoreToolSurface> = manifest
         .datastore_tool_surfaces
         .iter()

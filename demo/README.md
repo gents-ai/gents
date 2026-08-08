@@ -16,10 +16,17 @@ gents demo run pipeline --prompt "…" # override the seed prompt
 gents demo run pipeline --keep-home  # keep the node home for debugging
 ```
 
+Everything a run produces lands under `<pack>/runs/<job_id>/` (gitignored):
+`meta.json` with stage request ids, lifecycle states, collection counts and
+token totals, plus `server.log`. `--keep-home` also leaves the node home
+there, so a failed run can be re-opened and queried:
+
+```bash
+gents server --home demo/pipeline/runs/<job_id>/home --http-port 19393
+```
+
 Each run uses a **fresh home** by default. Triggers are created/first-seen, so
 a reused home can silently skip a stage whose source rows already existed.
-Artifacts land in `<pack>/runs/<job_id>/meta.json` (gitignored): stage request
-ids, lifecycle states, collection counts, and token totals.
 
 `gents demo` with no subcommand is still the interactive shell — same node
 lifecycle and pairing, with a human at the wheel.

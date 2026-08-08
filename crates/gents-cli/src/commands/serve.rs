@@ -502,10 +502,9 @@ pub(crate) async fn serve_with_control(
     };
     let background_execution_registry = agent.background_execution_registry();
 
-    // Own the shutdown signal locally and forward the external one into it, so
-    // paths like a failed `--apply-root` can ask the runtime to shut down
-    // gracefully. Aborting the task instead would skip run_agent's epilogue,
-    // leaving AgentRuntime at `ready` and its detached children still firing.
+    // Aborting the run task would skip run_agent's shutdown epilogue, leaving
+    // AgentRuntime at `ready` and its detached children still firing, so hold a
+    // sender here and forward any external signal into it.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     match external_shutdown {
         Some(mut external) => {
@@ -685,11 +684,8 @@ pub(crate) async fn serve_with_control(
             match apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune).await {
                 Ok(report) => Some(report),
                 Err(error) => {
-                    // Stop the runtime we already started. Dropping the handle
-                    // only detaches the task, which would leave the agent and
-                    // the open node alive for embedded callers of this function.
-                    // Signal rather than abort so run_agent runs its shutdown
-                    // epilogue (process state, cancellation, task joins).
+                    // Dropping the handle only detaches; embedded callers
+                    // would keep a live agent and an open node.
                     let _ = shutdown_tx.send(true);
                     let _ = (&mut run_handle).await;
                     return Err(error).with_context(|| {
