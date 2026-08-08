@@ -104,13 +104,14 @@ A DID stored in `agent_did` or `requester_did` is a claim made by the document.
 It is not proof of authorship. The ACP caller identity and the identity used by
 DefraDB to sign commit blocks are also distinct inputs.
 
-Commit signing requires a registered node signing identity and is not universal
-across current Gents node constructors. Unsigned blocks are accepted during
-merge. Every request-producing node must therefore enable signing explicitly,
-and legacy or unsigned commits remain unverified. A node-level signer also does
-not prove that a remote requester authored a mutation submitted through that
-node; preserve and verify a requester-signed envelope when storage signer and
-request author differ.
+Commit signing requires a registered node signing identity. Production init,
+serve, and offline configuration access must all load one explicitly; offline
+configuration fails closed when the initialized identity cannot be recovered.
+Unsigned blocks can still exist in legacy stores or be accepted during merge,
+so correctness loaders verify the selected commit and reject unsigned evidence.
+A node-level signer also does not prove that a remote requester authored a
+mutation submitted through that node; preserve and verify a requester-signed
+envelope when storage signer and request author differ.
 
 A verified provenance claim requires all of the following:
 

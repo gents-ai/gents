@@ -37,6 +37,120 @@ impl SignedDocumentVersionRef {
     }
 }
 
+/// One exact, signed configuration fact used during behavior resolution.
+///
+/// `collection` and `logical_id` retain the semantic edge that a bare DefraDB
+/// document version cannot express. `source` is the cryptographically verified
+/// immutable document snapshot from which the runtime parsed the value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigFactRef {
+    pub collection: String,
+    pub logical_id: String,
+    pub source: SignedDocumentVersionRef,
+}
+
+impl ConfigFactRef {
+    pub(crate) fn new(
+        collection: impl Into<String>,
+        logical_id: impl Into<String>,
+        source: SignedDocumentVersionRef,
+    ) -> Self {
+        Self {
+            collection: collection.into(),
+            logical_id: logical_id.into(),
+            source,
+        }
+    }
+
+    fn validate(&self, expected_collection: &str) -> anyhow::Result<()> {
+        if self.collection != expected_collection {
+            anyhow::bail!(
+                "configuration fact collection {} does not match expected {expected_collection}",
+                self.collection
+            );
+        }
+        if self.logical_id.trim().is_empty() {
+            anyhow::bail!("{expected_collection} configuration fact has an empty logical id");
+        }
+        if self.source.version.doc_id.trim().is_empty()
+            || self.source.version.composite_commit_cid.trim().is_empty()
+        {
+            anyhow::bail!(
+                "{expected_collection} {} configuration fact requires a document id and composite commit CID",
+                self.logical_id
+            );
+        }
+        if self.source.signer_did.trim().is_empty() {
+            anyhow::bail!(
+                "{expected_collection} {} configuration fact requires a verified signer DID",
+                self.logical_id
+            );
+        }
+        Ok(())
+    }
+}
+
+/// The exact signed document set used to resolve one behavior configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedBehaviorConfigProvenance {
+    pub principal: ConfigFactRef,
+    pub behavior: ConfigFactRef,
+    pub inference_backend: ConfigFactRef,
+    pub inference_profile: ConfigFactRef,
+    pub tool_selection: Option<ConfigFactRef>,
+    /// Effective skills in canonical ascending `logical_id` order.
+    pub skills: Vec<ConfigFactRef>,
+    pub resolution_algorithm_version: u32,
+}
+
+impl ResolvedBehaviorConfigProvenance {
+    pub fn validate_for_behavior(&self, behavior_id: &str, agent_did: &str) -> anyhow::Result<()> {
+        if behavior_id.trim().is_empty() {
+            anyhow::bail!("behavior configuration provenance requires a behavior id");
+        }
+        if agent_did.trim().is_empty() {
+            anyhow::bail!("behavior configuration provenance requires an agent DID");
+        }
+        if self.resolution_algorithm_version == 0 {
+            anyhow::bail!("behavior configuration provenance requires a non-zero resolution algorithm version");
+        }
+
+        self.principal.validate("AgentPrincipal")?;
+        self.behavior.validate("AgentBehavior")?;
+        self.inference_backend.validate("InferenceBackend")?;
+        self.inference_profile.validate("InferenceProfile")?;
+        if let Some(tool_selection) = &self.tool_selection {
+            tool_selection.validate("ToolSelection")?;
+        }
+        for skill in &self.skills {
+            skill.validate("Skill")?;
+        }
+
+        if self.principal.logical_id != agent_did {
+            anyhow::bail!(
+                "principal provenance {} does not match agent {agent_did}",
+                self.principal.logical_id
+            );
+        }
+        if self.behavior.logical_id != behavior_id {
+            anyhow::bail!(
+                "behavior provenance {} does not match behavior {behavior_id}",
+                self.behavior.logical_id
+            );
+        }
+        if let Some((left, right)) = self.skills.windows(2).find_map(|pair| {
+            (pair[0].logical_id >= pair[1].logical_id).then_some((&pair[0], &pair[1]))
+        }) {
+            anyhow::bail!(
+                "skill provenance must be unique and canonically ordered; found {} before {}",
+                left.logical_id,
+                right.logical_id
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Provenance boundary for one request execution.
 ///
 /// `source` is the sole current composite head admitted before the claim.
@@ -108,4 +222,58 @@ pub(crate) fn test_request_execution_provenance(
             claim_signer_did,
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fact(collection: &str, logical_id: &str) -> ConfigFactRef {
+        ConfigFactRef::new(
+            collection,
+            logical_id,
+            SignedDocumentVersionRef::new(
+                DocumentVersionRef::new(format!("doc-{logical_id}"), format!("bafy-{logical_id}")),
+                "did:key:zSigner",
+            ),
+        )
+    }
+
+    fn provenance() -> ResolvedBehaviorConfigProvenance {
+        ResolvedBehaviorConfigProvenance {
+            principal: fact("AgentPrincipal", "did:key:zAgent"),
+            behavior: fact("AgentBehavior", "default"),
+            inference_backend: fact("InferenceBackend", "backend"),
+            inference_profile: fact("InferenceProfile", "profile"),
+            tool_selection: Some(fact("ToolSelection", "tools")),
+            skills: vec![fact("Skill", "alpha"), fact("Skill", "zeta")],
+            resolution_algorithm_version: 1,
+        }
+    }
+
+    #[test]
+    fn resolved_behavior_config_provenance_accepts_canonical_exact_facts() {
+        provenance()
+            .validate_for_behavior("default", "did:key:zAgent")
+            .unwrap();
+    }
+
+    #[test]
+    fn resolved_behavior_config_provenance_rejects_duplicate_or_unsorted_skills() {
+        let mut duplicate = provenance();
+        duplicate.skills[1] = duplicate.skills[0].clone();
+        assert!(duplicate
+            .validate_for_behavior("default", "did:key:zAgent")
+            .unwrap_err()
+            .to_string()
+            .contains("unique and canonically ordered"));
+
+        let mut unsorted = provenance();
+        unsorted.skills.reverse();
+        assert!(unsorted
+            .validate_for_behavior("default", "did:key:zAgent")
+            .unwrap_err()
+            .to_string()
+            .contains("unique and canonically ordered"));
+    }
 }

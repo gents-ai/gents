@@ -80,11 +80,11 @@ pub const CAPTURE_VERSION: u32 = 3;
 /// Provenance manifest version. Bump when `ProvenanceManifest`'s serialized
 /// shape changes. A reader that does not know this number must report
 /// `UnsupportedManifest` rather than guessing.
-pub const PROVENANCE_MANIFEST_VERSION: u32 = 5;
+pub const PROVENANCE_MANIFEST_VERSION: u32 = 6;
 
 /// Assembly-trace version. Bump when `AssemblyTrace`'s serialized shape
-/// changes. Versioned independently of the manifest so a manifest that later
-/// gains pinned config CIDs does not have to re-version the trace.
+/// changes. Versioned independently of the manifest: adding exact config
+/// provenance to manifest v6 did not change the assembly trace.
 pub const ASSEMBLY_TRACE_VERSION: u32 = 2;
 
 /// Prefix on every capture key. Bound to the *key derivation*, not to
@@ -359,7 +359,7 @@ impl AssemblyTrace {
 pub enum ProvenanceStatus {
     /// The rendered request is durable and exact, but not all durable source
     /// versions are pinned alongside it, so a reconstruction cannot yet be
-    /// fully verified. This is the only status version 5 emits.
+    /// fully verified. This is the only status version 6 emits.
     CapturedOnly,
 }
 
@@ -372,17 +372,34 @@ pub enum ProvenanceStatus {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureSeam {
     /// The last `HttpClientExt` before the network client. The only seam
-    /// version 5 emits.
+    /// version 6 emits.
     TransportBody,
+}
+
+/// Declares whether configuration came from the reconciled DefraDB document
+/// runtime or from a static/one-shot construction path.
+///
+/// This is explicit rather than inferred from `config_provenance`: a dropped
+/// document-runtime map entry must fail closed instead of masquerading as an
+/// intentional static capture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigProvenanceScope {
+    ReconciledDocumentRuntime,
+    #[default]
+    StaticOrOneShot,
 }
 
 /// Versioned provenance travelling in the `provenance_json` column.
 ///
-/// Version 5 carries the assembly trace, the seam, the observed provider
+/// Version 6 carries the assembly trace, the seam, the observed provider
 /// endpoint, the complete signed source/claim chain admitted at request ingest,
-/// and the ordered exact transcript snapshot loaded for request assembly.
-/// Config and compaction source versions remain unpinned, so version 5 still
-/// reports `captured_only` rather than claiming full reconstruction.
+/// the ordered exact transcript snapshot loaded for request assembly, and,
+/// when the request uses a reconciled document runtime, the exact signed core
+/// configuration versions that produced that resolved behavior generation.
+/// The complete skill-candidate set, MCP availability, the host tool ceiling,
+/// and compaction source versions remain unpinned, so version 6 still reports
+/// `captured_only` rather than claiming full reconstruction.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceManifest {
     pub manifest_version: u32,
@@ -421,18 +438,66 @@ pub struct ProvenanceManifest {
     /// version consumed by provider-input assembly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transcript_snapshot: Vec<crate::MessageFactRef>,
+    /// Configuration-resolution path. Pre-v6 manifests omit this field and
+    /// decode as `static_or_one_shot`.
+    #[serde(default)]
+    pub config_provenance_scope: ConfigProvenanceScope,
+    /// Exact signed core configuration documents retained by the reconciled
+    /// behavior generation. Absent for one-shot and legacy/static-builder
+    /// contexts that have no document-runtime provenance bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
     pub assembly_trace: AssemblyTrace,
 }
 
 impl ProvenanceManifest {
-    const CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v5 pins the signed source/claim chain and the exact loaded \
-         transcript snapshot but not config or compaction source versions, so a \
-         reconstruction cannot yet be fully verified";
+    const RECONCILED_CORE_CONFIG_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v6 records a reconciled document-runtime capture and pins the signed \
+         source/claim chain, exact loaded transcript snapshot, and exact resolved core config \
+         documents, but not the complete skill-candidate set, MCP availability, the host tool \
+         ceiling, or compaction source versions, so reconstruction cannot yet be fully verified";
+    const STATIC_CORE_CONFIG_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v6 records a static or one-shot config path and pins the signed \
+         source/claim chain, exact loaded transcript snapshot, and supplied exact core config \
+         documents, but not the complete skill-candidate set, MCP availability, the host tool \
+         ceiling, or compaction source versions, so reconstruction cannot yet be fully verified";
+    const UNPINNED_CONFIG_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v6 pins the signed source/claim chain and exact loaded transcript \
+         snapshot but has no resolved core config provenance and does not pin MCP availability, \
+         the complete skill-candidate set, the host tool ceiling, or compaction source versions, \
+         so reconstruction cannot yet be fully verified";
     const ONESHOT_CAPTURED_ONLY_REASON: &'static str =
-        "provenance manifest v5 describes a one-shot run with no request document \
-         and pins no config or transcript versions, so a reconstruction cannot \
-         yet be fully verified";
+        "provenance manifest v6 describes a one-shot run with no request document provenance \
+         and does not pin the complete skill-candidate set, MCP availability, the host tool \
+         ceiling, or compaction source versions; resolved core config provenance may also be \
+         absent, so reconstruction cannot yet be fully verified";
+    const ONESHOT_WITH_CONFIG_CAPTURED_ONLY_REASON: &'static str =
+        "provenance manifest v6 records a static or one-shot config path with no request document \
+         provenance and pins supplied exact core config documents, but not the complete \
+         skill-candidate set, MCP availability, the host tool ceiling, or compaction source \
+         versions, so reconstruction cannot yet be fully verified";
+
+    fn captured_only_reason(
+        request_provenance: Option<&crate::RequestExecutionProvenance>,
+        config_provenance_scope: ConfigProvenanceScope,
+        config_provenance: Option<&crate::ResolvedBehaviorConfigProvenance>,
+    ) -> &'static str {
+        match (
+            request_provenance,
+            config_provenance_scope,
+            config_provenance,
+        ) {
+            (Some(_), ConfigProvenanceScope::ReconciledDocumentRuntime, Some(_)) => {
+                Self::RECONCILED_CORE_CONFIG_CAPTURED_ONLY_REASON
+            }
+            (Some(_), ConfigProvenanceScope::StaticOrOneShot, Some(_)) => {
+                Self::STATIC_CORE_CONFIG_CAPTURED_ONLY_REASON
+            }
+            (None, _, Some(_)) => Self::ONESHOT_WITH_CONFIG_CAPTURED_ONLY_REASON,
+            (Some(_), _, None) => Self::UNPINNED_CONFIG_CAPTURED_ONLY_REASON,
+            (None, _, None) => Self::ONESHOT_CAPTURED_ONLY_REASON,
+        }
+    }
 
     pub fn captured_only(
         capture_scope: String,
@@ -469,11 +534,49 @@ impl ProvenanceManifest {
         transcript_snapshot: Vec<crate::MessageFactRef>,
         assembly_trace: AssemblyTrace,
     ) -> Self {
-        let status_reason = if request_provenance.is_some() {
-            Self::CAPTURED_ONLY_REASON
-        } else {
-            Self::ONESHOT_CAPTURED_ONLY_REASON
-        };
+        Self::captured_only_with_request_transcript_and_config_provenance(
+            capture_scope,
+            provider_endpoint,
+            request_provenance,
+            transcript_snapshot,
+            None,
+            assembly_trace,
+        )
+    }
+
+    pub fn captured_only_with_request_transcript_and_config_provenance(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        request_provenance: Option<crate::RequestExecutionProvenance>,
+        transcript_snapshot: Vec<crate::MessageFactRef>,
+        config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
+        Self::captured_only_with_scoped_config_provenance(
+            capture_scope,
+            provider_endpoint,
+            request_provenance,
+            transcript_snapshot,
+            ConfigProvenanceScope::StaticOrOneShot,
+            config_provenance,
+            assembly_trace,
+        )
+    }
+
+    pub fn captured_only_with_scoped_config_provenance(
+        capture_scope: String,
+        provider_endpoint: Option<String>,
+        request_provenance: Option<crate::RequestExecutionProvenance>,
+        transcript_snapshot: Vec<crate::MessageFactRef>,
+        config_provenance_scope: ConfigProvenanceScope,
+        config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
+        assembly_trace: AssemblyTrace,
+    ) -> Self {
+        let status_reason = Self::captured_only_reason(
+            request_provenance.as_ref(),
+            config_provenance_scope,
+            config_provenance.as_ref(),
+        );
         Self {
             manifest_version: PROVENANCE_MANIFEST_VERSION,
             status: ProvenanceStatus::CapturedOnly,
@@ -484,6 +587,8 @@ impl ProvenanceManifest {
             request_version: None,
             request_provenance,
             transcript_snapshot,
+            config_provenance_scope,
+            config_provenance,
             assembly_trace,
         }
     }
@@ -508,6 +613,15 @@ pub struct RenderedRequestContext {
     /// this request-wide capture context.
     #[serde(default)]
     pub transcript_snapshot: Vec<crate::MessageFactRef>,
+    /// Explicit origin of the behavior configuration. Static constructors use
+    /// the default; the document runtime sets the reconciled variant before
+    /// looking up the exact bundle.
+    #[serde(default)]
+    pub config_provenance_scope: ConfigProvenanceScope,
+    /// Exact signed core config sources retained by the active reconciled
+    /// behavior generation. Optional for one-shot and legacy/static builders.
+    #[serde(default)]
+    pub config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -526,12 +640,16 @@ impl RenderedRequestContext {
         request: &crate::watcher::AgentRequest,
         request_provenance: crate::RequestExecutionProvenance,
         transcript_snapshot: Vec<crate::MessageFactRef>,
+        config_provenance_scope: ConfigProvenanceScope,
+        config_provenance: Option<crate::ResolvedBehaviorConfigProvenance>,
         model_name: String,
     ) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
             request_provenance: Some(request_provenance),
             transcript_snapshot,
+            config_provenance_scope,
+            config_provenance,
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -698,6 +816,23 @@ fn validate_transcript_snapshot(snapshot: &[crate::MessageFactRef]) -> Result<()
     Ok(())
 }
 
+fn validate_config_provenance(
+    scope: ConfigProvenanceScope,
+    provenance: Option<&crate::ResolvedBehaviorConfigProvenance>,
+    behavior_id: &str,
+    agent_did: &str,
+) -> Result<()> {
+    if scope == ConfigProvenanceScope::ReconciledDocumentRuntime && provenance.is_none() {
+        anyhow::bail!(
+            "reconciled document-runtime capture for behavior {behavior_id} has no exact config provenance"
+        );
+    }
+    if let Some(provenance) = provenance {
+        provenance.validate_for_behavior(behavior_id, agent_did)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn build_rendered_completion_request(
     context: &RenderedRequestContext,
     capture_scope: &str,
@@ -736,6 +871,13 @@ pub(crate) fn build_rendered_completion_request(
     }
     validate_transcript_snapshot(&context.transcript_snapshot)
         .context("invalid rendered-request transcript snapshot provenance")?;
+    validate_config_provenance(
+        context.config_provenance_scope,
+        context.config_provenance.as_ref(),
+        &context.behavior_id,
+        &context.agent_did,
+    )
+    .context("invalid rendered-request resolved config provenance")?;
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
@@ -744,11 +886,13 @@ pub(crate) fn build_rendered_completion_request(
         turn_index,
         attempt,
     )?;
-    let manifest = ProvenanceManifest::captured_only_with_request_and_transcript_provenance(
+    let manifest = ProvenanceManifest::captured_only_with_scoped_config_provenance(
         capture_scope.to_string(),
         provider_endpoint,
         context.request_provenance.clone(),
         context.transcript_snapshot.clone(),
+        context.config_provenance_scope,
+        context.config_provenance.clone(),
         assembly_trace.clone(),
     );
     let provenance_json = canonical_json(
@@ -844,16 +988,40 @@ impl RenderedCompletionRequest {
         if manifest.assembly_trace != self.assembly_trace {
             anyhow::bail!("rendered-request manifest assembly trace disagrees with its row");
         }
+        if manifest.status != ProvenanceStatus::CapturedOnly
+            || manifest.capture_seam != CaptureSeam::TransportBody
+        {
+            anyhow::bail!(
+                "new rendered-request manifest must be a transport-body captured-only fact"
+            );
+        }
+        validate_config_provenance(
+            manifest.config_provenance_scope,
+            manifest.config_provenance.as_ref(),
+            &self.behavior_id,
+            &self.agent_did,
+        )
+        .context("invalid rendered-request manifest resolved config provenance")?;
+        let expected_status_reason = ProvenanceManifest::captured_only_reason(
+            manifest.request_provenance.as_ref(),
+            manifest.config_provenance_scope,
+            manifest.config_provenance.as_ref(),
+        );
+        if manifest.status_reason != expected_status_reason {
+            anyhow::bail!(
+                "new rendered-request manifest status reason disagrees with its provenance set"
+            );
+        }
 
         // Re-encoding with the current serializer rejects unknown or legacy
-        // fields on a newly-created v5 manifest. In particular, v3's
+        // fields on a newly-created v6 manifest. In particular, v3's
         // `request_version` remains deserialize-only and can never leak into a
         // new canonical row.
         let canonical_manifest = canonical_json(
             &serde_json::to_value(&manifest).context("encoding rendered-request manifest")?,
         );
         if canonical_json(&self.provenance_json) != canonical_manifest {
-            anyhow::bail!("new rendered-request provenance manifest is not canonical v5");
+            anyhow::bail!("new rendered-request provenance manifest is not canonical v6");
         }
 
         validate_transcript_snapshot(&manifest.transcript_snapshot)
@@ -1010,6 +1178,57 @@ mod tests {
         ]
     }
 
+    fn config_fact(
+        collection: &str,
+        logical_id: &str,
+        doc_id: &str,
+        cid: &str,
+    ) -> crate::ConfigFactRef {
+        crate::ConfigFactRef::new(
+            collection,
+            logical_id,
+            crate::SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new(doc_id, cid),
+                "did:key:config-author",
+            ),
+        )
+    }
+
+    fn config_provenance() -> crate::ResolvedBehaviorConfigProvenance {
+        crate::ResolvedBehaviorConfigProvenance {
+            principal: config_fact(
+                "AgentPrincipal",
+                "did:key:test",
+                "principal-doc",
+                "bafy-principal",
+            ),
+            behavior: config_fact("AgentBehavior", "behavior", "behavior-doc", "bafy-behavior"),
+            inference_backend: config_fact(
+                "InferenceBackend",
+                "backend",
+                "backend-doc",
+                "bafy-backend",
+            ),
+            inference_profile: config_fact(
+                "InferenceProfile",
+                "profile",
+                "profile-doc",
+                "bafy-profile",
+            ),
+            tool_selection: Some(config_fact(
+                "ToolSelection",
+                "tools",
+                "tools-doc",
+                "bafy-tools",
+            )),
+            skills: vec![
+                config_fact("Skill", "review", "skill-doc-1", "bafy-skill-1"),
+                config_fact("Skill", "write", "skill-doc-2", "bafy-skill-2"),
+            ],
+            resolution_algorithm_version: 1,
+        }
+    }
+
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
@@ -1018,6 +1237,8 @@ mod tests {
                 "did:key:test",
             )),
             transcript_snapshot: transcript_snapshot(),
+            config_provenance_scope: ConfigProvenanceScope::ReconciledDocumentRuntime,
+            config_provenance: Some(config_provenance()),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),
@@ -1579,6 +1800,19 @@ mod tests {
         assert_eq!(rendered.request_claim_commit_cid, "bafy-claim-1");
         assert_eq!(rendered.request_claim_signer_did, "did:key:test");
         assert_eq!(manifest.transcript_snapshot, transcript_snapshot());
+        assert_eq!(
+            manifest.config_provenance_scope,
+            ConfigProvenanceScope::ReconciledDocumentRuntime
+        );
+        assert_eq!(manifest.config_provenance, Some(config_provenance()));
+        assert!(manifest
+            .status_reason
+            .contains("reconciled document-runtime"));
+        assert!(manifest.status_reason.contains("MCP availability"));
+        assert!(manifest.status_reason.contains("host tool ceiling"));
+        assert!(manifest
+            .status_reason
+            .contains("compaction source versions"));
         assert_eq!(manifest.assembly_trace, trace);
         assert_eq!(rendered.assembly_trace, trace);
     }
@@ -1595,10 +1829,10 @@ mod tests {
         );
     }
 
-    /// Version 5 declares `captured_only` positively. An absent field is never
+    /// Version 6 declares `captured_only` positively. An absent field is never
     /// the evidence — a reader must be able to see the claim, not infer it.
     #[test]
-    fn version_five_provenance_never_claims_full_reconstruction() {
+    fn version_six_provenance_never_claims_full_reconstruction() {
         let rendered = build(0, 0, empty_trace(), components());
 
         assert_eq!(rendered.provenance_json["status"], "captured_only");
@@ -1609,8 +1843,9 @@ mod tests {
         assert!(rendered.provenance_json.get("assembly_trace").is_some());
         assert!(
             rendered.provenance_json.get("request_version").is_none(),
-            "v5 must never emit the legacy single-version field"
+            "v6 must never emit the legacy single-version field"
         );
+        assert!(rendered.provenance_json.get("config_provenance").is_some());
     }
 
     #[test]
@@ -1736,6 +1971,174 @@ mod tests {
         assert_eq!(decoded.manifest_version, 4);
         assert!(decoded.transcript_snapshot.is_empty());
         assert!(decoded.request_provenance.is_some());
+    }
+
+    #[test]
+    fn version_five_manifest_without_config_provenance_remains_readable() {
+        let mut value = serde_json::to_value(
+            ProvenanceManifest::captured_only_with_request_transcript_and_config_provenance(
+                "inference.1".to_string(),
+                Some("https://provider.example".to_string()),
+                Some(crate::document_version::test_request_execution_provenance(
+                    "doc-1",
+                    "did:key:test",
+                )),
+                transcript_snapshot(),
+                Some(config_provenance()),
+                empty_trace(),
+            ),
+        )
+        .expect("legacy manifest fixture");
+        value["manifest_version"] = json!(5);
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("config_provenance");
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("config_provenance_scope");
+
+        let decoded: ProvenanceManifest =
+            serde_json::from_value(value).expect("version-five manifest remains readable");
+        assert_eq!(decoded.manifest_version, 5);
+        assert_eq!(
+            decoded.config_provenance_scope,
+            ConfigProvenanceScope::StaticOrOneShot
+        );
+        assert!(decoded.config_provenance.is_none());
+        assert_eq!(decoded.transcript_snapshot, transcript_snapshot());
+    }
+
+    #[test]
+    fn resolved_config_provenance_cannot_be_rebound_to_another_behavior_or_agent() {
+        let mut wrong_behavior = context();
+        wrong_behavior
+            .config_provenance
+            .as_mut()
+            .expect("config provenance")
+            .behavior
+            .logical_id = "other-behavior".to_string();
+        let error = build_rendered_completion_request(
+            &wrong_behavior,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("config provenance for another behavior must fail");
+        assert!(
+            format!("{error:#}").contains("invalid rendered-request resolved config provenance")
+        );
+
+        let mut wrong_agent = build(0, 0, empty_trace(), components());
+        wrong_agent.provenance_json["config_provenance"]["principal"]["logical_id"] =
+            json!("did:key:other-agent");
+        let error = wrong_agent
+            .validate_new_capture()
+            .expect_err("persisted config provenance for another agent must fail");
+        assert!(format!("{error:#}")
+            .contains("invalid rendered-request manifest resolved config provenance"));
+    }
+
+    #[test]
+    fn resolved_config_provenance_requires_canonical_skill_order() {
+        let mut context = context();
+        context
+            .config_provenance
+            .as_mut()
+            .expect("config provenance")
+            .skills
+            .swap(0, 1);
+        let error = build_rendered_completion_request(
+            &context,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("noncanonical config sources must fail before capture");
+        assert!(
+            format!("{error:#}").contains("invalid rendered-request resolved config provenance")
+        );
+    }
+
+    #[test]
+    fn reconciled_capture_rejects_missing_config_provenance() {
+        let mut missing_at_build = context();
+        missing_at_build.config_provenance = None;
+        let error = build_rendered_completion_request(
+            &missing_at_build,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect_err("a reconciled context cannot omit exact config provenance");
+        assert!(format!("{error:#}").contains("has no exact config provenance"));
+
+        let mut rendered = build(0, 0, empty_trace(), components());
+        rendered
+            .provenance_json
+            .as_object_mut()
+            .expect("manifest object")
+            .remove("config_provenance");
+
+        let error = rendered
+            .validate_new_capture()
+            .expect_err("a reconciled capture cannot lose its exact config bundle");
+        assert!(format!("{error:#}").contains("has no exact config provenance"));
+    }
+
+    #[test]
+    fn legacy_static_and_oneshot_contexts_may_omit_config_provenance() {
+        let mut legacy_static = context();
+        legacy_static.config_provenance_scope = ConfigProvenanceScope::StaticOrOneShot;
+        legacy_static.config_provenance = None;
+        let rendered = build_rendered_completion_request(
+            &legacy_static,
+            "inference.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect("legacy static context remains capturable");
+        assert!(rendered.provenance_json.get("config_provenance").is_none());
+        assert!(rendered.provenance_json["status_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no resolved core config provenance")));
+
+        let mut oneshot = legacy_static;
+        oneshot.request_doc_id.clear();
+        oneshot.request_provenance = None;
+        oneshot.transcript_snapshot.clear();
+        let rendered = build_rendered_completion_request(
+            &oneshot,
+            "oneshot.1",
+            RenderedRequestSource::OpenAiChatCompletions,
+            None,
+            0,
+            0,
+            empty_trace(),
+            components(),
+        )
+        .expect("one-shot context may omit config provenance");
+        assert!(rendered.provenance_json.get("config_provenance").is_none());
+        assert!(rendered.provenance_json["status_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("one-shot run")));
     }
 
     /// The seam is recorded positively so a reader never has to guess whether
@@ -1888,8 +2291,8 @@ mod tests {
         });
         let error = legacy_field
             .validate_new_capture()
-            .expect_err("a new v5 manifest cannot carry request_version");
-        assert!(error.to_string().contains("not canonical v5"));
+            .expect_err("a new v6 manifest cannot carry request_version");
+        assert!(error.to_string().contains("not canonical v6"));
     }
 
     fn agent_request() -> crate::watcher::AgentRequest {
@@ -1923,21 +2326,27 @@ mod tests {
             &request,
             crate::document_version::test_request_execution_provenance("doc-1", "did:key:test"),
             transcript_snapshot(),
+            ConfigProvenanceScope::ReconciledDocumentRuntime,
+            Some(config_provenance()),
             "test-model".to_string(),
         );
         assert_eq!(context.requester_did, "");
         assert_eq!(context.transcript_snapshot, transcript_snapshot());
-        assert!(context
-            .clone()
-            .without_transcript_snapshot()
-            .transcript_snapshot
-            .is_empty());
+        assert_eq!(context.config_provenance, Some(config_provenance()));
+        let without_transcript = context.clone().without_transcript_snapshot();
+        assert!(without_transcript.transcript_snapshot.is_empty());
+        assert_eq!(
+            without_transcript.config_provenance,
+            Some(config_provenance())
+        );
 
         request.requester_did = Some("did:key:requester".to_string());
         let context = RenderedRequestContext::for_request(
             &request,
             crate::document_version::test_request_execution_provenance("doc-1", "did:key:test"),
             Vec::new(),
+            ConfigProvenanceScope::ReconciledDocumentRuntime,
+            Some(config_provenance()),
             "test-model".to_string(),
         );
         assert_eq!(context.requester_did, "did:key:requester");

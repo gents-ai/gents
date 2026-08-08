@@ -17,7 +17,14 @@ pub(super) use crate::watcher::AgentRequest;
 pub(super) use serde_json::Value;
 
 pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    let node_identity = test_identity("agent-runtime-node");
+    Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(node_identity.did())
+            .build()
+            .await
+            .unwrap(),
+    )
 }
 
 pub(super) async fn test_node_with_identity(
@@ -89,21 +96,47 @@ pub(super) async fn fetch_runtime_status(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentRuntime query failed: {:?}",
-        response.errors
-    );
-    let value = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRuntime"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("AgentRuntime row");
-    serde_json::from_value(value).expect("decode AgentRuntime row")
+    // Signed exact-config loading adds several asynchronous verification reads
+    // before the control watcher can publish its first phase. These paused-time
+    // tests must wait for scheduler progress without sleeping: a timer would
+    // advance the logical clock and could accidentally fire the debounce under
+    // test. Bound the polling loop so a genuinely missing status row still
+    // fails promptly.
+    for _ in 0..512 {
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRuntime query failed: {:?}",
+            response.errors
+        );
+        if let Some(value) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(|rows| rows.as_array())
+            .and_then(|rows| rows.first())
+            .cloned()
+        {
+            return serde_json::from_value(value).expect("decode AgentRuntime row");
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("AgentRuntime row did not become visible after bounded scheduler progress")
+}
+
+pub(super) async fn wait_for_runtime_reconcile_result(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    expected: &str,
+) -> RuntimeStatusRow {
+    for _ in 0..512 {
+        let status = fetch_runtime_status(node, agent_did).await;
+        if status.last_reconcile_result == expected {
+            return status;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("AgentRuntime did not publish reconcile result {expected:?}")
 }
 
 pub(super) async fn wait_for_runtime_process_state(

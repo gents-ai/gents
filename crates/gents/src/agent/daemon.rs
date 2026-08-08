@@ -40,6 +40,7 @@ async fn finalize_request_failure(
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
     behavior: Arc<AgentBehavior>,
+    config_provenance: crate::runtime_snapshot::ScopedBehaviorConfigProvenance,
     model: Arc<M>,
     preamble: String,
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -67,6 +68,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
         behavior: Arc<AgentBehavior>,
+        config_provenance: crate::runtime_snapshot::ScopedBehaviorConfigProvenance,
         model: Arc<M>,
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -102,6 +104,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         Self {
             node,
             behavior,
+            config_provenance,
             model,
             preamble,
             loop_tools,

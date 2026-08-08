@@ -70,6 +70,8 @@ pub fn spawn_subagent_source_with_paired_peers(
         paired_peer_dids,
         default_behavior_id: parent_behavior_id.to_string(),
         behaviors,
+        config_provenance_scope: gents::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        behavior_config_provenance: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),

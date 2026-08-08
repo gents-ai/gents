@@ -50,6 +50,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             &request,
             request_provenance,
             transcript_snapshot,
+            self.config_provenance.scope,
+            self.config_provenance.exact.as_deref().cloned(),
             self.behavior.model_name.clone(),
         );
         // Title generation receives `Vec::new()` rather than the session

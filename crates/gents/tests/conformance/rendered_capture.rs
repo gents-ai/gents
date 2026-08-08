@@ -10,6 +10,9 @@
 //!   canonical request, for the life of the store;
 //! * `capture_failure_blocks_send` — a key already bound to a conflicting
 //!   request makes `sent` unreachable, permanently.
+//! * `reconciled_document_send_implies_exact_config_provenance` — a reconciled
+//!   document-runtime send carries required signed exact refs plus canonical
+//!   optional-tool/skill evidence; static/one-shot requests may omit it.
 //!
 //! The *ordering* half is fenced against the real owned loop in
 //! `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send`,
@@ -411,8 +414,88 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 
     let mut saw_rejection = false;
     let mut saw_idempotent = false;
+    let mut saw_missing_config = false;
+    let mut saw_config_rebinding = false;
+    let mut saw_static_without_config = false;
+
+    const REQUIRED_CONFIG_CLASSES: [&str; 4] = [
+        "principal",
+        "behavior",
+        "inference_backend",
+        "inference_profile",
+    ];
 
     for case in cases {
+        let exact = |source: &crate::lean_vocab_test::LeanRenderedConfigSourceRef| {
+            source.doc_id != 0 && source.composite_commit_cid != 0 && source.signer_did != 0
+        };
+        let required_complete = case.config_sources.len() >= REQUIRED_CONFIG_CLASSES.len()
+            && case
+                .config_sources
+                .iter()
+                .take(REQUIRED_CONFIG_CLASSES.len())
+                .zip(REQUIRED_CONFIG_CLASSES)
+                .all(|(source, expected_class)| {
+                    source.source_class == expected_class
+                        && source.logical_id.is_none()
+                        && exact(source)
+                });
+        let (optional_tool_complete, skills_complete) = if required_complete {
+            let mut index = REQUIRED_CONFIG_CLASSES.len();
+            let optional_tool_complete = if case
+                .config_sources
+                .get(index)
+                .is_some_and(|source| source.source_class == "tool_selection")
+            {
+                let tool = &case.config_sources[index];
+                index += 1;
+                tool.logical_id.is_none() && exact(tool)
+            } else {
+                true
+            };
+            let mut previous_skill_id = 0;
+            let skills_complete = case.config_sources[index..].iter().all(|skill| {
+                let Some(logical_id) = skill.logical_id else {
+                    return false;
+                };
+                let canonical =
+                    skill.source_class == "skill" && exact(skill) && previous_skill_id < logical_id;
+                previous_skill_id = logical_id;
+                canonical
+            });
+            (optional_tool_complete, skills_complete)
+        } else {
+            (false, false)
+        };
+        let computed_config_complete =
+            case.config_present && required_complete && optional_tool_complete && skills_complete;
+        let computed_config_required = match case.config_scope.as_str() {
+            "reconciled_document_runtime" => true,
+            "static_or_one_shot" => false,
+            other => panic!("{}: unknown config scope {other:?}", case.name),
+        };
+        let computed_config_admitted = if computed_config_required {
+            computed_config_complete
+        } else {
+            !case.config_present || computed_config_complete
+        };
+        assert_eq!(
+            computed_config_required, case.config_required,
+            "{}: config scope/requirement drifted",
+            case.name
+        );
+        assert_eq!(
+            computed_config_complete, case.config_complete,
+            "{}: the generated config-completeness decision drifted from the \
+             required/optional/canonical-skills exact-reference contract",
+            case.name
+        );
+        assert_eq!(
+            computed_config_admitted, case.config_admitted,
+            "{}: scope-aware config admission drifted",
+            case.name
+        );
+
         assert!(
             matches!(
                 case.capture_outcome.as_str(),
@@ -439,12 +522,28 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
             assert_eq!(case.post_stage, "durablyCaptured", "{}", case.name);
             assert_eq!(case.final_stage, "sent", "{}", case.name);
             assert_eq!(case.provider_requests_observed, 1, "{}", case.name);
-        } else {
-            assert_ne!(
-                case.durable_after,
-                Some(case.request),
-                "{}: a refused send must not claim this request is durable",
+            assert!(case.config_admitted, "{}: send was not admitted", case.name);
+            if case.config_required {
+                assert!(
+                    case.config_complete,
+                    "{}: a reconciled document-runtime send must carry complete exact config provenance",
+                    case.name
+                );
+            }
+            assert_eq!(
+                case.durable_config_sources, case.config_sources,
+                "{}: the durable fact must preserve the exact config bundle",
                 case.name
+            );
+        } else {
+            let same_canonical_fact = case.durable_after == Some(case.request)
+                && case.durable_config_present == case.config_present
+                && case.durable_config_sources == case.config_sources;
+            assert!(
+                !same_canonical_fact,
+                "{}: a refused send must not claim this complete canonical fact \
+                 is durable",
+                case.name,
             );
             assert_eq!(case.post_stage, "assembled", "{}", case.name);
             assert_eq!(case.final_stage, "assembled", "{}", case.name);
@@ -453,6 +552,10 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 
         saw_rejection |= case.capture_outcome == "rejected";
         saw_idempotent |= case.capture_outcome == "idempotent";
+        saw_missing_config |= case.name == "reconciled_runtime_missing_config_blocks_send";
+        saw_config_rebinding |=
+            case.name == "config_provenance_rebinding_is_an_integrity_violation";
+        saw_static_without_config |= case.name == "static_or_one_shot_without_config_can_send";
     }
 
     assert!(
@@ -464,5 +567,17 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
         saw_idempotent,
         "the generated rows must include an identical recapture; without it \
          idempotent redelivery is untested"
+    );
+    assert!(
+        saw_missing_config,
+        "the generated rows must include missing config provenance"
+    );
+    assert!(
+        saw_config_rebinding,
+        "the generated rows must include equal bytes rebound to another config bundle"
+    );
+    assert!(
+        saw_static_without_config,
+        "the generated rows must include a static/one-shot send without config provenance"
     );
 }

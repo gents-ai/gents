@@ -877,6 +877,10 @@ mod tests {
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
+            crate::runtime_snapshot::ScopedBehaviorConfigProvenance {
+                scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+                exact: None,
+            },
             Arc::new(RoutedReplyModel),
             preamble,
             loop_tools,

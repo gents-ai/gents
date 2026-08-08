@@ -11,8 +11,7 @@ pub(super) use startup::run_agent;
 use crate::watcher::Watcher;
 #[cfg(test)]
 use control_watcher::{
-    run_control_watcher, run_control_watcher_inner, CONTROL_FULL_RESCAN_INTERVAL,
-    CONTROL_RECONCILE_DEBOUNCE,
+    run_control_watcher_inner, CONTROL_FULL_RESCAN_INTERVAL, CONTROL_RECONCILE_DEBOUNCE,
 };
 #[cfg(test)]
 use router::{

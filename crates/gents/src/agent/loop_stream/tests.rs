@@ -580,22 +580,108 @@ async fn rendered_request_sink_runs_before_provider_stream() {
 /// request stored under it.
 type CaptureKey = (u64, u64, u64, usize, u32);
 
+type ConfigSourceRef = (String, Option<u64>, u64, u64, u64);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanonicalCapture {
+    provider_body: u64,
+    config_scope: String,
+    config: Option<Vec<ConfigSourceRef>>,
+}
+
+fn config_bundle(
+    present: bool,
+    sources: &[crate::lean_vocab_test::LeanRenderedConfigSourceRef],
+) -> Option<Vec<ConfigSourceRef>> {
+    present.then(|| {
+        sources
+            .iter()
+            .map(|source| {
+                (
+                    source.source_class.clone(),
+                    source.logical_id,
+                    source.doc_id,
+                    source.composite_commit_cid,
+                    source.signer_did,
+                )
+            })
+            .collect()
+    })
+}
+
+fn config_bundle_is_complete(config: &Option<Vec<ConfigSourceRef>>) -> bool {
+    const REQUIRED_CLASSES: [&str; 4] = [
+        "principal",
+        "behavior",
+        "inference_backend",
+        "inference_profile",
+    ];
+    let Some(sources) = config else {
+        return false;
+    };
+    if sources.len() < REQUIRED_CLASSES.len() {
+        return false;
+    }
+    let exact = |source: &ConfigSourceRef| source.2 != 0 && source.3 != 0 && source.4 != 0;
+    if !sources
+        .iter()
+        .take(REQUIRED_CLASSES.len())
+        .zip(REQUIRED_CLASSES)
+        .all(|(source, expected)| source.0 == expected && source.1.is_none() && exact(source))
+    {
+        return false;
+    }
+
+    let mut index = REQUIRED_CLASSES.len();
+    if sources
+        .get(index)
+        .is_some_and(|source| source.0 == "tool_selection")
+    {
+        let tool = &sources[index];
+        if tool.1.is_some() || !exact(tool) {
+            return false;
+        }
+        index += 1;
+    }
+
+    let mut previous_skill_id = 0;
+    sources[index..].iter().all(|skill| {
+        let Some(logical_id) = skill.1 else {
+            return false;
+        };
+        let canonical = skill.0 == "skill" && exact(skill) && previous_skill_id < logical_id;
+        previous_skill_id = logical_id;
+        canonical
+    })
+}
+
+fn config_bundle_is_admitted(scope: &str, config: &Option<Vec<ConfigSourceRef>>) -> bool {
+    match scope {
+        "reconciled_document_runtime" => config_bundle_is_complete(config),
+        "static_or_one_shot" => config.is_none() || config_bundle_is_complete(config),
+        _ => false,
+    }
+}
+
 /// `RenderedCapture.capture`, mirrored. This is deliberately the *only* hand
 /// written thing in the fence below, and it is the shape PR2's
 /// `rendered_request::sink` has to implement: missing key writes, identical
 /// canonical value succeeds without a write, conflicting canonical value is an
 /// integrity error. Everything else the test asserts is generated.
 fn mirror_capture(
-    store: &mut std::collections::HashMap<CaptureKey, u64>,
+    store: &mut std::collections::HashMap<CaptureKey, CanonicalCapture>,
     key: CaptureKey,
-    request: u64,
+    request: CanonicalCapture,
 ) -> &'static str {
-    match store.get(&key).copied() {
+    if !config_bundle_is_admitted(&request.config_scope, &request.config) {
+        return "rejected";
+    }
+    match store.get(&key) {
         None => {
             store.insert(key, request);
             "fresh"
         }
-        Some(stored) if stored == request => "idempotent",
+        Some(stored) if stored == &request => "idempotent",
         Some(_) => "rejected",
     }
 }
@@ -633,19 +719,31 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         );
         let mut seeded = std::collections::HashMap::new();
         if let Some(prior) = case.prior_binding {
-            seeded.insert(key, prior);
+            seeded.insert(
+                key,
+                CanonicalCapture {
+                    provider_body: prior,
+                    config_scope: case.config_scope.clone(),
+                    config: config_bundle(case.prior_config_present, &case.prior_config_sources),
+                },
+            );
         }
         let store = Arc::new(Mutex::new(seeded));
         let outcomes = Arc::new(Mutex::new(Vec::<&'static str>::new()));
 
         let store_for_sink = store.clone();
         let outcomes_for_sink = outcomes.clone();
-        let request_value = case.request;
+        let request_value = CanonicalCapture {
+            provider_body: case.request,
+            config_scope: case.config_scope.clone(),
+            config: config_bundle(case.config_present, &case.config_sources),
+        };
         let mut loop_config = config(0);
         loop_config.on_rendered_request =
             Some(Arc::new(move |_turn_index, _attempt, _request, _trace| {
                 let store = store_for_sink.clone();
                 let outcomes = outcomes_for_sink.clone();
+                let request_value = request_value.clone();
                 Box::pin(async move {
                     let outcome = mirror_capture(&mut *store.lock().await, key, request_value);
                     outcomes.lock().await.push(outcome);
@@ -679,10 +777,15 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
             "{}: the sink decision drifted from RenderedCapture.capture",
             case.name
         );
+        let expected_durable = case.durable_after.map(|provider_body| CanonicalCapture {
+            provider_body,
+            config_scope: case.config_scope.clone(),
+            config: config_bundle(case.durable_config_present, &case.durable_config_sources),
+        });
         assert_eq!(
-            store.lock().await.get(&key).copied(),
-            case.durable_after,
-            "{}: the durable binding drifted from the Lean model",
+            store.lock().await.get(&key).cloned(),
+            expected_durable,
+            "{}: the durable canonical binding drifted from the Lean model",
             case.name
         );
         assert_eq!(
@@ -1396,6 +1499,8 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             "did:key:agent",
         )),
         transcript_snapshot: Vec::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        config_provenance: None,
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),
@@ -1456,6 +1561,8 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
             "did:key:agent",
         )),
         transcript_snapshot: Vec::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        config_provenance: None,
         request_id: "req-empty".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

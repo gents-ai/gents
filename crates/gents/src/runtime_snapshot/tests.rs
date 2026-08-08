@@ -52,6 +52,32 @@ fn behavior_with_skills(skills: Vec<crate::skills::Skill>) -> Arc<crate::config:
     })
 }
 
+fn config_fact(collection: &str, logical_id: &str, cid: &str) -> crate::ConfigFactRef {
+    crate::ConfigFactRef::new(
+        collection,
+        logical_id,
+        crate::SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new(format!("doc-{collection}-{logical_id}"), cid),
+            "did:key:verified-config-writer",
+        ),
+    )
+}
+
+fn config_provenance(
+    behavior: &crate::config::AgentBehavior,
+    behavior_cid: &str,
+) -> crate::ResolvedBehaviorConfigProvenance {
+    crate::ResolvedBehaviorConfigProvenance {
+        principal: config_fact("AgentPrincipal", behavior.agent_did(), "cid-principal"),
+        behavior: config_fact("AgentBehavior", &behavior.behavior_id, behavior_cid),
+        inference_backend: config_fact("InferenceBackend", "backend-general", "cid-backend"),
+        inference_profile: config_fact("InferenceProfile", "profile-general", "cid-profile"),
+        tool_selection: None,
+        skills: Vec::new(),
+        resolution_algorithm_version: 1,
+    }
+}
+
 /// Build a minimal `Arc<AgentPrincipal>` for tests that call `.activate()`.
 /// Does not exercise signing — only satisfies the principal invariant so that
 /// the `debug_assert!` in `activate()` does not fire.
@@ -80,6 +106,8 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
         paired_peer_dids: HashSet::new(),
         default_behavior_id: default_behavior_id.to_string(),
         behaviors: HashMap::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        behavior_config_provenance: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
@@ -102,6 +130,8 @@ fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
         paired_peer_dids: HashSet::from(["did:peer".to_string()]),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        behavior_config_provenance: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::from([("code".to_string(), "missing backend".to_string())]),
@@ -157,6 +187,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
         paired_peer_dids: HashSet::new(),
         default_behavior_id: "general".to_string(),
         behaviors: HashMap::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        behavior_config_provenance: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
@@ -222,6 +254,103 @@ fn configuration_fingerprint_is_independent_of_skill_source_order() {
         permuted.configuration_fingerprint(),
         "the same skill set must not publish a new generation solely because its source map iterated differently"
     );
+}
+
+#[test]
+fn configuration_fingerprint_rotates_on_exact_config_version_change() {
+    let behavior = behavior_with_skills(Vec::new());
+    let behavior_id = behavior.behavior_id.clone();
+    let first = ResolvedRuntimeSnapshot::from_parts(
+        behavior_id.clone(),
+        vec![behavior.clone()],
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_behavior_config_provenance(HashMap::from([(
+        behavior_id.clone(),
+        Arc::new(config_provenance(&behavior, "cid-behavior-a")),
+    )]));
+    let second = ResolvedRuntimeSnapshot::from_parts(
+        behavior_id.clone(),
+        vec![behavior.clone()],
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_behavior_config_provenance(HashMap::from([(
+        behavior_id,
+        Arc::new(config_provenance(&behavior, "cid-behavior-b")),
+    )]));
+
+    assert_ne!(
+        first.configuration_fingerprint(),
+        second.configuration_fingerprint(),
+        "a CID-only config change is a new audit fact and must rotate the active generation"
+    );
+}
+
+#[test]
+fn reconciled_snapshot_requires_and_retains_scope_for_every_runnable_behavior() {
+    let behavior = behavior_with_skills(Vec::new());
+    let behavior_id = behavior.behavior_id.clone();
+
+    let missing = ResolvedRuntimeSnapshot::from_parts(
+        behavior_id.clone(),
+        vec![behavior.clone()],
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_reconciled_document_runtime_config_provenance(HashMap::new())
+    .expect_err("reconciled snapshots must pin every runnable behavior");
+    assert!(missing
+        .to_string()
+        .contains("has no exact config provenance"));
+
+    let mut reconciled = ResolvedRuntimeSnapshot::from_parts(
+        behavior_id.clone(),
+        vec![behavior.clone()],
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_reconciled_document_runtime_config_provenance(HashMap::from([(
+        behavior_id.clone(),
+        Arc::new(config_provenance(&behavior, "cid-behavior")),
+    )]))
+    .expect("complete reconciled provenance");
+    assert_eq!(
+        reconciled.config_provenance_scope,
+        crate::rendered_request::ConfigProvenanceScope::ReconciledDocumentRuntime
+    );
+
+    reconciled.behavior_config_provenance.remove(&behavior_id);
+    let scoped = reconciled.scoped_config_provenance_for(&behavior_id);
+    assert_eq!(
+        scoped.scope,
+        crate::rendered_request::ConfigProvenanceScope::ReconciledDocumentRuntime
+    );
+    assert!(scoped.exact.is_none());
+    let dropped = reconciled
+        .validate_config_provenance_scope()
+        .expect_err("a dropped reconciled map entry must fail closed");
+    assert!(dropped
+        .to_string()
+        .contains("has no exact config provenance"));
+}
+
+#[test]
+fn static_snapshot_validates_any_supplied_exact_bundle() {
+    let behavior = behavior_with_skills(Vec::new());
+    let behavior_id = behavior.behavior_id.clone();
+    let mut invalid = config_provenance(&behavior, "cid-behavior");
+    invalid.behavior.logical_id = "other-behavior".to_string();
+    let snapshot = ResolvedRuntimeSnapshot::from_parts(
+        behavior_id.clone(),
+        vec![behavior],
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .with_behavior_config_provenance(HashMap::from([(behavior_id, Arc::new(invalid))]));
+
+    assert!(snapshot.validate_config_provenance_scope().is_err());
 }
 
 #[test]

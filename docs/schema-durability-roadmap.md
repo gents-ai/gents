@@ -50,13 +50,26 @@ The active dependency chain is:
    only when the ingress signature is verified. The overall rendered manifest
    remains `CapturedOnly` until its other evidence dimensions are complete.
 
-#1065 now implements this signed-ingest milestone end to end, with the embedded
+#1065 implements this signed-ingest milestone end to end, with the embedded
 DefraDB signing/runtime support carried by DefraDB #1325. Request producers
 declare the actual node signer separately from requester attribution and target
 agent identity; atomic claim verifies the exact source and claim commits; and
-provider capture re-verifies the durable chain. The rendered manifest remains
-`CapturedOnly` for configuration/transcript dimensions that belong to later
-slices.
+provider capture re-verifies the durable chain.
+
+Two post-ingest checkpoints are now layered onto that foundation:
+
+- finalized transcript facts are immutable create-and-compare records, and the
+  provider manifest names the exact signed message versions it loaded; and
+- reconciled document-runtime behaviors retain the exact signed principal,
+  behavior, backend, profile, optional tool selection, and canonically ordered
+  effective skill versions used to build the active slot. A CID-only change
+  rotates the runtime generation, and the same bundle is captured before send.
+
+This is bounded direct evidence, not the immutable published
+`ResolvedAgentGeneration` described in Slice 6. The manifest remains
+`CapturedOnly`: it does not yet prove completeness of the skill candidate set,
+MCP availability, the host tool ceiling, compaction inputs, placement/lease
+authority, ACP authorization, or encryption.
 
 ### Active milestone acceptance
 
@@ -76,10 +89,13 @@ slices.
 
 Attaching identity to every query and mutation is still required for the later
 policy workstream, but it does not identify the versions a query consumed.
-Transcript/config provenance additionally requires an immutable manifest of
-every consumed `(collection, _docID, composite CID)` and signature status. A
-node signature proves authorship of each named commit; the manifest proves that
-those exact commits contributed to the provider request.
+The transcript checkpoint now records every consumed message
+`(_docID, composite CID, verified signer DID)`, and the bounded config
+checkpoint records the selected core config facts in the same form. Full config
+reconstruction additionally needs immutable evidence for the candidate and
+availability sets that influenced selection. A node signature proves
+authorship of each named commit; future ACP policy decides whether that author
+was authorized.
 
 This milestone does not claim cross-host single-executor safety. Two hosts can
 independently extend the same replicated pending head before convergence; the

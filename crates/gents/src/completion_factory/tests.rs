@@ -482,6 +482,8 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             "did:key:agent",
         )),
         transcript_snapshot: Vec::new(),
+        config_provenance_scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        config_provenance: None,
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

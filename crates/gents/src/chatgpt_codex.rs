@@ -748,6 +748,9 @@ mod tests {
                     ),
                 ),
                 transcript_snapshot: Vec::new(),
+                config_provenance_scope:
+                    crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+                config_provenance: None,
                 request_id: "req-1".to_string(),
                 agent_did: "did:key:agent".to_string(),
                 requester_did: String::new(),

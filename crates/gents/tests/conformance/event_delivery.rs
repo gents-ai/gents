@@ -960,6 +960,8 @@ fn active_snapshot(
             AGENT_NAME.to_string(),
             runtime_behavior(AGENT_NAME, agent_did),
         )]),
+        config_provenance_scope: gents::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+        behavior_config_provenance: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),

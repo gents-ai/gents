@@ -274,6 +274,9 @@ where
             request_doc_id: String::new(),
             request_provenance: None,
             transcript_snapshot: Vec::new(),
+            config_provenance_scope:
+                crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
+            config_provenance: None,
             request_id,
             agent_did: behavior.agent_did().to_string(),
             requester_did: String::new(),

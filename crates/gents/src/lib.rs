@@ -181,7 +181,8 @@ pub use document_config::{
     ToolSelectionDocument, WriteToolDecl, WriteToolField,
 };
 pub use document_version::{
-    DocumentVersionRef, RequestExecutionProvenance, SignedDocumentVersionRef,
+    ConfigFactRef, DocumentVersionRef, RequestExecutionProvenance,
+    ResolvedBehaviorConfigProvenance, SignedDocumentVersionRef,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
@@ -35,6 +35,7 @@ pub(super) async fn run_control_watcher(
         runtime_status,
         health_events_rx,
         shutdown,
+        None,
     )
     .await
 }
@@ -49,6 +50,7 @@ pub(super) async fn run_control_watcher_inner(
     runtime_status: RuntimeStatusHandle,
     mut health_events_rx: mpsc::Receiver<()>,
     mut shutdown: watch::Receiver<bool>,
+    startup_ready: Option<oneshot::Sender<()>>,
 ) -> Result<()> {
     let mut document_view =
         document_view::load_document_runtime_view(node.as_ref(), &agent_did).await?;
@@ -59,6 +61,9 @@ pub(super) async fn run_control_watcher_inner(
     // `interval` ticks immediately once. Consume that tick so the fallback is
     // genuinely periodic and does not manufacture a startup reconcile.
     full_rescan.tick().await;
+    if let Some(startup_ready) = startup_ready {
+        let _ = startup_ready.send(());
+    }
     let mut dirty = false;
     let mut pending_visibility = false;
     let mut settle_deadline = None;
