@@ -80,9 +80,12 @@ pub(super) async fn run_control_watcher_inner(
                         runtime_status
                             .set_reconcile_phase(ReconcilePhase::Debouncing)
                             .await;
-                        sleep.as_mut().reset(
-                            tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE
-                        );
+                        // A periodic rescan is already the delayed fallback for a
+                        // missed or closed subscription. Resolve it immediately:
+                        // applying the event debounce here would make the runtime
+                        // non-idle for half of every rescan interval even when the
+                        // loaded configuration is unchanged.
+                        sleep.as_mut().reset(tokio::time::Instant::now());
                     }
                     Err(error) => {
                         tracing::error!(
