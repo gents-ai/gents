@@ -189,6 +189,8 @@ pub(crate) enum Command {
 
 #[derive(clap::Args)]
 pub(crate) struct DemoArgs {
+    #[command(subcommand)]
+    pub(crate) command: Option<DemoCommand>,
     #[arg(
         long,
         help = "Demo state directory. Defaults to ~/.gents-demo (persists)"
@@ -228,6 +230,40 @@ pub(crate) struct DemoArgs {
     pub(crate) desktop: bool,
     #[arg(long, default_value_t = 19501, help = "HTTP port for the first node")]
     pub(crate) http_port: u16,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum DemoCommand {
+    #[command(about = "Run a pack end to end without a human: apply, seed, await, report")]
+    Run(DemoRunArgs),
+    #[command(about = "List runnable packs")]
+    List(DemoListArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DemoRunArgs {
+    #[arg(help = "Pack directory, or a name resolved under experiments/")]
+    pub(crate) pack: String,
+    #[arg(long, help = "Reuse this home instead of a fresh one per run")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
+    pub(crate) prompt: Option<String>,
+    #[arg(long = "job-id", help = "Run id stamped on the seed document")]
+    pub(crate) job_id: Option<String>,
+    #[arg(long, default_value_t = 19191, help = "HTTP port for the pack node")]
+    pub(crate) http_port: u16,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Keep the generated home after the run (for debugging)"
+    )]
+    pub(crate) keep_home: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct DemoListArgs {
+    #[arg(long, default_value = "experiments", help = "Directory holding packs")]
+    pub(crate) root: PathBuf,
 }
 
 #[derive(clap::Args)]

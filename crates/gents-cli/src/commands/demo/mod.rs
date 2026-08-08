@@ -1,5 +1,6 @@
 mod backend;
 mod fleet;
+pub(crate) mod pack;
 mod setup;
 mod shell;
 mod util;
@@ -7,7 +8,7 @@ mod util;
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::cli::args::DemoArgs;
+use crate::cli::args::{DemoArgs, DemoCommand};
 
 use backend::{read_backend_args, resolve_backend, write_backend_args, BackendChoice};
 use fleet::{desktop, spawn_server, wait_http, wait_runtime_ready, Fleet};
@@ -18,6 +19,14 @@ use util::short;
 const NODE_A_NAME: &str = "demo";
 
 pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
+    // Non-interactive verbs first: a pack run is the same machinery as the
+    // shell below, driven by CI instead of a human.
+    match args.command {
+        Some(DemoCommand::Run(run_args)) => return pack::run(run_args).await,
+        Some(DemoCommand::List(list_args)) => return pack::list(&list_args.root).await,
+        None => {}
+    }
+
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let home = resolve_home(args.home.clone());
     if args.reset && home.exists() {

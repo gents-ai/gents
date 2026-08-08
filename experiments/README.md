@@ -8,10 +8,30 @@ the home owns, so applying it to a working home mixes experiment config into
 that agent.
 
 ```bash
-# Preferred: server applies the pack after ready (in-process schemas + config)
-gents server --home <home> --apply-root experiments/<pack>
+# Run a pack end to end: init, apply, seed, await, report. Exit code is the result.
+gents demo run pipeline
 
-# Or apply against a running server / home
+gents demo list                      # what packs exist
+gents demo run pipeline --prompt "…" # override the seed prompt
+gents demo run pipeline --keep-home  # keep the node home for debugging
+```
+
+Each run uses a **fresh home** by default. Triggers are created/first-seen, so
+a reused home can silently skip a stage whose source rows already existed.
+Artifacts land in `<pack>/runs/<job_id>/meta.json` (gitignored): stage request
+ids, lifecycle states, collection counts, and token totals.
+
+`gents demo` with no subcommand is still the interactive shell — same node
+lifecycle and pairing, with a human at the wheel.
+
+To drive a pack by hand instead (what the runner automates):
+
+```bash
+gents server --home <home> --apply-root experiments/<pack>
+# wait for: event source now observing source collection source_collection=…
+# then POST one create_<SeedCollection> mutation, and poll AgentRequest by
+# caused_by_trigger_id
+
 gents config apply --root experiments/<pack> --home <home> \
   --bind-agent-did home --force-rebind-concrete-did
 ```
