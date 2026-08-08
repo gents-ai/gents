@@ -1,7 +1,7 @@
 {
   "selection_id": "exp-tools-stage1",
   "agent_did": "did:key:zExperimentAgentPlaceholder00000000000000000000000000",
-  "display_name": "Experiment tools with ExperimentFinding write",
+  "display_name": "Experiment tools with ExperimentFinding write (surface)",
   "enable_file_tools": false,
   "file_tools_mode": "ReadOnly",
   "file_tool_root": null,
@@ -15,19 +15,8 @@
   "enable_defra_query": false,
   "defra_query_collections": [],
   "subagent_targets": [],
-  "write_tools": [
-    {
-      "tool_name": "write_experiment_finding",
-      "collection": "ExperimentFinding",
-      "description": "Record a finding document for the next pipeline stage.",
-      "fields": [
-        {"name": "job_id", "required": true},
-        {"name": "finding_id", "required": true},
-        {"name": "content", "required": true},
-        {"name": "stage", "required": true}
-      ]
-    }
-  ],
+  "write_tools": [],
+  "datastore_tool_surface_ids": ["experiment-writes"],
   "subagent_spawn_enabled": false,
   "orchestration_enabled": false,
   "subagent_steering_enabled": false,

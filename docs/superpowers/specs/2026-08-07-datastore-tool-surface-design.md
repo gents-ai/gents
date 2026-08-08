@@ -2,14 +2,14 @@
 
 ## Status
 
-**Draft — iterate on this PR.** No implementation yet. Companion to the
-EventTrigger graph experiments design
-(`2026-08-07-event-trigger-graph-experiments-design.md`): that work proved
-document-pipeline DAGs with **hand-authored** `write_tools`; this design makes
-granting those tools reusable without re-listing fields on every tool
-selection, and makes the least-privilege stage agent — **whose only tools are
-datastore reads and the discrete transitions we want it to make** — a
-first-class, document-configured thing.
+**Implemented on this PR** (schema + desired-state + snapshot expand + tests +
+`pipeline-two-stage` surface migration). Companion to the EventTrigger graph
+experiments design (`2026-08-07-event-trigger-graph-experiments-design.md`):
+that work proved document-pipeline DAGs with **hand-authored** `write_tools`;
+this feature makes granting those tools reusable without re-listing fields on
+every tool selection, and makes the least-privilege stage agent — **whose only
+tools are datastore reads and the discrete transitions we want it to make** —
+a first-class, document-configured thing.
 
 ## Problem
 
