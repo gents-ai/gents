@@ -4,13 +4,17 @@ Each subdirectory is a **self-contained pack**: pack-scoped `schemas/`, desired
 state (including `DatastoreToolSurface`), and a README.
 
 ```bash
+# Preferred: server applies the pack after ready (in-process schemas + config)
+gents server --home <home> --apply-root experiments/<pack> --apply-prune
+
+# Or apply against a running server / home
 gents config apply --root experiments/<pack> --home <home> \
   --bind-agent-did home --force-rebind-concrete-did
 ```
 
-When `<pack>/schemas/` exists, **config apply registers those SDL/patches
-first**, then applies agent config (surfaces → selections → behaviors →
-tasks/triggers). Packs do not touch product baseline schemas.
+When `<pack>/schemas/` exists, **apply registers those SDL/patches first**,
+then agent config (surfaces → selections → behaviors → tasks/triggers). Packs
+do not touch product baseline schemas.
 
 ## Packs
 

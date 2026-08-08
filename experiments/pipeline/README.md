@@ -44,31 +44,32 @@ registers `schemas/` first so that name resolves.
      --tool-package minimal
    ```
 
-2. Server (keep running):
-
-   ```bash
-   gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim
-   ```
-
-   If schema registration fails over remote GraphQL (“collection management
-   not enabled”), apply schemas with a local home while the server is stopped,
-   then start the server and re-apply config — or use local access for apply.
-
-3. **One apply** — pack schemas then config (surfaces, selections, triggers):
+2. **Validate + start server with pack apply** (recommended):
 
    ```bash
    gents config validate --root experiments/pipeline
+   gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim \
+     --apply-root experiments/pipeline --apply-prune
+   ```
+
+   After ready, the server applies this pack against the **in-process** node
+   (`schemas/` first, then desired-state; home DID rebind). The serving JSON
+   includes an `apply_root` field with the apply report.
+
+   Equivalent without folding into server:
+
+   ```bash
+   gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim
    gents config apply --root experiments/pipeline --home <home> \
      --graphql http://127.0.0.1:19191/api/v0/graphql \
      --bind-agent-did home --force-rebind-concrete-did --prune
    ```
 
-   The JSON report includes a `schemas` object when `schemas/` was applied.
+3. Wait for EventSource logs: observing `ExperimentJob` **before** seeding
+   (created/first-seen only). Apply-root registers triggers; still wait for
+   the observe log before the first seed.
 
-4. Wait for EventSource logs: observing `ExperimentJob` **before** seeding
-   (created/first-seen only).
-
-5. Kick:
+4. Kick:
 
    ```graphql
    mutation {
@@ -81,7 +82,7 @@ registers `schemas/` first so that name resolves.
    }
    ```
 
-6. Await `caused_by_trigger_id` `exp-stage1` then `exp-stage2`; export with
+5. Await `caused_by_trigger_id` `exp-stage1` then `exp-stage2`; export with
    `gents trace timeline --request-id <id> --home <home>`.
 
 ## Design
