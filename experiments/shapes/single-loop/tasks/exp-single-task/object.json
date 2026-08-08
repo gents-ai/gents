@@ -1,9 +1,0 @@
-{
-  "task_id": "exp-single-task",
-  "name": "exp-single-task",
-  "description": null,
-  "behavior_id": "exp-node",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}

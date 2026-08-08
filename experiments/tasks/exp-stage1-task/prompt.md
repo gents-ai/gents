@@ -4,3 +4,6 @@ trigger {{ event.trigger_id }} on {{ event.source_collection }} doc
 {{ node.behavior_id }} on {{ node.node_did }}.
 
 {{ doc.prompt }}
+
+After answering, call the only available tool write_experiment_finding for
+job_id={{ doc.job_id }} (unique finding_id, content, stage="stage1").

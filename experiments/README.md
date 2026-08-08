@@ -1,59 +1,73 @@
-# EventTrigger graph experiments
+# Experiment pipeline (EventTrigger document graph)
 
-Config + docs only. Topology is expressed as **Tasks + EventTriggers** on
-document creates — not `fan_out_and_synthesize`.
+One productionized arm: a **two-stage document pipeline** driven only by
+EventTriggers on create (not `fan_out_and_synthesize`).
 
-## Model
+```text
+create ExperimentJob
+        │
+        ▼  EventTrigger exp-stage1
+   stage-1 behavior  ──write_experiment_finding──►  ExperimentFinding
+        │                                              │
+        │                                              ▼  EventTrigger exp-stage2
+        │                                         stage-2 behavior (no tools)
+```
 
-| Concept | Mapping |
-| --- | --- |
-| Node | Task bound to a behavior (prompt, model, tools) |
-| Edge | EventTrigger with `event_kind: created` (first-seen only) |
-| Shared state | Source document fields via `{{ doc.* }}` |
-| Kickoff | Single GraphQL create of an `ExperimentJob` |
-| Fan-out | Multiple EventTriggers on the same seed create |
-| Pipeline | Stage agents create next-collection docs (e.g. `ExperimentFinding`) |
+Stage-1’s only model-visible tool is **`write_experiment_finding`**, granted
+via the apply-owned `DatastoreToolSurface` `experiment-writes` (not inline
+`write_tools`). Stage-2 needs no tools: the finding is already in the task
+prompt via `{{ doc.* }}`.
 
-**v1 EventTrigger constraints**
+## Layout
 
-- Only `created` / first-seen fires — never chain on `AgentResponse` or
-  lifecycle updates.
-- No barrier / fan-in primitive (concurrency is per-trigger).
-- Stage edges require **new documents** in a watched collection.
+```text
+experiments/                         desired-state root (this directory)
+  schemas/                           ExperimentJob + ExperimentFinding SDL
+  datastore-tool-surfaces/
+    experiment-writes/               WriteToolDecl surface → ExperimentFinding
+  tool-selections/
+    exp-tools-stage1/                surface link only; all other tools off
+    exp-tools-stage2/                zero tools
+  agent-behaviors|tasks|event_triggers|…
+  runs/                              gitignored exports
+```
 
-## Arms
+## Tool surface (least privilege)
 
-| Arm | Topology | Expected fires |
+| Behavior | Tools advertised | Why |
 | --- | --- | --- |
-| `shapes/single-loop` | One trigger on `ExperimentJob` → one task | 1 request |
-| `shapes/fanout-on-job` | Three triggers on the same `ExperimentJob` create | 3 requests |
-| `shapes/pipeline-two-stage` | Stage-1 on job; stage-2 on `ExperimentFinding` create | ≥1 stage-1 (+ stage-2 after finding write) |
+| `exp-stage1` | `write_experiment_finding` only | Advance the graph by creating a finding |
+| `exp-stage2` | *(none)* | Finding fields are in the prompt; synthesize text only |
 
-All arms use **DeepSeek V4 Flash** (`d4f`) via OpenAI-compatible chat
-completions at `http://100.73.235.38:8000/v1` (Tailscale peer
-`workstation-1`). Tool selections set `orchestration_enabled: false`.
+Explicitly off on both selections (defaults that would otherwise leak tools):
+
+- `enable_file_tools` / `enable_bash` / `enable_meta_tools`
+- `enable_context_budget` (version-gated default-true)
+- `enable_defra_query` / memory / session history / self-config
+- orchestration / subagent spawn / MCP
+
+Job and finding text arrive through EventTrigger templates (`{{ doc.* }}`), so
+stage agents do not need datastore query tools for this arm.
 
 ## Schemas
 
-Register before kicking (custom collections are not in product schemas):
+Custom collections (not product baseline) — apply once per home:
 
-- `schemas/experiment_job.graphql` — seed collection
-- `schemas/experiment_finding.graphql` — pipeline stage-2 source
-
-Fields on `ExperimentJob`: `job_id`, `prompt`, `suite`, `arm`.
+- `schemas/experiment_job.graphql` — seed
+- `schemas/experiment_finding.graphql` — stage edge
 
 ## Operator flow
 
 Static check (no server):
 
 ```bash
-gents config validate --root experiments/shapes/<arm>
+gents config validate --root experiments
 ```
 
-Live path that has been exercised end-to-end against DeepSeek V4 Flash
-(`d4f` on workstation-1):
+Live path (DeepSeek V4 Flash `d4f` on Tailscale `workstation-1` is the
+checked-in backend example):
 
-1. **Init a home** (once) pointed at the same backend the arms use:
+1. **Init a home** (once):
 
    ```bash
    gents init --home <home> --inference-url http://100.73.235.38:8000/v1 \
@@ -61,107 +75,61 @@ Live path that has been exercised end-to-end against DeepSeek V4 Flash
      --tool-package minimal
    ```
 
-2. **Register experiment SDL via local home** (GraphQL remote schema apply
-   may return “Collection management operations are not enabled”):
+2. **Register experiment SDL** (stop the server if it holds the store open):
 
    ```bash
-   # stop the server if it is holding the store open
    gents schema apply experiments/schemas --home <home>
    ```
 
-3. **Start the server**, then **apply the arm** (checked-in DIDs are
-   placeholders — rebind is required):
+3. **Start server**, then **apply this tree** (placeholders rebind to home DID):
 
    ```bash
    gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim
-   gents config apply --root experiments/shapes/<arm> --home <home> \
+   gents config apply --root experiments --home <home> \
      --graphql http://127.0.0.1:19191/api/v0/graphql \
      --bind-agent-did home --force-rebind-concrete-did --prune
    ```
 
-   Use `--prune` when switching arms so leftover triggers (e.g. `exp-single`)
-   do not also fire on the next seed. Each behavior must bind an inference
-   profile (`exp-profile` in these arms); otherwise multi-behavior arms only
-   partially reconcile.
+4. **Wait** until logs show EventSource observing `ExperimentJob` **before**
+   creating a seed (v1 is created/first-seen only; earlier seeds never fire).
 
-
-4. **Wait until the event source observes the seed collection.** Logs should
-   show `event source now observing source collection
-   source_collection=ExperimentJob` *before* you create a job. Seeds created
-   earlier are treated as already-seen (v1 created/first-seen only) and will
-   **not** fire.
-
-5. **Kick with one seed create** (fresh `job_id` each run):
+5. **Kick** with a fresh `job_id`:
 
    ```graphql
    mutation {
      create_ExperimentJob(input: {
        job_id: "exp-…"
        prompt: "Your research question"
-       suite: "topology-ab"
-       arm: "single-loop"
+       suite: "pipeline"
+       arm: "pipeline-two-stage"
      }) { _docID job_id }
    }
    ```
 
-6. **Await lineage and export**
-
-   Poll:
+6. **Await lineage** (`exp-stage1`, then `exp-stage2` after the finding write):
 
    ```graphql
    {
-     AgentRequest(filter: { caused_by_trigger_id: { _eq: "exp-single" } }) {
-       request_id
-       content
-       caused_by_trigger_id
-       caused_by_trigger_kind
-       lifecycle_state
+     AgentRequest(filter: { caused_by_trigger_id: { _eq: "exp-stage1" } }) {
+       request_id lifecycle_state caused_by_trigger_id
      }
    }
    ```
 
-   Trigger ids: `exp-single`; `exp-fan-a` / `exp-fan-b` / `exp-fan-c`;
-   `exp-stage1` / `exp-stage2`.
-
-   Then:
-
    ```bash
    gents trace timeline --request-id <id> --home <home>
-   gents trace project --projection multi-agent --format eval-jsonl \
-     --request-id <id> --home <home>
-   # token cost (not on the timeline row today):
-   # InferenceCall(filter: { request_id: { _eq: "…" } }) {
-   #   prompt_tokens completion_tokens cached_input_tokens
-   # }
+   # tokens: query InferenceCall by request_id (not AgentResponse.token_count)
    ```
 
    Drop exports under `runs/<job_id>/` (gitignored).
 
 ## Measurement
 
-Trust for cost/structure:
-
-- Request count / siblings by `caused_by_trigger_id`
-- Inference call count and wall time from the run timeline
-- **Token usage from `InferenceCall.prompt_tokens` /
-  `completion_tokens` / `cached_input_tokens`** — query `InferenceCall` by
-  `request_id` (timeline rows do not project these fields today)
-
-Do **not** use `AgentResponse.token_count` as a cost metric — it is a
-streaming word-count proxy and can read 0 on recovered responses.
-
-Quality scoring (LLM-as-judge, human rubrics) is out of band via
-eval-jsonl export.
-
-## Scope of this tree
-
-Shipped here: **desired-state arms + schemas + this operator guide**.  
-Not in this tree or PR: CI e2e (`experiment_graph_e2e`),
-`cli_experiment_shapes`, or a custom harness binary. Runtime already
-provides config apply, schema apply, triggers, and `gents trace`.
+- Request count / stage by `caused_by_trigger_id`
+- Timeline wall time; **tokens from `InferenceCall`**
+- Do **not** use `AgentResponse.token_count` as cost
 
 ## Design
 
-See `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`
-and the status plan under
-`docs/superpowers/plans/2026-08-07-event-trigger-graph-experiments.md`.
+- Topology: `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`
+- Create-tool surface: `docs/superpowers/specs/2026-08-07-datastore-tool-surface-design.md`

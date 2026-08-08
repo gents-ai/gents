@@ -1,9 +1,0 @@
-{
-  "task_id": "exp-fan-c-task",
-  "name": "exp-fan-c-task",
-  "description": null,
-  "behavior_id": "exp-fan-c",
-  "prompt_template": "./prompt.md",
-  "enabled": true,
-  "output_schema_ref": null
-}

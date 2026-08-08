@@ -1,9 +1,0 @@
-{
-  "trigger_id": "exp-fan-b",
-  "task_id": "exp-fan-b-task",
-  "source_collection": "ExperimentJob",
-  "event_kind": "created",
-  "filter": null,
-  "enabled": true,
-  "concurrency": "parallel"
-}

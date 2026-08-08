@@ -353,5 +353,5 @@ part.
 - Apply-order proofs: `crates/gents/proofs/Proofs/ApplyReconcile/`
 - Migration baseline: `crates/gents-migration/src/registry.rs`
 - Self-config protected fields: `crates/gents/src/self_config/mod.rs`
-- Motivating usage: `experiments/shapes/pipeline-two-stage/` (inline decl
-  this feature replaces), `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`
+- Motivating usage: `experiments/` (pipeline arm; stage-1 links
+  `experiment-writes`), `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`

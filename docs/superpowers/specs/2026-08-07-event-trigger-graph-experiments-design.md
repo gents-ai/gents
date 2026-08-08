@@ -4,15 +4,17 @@
 
 This design describes the **shipped** experiment surface on branch/PR:
 
-- **Config + operator docs only** under repo-root `experiments/`
-- Three desired-state arms (`single-loop`, `fanout-on-job`, `pipeline-two-stage`)
-- No CI e2e wrapper, no `cli_experiment_shapes` fence, no new harness binary
-- Inference example arms target **DeepSeek V4 Flash** (`d4f`) via OpenAI-compatible
+- **One productionized desired-state root** under repo-root `experiments/`
+  (two-stage pipeline: `ExperimentJob` → finding write → `ExperimentFinding`)
+- Stage-1 create tool via **`DatastoreToolSurface` `experiment-writes`**
+  (not inline `write_tools`); stage-2 has **no tools**
+- No CI e2e wrapper, no multi-arm shape matrix, no harness binary
+- Inference example targets **DeepSeek V4 Flash** (`d4f`) via OpenAI-compatible
   chat completions on Tailscale peer **workstation-1**
   (`http://100.73.235.38:8000/v1`)
 
-CI mock e2e (reusing `e2e_triggers` + `tests/support`) remains an optional
-**follow-up**, not part of this deliverable. See Non-goals / deferred.
+Earlier draft arms (`single-loop`, `fanout-on-job`) were removed in favor of the
+pipeline. CI mock e2e remains an optional **follow-up**.
 
 ## Problem
 
@@ -28,10 +30,10 @@ document-driven graphs:
 
 Substantially all runtime infrastructure already exists. This workstream adds:
 
-1. **Agent config files per experiment** ("arms") — desired-state roots under
-   `experiments/shapes/`, applied with `gents config apply`.
+1. **Agent config** — desired-state root at `experiments/`, applied with
+   `gents config apply --root experiments`.
 2. **Operator documentation** — `experiments/README.md` for validate → schema
-   apply → server → apply arm → wait for EventSource → single seed create →
+   apply → server → apply → wait for EventSource → single seed create →
    await lineage → timeline / token export.
 
 No new harness code under `experiments/`.

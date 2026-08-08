@@ -8,17 +8,16 @@
 | Item | Status |
 | --- | --- |
 | Design doc | Shipped under `docs/superpowers/specs/` |
-| `experiments/` layout (README, schemas, `runs/.gitignore`) | Shipped |
-| Arms `single-loop`, `fanout-on-job`, `pipeline-two-stage` | Shipped (desired-state roots) |
-| DeepSeek V4 Flash / workstation-1 backend on arms | Shipped (`d4f` @ `http://100.73.235.38:8000/v1`) |
+| Single productionized pipeline under `experiments/` | Shipped (no multi-arm matrix) |
+| `DatastoreToolSurface` `experiment-writes` on stage-1 | Shipped |
+| Least-privilege tool selections (stage-1 write only; stage-2 none) | Shipped |
+| DeepSeek V4 Flash / workstation-1 backend | Shipped (`d4f` @ `http://100.73.235.38:8000/v1`) |
 | Operator path + measurement docs | Shipped in `experiments/README.md` |
-| `gents config validate` on all three arms | Passes |
-| CI e2e (`experiment_graph_e2e.rs`) | **Not shipped** — deferred |
-| `cli_experiment_shapes` fence | **Not shipped** — deferred |
-| New harness binary under `experiments/` | **Out of scope** |
+| `gents config validate --root experiments` | Passes |
+| CI e2e / harness binary | **Not shipped** — deferred |
 
-This PR is **config + docs** (`docs/superpowers/**` + `experiments/**`). No
-Rust production changes and no new CI e2e or workflows.
+This PR ships experiment config + DatastoreToolSurface runtime. No multi-shape
+A/B matrix and no new CI e2e.
 
 ## Goal (original)
 
@@ -57,17 +56,15 @@ pipeline, single GraphQL seed kick, measure with `gents trace` /
 - `experiments/schemas/experiment_finding.graphql`
 - `experiments/runs/.gitignore`
 
-### Task 2 — Three arm roots — **done** (without `cli_experiment_shapes`)
+### Task 2 — Pipeline desired-state root — **done**
 
-Roots under `experiments/shapes/{single-loop,fanout-on-job,pipeline-two-stage}/`
-with DeepSeek backend, created-only triggers, and full template surface.
+Single root at `experiments/` (two-stage pipeline + surface). Former draft
+arms `single-loop` / `fanout-on-job` removed.
 
 Validate:
 
 ```bash
-gents config validate --root experiments/shapes/single-loop
-gents config validate --root experiments/shapes/fanout-on-job
-gents config validate --root experiments/shapes/pipeline-two-stage
+gents config validate --root experiments
 ```
 
 ### Task 3 — CI e2e wrapper — **deferred (not this PR)**
