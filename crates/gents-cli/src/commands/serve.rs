@@ -502,18 +502,36 @@ pub(crate) async fn serve_with_control(
     };
     let background_execution_registry = agent.background_execution_registry();
 
-    let shutdown_rx = match external_shutdown {
-        Some(shutdown_rx) => shutdown_rx,
-        None => {
-            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Own the shutdown signal locally and forward the external one into it, so
+    // paths like a failed `--apply-root` can ask the runtime to shut down
+    // gracefully. Aborting the task instead would skip run_agent's epilogue,
+    // leaving AgentRuntime at `ready` and its detached children still firing.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    match external_shutdown {
+        Some(mut external) => {
+            let forward_tx = shutdown_tx.clone();
             tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
-                    let _ = shutdown_tx.send(true);
+                if *external.borrow() {
+                    let _ = forward_tx.send(true);
+                    return;
+                }
+                while external.changed().await.is_ok() {
+                    if *external.borrow() {
+                        let _ = forward_tx.send(true);
+                        return;
+                    }
                 }
             });
-            shutdown_rx
         }
-    };
+        None => {
+            let signal_tx = shutdown_tx.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    let _ = signal_tx.send(true);
+                }
+            });
+        }
+    }
 
     let mut run_handle = tokio::spawn(agent.run(shutdown_rx));
     loop {
@@ -670,7 +688,9 @@ pub(crate) async fn serve_with_control(
                     // Stop the runtime we already started. Dropping the handle
                     // only detaches the task, which would leave the agent and
                     // the open node alive for embedded callers of this function.
-                    run_handle.abort();
+                    // Signal rather than abort so run_agent runs its shutdown
+                    // epilogue (process state, cancellation, task joins).
+                    let _ = shutdown_tx.send(true);
                     let _ = (&mut run_handle).await;
                     return Err(error).with_context(|| {
                         format!(

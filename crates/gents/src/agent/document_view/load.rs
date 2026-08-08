@@ -141,8 +141,11 @@ pub(crate) async fn load_document_runtime_view(
                     );
                     continue;
                 }
+                // Key trimmed: lookups trim, and the CLI's link validation
+                // keys trimmed too. Keying raw here would let `config apply`
+                // accept a padded surface_id the runtime then cannot resolve.
                 view.datastore_tool_surfaces.insert(
-                    surface.surface_id.clone(),
+                    surface.surface_id.trim().to_string(),
                     DocumentRecord {
                         doc_id,
                         value: surface,

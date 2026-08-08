@@ -117,7 +117,7 @@ pub(crate) async fn apply_control_update(
         }
         view.remove_datastore_tool_surface_by_doc_id(doc_id);
         view.datastore_tool_surfaces.insert(
-            surface.surface_id.clone(),
+            surface.surface_id.trim().to_string(),
             DocumentRecord {
                 doc_id: loaded_doc_id,
                 value: surface,
