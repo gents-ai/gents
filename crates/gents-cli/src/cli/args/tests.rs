@@ -192,7 +192,6 @@ fn init_write_and_yolo_flags_parse() {
 }
 
 #[test]
-#[test]
 fn server_apply_root_flags_parse() {
     let args = parse_server(&["--apply-root", "experiments/pipeline", "--apply-prune"]);
     assert_eq!(
@@ -205,6 +204,7 @@ fn server_apply_root_flags_parse() {
     assert!(!bare.apply_prune);
 }
 
+#[test]
 fn server_p2p_admission_flags_parse() {
     let args = parse_server(&[
         "--p2p-max-pending-dags",
