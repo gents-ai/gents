@@ -354,8 +354,19 @@ fn manifest_agent_dids(manifest: &DesiredStateManifest) -> BTreeSet<String> {
     for behavior in &manifest.agent_behaviors {
         insert_nonempty(&mut dids, &behavior.agent_did);
     }
+    for skill in &manifest.skills {
+        insert_nonempty(&mut dids, &skill.agent_did);
+    }
+    for surface in &manifest.datastore_tool_surfaces {
+        insert_nonempty(&mut dids, &surface.agent_did);
+    }
     for selection in &manifest.tool_selections {
         insert_nonempty(&mut dids, &selection.agent_did);
+    }
+    for binding in &manifest.projection_acp_bindings {
+        if let Some(agent_did) = binding.agent_did.as_deref() {
+            insert_nonempty(&mut dids, agent_did);
+        }
     }
     dids
 }
@@ -374,6 +385,12 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
     for behavior in &mut manifest.agent_behaviors {
         behavior.agent_did = target_did.to_string();
     }
+    for skill in &mut manifest.skills {
+        skill.agent_did = target_did.to_string();
+    }
+    for surface in &mut manifest.datastore_tool_surfaces {
+        surface.agent_did = target_did.to_string();
+    }
     for selection in &mut manifest.tool_selections {
         selection.agent_did = target_did.to_string();
         rebind_subagent_target_dids(
@@ -381,6 +398,15 @@ fn rebind_manifest_agent_did(manifest: &mut DesiredStateManifest, target_did: &s
             &source_local_dids,
             target_did,
         );
+    }
+    for binding in &mut manifest.projection_acp_bindings {
+        if binding
+            .agent_did
+            .as_deref()
+            .is_some_and(|did| !did.trim().is_empty())
+        {
+            binding.agent_did = Some(target_did.to_string());
+        }
     }
 }
 
@@ -523,6 +549,25 @@ mod tests {
             .iter()
             .map(|entry| SubagentTarget::parse(entry).expect("entry must parse"))
             .collect()
+    }
+
+    #[test]
+    fn rebind_rewrites_datastore_tool_surface_agent_did() {
+        use crate::desired_state::DesiredDatastoreToolSurface;
+        let mut manifest = empty_manifest(SOURCE_DID);
+        manifest.datastore_tool_surfaces.push(DesiredDatastoreToolSurface {
+            surface_id: "experiment-writes".to_string(),
+            agent_did: SOURCE_DID.to_string(),
+            display_name: None,
+            enabled: true,
+            entries: Vec::new(),
+        });
+        rebind_manifest_agent_did(&mut manifest, TARGET_DID);
+        assert_eq!(
+            manifest.datastore_tool_surfaces[0].agent_did,
+            TARGET_DID,
+            "surfaces must rebind with the principal"
+        );
     }
 
     #[test]
