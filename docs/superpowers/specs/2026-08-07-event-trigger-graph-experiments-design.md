@@ -66,23 +66,37 @@ collection.
 
 ## Architecture
 
+A **pack** is a self-contained desired-state root: its own `schemas/`
+alongside the config documents, so one `apply` registers collections and
+config together.
+
 ```text
-experiments/                      config + docs only — no code
-  README.md                       operator guide (real apply path)
-  schemas/                        SDL for ExperimentJob / ExperimentFinding
-  shapes/<arm>/                   one desired-state root per arm
-  runs/                           gitignored scratch for trace exports
+experiments/
+  README.md                       what a pack is; index of packs
+  pipeline/                       the shipped pack
+    README.md                     operator guide (real apply path)
+    schemas/                      SDL for ExperimentJob / ExperimentFinding
+    agent-principal.json
+    datastore-tool-surfaces/      experiment-writes (stage-1's create tool)
+    tool-selections/  agent-behaviors/  tasks/  event_triggers/
+    inference-backends/  inference-profiles/
+    runs/                         gitignored scratch for trace exports
 ```
 
 ```text
-                    ┌─ Task/behavior A  (EventTrigger 1)
- seed create ───────┼─ Task/behavior B  (EventTrigger 2)   ← fan-out
-                    └─ Task/behavior C  (EventTrigger 3)
-
- stage agent creates ExperimentFinding docs
-        │
-        └─► next EventTriggers (pipeline)
+ ExperimentJob create ──► EventTrigger exp-stage1 ──► stage-1 agent
+                                                          │
+                                     record_experiment_finding (surface tool)
+                                                          ▼
+                                              ExperimentFinding create
+                                                          │
+                                                          ▼
+                                          EventTrigger exp-stage2 ──► stage-2 agent
 ```
+
+Fan-out remains expressible — N EventTriggers on the same seed create —
+but the shipped pack is the two-stage pipeline, because it is the shape
+that exercises the write-tool edge.
 
 ### Seed document = experiment handle
 
@@ -93,7 +107,7 @@ One shared seed collection, `ExperimentJob`, holds:
 | `job_id` | Stable run id; greppable in prompts and lineage queries |
 | `prompt` | Task body for templates (`{{ doc.prompt }}`) |
 | `suite` | Experiment suite name (e.g. `topology-ab`) |
-| `arm` | Which shape was applied |
+| `arm` | Which pack was applied |
 
 Kickoff is intentionally one mutation:
 
@@ -103,30 +117,32 @@ mutation {
     job_id: "exp-…"
     prompt: "…"
     suite: "topology-ab"
-    arm: "fanout-on-job"
+    arm: "pipeline"
   }) { _docID }
 }
 ```
 
-### Arms (shipped)
+### The shipped pack: `experiments/pipeline`
 
-| Arm | Topology | Expected fires |
-| --- | --- | --- |
-| `single-loop` | One EventTrigger on `ExperimentJob` created → one task | 1 request |
-| `fanout-on-job` | Three EventTriggers on the same `ExperimentJob` create | 3 requests, same `job_id` |
-| `pipeline-two-stage` | Stage-1 on seed; stage-1 may write `ExperimentFinding` docs; stage-2 EventTrigger on finding created | ≥1 stage-1 + stage-2 per finding |
+| Stage | Trigger | Tools | Produces |
+| --- | --- | --- | --- |
+| stage-1 | `exp-stage1` on `ExperimentJob` created | `experiment-writes` surface only (`record_experiment_finding`) | `ExperimentFinding` docs |
+| stage-2 | `exp-stage2` on `ExperimentFinding` created | none | response only |
 
-`single-loop` kicks through a trigger (not a direct `AgentRequest` create)
-so every arm shares the same kick API. Arms share backends and tool
-selections where possible; the topology delta should read as a clean
-`gents config diff` between shape roots.
+Every kick goes through a trigger (never a direct `AgentRequest` create),
+so the pack has one kick API: a single `create_ExperimentJob`.
 
-Arm prompt templates exercise the full trigger template surface —
+Stage-1 is the datastore-only agent the tool-surface design targets — its
+entire tool set is one create tool, granted by a `DatastoreToolSurface`
+document rather than inline `write_tools`. Stage-2 has no tools at all,
+proving the edge is the *document create*, not a lifecycle update.
+
+Prompt templates exercise the full trigger template surface —
 `{{ doc.* }}`, `{{ event.* }}` (`trigger_id`, `source_collection`,
 `source_doc_id`, `fired_at`), `node.node_did` / `node.behavior_id`,
 `ctx.now` — so a successful fire also proves template rendering.
 
-Checked-in arms use backend **`exp-deepseek`**:
+The pack uses backend **`exp-deepseek`**:
 
 - `endpoint`: `http://100.73.235.38:8000/v1`
 - `provider_kind`: `OpenAiCompatible`
@@ -137,13 +153,16 @@ Tool selections set `orchestration_enabled: false`.
 
 ### Config surface
 
-Each arm is a desired-state root in the layout `gents config export`
-writes and `apply` / `validate` / `diff` read:
+A pack is a desired-state root in the layout `gents config export` writes
+and `apply` / `validate` / `diff` read, plus a pack-local `schemas/`:
 
 ```text
-shapes/<arm>/
+pipeline/
+  schemas/*.graphql                              applied before config docs
   agent-principal.json
   inference-backends/<backend_id>/object.json
+  inference-profiles/<profile_id>/object.json
+  datastore-tool-surfaces/<surface_id>/object.json
   tool-selections/<selection_id>/object.json     orchestration_enabled: false
   agent-behaviors/<behavior_id>/object.json      (+ system_prompt.md sidecar)
   tasks/<task_id>/object.json                    (+ prompt.md sidecar)
@@ -151,11 +170,16 @@ shapes/<arm>/
 ```
 
 ```bash
-gents config validate --root experiments/shapes/<arm>   # static, no server
-gents config apply    --root experiments/shapes/<arm> --home <home> \
+gents config validate --root experiments/pipeline   # static, no server
+gents config apply    --root experiments/pipeline --home <home> \
   --graphql http://127.0.0.1:<port>/api/v0/graphql \
   --bind-agent-did home --force-rebind-concrete-did
 ```
+
+`config apply` registers `schemas/` on the node **before** the config
+documents, so trigger source collections and surface targets exist by the
+time live validation runs. `gents server --apply-root experiments/pipeline`
+does the same against the in-process node at startup.
 
 `--bind-agent-did home` rebinds the root's placeholder DID to the target
 home; **`--force-rebind-concrete-did` is required** for the checked-in
@@ -164,22 +188,21 @@ placeholder principal. Layout reference:
 
 ### Running an experiment (operator path)
 
-Full detail: **`experiments/README.md`**. Summary:
+Full detail: **`experiments/pipeline/README.md`**. Summary:
 
 1. `gents init` with `--inference-url http://100.73.235.38:8000/v1`,
    `--openai-wire-api chat-completions`, `--model-name d4f`
-2. **`gents schema apply experiments/schemas --home <home>`** (local; stop
-   server first if needed — GraphQL remote schema apply may 503 with
-   collection management disabled)
-3. Start `gents server`, then `config apply` with rebind flags above
-4. Wait for log: `event source now observing source collection
+2. `gents server --apply-root experiments/pipeline` — one command: the pack's
+   `schemas/` register on the in-process node, then the config applies with
+   the home DID rebind. (Equivalent two-step: start `gents server`, then
+   `gents config apply --root experiments/pipeline` with the rebind flags.)
+3. Wait for log: `event source now observing source collection
    source_collection=ExperimentJob`
-5. POST one `create_ExperimentJob` with a fresh `job_id`
-6. Poll `AgentRequest(filter: { caused_by_trigger_id: { _eq: "…" } })`, then
+4. POST one `create_ExperimentJob` with a fresh `job_id`
+5. Poll `AgentRequest(filter: { caused_by_trigger_id: { _eq: "…" } })`, then
    `gents trace timeline` / `project`
 
-Trigger ids: `exp-single`; `exp-fan-a` / `exp-fan-b` / `exp-fan-c`;
-`exp-stage1` / `exp-stage2`.
+Trigger ids: `exp-stage1` / `exp-stage2`.
 
 ### Measurement
 
@@ -204,39 +227,44 @@ eval-jsonl; score offline.
 
 ## Non-goals (v1 / this PR)
 
-- New harness/runner code under `experiments/` — config + docs only
-- **CI e2e** (`experiment_graph_e2e.rs`), **`cli_experiment_shapes`**, or any
-  new CI workflow for experiment arms (optional follow-up only)
+- New harness/runner code under `experiments/` — packs are config + docs
+- **CI e2e** (`experiment_graph_e2e.rs`) or any new CI workflow for packs
+  (optional follow-up only)
 - Replacing or extending `fan_out_and_synthesize` barrier semantics
 - `event_kind: updated` / "on lifecycle completed" triggers
 - Claiming topology quality wins without a separate judge suite
-- Cross-node P2P experiment arms
+- Cross-node P2P packs
 - Promoting `ExperimentJob` into product `gents-schemas`
 
 ## Decisions
 
-1. **Seed collections are experiment-local SDL** in `experiments/schemas/`;
+1. **Seed collections are pack-local SDL** in `experiments/pipeline/schemas/`;
    promote into `gents-schemas` only if productized.
-2. **Pipeline stage-1 findings** use a bounded write tool on the stage-1
-   tool selection; operators may also inject `ExperimentFinding` docs via
+2. **Stage-1 findings** come from a create tool granted by the
+   `experiment-writes` `DatastoreToolSurface` rather than inline
+   `write_tools`; operators may also inject `ExperimentFinding` docs via
    GraphQL when the model is weak.
-3. **`single-loop` kicks through one trigger** for a uniform kick API.
-4. **Manifests live at repo-root `experiments/`** so apply paths are short
+3. **Every kick goes through a trigger**, never a direct `AgentRequest`
+   create, so the pack has one kick API.
+4. **Packs live at repo-root `experiments/`** so apply paths are short
    and runs are not mixed with design docs.
-5. **No CI e2e in this deliverable** — operator path + `gents config validate`
+5. **Packs are self-contained** — `schemas/` lives inside the pack and is
+   applied ahead of the config documents, so one command bootstraps a run.
+6. **No CI e2e in this deliverable** — operator path + `gents config validate`
    are the gates; a mock e2e in `e2e_triggers` may be added later if desired.
-6. **v1 needs no `{{ args.* }}` in trigger scope** — the seed document
+7. **v1 needs no `{{ args.* }}` in trigger scope** — the seed document
    carries every run parameter. Exposing `args` to event-trigger templates
    is an accepted runtime follow-up, not a v1 blocker.
 
 ## Success criteria (this deliverable)
 
-- Three arms check in as desired-state roots and pass
-  `gents config validate --root`
-- Operator README documents local schema apply, rebind flags, EventSource
-  ordering, DeepSeek endpoint, and InferenceCall token measurement
-- Design/plan match shipped tree (config + docs; CI e2e deferred)
-- No new Rust/CI e2e or workflow files for this work
+- The pipeline pack checks in as a desired-state root and passes
+  `gents config validate --root experiments/pipeline`
+- `gents server --apply-root experiments/pipeline` bootstraps schemas +
+  config in one command against a fresh home
+- Operator README documents the rebind flags, EventSource ordering, the
+  DeepSeek endpoint, and InferenceCall token measurement
+- Design/plan match the shipped tree
 
 ## Related code
 

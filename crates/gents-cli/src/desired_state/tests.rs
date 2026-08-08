@@ -2625,8 +2625,8 @@ pub(super) mod write_manifest_root {
                 skill_excludes: Vec::new(),
             }],
             skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: Vec::new(),
+            datastore_tool_surfaces: Vec::new(),
+            tool_selections: Vec::new(),
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
@@ -2891,7 +2891,9 @@ fn sample_surface(surface_id: &str) -> DesiredDatastoreToolSurface {
 #[test]
 fn validate_accepts_surface_linked_tool_selection() {
     let mut manifest = manifest_with_default_behavior();
-    manifest.datastore_tool_surfaces.push(sample_surface("experiment-writes"));
+    manifest
+        .datastore_tool_surfaces
+        .push(sample_surface("experiment-writes"));
     let mut sel = sample_tool_selection("stage-tools");
     sel.agent_did = "did:test:test".to_string();
     sel.datastore_tool_surface_ids = vec!["experiment-writes".to_string()];
@@ -2916,7 +2918,8 @@ fn validate_rejects_missing_surface_link() {
     assert!(
         errors
             .iter()
-            .any(|msg| msg.contains("missing DatastoreToolSurface") && msg.contains("does-not-exist")),
+            .any(|msg| msg.contains("missing DatastoreToolSurface")
+                && msg.contains("does-not-exist")),
         "expected missing surface rejection, got {errors:?}"
     );
 }
@@ -2963,7 +2966,8 @@ fn validate_rejects_foreign_agent_surface_link() {
 fn load_pipeline_two_stage_fixture_with_surface() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");
     assert!(
-        root.join("datastore-tool-surfaces/experiment-writes/object.json").is_file(),
+        root.join("datastore-tool-surfaces/experiment-writes/object.json")
+            .is_file(),
         "pipeline fixture must include experiment-writes surface"
     );
     assert!(
@@ -2992,7 +2996,9 @@ fn load_pipeline_two_stage_fixture_with_surface() {
     validate_manifest(&manifest, &mut errors);
     // Backend/model offline endpoints may still pass static validate; surface links must not error.
     assert!(
-        !errors.iter().any(|e| e.contains("DatastoreToolSurface") || e.contains("datastore_tool_surface")),
+        !errors
+            .iter()
+            .any(|e| e.contains("DatastoreToolSurface") || e.contains("datastore_tool_surface")),
         "pipeline fixture surface wiring must be valid: {errors:?}"
     );
 }

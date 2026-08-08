@@ -1214,7 +1214,7 @@ fn count_for_collection(counts: &ConfigApplyCounts, collection: Collection) -> u
         Collection::AgentPrincipal => counts.agent_principal,
         Collection::AgentBehavior => counts.agent_behaviors,
         Collection::Skill => counts.skills,
-            Collection::DatastoreToolSurface => counts.datastore_tool_surfaces,
+        Collection::DatastoreToolSurface => counts.datastore_tool_surfaces,
         Collection::WorkspaceRoot => counts.workspace_roots,
         Collection::ToolSelection => counts.tool_selections,
         Collection::InferenceBackend => counts.inference_backends,

@@ -68,7 +68,13 @@ pub(crate) async fn load_datastore_tool_surface_by_doc_id(
     );
     let resp = node.execute(&query).await;
     if resp.has_errors() {
-        anyhow::bail!("query DatastoreToolSurface by _docID failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "query DatastoreToolSurface by _docID failed: {:?}",
+            resp.errors
+        );
     }
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "DatastoreToolSurface"))
+    Ok(first_row_with_doc_id(
+        resp.data.as_ref(),
+        "DatastoreToolSurface",
+    ))
 }

@@ -4,8 +4,8 @@ use defra_node::EmbeddedNode;
 use crate::backend_registry::list_backend_records;
 use crate::document_config::{
     ensure_agent_principal, list_agent_behavior_records, list_all_tool_selection_records,
-    list_event_trigger_records, list_inference_profile_records, list_schedule_records,
-    list_datastore_tool_surface_records, list_skill_records, list_task_records,
+    list_datastore_tool_surface_records, list_event_trigger_records,
+    list_inference_profile_records, list_schedule_records, list_skill_records, list_task_records,
     list_tool_selection_records, load_tool_selection_record, ToolSelectionDocument,
 };
 
@@ -158,7 +158,6 @@ pub(crate) async fn load_document_runtime_view(
             );
         }
     }
-
 
     for (doc_id, task) in list_task_records(node).await? {
         if task.task_id.trim().is_empty() {

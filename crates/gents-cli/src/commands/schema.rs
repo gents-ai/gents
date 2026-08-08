@@ -98,6 +98,21 @@ pub(crate) struct PackSchemaPhase {
     pub(crate) patch_files: Vec<SchemaApplyPatchResult>,
 }
 
+impl PackSchemaPhase {
+    /// Whether the schema phase actually mutated the node. A pack re-applied
+    /// against a converged node reports every file as `already_exists`, which
+    /// must stay a `noop` so idempotency checks can settle.
+    pub(crate) fn changed(&self) -> bool {
+        self.schema_files
+            .iter()
+            .any(|file| file.status != "already_exists")
+            || self
+                .patch_files
+                .iter()
+                .any(|patch| patch.status != "already_exists")
+    }
+}
+
 /// If `<pack_root>/schemas` exists, apply every SDL/patch under it (same
 /// discovery rules as `gents schema apply`). Returns `None` when the directory
 /// is absent so ordinary agent-config roots stay unchanged.
@@ -119,7 +134,9 @@ pub(crate) async fn apply_pack_schemas_if_present(
             pack_root.display()
         );
     }
-    Ok(Some(apply_schema_inputs(access, &schemas_dir, &inputs).await?))
+    Ok(Some(
+        apply_schema_inputs(access, &schemas_dir, &inputs).await?,
+    ))
 }
 
 async fn apply_schema_inputs(

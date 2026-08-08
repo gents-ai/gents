@@ -1886,3 +1886,81 @@ fn merge_fails_closed_on_name_collision() {
         "expected duplicate name error, got: {err}"
     );
 }
+
+#[tokio::test]
+async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-surface-revoke"));
+    bind_default_behavior_backend(
+        node.as_ref(),
+        identity.did(),
+        "backend-surface-revoke",
+        "http://127.0.0.1:8234/v1",
+    )
+    .await;
+
+    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+        .await
+        .expect("document view");
+
+    let create = format!(
+        r#"mutation {{ create_DatastoreToolSurface(input: {{
+            surface_id: "experiment-writes", agent_did: "{did}", enabled: true,
+            entries: ["{entry}"]
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(identity.did()),
+        entry = escape_graphql_string(&serde_json::to_string(&finding_decl()).unwrap()),
+    );
+    let resp = node.execute(&create).await;
+    assert!(
+        !resp.has_errors(),
+        "create_DatastoreToolSurface: {:?}",
+        resp.errors
+    );
+    let doc_id = created_skill_doc_id(resp.data.as_ref()).expect("created surface _docID");
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "datastore_tool_surface",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .expect("apply surface create");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(view
+        .datastore_tool_surfaces
+        .contains_key("experiment-writes"));
+
+    // Reassigning the surface to another principal must revoke the grant now,
+    // not at the next process restart.
+    let reassign = format!(
+        r#"mutation {{ update_DatastoreToolSurface(
+            docID: "{doc_id}", input: {{ agent_did: "did:key:zOtherOwner" }}
+        ) {{ _docID }} }}"#,
+        doc_id = escape_graphql_string(&doc_id),
+    );
+    let resp = node.execute(&reassign).await;
+    assert!(
+        !resp.has_errors(),
+        "update_DatastoreToolSurface: {:?}",
+        resp.errors
+    );
+
+    let outcome = apply_control_update(
+        node.as_ref(),
+        identity.did(),
+        "datastore_tool_surface",
+        &doc_id,
+        &mut view,
+    )
+    .await
+    .expect("apply surface reassign");
+    assert_eq!(outcome, ControlUpdateOutcome::Applied);
+    assert!(
+        view.datastore_tool_surfaces.is_empty(),
+        "surface must be evicted once it is owned by another principal"
+    );
+}

@@ -35,8 +35,13 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     .require_valid()?;
     let mut report = apply_bound_desired_manifest(&args.root, &access, &bound, args.prune).await?;
     report.schemas = schemas;
-    if report.schemas.is_some() && report.status == "noop" {
-        // Schema phase may have done work even when config docs were already live.
+    if report
+        .schemas
+        .as_ref()
+        .is_some_and(crate::commands::schema::PackSchemaPhase::changed)
+        && report.status == "noop"
+    {
+        // Schema phase did work even though config docs were already live.
         report.status = "applied";
         report.changed = true;
     }

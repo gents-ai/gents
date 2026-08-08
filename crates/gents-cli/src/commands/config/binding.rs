@@ -439,10 +439,29 @@ fn rebind_subagent_target_dids(
     }
 }
 
+/// Errors that a DID rebind would resolve. Must cover every collection
+/// [`rebind_manifest_agent_did`] rewrites, or a stale-DID pack is rejected
+/// before the rebind that would have fixed it ever runs.
 fn is_rebindable_agent_did_error(error: &str) -> bool {
-    (error.starts_with("behavior ") || error.starts_with("tool selection "))
+    const OWNERSHIP_PREFIXES: &[&str] = &[
+        "behavior ",
+        "tool selection ",
+        "skill ",
+        "projection ACP binding ",
+    ];
+
+    if OWNERSHIP_PREFIXES
+        .iter()
+        .any(|prefix| error.starts_with(prefix))
         && error.contains(" belongs to ")
         && error.contains(" not ")
+    {
+        return true;
+    }
+
+    error.starts_with("DatastoreToolSurface ")
+        && error.contains("agent_did does not match principal")
+        || error.starts_with("tool selection ") && error.contains("owned by a different agent")
 }
 
 #[cfg(test)]
@@ -467,8 +486,8 @@ mod tests {
             },
             agent_behaviors: Vec::new(),
             skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: Vec::new(),
+            datastore_tool_surfaces: Vec::new(),
+            tool_selections: Vec::new(),
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
@@ -555,19 +574,51 @@ mod tests {
     fn rebind_rewrites_datastore_tool_surface_agent_did() {
         use crate::desired_state::DesiredDatastoreToolSurface;
         let mut manifest = empty_manifest(SOURCE_DID);
-        manifest.datastore_tool_surfaces.push(DesiredDatastoreToolSurface {
-            surface_id: "experiment-writes".to_string(),
-            agent_did: SOURCE_DID.to_string(),
-            display_name: None,
-            enabled: true,
-            entries: Vec::new(),
-        });
+        manifest
+            .datastore_tool_surfaces
+            .push(DesiredDatastoreToolSurface {
+                surface_id: "experiment-writes".to_string(),
+                agent_did: SOURCE_DID.to_string(),
+                display_name: None,
+                enabled: true,
+                entries: Vec::new(),
+            });
         rebind_manifest_agent_did(&mut manifest, TARGET_DID);
         assert_eq!(
-            manifest.datastore_tool_surfaces[0].agent_did,
-            TARGET_DID,
+            manifest.datastore_tool_surfaces[0].agent_did, TARGET_DID,
             "surfaces must rebind with the principal"
         );
+    }
+
+    /// Every collection `rebind_manifest_agent_did` rewrites must have its
+    /// ownership error classified rebindable, or the rebind is skipped before
+    /// it can fix the manifest.
+    #[test]
+    fn ownership_errors_for_every_rebound_collection_are_rebindable() {
+        for error in [
+            "behavior b1 belongs to did:key:zA not did:key:zB",
+            "tool selection s1 belongs to did:key:zA not did:key:zB",
+            "skill sk1 belongs to did:key:zA not did:key:zB",
+            "projection ACP binding p1 belongs to did:key:zA not did:key:zB",
+            "DatastoreToolSurface experiment-writes agent_did does not match principal",
+            "tool selection s1 references DatastoreToolSurface experiment-writes owned by a different agent",
+        ] {
+            assert!(
+                is_rebindable_agent_did_error(error),
+                "must be rebindable: {error}"
+            );
+        }
+
+        for error in [
+            "behavior b1 references missing backend bk1",
+            "tool selection s1 references missing DatastoreToolSurface experiment-writes",
+            "DatastoreToolSurface has empty surface_id",
+        ] {
+            assert!(
+                !is_rebindable_agent_did_error(error),
+                "must not be rebindable: {error}"
+            );
+        }
     }
 
     #[test]

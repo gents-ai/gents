@@ -26,7 +26,8 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) principal: DocumentRecord<AgentPrincipal>,
     pub(crate) behaviors: HashMap<String, DocumentRecord<AgentBehavior>>,
     pub(crate) skills: HashMap<String, DocumentRecord<SkillDocument>>,
-    pub(crate) datastore_tool_surfaces: HashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
+    pub(crate) datastore_tool_surfaces:
+        HashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
     pub(crate) tool_selections: HashMap<String, DocumentRecord<ToolSelectionDocument>>,
     pub(crate) inference_profiles: HashMap<String, DocumentRecord<InferenceProfile>>,
     pub(crate) backends: HashMap<String, DocumentRecord<InferenceBackend>>,
@@ -118,9 +119,12 @@ impl DocumentRuntimeView {
     }
 
     fn remove_datastore_tool_surface_by_doc_id(&mut self, doc_id: &str) -> bool {
-        let key = self.datastore_tool_surfaces.iter().find_map(|(surface_id, record)| {
-            (record.doc_id == doc_id).then_some(surface_id.clone())
-        });
+        let key = self
+            .datastore_tool_surfaces
+            .iter()
+            .find_map(|(surface_id, record)| {
+                (record.doc_id == doc_id).then_some(surface_id.clone())
+            });
         key.is_some_and(|surface_id| self.datastore_tool_surfaces.remove(&surface_id).is_some())
     }
 
@@ -267,7 +271,6 @@ fn validate_subagent_targets_resolve(
 #[cfg(test)]
 mod tests;
 
-
 /// Merge inline `write_tools` with entries from linked `DatastoreToolSurface`
 /// docs. Fail-closed on missing/disabled/foreign surfaces and name collisions.
 pub(crate) fn merge_write_tools_with_surfaces(
@@ -301,13 +304,16 @@ pub(crate) fn merge_write_tools_with_surfaces(
                 selection.selection_id
             );
         }
-        let record = view.datastore_tool_surfaces.get(surface_id).ok_or_else(|| {
-            anyhow!(
-                "ToolSelection {} references missing DatastoreToolSurface {}",
-                selection.selection_id,
-                surface_id
-            )
-        })?;
+        let record = view
+            .datastore_tool_surfaces
+            .get(surface_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "ToolSelection {} references missing DatastoreToolSurface {}",
+                    selection.selection_id,
+                    surface_id
+                )
+            })?;
         let surface = &record.value;
         if surface.agent_did.trim() != selection.agent_did.trim() {
             bail!(

@@ -131,7 +131,9 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
         if surface_id.is_empty() {
             errors.push("DatastoreToolSurface has empty surface_id".to_string());
         } else if !surface_ids.insert(surface_id.to_string()) {
-            errors.push(format!("duplicate DatastoreToolSurface surface_id {surface_id}"));
+            errors.push(format!(
+                "duplicate DatastoreToolSurface surface_id {surface_id}"
+            ));
         }
         if !principal_agent_did.is_empty() && surface.agent_did.trim() != principal_agent_did {
             errors.push(format!(
@@ -300,12 +302,9 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
             &selection.subagent_targets,
             errors,
         );
-        validate_write_tools(
-            &selection.selection_id,
-            &selection.write_tools,
-            &selection.cli_tool_names,
-            errors,
-        );
+        // Field-level write-tool checks run once, inside the link validation,
+        // over the merged inline ∪ surface list (which equals the inline list
+        // when no surfaces are linked).
         validate_datastore_surface_links(manifest, selection, errors);
         if selection.subagent_spawn_enabled {
             if selection.subagent_targets.is_empty() {
@@ -1269,7 +1268,6 @@ fn validate_subagent_targets(
     }
 }
 
-
 fn validate_datastore_surface_links(
     manifest: &DesiredStateManifest,
     selection: &DesiredToolSelection,
@@ -1506,8 +1504,8 @@ mod tests {
                 skill_excludes: Vec::new(),
             }],
             skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: Vec::new(),
+            datastore_tool_surfaces: Vec::new(),
+            tool_selections: Vec::new(),
             inference_backends: Vec::new(),
             inference_profiles: Vec::new(),
             tool_service_registries: Vec::new(),
@@ -1716,8 +1714,8 @@ mod live_tests {
             },
             agent_behaviors: Vec::new(),
             skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: vec![DesiredToolSelection {
+            datastore_tool_surfaces: Vec::new(),
+            tool_selections: vec![DesiredToolSelection {
                 selection_id: "live-test-sel".to_string(),
                 agent_did: "did:key:test-live-validate".to_string(),
                 display_name: None,
@@ -2236,8 +2234,8 @@ mod live_tests {
                 },
                 agent_behaviors: Vec::new(),
                 skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: vec![DesiredToolSelection {
+                datastore_tool_surfaces: Vec::new(),
+                tool_selections: vec![DesiredToolSelection {
                     selection_id: "subagent-idempotency-sel".to_string(),
                     agent_did: "did:key:test-subagent-idempotency".to_string(),
                     display_name: None,
@@ -2451,8 +2449,8 @@ mod live_tests {
                     skill_excludes: Vec::new(),
                 }],
                 skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        tool_selections: Vec::new(),
+                datastore_tool_surfaces: Vec::new(),
+                tool_selections: Vec::new(),
                 inference_backends: Vec::new(),
                 inference_profiles: Vec::new(),
                 tool_service_registries: Vec::new(),

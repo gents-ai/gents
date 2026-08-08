@@ -107,11 +107,11 @@ async fn apply_pack_after_ready(
     root: &Path,
     prune: bool,
 ) -> Result<Value> {
+    use crate::cli::ManifestAgentDidBindingArg;
     use crate::commands::config::apply::apply_bound_desired_manifest;
     use crate::commands::config::binding::{load_bound_manifest, ManifestBindingOptions};
     use crate::commands::schema::apply_pack_schemas_if_present;
     use crate::config_writes::ConfigAccess;
-    use crate::cli::ManifestAgentDidBindingArg;
 
     if !root.is_dir() {
         anyhow::bail!("--apply-root is not a directory: {}", root.display());
@@ -147,7 +147,12 @@ async fn apply_pack_after_ready(
 
     let mut report = apply_bound_desired_manifest(root, &access, &bound, prune).await?;
     report.schemas = schemas;
-    if report.schemas.is_some() && report.status == "noop" {
+    if report
+        .schemas
+        .as_ref()
+        .is_some_and(crate::commands::schema::PackSchemaPhase::changed)
+        && report.status == "noop"
+    {
         report.status = "applied";
         report.changed = true;
     }
@@ -659,19 +664,17 @@ pub(crate) async fn serve_with_control(
     // without a separate home open / remote schema API.
     let pack_apply = if let Some(root) = args.apply_root.as_ref() {
         Some(
-            apply_pack_after_ready(
-                node.clone(),
-                &home_dir,
-                root,
-                args.apply_prune,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "server --apply-root {} failed (server is up; fix the pack and re-run apply, or restart with a fixed root)",
-                    root.display()
-                )
-            })?,
+            apply_pack_after_ready(node.clone(), &home_dir, root, args.apply_prune)
+                .await
+                .with_context(|| {
+                    format!(
+                        "server --apply-root {} failed; the server is shutting down rather than \
+                     serving without the requested pack. Schema registration is not \
+                     transactional, so schemas/ may be partially applied — fix the pack and \
+                     restart.",
+                        root.display()
+                    )
+                })?,
         )
     } else {
         None

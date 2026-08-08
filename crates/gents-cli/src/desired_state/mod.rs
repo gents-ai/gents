@@ -250,7 +250,6 @@ pub(crate) struct DesiredSkill {
     pub(crate) enabled: bool,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DesiredDatastoreToolSurface {

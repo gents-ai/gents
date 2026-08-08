@@ -6,10 +6,11 @@ use serde::Deserialize;
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
-    DesiredInferenceProfile, DesiredPeerPairing, DesiredProjectionAcpBinding, DesiredSchedule,
-    DesiredSkill, DesiredDatastoreToolSurface, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
+    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredDatastoreToolSurface, DesiredEventTrigger,
+    DesiredInferenceBackend, DesiredInferenceProfile, DesiredPeerPairing,
+    DesiredProjectionAcpBinding, DesiredSchedule, DesiredSkill, DesiredStateCounts,
+    DesiredStateManifest, DesiredStateValidationReport, DesiredTask, DesiredToolSelection,
+    DesiredToolServiceRegistry, HasUniqueId,
 };
 use gents::Collection;
 

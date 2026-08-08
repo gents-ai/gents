@@ -173,10 +173,12 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 Some(selection_id) => match view.tool_selections.get(selection_id) {
                     Some(record) => {
                         let mut selection = record.value.clone();
-                        selection.write_tools = Some(crate::agent::document_view::merge_write_tools_with_surfaces(
-                            &record.value,
-                            view,
-                        )?);
+                        selection.write_tools = Some(
+                            crate::agent::document_view::merge_write_tools_with_surfaces(
+                                &record.value,
+                                view,
+                            )?,
+                        );
                         selection.validate()?;
                         validate_subagent_targets_resolve(&selection, view)?;
                         (
