@@ -193,10 +193,10 @@ fn init_write_and_yolo_flags_parse() {
 
 #[test]
 fn server_apply_root_flags_parse() {
-    let args = parse_server(&["--apply-root", "experiments/pipeline", "--apply-prune"]);
+    let args = parse_server(&["--apply-root", "demo/pipeline", "--apply-prune"]);
     assert_eq!(
         args.apply_root.as_deref(),
-        Some(std::path::Path::new("experiments/pipeline"))
+        Some(std::path::Path::new("demo/pipeline"))
     );
     assert!(args.apply_prune);
     let bare = parse_server(&[]);

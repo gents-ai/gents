@@ -71,20 +71,20 @@ struct PackExpect {
     collection_counts: BTreeMap<String, u64>,
 }
 
-/// Resolve a pack by path, or by name under `experiments/`.
+/// Resolve a pack by path, or by name under `demo/`.
 fn resolve_pack(target: &str) -> Result<PathBuf> {
     let direct = PathBuf::from(target);
     if direct.join("experiment.json").is_file() {
         return Ok(direct);
     }
-    let under_experiments = PathBuf::from("experiments").join(target);
-    if under_experiments.join("experiment.json").is_file() {
-        return Ok(under_experiments);
+    let under_demo = PathBuf::from("demo").join(target);
+    if under_demo.join("experiment.json").is_file() {
+        return Ok(under_demo);
     }
     bail!(
         "no pack at {} or {} (a pack is a directory containing experiment.json)",
         direct.display(),
-        under_experiments.display()
+        under_demo.display()
     )
 }
 

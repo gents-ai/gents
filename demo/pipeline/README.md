@@ -47,9 +47,9 @@ registers `schemas/` first so that name resolves.
 2. **Validate + start server with pack apply** (recommended):
 
    ```bash
-   gents config validate --root experiments/pipeline
+   gents config validate --root demo/pipeline
    gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim \
-     --apply-root experiments/pipeline
+     --apply-root demo/pipeline
    ```
 
    After ready, the server applies this pack against the **in-process** node
@@ -65,7 +65,7 @@ registers `schemas/` first so that name resolves.
 
    ```bash
    gents server --home <home> --http-port 19191 --p2p-transport none --no-codex-shim
-   gents config apply --root experiments/pipeline --home <home> \
+   gents config apply --root demo/pipeline --home <home> \
      --graphql http://127.0.0.1:19191/api/v0/graphql \
      --bind-agent-did home --force-rebind-concrete-did --prune
    ```

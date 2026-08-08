@@ -27,12 +27,12 @@ lifecycle and pairing, with a human at the wheel.
 To drive a pack by hand instead (what the runner automates):
 
 ```bash
-gents server --home <home> --apply-root experiments/<pack>
+gents server --home <home> --apply-root demo/<pack>
 # wait for: event source now observing source collection source_collection=…
 # then POST one create_<SeedCollection> mutation, and poll AgentRequest by
 # caused_by_trigger_id
 
-gents config apply --root experiments/<pack> --home <home> \
+gents config apply --root demo/<pack> --home <home> \
   --bind-agent-did home --force-rebind-concrete-did
 ```
 
@@ -50,8 +50,8 @@ retargeted without editing tracked config — which is how one pack is compared
 across models:
 
 ```bash
-GENTS_EXP_MODEL=some-other-model gents config apply --root experiments/<pack> ...
-GENTS_EXP_ENDPOINT=http://127.0.0.1:8000/v1 gents server --apply-root experiments/<pack> ...
+GENTS_EXP_MODEL=some-other-model gents config apply --root demo/<pack> ...
+GENTS_EXP_ENDPOINT=http://127.0.0.1:8000/v1 gents server --apply-root demo/<pack> ...
 ```
 
 A `${VAR}` with no default and no value set is an error naming the variable —

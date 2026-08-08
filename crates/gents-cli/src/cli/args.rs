@@ -242,7 +242,7 @@ pub(crate) enum DemoCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct DemoRunArgs {
-    #[arg(help = "Pack directory, or a name resolved under experiments/")]
+    #[arg(help = "Pack directory, or a name resolved under demo/")]
     pub(crate) pack: String,
     #[arg(long, help = "Reuse this home instead of a fresh one per run")]
     pub(crate) home: Option<PathBuf>,
@@ -262,7 +262,7 @@ pub(crate) struct DemoRunArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct DemoListArgs {
-    #[arg(long, default_value = "experiments", help = "Directory holding packs")]
+    #[arg(long, default_value = "demo", help = "Directory holding packs")]
     pub(crate) root: PathBuf,
 }
 

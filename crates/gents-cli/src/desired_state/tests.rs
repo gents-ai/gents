@@ -2967,7 +2967,7 @@ fn validate_rejects_foreign_agent_surface_link() {
 /// lets one pack be compared across models and endpoints.
 #[test]
 fn pipeline_pack_interpolates_endpoint_and_model() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
 
     let (manifest, report) = load_manifest_root(&root);
     assert!(
@@ -3001,7 +3001,7 @@ fn pipeline_pack_interpolates_endpoint_and_model() {
 
 #[test]
 fn load_pipeline_two_stage_fixture_with_surface() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../experiments/pipeline");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
     assert!(
         root.join("datastore-tool-surfaces/experiment-writes/object.json")
             .is_file(),
