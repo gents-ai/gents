@@ -13,33 +13,41 @@ The document deliberately separates **current evidence** from **target
 decisions**. A target decision is the proposed breaking contract for Track B;
 it is not a claim that the current SDL or runtime already enforces it.
 
+The current-state evidence in this revision is refreshed through commit
+`f6d03cb6`. The exact provider-attempt edge, immutable transcript finalization,
+and immutable response-outcome checkpoints have landed. Track B remains open
+because exact traversal, fleet ownership, ACP, gossip/late-peer verification,
+and governed retention are not complete.
+
 Retention classes and evidence downgrades use the
 [shared retention and erasure lattice](schema-retention-lattice.md); this track
 does not establish independent default durations.
 
 ## Executive finding
 
-The current runtime has strong local lifecycle and crash-repair work, but its
-database graph does not preserve those guarantees across duplicates,
-replication, or archival:
+The current runtime now has a signed exact-version spine for the owned provider
+and response path, but the database graph does not yet preserve the full target
+contract across every traversal, duplicate, host, policy, or archive:
 
 - `AgentResponse` mixes a replaceable live stream overlay with terminal outcome
-  state. Its successful terminal `content` and `reasoning` are cleared, while
-  the durable answer is copied into `AgentMessage`.
-- The only persisted response-to-message edge is a session-local integer
-  sequence. It is not a DefraDB document reference and does not pin the message
-  version.
-- `InferenceCall` is updated by a random logical `call_id` even though creation
-  returns `_docID`; the permit retains that `_docID` but does not use it.
-- Provider attempts join to `AgentRequest`, backend configuration, and
-  `RenderedRequest` only through mutable or application-generated values. There
-  is no exact `InferenceCall -> RenderedRequest` edge.
+  state, but terminal truth now lives in immutable `AgentResponseOutcome` and a
+  successful outcome pins the exact signed `AgentMessage` version.
+- finalized `AgentMessage` rows are immutable facts; mutable assembly is kept in
+  `AgentMessageDraft`.
+- normal `InferenceCall` transitions use `_docID`, expected-state fences, exact
+  reload, and the node actor identity rather than mutating by logical `call_id`.
+- `InferenceCall` and `RenderedRequest` now form a bidirectional exact
+  `_docID`/composite-CID/signer edge, and the rendered manifest captures bounded
+  exact config versions.
 - Recovery and client/timeline reads frequently use logical-ID filters with
   `limit: 1`. A unique index is not a cross-peer conflict policy, so these reads
   can select an arbitrary conflicting document after replication.
-- Neither collection has ACP. Response and transcript collections are broadly
-  present in participant replication profiles, while `InferenceCall` is local
-  and absent from every profile. Retention and archival behavior are unstated.
+- The run timeline does not load response outcomes or rendered requests and
+  therefore cannot expose the exact terminal/provider graph or its conflicts.
+- None of these collections has ACP. Response, outcome, and transcript facts
+  are present in participant replication profiles, while `InferenceCall` is
+  local and absent from every profile. Retention and archival behavior remain
+  target contracts rather than implemented workflows.
 
 The target is therefore a split model: immutable transcript messages and
 terminal response outcomes are canonical facts; live stream state is an
@@ -80,7 +88,34 @@ The primary evidence was read from the current worktree. Important sources are:
   `crates/gents/src/agent/p2p_reconcile/templates.rs:112`.
 
 This audit does not assert that a claimed `agent_did` is the commit signer.
-That unresolved verification boundary is tracked by issue #1064.
+The landed provenance-critical paths verify commit signer evidence, while the
+remaining system-wide signer/delegation boundary is tracked by issue #1064.
+
+## Implemented checkpoints and remaining boundary
+
+Implemented on the current branch:
+
+- immutable finalized `AgentMessage` facts with separate mutable drafts and
+  exact idempotency/conflict checks;
+- immutable `AgentResponseOutcome` facts that bind an exact signed request
+  source/claim and, for completion, an exact signed assistant message;
+- recovery and child-result consumption that publish/load the immutable outcome
+  and verify the exact final message instead of inferring by sequence;
+- lifecycle-fenced `InferenceCall` persistence addressed by `_docID`; and
+- bidirectional exact signed `InferenceCall <-> RenderedRequest` linkage, with
+  Lean and generated conformance coverage for send/capture ordering.
+
+Still required before Track B completion:
+
+- make every correctness-sensitive entry and traversal exact, especially
+  timeline, client turn-state, session roots, and remaining recovery paths;
+- expose outcomes, renders, config versions, signer state, and all conflict sets
+  in timeline/export output;
+- finish the response-live schema/lease cleanup and remove redundant derived
+  identities;
+- install and test principal/deployment/participant ACP; and
+- prove replicated and late-peer convergence and implement governed archive,
+  sunset, legal hold, and purge behavior.
 
 ## Current fact graph
 
@@ -88,29 +123,24 @@ The graph below is what the code can currently correlate. A dashed edge is a
 logical or inferred join, not a durable DefraDB reference.
 
 ```text
-AgentRequest._docID + claimed composite CID
-    | exact only in RenderedRequest
-    +---------------------------> RenderedRequest
-    |
-    : request_id
-    +----> AgentResponse (response_key duplicates request_id)
-    |
-    +----> InferenceCall (call_id is its update key)
-    |
-    +----> AgentMessage (request_id is optional/empty on some paths)
+signed AgentRequest source/claim versions
+    +====> AgentResponse live projection
+    |          +====> immutable AgentResponseOutcome
+    |                       +====> exact signed AgentMessage version
+    +====> immutable finalized AgentMessage
+    +====> lifecycle-fenced InferenceCall V1
+                         +====> immutable RenderedRequest pins V1
+                         <====+ InferenceCall V2/V3 pins render version
 
-AgentResponse.materialized_message_sequence
-    : (session_id, sequence)
-    +----> AgentMessage
-
-InferenceCall
-    : no persisted edge
-    + - -> RenderedRequest
+logical request_id/session_id
+    : - -> run timeline, client turn-state, and some session/recovery roots
 ```
 
-DefraDB still provides a composite CID for every mutation of these documents,
-including non-branchable `InferenceCall`. The application simply does not
-persist or export the relevant version references.
+Solid `====>` edges are persisted `_docID`/composite-CID/signer references on
+the owned execution path. The dashed projection/root edge remains logical and
+is the main reason this graph is not yet provenance-complete. DefraDB provides a
+composite CID for every mutation, including non-branchable `InferenceCall`, but
+the run timeline still does not traverse or export the complete exact graph.
 
 ## Canonical fact model
 
@@ -119,11 +149,12 @@ persist or export the relevant version references.
 | Collection/field set | Current role | Canonical today? | Evidence and consequence |
 | --- | --- | --- | --- |
 | `AgentResponse.content`, `reasoning` | Mutable in-memory-buffer snapshot and live client overlay | No | Flush replaces the whole tail (`streaming.rs:166-218`); tool-result and retry paths reset it (`streaming.rs:242-295`); normal finalize writes both fields to `""` (`streaming.rs:830-873`). |
-| `AgentResponse.status`, error/timestamps | Response lifecycle and request-terminal bridge | Partly | Response and request normally terminalize in one GraphQL mutation (`streaming.rs:785-909`), but materialization is a prior mutation and recovery can create or mutate a response independently (`lifecycle/recovery.rs:349-543`). |
-| `AgentMessage.content` | Serialized native message used to reconstruct provider history | Yes, after the turn is final | `load_history` decodes this column (`session/history.rs:7-48`). During an assistant tool-call turn the same row is upserted repeatedly (`hook/persistence/message_spawn.rs:13-76`), so it is not currently immutable. |
+| `AgentResponse.status`, error/timestamps | Recoverable live projection and request-terminal bridge | No for terminal truth | Immutable `AgentResponseOutcome` is now the canonical terminal fact. Recovery republishes it and repairs the live/request terminal bridge across persistence cuts. |
+| `AgentMessage.content` | Serialized native message used to reconstruct provider history | Yes, after finalization | Mutable assistant assembly uses `AgentMessageDraft`; finalization creates an immutable fact and rejects non-identical logical conflicts. |
 | `AgentMessage.role`, `reasoning` | Query/read convenience copies of data encoded in `content` | Derived duplicate | Dedicated reasoning is extracted from the serialized message (`hook/persistence/message_spawn.rs:79-89`). No stored source-version assertion proves that the copies agree. |
-| `InferenceCall` row | Admission/provider-attempt lifecycle ledger | Yes for scheduling telemetry | It is created before admission/send and transitions through queued/running/terminal states (`admission/controller.rs:175-235`, `admission/persistence.rs:43-154`). It does not identify the exact provider body or config versions. |
-| `RenderedRequest.request_json` | Exact canonical JSON body captured before HTTP send | Yes | The transport refuses the send when capture fails; the fact is immutable and request-version-pinned. It has no inference-call reference (`rendered_request/mod.rs:379-456`, `rendered_request/sink.rs:1-32`). |
+| `AgentResponseOutcome` | Immutable terminal response fact | Yes on the owned completion/recovery path | It pins exact signed request source/claim versions and, for completion, the exact signed assistant message; conflicting sibling outcomes fail closed. |
+| `InferenceCall` row | Admission/provider-attempt lifecycle ledger | Yes for the owned send path | `_docID`-addressed expected-state transitions preserve an exact render binding through terminal state. The bounded config manifest is captured, but broader candidate/placement completeness is still `CapturedOnly`. |
+| `RenderedRequest.request_json` | Exact canonical JSON body captured before HTTP send | Yes | The transport refuses send when capture fails; the immutable fact pins the exact running inference-call version and the call pins the exact render version back. |
 
 ### Target decisions
 
@@ -143,8 +174,9 @@ persist or export the relevant version references.
    may mutate only along the proven state machine. Its identity and lineage
    fields are immutable; terminal fields are write-once. Every actual HTTP send
    is linked to exactly one immutable `RenderedRequest` fact.
-5. **`RenderedRequest` remains the provider-body fact.** Add an exact edge to the
-   `InferenceCall` document/version that authorized the send. Do not infer that
+5. **`RenderedRequest` remains the provider-body fact.** Retain the implemented
+   exact edge to the `InferenceCall` document/version that authorized the send.
+   Do not infer that
    edge from `(request_id, attempt)` or timestamps.
 
 ## Cardinality and lifecycle contracts
@@ -166,21 +198,22 @@ persist or export the relevant version references.
 
 | State/operation | Current behavior | Durability gap |
 | --- | --- | --- |
-| begin | Pre-reads by `response_key == request_id`, then creates one `streaming` row with empty tails (`streaming.rs:610-688`). | Check-then-create is only node-serialized; replicated concurrent creates can survive. The row has no request `_docID`. |
+| begin | Pre-reads by `response_key == request_id`, then creates one `streaming` row with exact signed request source/claim references and empty tails. | Check-then-create is only node-serialized; replicated concurrent live rows can survive. No deployment lease establishes a fleet-wide writer. |
 | stream | Full buffered snapshots replace `content`/`reasoning`; progress updates are separate mutations (`streaming.rs:166-218`, `lifecycle/transition.rs:61-113`). | Multiple commits are useful live history but not a declared canonical transcript. `token_count` is whitespace-counted preview telemetry. |
-| materialize | `AgentMessage` is written, then `AgentResponse` is marked by a `request_id` filter (`agent/stream_processor.rs:159-173`, `session/history.rs:493-514`). | The two writes are not atomic. The marker is a sequence, not a document/version reference, and the mutation can update duplicates. |
-| finalize | Response tail is cleared and status/timestamps are written together with the request terminal transition (`streaming.rs:406-584`, `streaming.rs:785-909`). | Success depends on the earlier message marker. `AgentResponse.content` no longer represents the final answer despite clients reading it. |
-| restart recovery | Every owner-scoped `streaming` row becomes `error`; partial content is retained/appended. Missing response rows are synthesized for processing requests (`lifecycle/recovery.rs:349-543`). | Recovery uses logical request joins to find absence and can create a competing response. Recovered tail semantics differ from normal finalize and from the model's canonical message. |
+| materialize | Finalization creates an immutable `AgentMessage`, verifies its exact document version/signer, and null-CAS binds that tuple to the live response. | Sequence allocation is still local, and the legacy live row retains both the exact tuple and the older sequence marker. |
+| finalize | An immutable outcome is published from the exact request and final-message bindings, then the live response/request bridge is terminalized. | The writes are separate recoverable cuts, not one atomic transaction; correctness depends on re-drive and conflict checks. |
+| restart recovery | Recovery verifies exact request/live/message provenance, publishes or reloads the immutable outcome, and repairs the remaining live/request cut. | Fleet-wide single-executor safety and provenance-complete timeline visibility remain absent. |
 
 ### Current `InferenceCall` lifecycle
 
 | Transition | Current writer | Current guard | Gap |
 | --- | --- | --- | --- |
-| absent -> `queued` | admission controller | unique random `call_id` create | `_docID` is returned but subsequent normal writes ignore it. |
-| absent -> `running` | immediate permit | unique random `call_id` create | Valid shortcut, but timestamps and immutable source fields are schema-optional. |
-| `queued` -> `running` | queued permit acquisition | `upsert` by `call_id` | Update branch has no expected-state condition and can reopen a terminal row if identity is reused/corrupted. |
-| live -> terminal | stream guard / permit drop | `upsert` by `call_id` | Update branch has no source-state fence; a later terminal write can replace a different terminal outcome. Persistence failure is logged after permit drop. |
-| stale live -> terminal | startup sweep | exact `_docID` | This is the sound addressing pattern, but it is parent-gated by a `request_id` + `limit: 1` lookup (`admission/recovery.rs:111-148`). |
+| absent -> `queued` | admission controller | signed create returns `_docID` and exact version | Logical `call_id` remains redundant correlation, and config completeness remains bounded. |
+| absent -> `running` | immediate/one-off permit | signed create returns exact running version | Valid shortcut; provider send is blocked until the render is durably bound. |
+| `queued` -> `running` | queued permit acquisition | `_docID` plus expected state, affected-row verification, exact reload | No fleet deployment lease; a local lifecycle fence is not cross-host ownership. |
+| running -> render-bound | capture sink/admission client | null-CAS exact render tuple, then exact reload | Captures send authorization, not proof that bytes reached or were processed by the provider. |
+| live -> terminal | stream guard / permit drop | `_docID` plus expected state; terminal binding preserves render tuple | Transport receipt/provider-response identity is not yet a separate immutable fact. |
+| stale live -> terminal | startup sweep | exact `_docID`, expected state, and conflict reload | Timeline and some parent/session entry reads still begin from logical IDs. |
 
 The target state machines are:
 
@@ -205,9 +238,9 @@ conflict.
 | --- | --- | --- |
 | `response_key` | Equal to `request_id`; unique-indexed | Redundant application identity. It does not identify the request document and distributed conflicts remain possible. |
 | `request_id` | Logical correlation across all four collections | Its schema uniqueness is not consistently declared; many correctness reads use it with `limit: 1`. |
-| `materialized_message_sequence` | Joins response to `(session_id, AgentMessage.sequence)` | Sequence is an ordering label, not stable document identity. A duplicate sequence or wrong-session row can redirect the answer. |
-| `message_key` | Unique idempotency key; commonly `session_id:sequence` | Delimiter encoding is not a durable relationship. Some paths update the row selected by this key. |
-| `call_id` | UUID and unique index used for all normal call updates | It duplicates the identity DefraDB already returned. `AdmissionPermit._doc_id` is stored but unused (`admission/permit.rs:12-18`). |
+| `materialized_message_sequence` | Legacy display/progress marker retained beside the exact final-message tuple | Sequence remains useful order, but correctness readers can and should use `final_message_doc_id` plus CID/signer instead. |
+| `message_key` | Non-unique idempotency/correlation key; commonly `session_id:sequence` | Final facts compare complete content and expose conflicts, but delimiter encoding remains redundant identity and no composite session/sequence index exists. |
+| `call_id` | UUID correlation retained on `InferenceCall` | Normal lifecycle writes now use `_docID` and expected state; `call_id` remains redundant schema/application identity. |
 | `call_seq` | Monotonic in one shared in-memory admission context | It restarts with a new context/process and is not a global or database invariant. |
 | `attempt` | Task-local call policy value | It is not `RenderedRequest.attempt`; completion-loop retries can create later calls while the surrounding scope still reports attempt `1`. |
 | `backend_config_fingerprint` | Hash stored by the inference writer | Self-attested query convenience, not a version/proof edge to `InferenceBackend`. |
@@ -246,8 +279,8 @@ conflict.
 | Request identity | `request_id` repeated in response, call, message, and render | `request_doc_id` for relationships; `request_id` only for user/protocol correlation. |
 | Response identity | `response_key == request_id`, plus DefraDB `_docID` | `_docID`; uniqueness/conflict policy is over immutable `request_doc_id`. |
 | Message identity | `message_key`, `(session_id, sequence)`, `_docID` | `_docID`; component fields express session order and idempotency scope. |
-| Provider attempt identity | `call_id`, `(request_id, call_seq)`, and unrelated rendered `(capture_scope, turn_index, attempt)` | `InferenceCall._docID`, explicitly referenced from `RenderedRequest`. |
-| Backend used | request `backend_id`, call `backend_id`/fingerprint, render endpoint/model, mutable config | Call stores exact backend config version; render stores observed endpoint/body. Both are needed and have different meanings. |
+| Provider attempt identity | `InferenceCall._docID` plus retained `call_id`/ordinal correlation | `_docID`, now explicitly and bidirectionally referenced by exact `RenderedRequest` version. |
+| Backend/config used | request/call logical fields plus the rendered request's exact bounded config manifest | Exact manifest references are authoritative for captured inputs; completeness remains `CapturedOnly` until resolved candidate/tool/placement inputs are proven complete. |
 | Token usage | response whitespace `token_count`; inference provider prompt/completion/cache counts | Provider usage belongs to terminal `InferenceCall`; live token estimates are named approximate projection fields. |
 | Terminal status | request lifecycle, response status, call status, message presence | Each fact owns its state; cross-document outcome transaction/recovery enforces the bridge. No reader guesses terminality from content. |
 
@@ -258,13 +291,13 @@ conflict.
 | Begin response | `response_key/request_id` pre-read, then create | `streaming.rs:610-688`; `streaming/queries.rs:98-140` | Create live projection with immutable request version ref and writer lease; on duplicate, load all conflicts and fail closed. |
 | Flush/reset live tail | response `_docID` + `status=streaming` | `streaming.rs:166-295` | Keep `_docID` plus lease/monotonic revision compare-and-set. Never mutate transcript facts. |
 | Advance response progress | response `_docID` | `lifecycle/transition.rs:61-113` | Same document, expected revision/state, monotonic counters. |
-| Materialize assistant message | append or upsert by logical key/sequence | `hook/persistence/message_spawn.rs:13-259`; `session/history.rs:68-255` | Append immutable message; acquire `_docID` and composite CID; reject non-identical idempotency conflicts. |
-| Mark materialized | all responses matching `request_id` | `session/history.rs:493-514` | Create immutable outcome with exact message reference; no logical-ID fan-out update. |
-| Finalize response + request | response `_docID`, request `request_id + agent_did + state` | `streaming.rs:785-909` | Outcome creation and exact request `_docID` terminal transition share a transaction; live projection is then disposable. |
-| Recover response | scan owner `streaming`, mutate `_docID`; infer missing by request logical ID | `lifecycle/recovery.rs:349-543` | Recover from exact request/live/message refs. Multiple candidates are an integrity report, not `limit: 1`; append one outcome fact. |
-| Create/update inference call | create returns `_docID`; update/upsert by `call_id` | `admission/persistence.rs:43-154`; `admission/persistence.rs:219-328` | Retain `_docID` in the permit and every async drop task; conditional update by `_docID` and expected state. |
-| Recover inference call | stale call `_docID`; parent by `request_id limit:1` | `admission/recovery.rs:76-195` | Call stores request `_docID`; parent lookup is exact and signer/authority scoped. |
-| Load child final answer | response by request ID, then message by session/sequence | `background_tools.rs:2354-2421` | Outcome by exact child request `_docID`, then message CID read; verify role, request edge, and signer. |
+| Materialize assistant message | finalize draft into immutable fact; compare complete conflicts | `hook/persistence/message_spawn.rs`; `session/history.rs` | **Implemented checkpoint.** Exact `_docID`/CID/signer is returned; distributed order allocation remains. |
+| Bind materialized message | response `_docID` with null-CAS exact message tuple | `streaming.rs:321-397` | **Implemented checkpoint.** Keep the legacy sequence marker projection-only. |
+| Finalize response + request | publish immutable outcome, then exact live/request terminal cuts | `streaming.rs`; `response_outcome.rs` | **Implemented recoverable checkpoint.** Continue re-drive; it is intentionally not represented as an atomic transaction. |
+| Recover response | exact request/live/message provenance and outcome conflict enumeration | `lifecycle/recovery.rs`; `response_outcome.rs` | **Implemented for the owned path.** Fleet lease and exact external entry traversal remain. |
+| Create/update inference call | signed create; `_docID`/expected-state transition with exact reload | `admission/persistence.rs` | **Implemented checkpoint.** Retire redundant `call_id` as a correctness key and add fleet ownership separately. |
+| Recover inference call | stale call `_docID` plus expected state and exact reload | `admission/recovery.rs` | **Implemented call transition fencing.** Timeline/parent entry selection still needs complete exact traversal. |
+| Load child final answer | accepted outcome by exact child request `_docID`, then exact message CID/signature verification | `background_tools.rs`; `response_outcome.rs` | **Implemented checkpoint.** ACP policy still must authorize the read. |
 | Client turn state | request and response by `request_id limit:1` | `gents-protocol/src/graphql.rs:808-918` | Resolve request conflict explicitly, then traverse its exact outcome/live references. |
 | Timeline fetch | request latest by logical ID; session-wide scans; inference calls by request ID | `run_timeline_fetch.rs:82-370` | Start from exact request `_docID` (or return all logical-ID conflicts), traverse direct edges, and include CIDs/signer status. |
 | Timeline association | infer message request from response sequence and session position | `run_timeline.rs:478-558`; `run_timeline.rs:678-703` | Use immutable request/message/outcome refs only. Unknown legacy lineage remains unknown. |
@@ -274,13 +307,14 @@ conflict.
 
 ### Current evidence
 
-- `AgentResponse` and `AgentMessage` are `@branchable`, included in the desktop
-  branchable sync list, the broad runtime/chat profiles, and requester-filtered
-  conversation/machine/subagent-host templates
-  (`gents-schemas/src/lib.rs:171-193`, `p2p_reconcile/templates.rs:112-191`).
-- Their live replication filter is `requester_did`; that field is immutable in
-  both schemas. Other scope fields, including `session_id` and `request_id`, are
-  not immutable.
+- `AgentResponse`, `AgentResponseOutcome`, and `AgentMessage` are `@branchable`
+  and are included in broad runtime/chat and requester-filtered
+  conversation/machine/subagent-host routes. The immutable outcome is therefore
+  available for authorized late-peer backfill; the mutable live response still
+  shares that broad route.
+- Their live replication filter is immutable `requester_did`. Finalized message
+  and outcome scope fields are immutable; the live response's payload/lifecycle
+  fields intentionally remain mutable.
 - `InferenceCall` is not branchable and appears in no P2P collection profile or
   pairing template. It is local operational telemetry and startup-recovery
   state.
@@ -297,22 +331,23 @@ conflict.
 | `InferenceCall` | None by default; optional filtered operator-observability channel, never participant gossip | Not required for execution recovery; governed archive supplies enterprise history | **No** in this schema. A future multi-host audit/handoff requirement gets a new branchable successor rather than assuming replication. |
 | `RenderedRequest` | No participant gossip; optionally an encrypted/governed audit channel | Required only for authorized audit nodes, not chat clients | **Keep Yes** because the shipped choice is irreversible and governed audit backfill is a stated use; add an explicit audit-sync profile before relying on it |
 
-Terminal response re-drive currently exists only for `AgentRequest`. The target
-adds convergence repair for outcome/message facts or proves that branchable
-backfill is sufficient. Live overlays must never be used as the only recovery
-source.
+Terminal response recovery now republishes/reloads immutable outcome and message
+facts and repairs the request/live projection across bounded persistence cuts.
+The remaining target is replicated/late-peer evidence that the same conflict
+and re-drive rules converge across hosts. Live overlays must never be used as
+the only recovery source.
 
 ## ACP, identity, and confidentiality
 
 ### Current evidence
 
-None of the four schemas in this audit has `@policy`. Most runtime mutations use
-identity-less `EmbeddedNode::execute`. The rendered-request sink attaches the
-claimed agent DID to a `QueryRequest`, but its own documentation correctly notes
-that the identity is inert without a policy (`rendered_request/sink.rs:19-32`).
-Replication filters decide placement; they do not enforce reads after blocks
-arrive. Reasoning and provider payloads therefore have no data-layer
-least-privilege boundary today.
+None of the schemas in this audit has `@policy`. Provenance-critical request,
+message, outcome, inference-call, and rendered-request operations now attach the
+node actor identity and verify the resulting commit signer. That proves who
+signed the accepted versions on those paths; it does not prove delegation or
+authorize the operation without a policy. Replication filters decide placement,
+not reads after blocks arrive. Reasoning and provider payloads therefore still
+have no data-layer least-privilege boundary.
 
 ### Target decisions
 
@@ -428,11 +463,15 @@ rows with only inferred joins remain visibly `unverified_legacy`.
 
 ## Lean and conformance implications
 
-This is lifecycle and provider-input work, so implementation must begin in the
-formal layer.
+This is lifecycle and provider-input work, so each implementation checkpoint
+continues to begin in the formal layer. The current branch has already landed
+the `ResponseOutcome`, `InferenceRenderedCapture`, and transcript-finalization
+models plus generated conformance consumers. They cover immutable terminal
+outcomes, exact final-message binding, bidirectional render/call capture, and
+the implemented persistence cuts with zero known `sorry`s.
 
-1. Extend `StreamingResponse` into separate live-projection and immutable
-   outcome/message states. Prove:
+1. Keep the landed immutable outcome/message model aligned with the remaining
+   `StreamingResponse` live-projection redesign. Continue to prove:
    - one request document cannot acquire two accepted outcomes;
    - completion requires an exact, matching assistant message version;
    - terminal outcome is immutable;
@@ -443,13 +482,16 @@ formal layer.
    completion edge with a message document/version reference. Retain sequence
    as the canonical transcript ordering property, allocated by the
    lease-fenced single writer defined in Track A.
-3. Extend `InferenceCall` with immutable request/config identity, exact render
-   linkage, timestamps, and typed terminal reasons. Prove terminal
+3. Retain the landed exact render linkage and `_docID`-fenced `InferenceCall`
+   transitions; extend the model with the remaining immutable config identity,
+   timestamps, and typed terminal reasons. Prove terminal
    irreversibility against the executable persistence transitions, including
    queued-to-running and drop/recovery races.
-4. Compose `InferenceCall` with `RenderedCapture`: send implies both a durable
-   running attempt and a matching durable render; queue rejection implies no
-   render/send; capture failure blocks send and terminalizes the attempt.
+4. Preserve the implemented `InferenceCall`/`RenderedCapture` composition: send
+   implies both a durable running attempt and a matching durable render; queue
+   rejection implies no render/send; capture failure blocks send and
+   terminalizes the attempt. Extend it only when transport receipt/provider
+   response facts are introduced.
 5. Add concurrency models for duplicate response/outcome/attempt creates and
    deterministic conflict projection without treating the winner as authentic.
 6. Drive conformance cases for every crash cut point: message persisted before
@@ -465,20 +507,25 @@ recoverable persistence cuts. The pinned policy-backed mutation path can split
 an otherwise implicit multi-mutation transaction, so ACP installation must not
 silently strengthen the formal model's atomicity assumption.
 
-The existing Lean response model already proves bounded status flow, terminal
-irreversibility, and a response/request bridge. It currently models completion
-as if materialization were part of the finalize transition, while Rust writes
-the message marker separately. The new model must expose those persistence cut
-points rather than assume atomicity. The existing inference model preserves only
-logical request/backend values and cannot validate current unguarded upserts.
+The landed response-outcome model exposes message, outcome, live-response, and
+request terminalization as recoverable persistence cuts rather than assuming
+atomicity. The landed inference/render model validates the exact transition and
+capture contract. Remaining proof work is the broader live-writer lease,
+resolved-config completeness, replicated conflict convergence, exact timeline
+reconstruction, ACP behavior, and governed retention—not a return to the old
+logical-ID/upsert model.
 
 ## Breaking-schema implications
 
-Track B should be treated as an intentional breaking schema generation, not an
-in-place compatibility migration:
+Track B is an intentional breaking schema generation, not an in-place
+compatibility migration. The current branch has started that generation with
+immutable messages/outcomes and exact call/render fields; the remaining work
+still must:
 
-- introduce explicit `AgentResponseLive` and `AgentResponseOutcome` roles;
-- make message/call identity and lineage fields immutable;
+- finish the explicit `AgentResponseLive` role while retaining the implemented
+  immutable `AgentResponseOutcome` role;
+- finish making call identity/lineage immutable while retaining immutable
+  finalized-message fields;
 - replace response/message/call logical joins with `_docID`/CID fields;
 - replace string timestamps with `DateTime` and empty-string absence with null;
 - remove or rename ambiguous fields (`response_key`, call `attempt`, response
@@ -495,7 +542,7 @@ match the decisions above at creation time.
 
 ## Prioritized child-issue candidates
 
-### Active checkpoint: #1075 exact provider-attempt edge
+### Implemented checkpoint: #1075 exact provider-attempt edge
 
 The first Track B implementation checkpoint uses a bidirectional exact-version
 contract instead of the logical/ordinal joins described in the original
@@ -520,24 +567,36 @@ the same running call fact explicitly rather than bypassing provenance.
 This checkpoint proves durable render and send authorization. It does not prove
 that bytes reached the network, that the provider received or processed them,
 or that a response belongs to the attempt; those require later transport and
-response facts. `AgentResponseLive`/`AgentResponseOutcome` remains the next
-broader Track B redesign, including subscription and crash-cut semantics.
+response facts.
 
-1. **P0 — Formalize the response fact split and exact materialization edge.**
-   Define live/outcome/message states in Lean; prove crash-cut convergence and
-   terminal immutability; generate conformance cases.
-2. **P0 — Link provider attempts to exact renders and request/config versions.**
-   Compose `InferenceCall` with `RenderedCapture`; carry the call `_docID` into
-   the transport scope and persist both directions needed for exact traversal.
-3. **P0 — Replace logical-ID mutation and recovery addressing.** Change
-   response materialization, inference running/terminal updates, parent
-   recovery, and child final-response loading to `_docID`/CID; make duplicates
-   explicit failures.
-4. **P1 — Implement breaking Track B schemas.** Add immutable
-   `AgentResponseOutcome`, replaceable `AgentResponseLive`, immutable message
-   commits, typed timestamps/reasons, and exact version-reference fields. No
-   compatibility migration is required; provide a legacy importer only if an
-   existing deployment needs it.
+### Implemented checkpoint: immutable response outcome
+
+`AgentResponseOutcome` now records immutable terminal truth for one exact signed
+request execution. A complete outcome binds the exact signed assistant message;
+error/interrupted outcomes carry typed reasons and optional partial-message
+evidence. Creation enumerates signed sibling conflicts, and recovery re-drives
+the message/outcome/live/request persistence cuts. `AgentResponse` remains the
+recoverable live projection during this schema generation. A separately named
+live collection, writer lease, provenance-complete subscriptions/timeline, and
+replicated conflict convergence remain broader Track B work.
+
+1. **P0 — Finish the response fact split and exact materialization edge.** The
+   immutable outcome/message model, crash-cut recovery, and exact materialized
+   message binding are implemented. Finish the explicit live role, writer
+   lease, and all external correctness readers.
+2. **P0 — Complete provider-attempt config/transport provenance.** Exact
+   bidirectional `InferenceCall`/`RenderedCapture` linkage is implemented.
+   Finish resolved-config completeness and add transport receipt/provider
+   response facts if those claims are required.
+3. **P0 — Finish replacing logical-ID mutation and recovery addressing.**
+   Inference transitions, response materialization/recovery, and child final
+   response loading now use exact references. Timeline, client turn-state,
+   session roots, and remaining recovery/goal consumers still need conversion.
+4. **P1 — Finish the breaking Track B schemas.** Immutable
+   `AgentResponseOutcome` and finalized messages exist; finish the replaceable
+   live collection/lease, typed timestamps/reasons, redundant-key removal, and
+   remaining exact version-reference fields. No compatibility migration is
+   required; provide a legacy importer only if an existing deployment needs it.
 5. **P1 — Enforce principal/deployment ACP at the data layer.** Install policies
    and relationships before writes, attach caller identity to every mutation,
    and test unrelated/anonymous normal, CID, version, and commit-history reads.

@@ -1214,18 +1214,22 @@ mod tests {
         let filters = bearer_replicator_filters("conversation", "did:key:phone", "did:key:issuer");
         assert!(collections.contains(&"AgentRequest".to_string()));
         assert!(collections.contains(&"AgentResponse".to_string()));
+        assert!(collections.contains(&"AgentResponseOutcome".to_string()));
+        assert!(collections.contains(&"AgentToolApproval".to_string()));
         assert!(collections.contains(&"AgentBehavior".to_string()));
         assert!(collections.contains(&"PairingBearerClaim".to_string()));
         assert!(collections.contains(&"PeerEndpoint".to_string()));
         assert!(collections.contains(&"BearerPairingReady".to_string()));
         assert!(!collections.contains(&"ReciprocalConversationIntent".to_string()));
-        assert_eq!(filters.len(), 11);
+        assert_eq!(filters.len(), 13);
         for collection in [
             "AgentRequest",
             "AgentResponse",
+            "AgentResponseOutcome",
             "AgentMessage",
             "AgentToolCall",
             "AgentToolResult",
+            "AgentToolApproval",
             "AgentSession",
             "AgentConversation",
             "CompactionEntry",

@@ -17,6 +17,12 @@ recovery queries, Lean models, replication templates, projection/export code,
 and the pinned DefraDB implementation. Recommendations are labelled as such.
 No recommendation below is implemented merely by recording it here.
 
+The current-state evidence in this revision is refreshed through commit
+`f6d03cb6`. Several durability checkpoints described by the original audit have
+since landed; those checkpoints are called out explicitly below. They do not
+make the proposed end-state contract, ACP, fleet ownership, or retention work
+complete.
+
 Retention terms and evidence downgrades in this track are governed by the
 [shared retention and erasure lattice](schema-retention-lattice.md). Any
 example duration below is illustrative deployment policy, not a schema default.
@@ -46,25 +52,27 @@ separated:
 4. Placement and authorization fields: immutable principal, participant, and
    session document references used by replication and ACP.
 
-The highest-risk defects are:
+The highest-risk remaining defects are:
 
 - `AgentRequest` combines requester-authored intent and agent-authored mutable
   execution state, which prevents least-privilege document ACP.
 - session, request, tool, and transcript joins commonly use logical strings;
   several correctness reads still use logical-ID `limit: 1`.
-- `AgentMessage` and `CompactionEntry` are described as durable facts but have
-  upsert paths that rewrite existing rows.
-- transcript sequence allocation is a read-max-then-create protocol and the
-  schema does not enforce unique `(session, sequence)` ordering.
-- `AgentToolResult` is only a best-effort overflow spill, has no request or tool
-  call reference, and is omitted from the run timeline despite its name.
-- multiple approval documents are allowed and the first `created_at` value is
-  accepted without a total tie-break or signer verification.
-- fork copies create new facts with no source `_docID`/CID manifest and omit
-  routing fields on copied rows, so copied history is neither verifiably
-  derived nor guaranteed to reach the same participant.
-- the standard replication templates omit `AgentToolApproval`, `Goal`, and
-  `AgentMemory`; none of the ten base schemas has a DefraDB `@policy`.
+- finalized `AgentMessage` rows and `CompactionEntry` rows are now immutable
+  create-only facts, but transcript order is still allocated by a local
+  read-max protocol and the schema does not enforce unique
+  `(session, sequence)` ordering;
+- `AgentToolResult` is now an immutable, exact-call-version fact, but remains a
+  best-effort overflow spill rather than the canonical complete output ledger;
+- approvals are now immutable exact-call-version facts with signer checks and
+  conflict enumeration, but ACP-backed approver authority and a declared
+  concurrent/quorum policy remain absent;
+- copied messages, tool facts, approvals, and compactions now carry source
+  `_docID`/CID/signer provenance, but there is no first-class `SessionFork`
+  prefix manifest or lease-fenced session owner;
+- the standard routes now include approvals, tool results, and compactions,
+  while `Goal` and `AgentMemory` still lack the target routes and none of the ten
+  base schemas has a DefraDB `@policy`;
 - the participant-facing conversation/machine templates also carry several
   configuration collections without filters, including secret-bearing
   `InferenceBackend`; this is a current placement fact even though policy and
@@ -84,19 +92,51 @@ AgentSession(session_id)
   │     └── caused_by_parent_tool_call_id .................> AgentToolCall
   ├── AgentMessage(session_id, request_id)
   ├── AgentToolCall(session_id, request_id, tool_call_id)
-  │     └── child_request_id ..............................> AgentRequest
-  ├── AgentToolResult(session_id, conversation_doc_id) ....> ?
-  ├── CompactionEntry(session_id)
+  │     ├── child_request_id ..............................> AgentRequest
+  │     ├── exact result _docID/CID/signer ...............> AgentToolResult
+  │     └── exact approval _docID/CID/signer .............> AgentToolApproval
+  ├── AgentToolResult(exact AgentToolCall _docID/CID/signer)
+  ├── CompactionEntry(exact versioned source manifest)
   └── Goal(session_id, last_*_request_id) .................> AgentRequest
 
-AgentToolApproval(tool_call_id, request_id) ...............> AgentToolCall
+AgentToolApproval(exact AgentToolCall _docID/CID/signer) ..> AgentToolCall
 AgentMemory(agent_did, key)  [cross-session; no session edge]
 ```
 
-Only `conversation_doc_id` is named as a document ID, and it is not sufficient:
-it is nullable text with no source collection/version contract. The remaining
-edges use logical IDs. The implemented `AgentRequest -> RenderedRequest` edge
-is the useful counterexample: it carries `_docID` plus a composite commit CID.
+The tool-result and approval edges now carry exact `_docID`, composite CID, and
+verified signer DID, and compaction records carry a versioned exact-source
+manifest. Finalized messages also carry the exact request `_docID`. Session,
+conversation, goal, memory, request lineage, and several tool/subagent edges
+still use logical IDs. The implemented `AgentRequest -> RenderedRequest` edge is
+the broader useful counterexample: it carries `_docID` plus a composite commit
+CID.
+
+## Implemented checkpoints and remaining boundary
+
+Implemented on the current branch:
+
+- finalized transcript rows are immutable facts; `AgentMessageDraft` contains
+  mutable assembly, and idempotent replay compares the complete finalized fact;
+- `AgentToolResult` and `AgentToolApproval` pin the exact tool-call document
+  version and signer, enumerate logical conflicts, and fail closed on mismatch;
+- `CompactionEntry` is create-only and pins a versioned canonical source
+  manifest, with Lean and generated conformance coverage;
+- forked messages, tool calls/results/approvals, and compactions preserve exact
+  source document-version and signer provenance; and
+- the requester-scoped replication profiles include the immutable tool facts,
+  approvals, compactions, and response outcomes.
+
+Still required before Track A completion:
+
+- split request intent from execution and tool invocation from execution;
+- establish `AgentSession._docID` plus a deployment lease as the ownership and
+  transcript-allocation spine;
+- replace per-row fork copying as the authority with a frozen `SessionFork`
+  prefix manifest;
+- split goals, version memory, and source-version the conversation projection;
+- install and test base-collection ACP, complete Goal/Memory placement, and
+  make timeline/export traversal exact; and
+- implement archive/restore, retention, legal hold, sunset, and purge receipts.
 
 ### Recommended graph
 
@@ -124,23 +164,22 @@ at API boundaries and in exports for correlation; they do not choose a row.
 ## Evidence: placement, ACP, and export today
 
 - The `conversation` and `machine` scope templates push `AgentRequest`,
-  `AgentMessage`, `AgentToolCall`, `AgentToolResult`, `AgentSession`,
-  `AgentConversation`, and `CompactionEntry` using immutable `requester_did`
-  filters (`crates/gents/src/agent/p2p_reconcile/templates.rs:114-262`). Those
-  templates also include `AgentResponse`, pairing readiness, and six
+  `AgentMessage`, `AgentToolCall`, `AgentToolResult`, `AgentToolApproval`,
+  `AgentSession`, `AgentConversation`, and `CompactionEntry` using immutable
+  `requester_did` filters
+  (`crates/gents/src/agent/p2p_reconcile/templates.rs:112-293`). Those
+  templates also include `AgentResponse`, `AgentResponseOutcome`, pairing
+  readiness, and six
   configuration collections without a filter rule; this audit must not describe
   the complete participant route as transcript-only.
-- The `subagent-host` template returns only requests, responses, messages, and
-  tool calls; it deliberately omits session/conversation, spills, and
-  compactions (`templates.rs:329-359`).
-- The legacy `runtime` and `chat-requests` profiles include the same eight
-  Track A collections (`profiles.rs:82-133`). `AgentToolApproval`, `Goal`, and
-  `AgentMemory` occur in none of these runtime profiles, and the unscoped
-  `backup` template excludes them (`templates.rs:366-390`). They are present in
-  the desktop branchable bulk-sync list
-  (`crates/gents-schemas/src/lib.rs:176-193`), however, so paired desktops can
-  currently backfill them without the target private-memory/approval placement
-  policy.
+- The `subagent-host` template returns requests, responses/outcomes, messages,
+  tool calls, and approvals; it deliberately omits session/conversation,
+  result spills, and compactions (`templates.rs:350-401`).
+- The legacy `runtime` and `chat-requests` profiles include tool results,
+  approvals, and compactions (`profiles.rs:83-136`). `Goal` and `AgentMemory`
+  occur in none of these runtime profiles or requester-filtered templates. They
+  remain in the desktop branchable bulk-sync list, however, so paired desktops
+  can backfill them without the target private-memory/goal placement policy.
 - All ten SDL files use `@branchable`; none uses `@policy`. Consequently the
   claimed `agent_did`, `requester_did`, and `approver_did` values are routing
   claims, not database-enforced authorship.
@@ -149,9 +188,11 @@ at API boundaries and in exports for correlation; they do not choose a row.
   base-collection read/write ACP and does not cover tool-output spills,
   approvals, compactions, goals, or memory.
 - `load_run_timeline_rows` fetches requests, messages, tool calls, responses,
-  inference calls, session, and conversation
-  (`crates/gents/src/run_timeline_fetch.rs:23-73`). It omits five Track A
-  collections: tool-result spills, approvals, compactions, goals, and memory.
+  inference calls, session, and conversation and now attaches exact
+  `AgentToolResult` and `AgentToolApproval` versions to tool calls
+  (`crates/gents/src/run_timeline_fetch.rs:23-73`, `:461-579`). It still omits
+  compactions, goals, and memory, and its request/session roots remain logical
+  `limit: 1` selections.
 - No operational retention, legal-hold, coordinated purge, or full-fidelity
   enterprise archive implementation was found for these collections.
 - In pinned DefraDB, `sync_branchable_collection` rejects a non-branchable
@@ -197,8 +238,8 @@ verified.
 | One transcript position | unique `message_key`, normally `session_id:sequence` | stable event keys may differ; no `(session, sequence)` unique index |
 | Next transcript position | max message/tool reservation + 1, retry five times | a local retry protocol, not a replicated allocator |
 | One tool call | unique `tool_call_key = session_id:tool_call_id` | components are mutable and logical; several reads use raw `tool_call_id` |
-| One approval verdict | random unique `approval_id`; first `created_at` wins | multiple verdicts are legal and equal timestamps have no tie-break |
-| One compaction step | unique `compaction_key = session_id:sequence` | sequence is read-last + 1 and existing fact is mutable by upsert |
+| One approval verdict | immutable `approval_key` plus exact held call version | logical/replicated twins remain legal; authority still depends on future ACP/quorum policy |
+| One compaction step | non-unique immutable `compaction_key` plus exact source manifest | sequence remains locally allocated; conflicts are surfaced rather than consensus-resolved |
 | One goal | length-prefixed `(agent_did, session_id)` logical `goal_id`, not unique | twins are expected; only one canonical twin is advanced |
 | One memory key | injective length-prefixed `(agent_did, key)` `memory_id` | components mutable; concurrent LWW winner is not a declared policy |
 
@@ -240,11 +281,11 @@ production ownership seams and hot or correctness-sensitive reads.
 | `AgentSession` | session ensure/close (`session/sessions.rs:5-218`); fork (`session/fork.rs:801-850`); desktop transactional submit (`gents-desktop-core/.../chat/conversation.rs`) | completion binding (`session/query.rs:6-55`); desktop session snapshot; run timeline | `load_session_document_optional` filters `session_id`, `limit: 1` |
 | `AgentConversation` | request projection/title/status (`session/conversation.rs:76-359`); recovery sweep (`lifecycle/recovery.rs:555-780`); desktop submit; fork | ranked canonical loader (`session/query.rs:133-207`); recent-title query; run timeline | duplicates are real; deterministic rank exists, but a later update can change the winner |
 | `AgentRequest` | lifecycle materialize/claim/transition/recovery/queue; desktop submit/retry; trigger and subagent materializers | watcher pending scan and CID reload; lifecycle `_docID` reads; timeline/session/client queries | `request_id` is not unique; timeline and multiple APIs order/limit by logical ID |
-| `AgentMessage` | owned-loop hook through `session/history.rs:52-488`; fork copy; desktop projection fixtures | provider history (`history.rs:7-48`); compaction; timeline/session projections | max+1 allocation races; save path rewrites a fact; request/content dedup uses first match |
+| `AgentMessage` | owned-loop hook through `session/history.rs`; fork copy; desktop projection fixtures | provider history; compaction; timeline/session projections | finalized facts are immutable and conflicts are enumerated, but max+1 allocation is not fleet-fenced |
 | `AgentToolCall` | `ToolCallLifecycle` native/bridge/mode transitions (`tool_call_lifecycle/transition/*.rs`); background recovery; fork | lifecycle load/result; held-call polling; transcript/timeline/background projections | some reads correctly use `tool_call_key`, others use `(session_id, tool_call_id)` or raw `tool_call_id` with `limit: 1` |
-| `AgentToolResult` | truncation spill (`truncation/spill.rs:11-72`); fork copy | desktop/session snapshot only | no call/request identity or uniqueness; spill failure is explicitly fail-open |
-| `AgentToolApproval` | CLI/desktop approval client (`config_client/approval.rs:78-129`) | held-call watcher (`hook/persistence/approval.rs:40-103`) | first by `created_at`; no total tie-break, expected call version, or signer verification |
-| `CompactionEntry` | compaction reducer (`session/compaction_entries.rs:61-171`); fork copy | prompt assembly, context-budget tools, session UI | read-last+1 then mutable upsert; no exact compacted prefix manifest |
+| `AgentToolResult` | truncation spill (`truncation/spill.rs`); fork copy | exact attachment in timeline/session projections | immutable exact call-version fact with conflict enumeration, but spill persistence remains fail-open and is not the complete output ledger |
+| `AgentToolApproval` | CLI/desktop approval client (`config_client/approval.rs`); fork copy | exact held-call watcher and timeline attachment (`hook/persistence/approval.rs`) | immutable exact call-version and signer checks landed; ACP authority and concurrent/quorum policy remain |
+| `CompactionEntry` | compaction reducer (`session/compaction_entries.rs`); fork copy | prompt assembly, context-budget tools, session UI | create-only exact source manifest landed; ordinal allocation and full fork-prefix authority remain |
 | `Goal` | goal API/CLI and trigger controller (`goal.rs:546-888`, `trigger_engine/goal_source.rs`) | canonical goal load, active-goal trigger scan, usage aggregation | canonical earliest twin is chosen, but twins can diverge and only the selected doc is CAS-updated |
 | `AgentMemory` | agent memory tool (`toolset/memory.rs:233-285`) | same tool by `memory_id`, `limit: 1` (`memory.rs:189-230`) | unique local key masks replicated twins; no conflict enumeration |
 
@@ -395,12 +436,13 @@ Status: **provisional; P0**.
 ### `AgentMessage`
 
 **Evidence.** The provider loads messages by `session_id`, ordered only by
-`sequence` (`session/history.rs:7-48`). New appends use create, but
-`save_message_inner` upserts and rewrites content, reasoning, and timestamp for
-an existing key (`history.rs:95-145`). Sequence is `max(message,
-background-reservation)+1`, followed by bounded retries
-(`history.rs:147-255`, `385-437`). Fork creates indistinguishable new message
-facts with copied payloads and timestamps (`session/fork.rs:450-510`).
+`sequence`. Mutable assembly now lives in `AgentMessageDraft`; finalization
+creates an immutable `AgentMessage`, reloads its exact document version, and
+accepts idempotency only when the complete canonical fact agrees. Conflicting
+logical facts are enumerated and rejected. Sequence is still
+`max(message, background-reservation)+1`, followed by bounded retries, so the
+ordering allocator remains node-local. Forked messages carry the source
+`_docID`, composite CID, and verified signer DID.
 
 **Recommended contract.** Primary archetype: immutable durable transcript fact;
 canonical. Creator: the actual message author—requester for user content,
@@ -430,7 +472,9 @@ Indexes: composite unique session/order; request doc; author/time; tool
 execution doc. Lean/conformance: strengthen Transcript refinement so database
 rows enforce unique total order, author/role coherence, immutable idempotency,
 and replicated conflict handling. Breaking plan: freeze old rows, import each
-as a fact with source `_docID`/CID; never upsert. Status: **provisional; P0**.
+as a fact with source `_docID`/CID; never upsert. Status: **immutable
+finalization checkpoint implemented; distributed ordering and the broader P0
+contract remain provisional**.
 
 ### `AgentToolCall`
 
@@ -438,10 +482,12 @@ as a fact with source `_docID`/CID; never upsert. Status: **provisional; P0**.
 `_docID` transitions (`tool_call_lifecycle.rs:20-73`,
 `tool_call_lifecycle/transition/native.rs:31-811`). The schema still combines
 invocation arguments, lifecycle, output, policy decision detail, background
-coordination, and child linkage. Only `agent_did`, `requester_did`, and
-`spawn_target_did` are immutable. `tool_call_key` concatenates session and
-provider call ID. Some reads use that key; lifecycle load filters session plus
-call ID with `limit: 1` (`tool_call_lifecycle/query.rs:89-139`).
+coordination, and child linkage. Invocation identity, route, arguments, and fork
+source fields are now immutable, and mutable result/approval bindings can pin
+exact fact versions. The invocation and execution roles nevertheless remain in
+one document. `tool_call_key` concatenates session and provider call ID. Some
+reads use that key; lifecycle load filters session plus call ID with `limit: 1`
+(`tool_call_lifecycle/query.rs:89-139`).
 
 **Recommended contract.** Split immutable `ToolInvocation` from mutable
 `ToolExecution`; represent full outputs as `ToolOutputFact`. Invocation creator
@@ -479,13 +525,14 @@ ambiguous legacy mutations unverified. Status: **provisional; P0**.
 ### `AgentToolResult`
 
 **Evidence.** Despite its name, the only canonical writer is the truncation
-spill path, which creates a row only when model-visible output is truncated
-(`truncation/spill.rs:11-72`). Failure is logged and execution continues
-without a spill (`spill.rs:87-108`). The row has no `request_id`,
-`tool_call_id`, invocation/execution doc ID, idempotency key, or output sequence.
-Fork copies it by session and timestamp and preserves an unexplained
-`conversation_doc_id` string (`session/fork.rs:637-712`). It is not included in
-the run timeline or trace ACP filter.
+spill path, which creates a row only when model-visible output is truncated;
+failure is still logged and execution continues without a spill. The row is now
+an immutable fact with a stable result key, route fields, full tool input/output,
+the exact accepted `AgentToolCall` `_docID`/composite CID/signer, and fork-source
+provenance. Creation enumerates conflicting logical facts and requires exact
+equality for idempotency. The run timeline verifies and attaches exact result
+versions to their tool call. This makes the spill auditable, but not mandatory
+or canonical for every full tool output.
 
 **Recommended contract.** Replace with immutable `ToolOutputFact`; canonical
 for every tool output, not just truncation overflow. Creator and signer: the
@@ -514,18 +561,21 @@ pins blobs and keys. Indexes: execution doc/chunk, request doc, session/time,
 participant route. Lean/conformance: extend transcript pairing to require exact
 output fact and test fail-closed durability when full output is promised.
 Breaking plan: import spills as `legacy_partial_archive`; do not claim they are
-a complete output ledger. Status: **provisional; P0**.
+a complete output ledger. Status: **exact immutable spill checkpoint
+implemented; complete-output durability and the broader P0 split remain
+provisional**.
 
 ### `AgentToolApproval`
 
-**Evidence.** An operator creates a random `approval_id` with claimed agent,
-approver, call ID, decision, reason, and client timestamp
-(`config_client/approval.rs:78-129`). The runtime queries all rows for
-`(agent_did, tool_call_id)`, orders only by `created_at`, and accepts the first
-recognized decision (`hook/persistence/approval.rs:40-103`). The schema makes
-only `agent_did` and `approver_did` immutable, and the collection is absent from
-all standard P2P templates. The Lean tool model fences approve/deny transitions
-but does not prove signer identity or deterministic choice among documents.
+**Evidence.** Approval creation now resolves the exact held `AgentToolCall`
+version, verifies its signer, and writes an immutable approval fact containing
+that call `_docID`/composite CID/signer plus immutable routing and decision
+fields. The held-call watcher enumerates approval conflicts, verifies the
+approval commit signer against `approver_did`, and fails closed instead of
+choosing the first timestamp. Approval facts are present in the standard
+runtime/chat and requester-filtered replication routes. The remaining authority
+gap is that no DefraDB policy proves the signer is an authorized approver, and
+no data-layer round/quorum contract resolves concurrent valid operators.
 
 **Recommended contract.** Primary archetype: immutable authorization fact;
 canonical. Creator/signer: an ACP-authorized human/device/service approver.
@@ -552,18 +602,20 @@ round + approver, agent/unconsumed/time, expiry. Lean/conformance: model
 approval document selection, version binding, signer authorization, replay
 rejection, and concurrent decisions. Breaking plan: old decisions import as
 unverified because signer and held-version evidence are absent. Status:
-**provisional; P0**.
+**exact immutable approval checkpoint implemented; ACP/quorum and the broader
+P0 authorization contract remain provisional**.
 
 ### `CompactionEntry`
 
-**Evidence.** A save loads every previous entry, derives `last.sequence + 1`,
-accumulates paths, then upserts `session_id:sequence`; the update arm can rewrite
-summary and counts (`session/compaction_entries.rs:88-171`). The schema records
-a count but no exact compacted-through position or source message versions.
-Fork copies compactions by timestamp rather than transcript boundary
-(`session/fork.rs:714-799`). Lean proves reduction properties over an abstract
-ordered transcript (`proofs/Proofs/Compaction/`), not that the persisted row
-identifies the exact database prefix summarized.
+**Evidence.** A finalized compaction is now an immutable create-only fact. Its
+versioned canonical source manifest pins the exact transcript, resolved-config,
+and prior-compaction document versions consumed by the summary. Runtime
+admission enumerates same-key conflicts and accepts only exact idempotent replay;
+Lean and generated conformance cases cover manifest equality, source stability,
+and conflicting replay. Fork copies preserve exact source document-version and
+signer provenance. The compaction ordinal is still derived locally from prior
+entries, and there is no fleet lease or first-class fork-prefix manifest tying
+all compaction boundaries to one distributed session owner.
 
 **Recommended contract.** Primary archetype: immutable transcript-reduction
 fact; canonical. Creator/signer: owning agent's compaction worker. Identity:
@@ -589,7 +641,9 @@ unique session/ordinal, session/boundary, created time.
 Lean/conformance: connect the Compaction model to persisted `_docID`/CID
 manifests, database order allocation, idempotent create equality, and fork
 prefix composition. Breaking plan: legacy entries import as captured summaries
-without reconstructible provenance. Status: **provisional; P0**.
+without reconstructible provenance. Status: **exact source-manifest checkpoint
+implemented; distributed allocation/fork composition and the broader P0
+contract remain provisional**.
 
 ### `Goal`
 
@@ -673,11 +727,15 @@ CID; enumerate duplicate logical keys before choosing a head. Status:
 ## Fork durability decision
 
 Fork is not a bulk-copy implementation detail; it is a provenance operation.
-The current implementation computes a cut from message sequence/time and
-creates child messages, calls, spills, and compactions with new keys
-(`session/fork.rs:380-799`). The new documents cannot prove which original
-versions they copied, and timestamp cuts for spills/compactions are not the same
-boundary as the transcript order. Copied rows also omit `requester_did`.
+The current implementation computes a cut and creates child messages, calls,
+results, approvals, and compactions with new keys. Each copied fact now carries
+the original `_docID`, composite CID, and verified signer DID, and copied route
+fields retain participant placement. Lean and generated conformance tests prove
+that a copied fact cannot silently change its source version. This is per-row
+derivation evidence, not yet a single immutable assertion of the exact ordered
+prefix: cut selection still mixes transcript sequence with timestamp-bound
+facts, and the child session has no `SessionFork` manifest that freezes the
+complete source set.
 
 The target fork is an immutable `SessionFork` fact containing source session
 `_docID`, source composite CID, exact ordered prefix manifest, child session
@@ -743,18 +801,20 @@ coordinated purge.
 1. **P0 — Split `AgentRequest` intent from execution and replace logical joins
    with exact document/version references.** Includes lifecycle owner fencing,
    interrupt facts, retry components, and removal of request-ID `limit: 1`.
-2. **P0 — Make transcript persistence append-only with database-enforced order
-   and pairing.** Covers message upsert removal, composite uniqueness,
-   multi-host allocation, tool pairing, and exact request/message links.
-3. **P0 — Split tool invocation/execution/output and make full output durable.**
-   Replace best-effort orphan spills; bind terminal execution to an output
-   version and include it in timeline/archive.
-4. **P0 — Make approvals signed, exact-version-bound, replicated authorization
-   facts.** Define concurrent/quorum behavior and add base DefraDB ACP, signer,
-   replay, and expiry tests.
-5. **P0 — Persist compaction source manifests and immutable boundaries.** Bridge
-   the existing Lean reducer to database `_docID`/CID evidence and fork-safe
-   reconstruction.
+2. **P0 — Finish transcript ordering and pairing.** Append-only finalized
+   messages, separate drafts, exact request links, and conflict checks are
+   implemented. Add composite uniqueness and lease-fenced multi-host allocation.
+3. **P0 — Finish splitting tool invocation/execution/output and make full output
+   durable.** Exact immutable result facts and timeline attachment are
+   implemented for spills. Replace best-effort spill semantics and bind every
+   terminal execution to its complete output version.
+4. **P0 — Finish approval authorization semantics.** Signed,
+   exact-version-bound, replicated approval facts and conflict enumeration are
+   implemented. Define concurrent/quorum behavior and add base DefraDB ACP,
+   delegation, replay, and expiry tests.
+5. **P0 — Finish compaction ownership and fork composition.** Immutable exact
+   source manifests and conformance coverage are implemented. Add lease-fenced
+   ordinal allocation and compose them with the frozen fork-prefix manifest.
 6. **P1 — Establish `AgentSession` `_docID` as the conversation-plane spine.**
    Add lifecycle/ownership model, route fields, conflict quarantine, and remove
    session-ID `limit: 1` reads.

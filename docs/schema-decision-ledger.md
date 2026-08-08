@@ -86,8 +86,10 @@ Decision status:
 
 ## Current collection inventory
 
-`Branchable` reflects the schema root merged by #1059. Archetypes are starting
-hypotheses to test, not conclusions.
+`Branchable` reflects the 46 schema roots shipped at checkpoint `f6d03cb6`.
+Archetypes are starting hypotheses to test, not conclusions. A collection added
+by an implemented durability slice remains `Provisional` here until its full
+identity, ACP, replication, retention, and successor contract is accepted.
 
 ### Conversation, execution, and projections — Tracks A-C
 
@@ -97,8 +99,10 @@ hypotheses to test, not conclusions.
 | `AgentConversation` | Materialized UX projection | Yes | A | Provisional |
 | `AgentRequest` | Command plus lifecycle envelope | Yes | A/B | Provisional |
 | `AgentResponse` | Streaming materialization plus terminal result | Yes | B | Provisional |
+| `AgentResponseOutcome` | Immutable terminal response fact | Yes | B | Provisional |
 | `InferenceCall` | Durable provider-attempt fact/ledger | No | B | Provisional |
 | `AgentMessage` | Durable transcript fact | Yes | A | Provisional |
+| `AgentMessageDraft` | Mutable non-authoritative transcript checkpoint | Yes | A | Provisional |
 | `AgentToolCall` | Tool lifecycle envelope | Yes | A | Provisional |
 | `AgentToolResult` | Durable tool-result fact | Yes | A | Provisional |
 | `AgentToolApproval` | Durable authorization decision | Yes | A | Provisional |
@@ -131,6 +135,8 @@ hypotheses to test, not conclusions.
 | `Task` | Desired work configuration | Yes | D | Provisional |
 | `Schedule` | Desired schedule plus observed firing state | Yes | D | Provisional |
 | `EventTrigger` | Desired trigger plus observed firing state | Yes | D | Provisional |
+| `EventTriggerActivation` | Immutable trigger activation/baseline fact | Yes | D | Provisional |
+| `EventDeliveryAdmission` | Immutable source-delivery admission fact | Yes | D | Provisional |
 | `PersonaConfigRequest` | Command/intent plus outcome | Yes | D | Provisional |
 
 ### Network, pairing, and placement
@@ -177,8 +183,9 @@ DocumentVersionRef {
 - `@branchable` is not required for the `AgentRequest` document-version CID or
   the `RenderedRequest.request_json` field CID. It remains independently
   relevant to backfill and collection-scoped ACP.
-- The signer of either document is not yet guaranteed to match its claimed
-  principal; that is tracked by issue #1064.
+- The signed-ingest path at `f6d03cb6` verifies the source and claim commit
+  signers against the declared immediate authors. Broader signer coverage and
+  remote requester-envelope semantics remain tracked by issue #1064.
 
 ### Implemented direction
 
@@ -199,9 +206,13 @@ DocumentVersionRef {
    race even while request input fields remain mutable in the current schema.
 5. A document-backed capture fails closed without the reference. The
    `RenderedRequest` row stores `request_doc_id` and `request_commit_cid`, and
-   provenance manifest v3 carries the structured pair.
-6. The status remains `CapturedOnly`: config, transcript, ACP-read, and signer
-   evidence are not all pinned yet.
+   the current provenance manifest v7 carries the structured signed source and
+   claim chain.
+6. Later checkpoints pin the exact running `InferenceCall`, ordered finalized
+   transcript facts, and the selected core document-runtime configuration
+   facts. The status remains `CapturedOnly`: complete skill/discovery and MCP
+   availability, host tool ceilings, compaction source versions, ACP decisions,
+   and the frozen projection/export manifest are not all pinned yet.
 
 ### Findings from the pinned DefraDB implementation
 
@@ -217,8 +228,10 @@ DocumentVersionRef {
   unique forever.
 - The exact `status = processing`, `lifecycle_state = claimed` snapshot written
   by the `pending -> claimed` mutation is the request source boundary.
-- ACP behavior for CID/history reads, signer evidence, and complete
-  reconstructibility remain follow-up gates before `Verified` is legal.
+- ACP behavior for CID/history reads and complete reconstructibility remain
+  follow-up gates before `Verified` is legal. Signer evidence is enforced for
+  the implemented strict paths, but #1064 remains open for system-wide
+  authorship coverage.
 
 ### Initial acceptance criteria
 
@@ -232,6 +245,9 @@ DocumentVersionRef {
 - Signer verification remains explicit and cannot be inferred from
   `agent_did` or `requester_did` fields.
 
-Status: **Implemented first slice**. Exact request-version provenance is
-captured; the manifest intentionally remains `CapturedOnly` until the remaining
-config, transcript, ACP, and signer evidence is modeled and implemented.
+Status: **Implemented first slice plus bounded follow-on checkpoints**. Exact
+request/claim, inference-call, finalized-transcript, and selected core-config
+versions are captured at `f6d03cb6`. The manifest intentionally remains
+`CapturedOnly` until the remaining selection/availability inputs, compaction
+source versions, ACP evidence, and regenerable projection manifest are modeled
+and implemented.

@@ -40,16 +40,34 @@ the authorization/redaction decision used to produce the view.
 
 - `RenderedRequest` is an immutable, branchable fact written before provider
   send by `rendered_request/transport.rs` and `rendered_request/sink.rs`.
-- Its `request_doc_id` and `request_commit_cid` pin the exact claimed
-  `AgentRequest` version. `capture_key` is an idempotency/query key, not an
-  integrity proof. `request_json`'s DefraDB field CID is the integrity anchor.
-- The capture remains `CapturedOnly`: the manifest does not pin every config,
-  transcript, ACP, and signer input needed to claim full reconstruction or
-  verified authorship.
+- Its signed source and claim edges pin the exact accepted `AgentRequest`
+  version and the exact target-agent claim version by `_docID`, composite CID,
+  and cryptographically verified signer DID. `capture_key` is an
+  idempotency/query key, not an integrity proof. `request_json`'s DefraDB field
+  CID is the payload integrity anchor.
+- The v7 capture manifest also pins the exact signed running `InferenceCall`,
+  the canonically ordered exact signed transcript snapshot loaded for the call,
+  and a bounded exact signed core-config bundle for reconciled document-runtime
+  behaviors: principal, behavior, backend, profile, optional tool selection,
+  and effective skills. CID-only changes to those selected config facts rotate
+  the runtime generation fingerprint and the same bundle is captured before
+  send.
+- The capture nevertheless remains `CapturedOnly`: that bounded bundle is not
+  a separately published `ResolvedAgentGeneration` and does not prove the
+  complete skill candidate set, MCP registry/discovery and health observations,
+  host tool ceiling, compaction inputs for the provider call, placement/lease
+  authority, ACP authorization, encryption, or a durable read decision.
 - `RunTimelineRows` currently loads `AgentRequest`, `AgentSession`,
   `AgentConversation`, `AgentMessage`, `AgentToolCall`, `AgentResponse`, and
-  `InferenceCall`. It does not load `RenderedRequest`, tool results/approvals,
-  compaction entries, or source commit references.
+  `InferenceCall`. Tool result and approval facts are now loaded through their
+  exact `_docID`/composite-CID/signer edges and verified against the physical
+  historical `AgentToolCall`. It still does not load `RenderedRequest`,
+  compaction entries, or a complete source-version manifest for the other rows.
+- Finalized `CompactionEntry` facts now carry a canonical exact-source manifest
+  over their signed transcript snapshot and prior compaction facts, with
+  create-and-compare and pre-finalization re-verification. This is durable
+  compaction evidence, but the central timeline/projection path does not yet
+  consume it or explain compacted omissions.
 - `run_timeline_fetch.rs` begins with `AgentRequest(request_id, order:
   created_at DESC, limit: 1)` and discovers related rows through logical IDs.
   This is a current-head operational view, not an exact historical read.
@@ -106,20 +124,25 @@ the authorization/redaction decision used to produce the view.
 - **Primary archetype / meaning:** immutable durable fact for the exact body
   sent during one provider attempt. Canonical, not derived from a later replay.
 - **Authority:** the runtime deployment executing the request is the sole
-  creator. No transition writer exists; updates are illegal. The claimed
-  `agent_did` remains unverified until commit-signer enforcement is implemented
-  under #1064.
+  creator. No transition writer exists; updates are illegal. The capture sink
+  requires the node signing identity to match `agent_did`, cryptographically
+  verifies the stored `RenderedRequest` commit signer, and re-verifies the
+  signed request source/claim and running `InferenceCall` chain before send.
+  This is authorship evidence; future ACP still decides whether that author was
+  authorized.
 - **Identity:** `_docID` is the durable identity. `capture_key` has uniqueness
   scope `(agent_did, session_id, request_doc_id + capture_scope, turn_index,
   attempt)` and exists for idempotent retry/query. Concurrent duplicate creates
   must be compared byte-for-byte and mismatches fail closed; a unique-index
-  winner alone does not canonicalize replicated conflicts. `request_doc_id` +
-  `request_commit_cid` is the source-version edge. The `request_json` field CID
-  is the payload evidence and must be exposed to archive manifests.
+  winner alone does not canonicalize replicated conflicts. `request_doc_id`
+  plus the source and claim composite CIDs and signer DIDs form the signed
+  execution-provenance edges. The `request_json` field CID is the payload
+  evidence and must be exposed to archive manifests.
 - **Mutability / illegal states:** every field is immutable. A document-backed
-  capture without both request reference fields, a one-shot capture with a
-  forged nonempty request reference, unsupported `capture_version`, malformed
-  provenance, or a capture-key/canonical-body mismatch is illegal.
+  capture without the complete signed source/claim reference set, a one-shot
+  capture with a forged nonempty request reference, unsupported
+  `capture_version`, malformed provenance, or a capture-key/canonical-body
+  mismatch is illegal.
 - **Gossip:** no participant route carries this raw provider body. Live
   delivery is limited to execution failover and explicitly governed audit
   sinks, filtered by immutable principal/session placement fields; participant
@@ -154,8 +177,11 @@ the authorization/redaction decision used to produce the view.
   breaking; no compatibility migration is required, but an explicit backfill
   policy must say that old captures are `CapturedOnly`, never upgraded by
   inference.
-- **Decision:** target direction decided; ACP, signer verification, complete
-  manifest, and projection consumption remain unimplemented gates.
+- **Decision:** target direction decided; signer verification is implemented
+  for the bounded request/claim/inference/render and selected transcript/config
+  evidence described above. Complete-generation evidence, ACP authorization,
+  complete manifest semantics, and projection consumption remain unimplemented
+  gates.
 
 ## Collection decision: `ProjectionAcpBinding`
 
@@ -219,7 +245,7 @@ source selection is part of the durability contract.
 | Root request | logical id, newest timestamp, `limit: 1` | caller-selected `_docID`; exact composite CID; duplicate logical ids fail |
 | Related requests | session and parent logical ids | durable edges frozen to exact CIDs |
 | Messages | session id, sequence ascending | exact CIDs; uniqueness/order scope `(session document, sequence)` with deterministic conflict handling |
-| Tool calls/results/approvals | partial tool-call materialization | include every lifecycle fact by `_docID`/CID and preserve attempt/order edges |
+| Tool calls/results/approvals | exact signed result/approval facts are verified against the physical historical tool call, but the complete lifecycle/attempt graph is not frozen in a source manifest | include every lifecycle fact by `_docID`/CID and preserve attempt/order edges |
 | Responses/inference | logical request/session ids | exact attempt/materialization versions, stable attempt and progress ordering |
 | Compaction | not a timeline source | include checkpoint/source-range facts so omitted transcript is explainable |
 | Rendered request | not a timeline source | join exact request version; expose body/field CID subject to ACP/redaction |
@@ -235,7 +261,7 @@ as a final deterministic presentation tie-breaker, not as causal proof.
 
 | Component | Writes | Reads / projects | Durability concern |
 | --- | --- | --- | --- |
-| Rendered capture transport/sink | immutable `RenderedRequest` before send | idempotency lookup by `capture_key` | conflict policy and ACP/signer evidence |
+| Rendered capture transport/sink | immutable `RenderedRequest` before send | idempotency lookup by `capture_key` | replicated conflict policy, complete-generation evidence, and ACP authorization |
 | Request watcher/lifecycle/daemon | claim transition and exact request version | supplies capture context | preserve the exact claim boundary |
 | `run_timeline_fetch.rs` | none | logical-id/current-head GraphQL or local reads | ambiguous root and no source CIDs |
 | `run_timeline.rs` | none | sorts/materializes runtime rows | deterministic display is not exact provenance |
@@ -262,8 +288,9 @@ as a final deterministic presentation tie-breaker, not as causal proof.
 
 1. Define and prove the versioned run-timeline source manifest and exact-CID
    fetcher.
-2. Add `RenderedRequest`, tool-result/approval, and compaction facts to timeline
-   reconstruction with ACP-aware explicit omissions.
+2. Add `RenderedRequest` and compaction facts to timeline reconstruction, retain
+   the implemented exact tool-result/approval edges in the frozen manifest, and
+   represent ACP-aware omissions explicitly.
 3. Version adapter provenance and export receipts with source, signer, policy,
    resource-map, and redaction evidence.
 4. Replace `ProjectionAcpBinding` with branchable desired-binding and immutable
@@ -272,6 +299,9 @@ as a final deterministic presentation tie-breaker, not as causal proof.
    replay conformance suites.
 6. Define trust classes and provenance for external adapter imports.
 
-Track C is **provisional** overall. `RenderedRequest` has an implemented first
-slice, but the projection pipeline is not yet a durable, independently
+Track C is **provisional** overall. `RenderedRequest` now has signed exact
+request/claim, inference-attempt, transcript, and bounded core-config evidence;
+tool results/approvals and finalized compactions also have narrower exact-source
+foundations. The projection pipeline still does not freeze or consume those
+facts as one complete source manifest and is not yet a durable, independently
 verifiable export path.

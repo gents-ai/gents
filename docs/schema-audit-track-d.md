@@ -16,15 +16,18 @@ class labels below refine that common contract rather than replace it.
 
 ## Executive findings
 
-1. **The resolved runtime generation has no durable source-version manifest.**
-   `DocumentRecord<T>` retains `_docID` but no composite commit CID, and the
-   resolved snapshot drops even that `_docID`
-   (`crates/gents/src/agent/document_view/mod.rs:19-37`,
-   `crates/gents/src/agent/document_view/snapshot.rs:75-223`). The
-   `RenderedRequest` manifest therefore honestly remains `CapturedOnly`: it
-   pins the `AgentRequest`, endpoint, and sent body, but explicitly does not pin
-   configuration or transcript versions
-   (`crates/gents/src/rendered_request/mod.rs:379-419`).
+1. **The runtime retains bounded exact config provenance, but does not publish a
+   durable resolved generation.** `DocumentRecord<T>` now carries a
+   `ConfigFactRef` containing collection, logical id, `_docID`, composite commit
+   CID, and cryptographically verified signer. Resolution retains exact signed
+   principal, behavior, backend, profile, optional tool-selection, and
+   canonically ordered effective-skill facts in the active snapshot. The
+   `RenderedRequest` v7 manifest captures that same bundle plus its exact signed
+   transcript snapshot and running `InferenceCall`. This closes the earlier
+   source-id loss for the bounded core, but it is not a separately persisted
+   `ResolvedAgentGeneration` and does not prove the complete candidate,
+   discovery, availability, host-ceiling, placement/lease, or ACP input set.
+   `RenderedRequest` therefore honestly remains `CapturedOnly`.
 2. **Desired, resolved, and observed state are not consistently separated.**
    `InferenceBackend` combines routing intent/secrets with probe observations;
    `Schedule` and `EventTrigger` combine operator intent with runtime cursors
@@ -80,10 +83,11 @@ DefraDB current-value queries
   -> transport-body RenderedRequest capture
 ```
 
-The loader records `_docID` for principal, behavior, skill, tool selection,
-profile, backend, OAuth credential, task, schedule, and event trigger. It does
-not read or retain composite commit CIDs
-(`crates/gents/src/agent/document_view/load.rs:18-185`). Resolution then:
+The loader now resolves the sole current signed composite head for principal,
+behavior, skill, tool selection, profile, and backend, reloads that exact CID,
+and retains it as a `ConfigFactRef`. OAuth credentials, tasks, schedules, and
+event triggers remain explicitly unversioned in this bounded provider-config
+slice. Resolution then:
 
 - rejects unavailable backends and locally vetoed backend health;
 - requires an enabled OAuth credential for OAuth provider kinds;
@@ -94,18 +98,22 @@ not read or retain composite commit CIDs
 - resolves tasks, schedules, event triggers, and paired-peer DIDs.
 
 The relevant code is
-`crates/gents/src/agent/document_view/snapshot.rs:75-223,251-317,326-359`.
-The resolved structs carry values, not source `DocumentVersionRef`s. Later
-configuration changes do not mutate an already-built `Arc<AgentBehavior>`, but
-there is no durable record of which generation or source versions served a
-request.
+`crates/gents/src/agent/document_view/load.rs`,
+`crates/gents/src/agent/document_view/snapshot.rs`, and
+`crates/gents/src/runtime_snapshot.rs`. The active snapshot carries exact
+source versions for the bounded core beside the resolved values, and its
+fingerprint includes that provenance so a CID-only source change rotates the
+runtime generation. `RenderedRequest` records the same selected bundle before
+send. There is still no immutable published generation fact proving the full
+resolution input set or binding that set to one deployment/lease epoch.
 
-The final HTTP body is nevertheless strong evidence of what was sent. The
-transport capture records the exact body, observed endpoint, request document
-version, and an assembly trace. It deliberately reports `CapturedOnly`
-(`crates/gents/src/rendered_request/mod.rs:379-455,618-700`). This distinction
-must remain: exact sent bytes are not proof that every input, signer, or policy
-decision can be reconstructed.
+The final HTTP body is strong evidence of what was sent. The transport capture
+records the exact body, observed endpoint, signed request source/claim chain,
+signed running `InferenceCall`, exact signed transcript snapshot, bounded
+core-config bundle, and an assembly trace. It deliberately reports
+`CapturedOnly`. This distinction must remain: exact sent bytes and a selected
+config subset are not proof that every candidate, local constraint, placement,
+signer authorization, or policy decision can be reconstructed.
 
 ### Existing desired-state machinery
 
@@ -138,10 +146,16 @@ model layer, but several physical documents still mix desired and live fields.
   row, written and deleted by the health checker
   (`crates/gents/src/health_checker.rs:383-430,770-909`). This is directionally
   correct, but its compound identity is only application-enforced.
-- Schedule and trigger callbacks update counters and cursors in the desired
-  documents. Both increments are read-then-write and explicitly permit lost
-  increments (`crates/gents/src/document_config/schedule.rs:86-186`;
-  `crates/gents/src/document_config/event_trigger.rs:39-143`).
+- Schedule callbacks still update cursors and counters in the desired document
+  through read-then-write bookkeeping that permits lost increments
+  (`crates/gents/src/document_config/schedule.rs:86-186`). Event delivery has
+  implemented a narrower target split: signed branchable
+  `EventTriggerActivation` freezes the physical trigger version and initial
+  source baseline, and signed branchable `EventDeliveryAdmission` pins the exact
+  trigger, activation, and source versions before deterministic request
+  materialization. Event callbacks are now observability-only and leave the
+  legacy trigger counters/cursors untouched. The old mixed fields remain in the
+  `EventTrigger` schema and no deployment lease fences the event authority yet.
 - Pairing reconciliation explicitly reads desired and applied rows, computes a
   diff against actual P2P state, and persists `PeerPairingApplied` after each
   successful operation
@@ -210,7 +224,7 @@ generation.
 | `WorkspaceRoot` and host tool ceiling | Root publication and canonical path/ceiling constrain effective tools | Local config version and canonical resolved root fingerprint; raw path visibility governed separately |
 | `OAuthCredential` / backend key | Authorizes transport; token rotation and account headers can change request handling | Confidential credential reference/version and auth-mode fingerprint, never access/refresh/id tokens or raw keys in general provenance |
 | `Task` | Supplies the prompt template for automated requests | Task document version stamped into request lineage at materialization |
-| `Schedule` / `EventTrigger` | Selects task, cadence/source/filter, concurrency, and execution origin | Exact desired trigger version; source event `_docID`/CID for events; observed cursor/result stored separately |
+| `Schedule` / `EventTrigger` | Selects task, cadence/source/filter, concurrency, and execution origin. Event delivery now pins exact signed trigger/activation/source versions in immutable admission facts; schedules still mutate desired-state bookkeeping. | Preserve the event admission foundation; add exact task lineage, schedule fire/result facts, separately stored observed cursors/results, and deployment-lease fencing. |
 | `PeerPairingDesired` / membership | Affects which peers/targets are considered reachable/authorized | Placement or membership fact versions used for cross-deployment routing |
 
 `RenderedRequest.request_json` remains the conformance oracle for bytes sent.
@@ -247,7 +261,7 @@ separate result/revocation fact.
 | --- | --- | --- |
 | `Task` | Unique `task_id`; desired-state/config/self-config/persona writers; runtime resolves task to behavior/prompt | Immutable `task_id` and owner/principal scope. Desired-only document. Stamp task version onto every materialized request. Prefer `(owner_did, task_id)` unless IDs are a global catalog. |
 | `Schedule` | Unique `schedule_id`; operator owns cadence/task/enabled/concurrency while runtime writes next/last/count fields | Split `ScheduleDesired` from `ScheduleCursor` and immutable `ScheduleFire` result facts. Desired identity/owner immutable. Cursor keyed by `(deployment_id, schedule_doc_id)` and fenced by a scheduler lease. |
-| `EventTrigger` | Unique `trigger_id`; operator owns source/filter/task/enabled/concurrency while runtime writes last source/result/count | Split `EventTriggerDesired`, deployment cursor, and immutable dispatch result. Desired identity/owner/source scope immutable. A consumed event is identified by source `_docID` plus composite CID, not only `last_fired_source_doc_id`. |
+| `EventTrigger` | Unique `trigger_id`; operator owns source/filter/task/enabled/concurrency. Legacy last-source/result/count fields remain, but event callbacks no longer mutate them; immutable signed activation/admission facts now govern delivery. | Complete the split into `EventTriggerDesired`, deployment cursor, and immutable dispatch result, preserving the activation/admission facts. Desired identity/owner/source scope immutable. A consumed event is identified by exact signed trigger, activation, and source versions, not `last_fired_source_doc_id`. |
 | `PersonaConfigRequest` | Unique immutable `request_key`; phone creates pending row; server mutates it to applied/rejected (`persona_requests.rs:225-269,413-445`) | Keep immutable request fields and requester scope; move outcome to an immutable `PersonaConfigResult` keyed by request `_docID`/CID. Server authorized for the target principal signs result. The request's logical key is idempotency, not proof of caller identity. |
 
 ### Network, pairing, and placement
@@ -449,9 +463,11 @@ Assume this Track D redesign is intentionally breaking.
 4. **Secret extraction.** Remove raw backend keys and OAuth tokens from general
    config/replication; integrate encrypted local secret refs, rotation,
    revocation, backup, and cryptographic-erasure tests.
-5. **Automation desired/cursor/result split.** Introduce schedule/event result
-   facts with deterministic versioned source keys and lease-fenced cursors;
-   stamp exact task/trigger/event versions onto `AgentRequest`.
+5. **Automation desired/cursor/result split.** Preserve the implemented signed
+   event activation/admission facts, remove the remaining mixed trigger fields,
+   introduce schedule and event result facts plus deterministic versioned source
+   keys and lease-fenced cursors, and stamp exact task/trigger/event versions
+   onto `AgentRequest`.
 6. **Multi-host nonce redemption.** Add issuer authority fencing or an
    explicitly serialized redemption service; update Lean so disconnected local
    unique indexes are not modeled as one atomic set.
@@ -491,11 +507,12 @@ Assume this Track D redesign is intentionally breaking.
 ## Decision summary
 
 Track D should not be declared “decided” yet. The code already has valuable
-foundations—ordered desired apply, fail-closed duplicate reads, immutable
-transport capture, signed network materialization, and explicit
-desired/applied pairing reconciliation. The decisive next step is to persist
-the resolved generation that connects them. Without that fact and explicit
-deployment fencing, current configuration is recoverable as a collection of
-documents but not provably the configuration one host used for one provider
-call, and multi-host control remains vulnerable to ambiguous concurrent
-authority.
+foundations—ordered desired apply, fail-closed duplicate reads, signed exact
+bounded core-config/transcript/provider capture, immutable event
+activation/admission, signed network materialization, and explicit
+desired/applied pairing reconciliation. The decisive next step is still to
+persist the complete resolved generation that connects every selection input to
+one deployment/lease epoch. Without that fact and explicit deployment fencing,
+the bounded selected config used for a provider call is attestable, but the
+completeness of the resolution decision and multi-host execution authority are
+not.

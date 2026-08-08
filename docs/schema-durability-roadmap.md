@@ -10,9 +10,9 @@ reset at a declared schema epoch. Where retained data matters, export/import
 preserves old `_docID`/CID evidence as `unverified_legacy`; it never invents
 new provenance or treats a new CID as the old one.
 
-## Active milestone: signed request-ingest provenance
+## Durability checkpoint at `f6d03cb6`: signed ingest and exact provider provenance
 
-The active milestone is intentionally narrower than the full durability
+This implemented checkpoint is intentionally narrower than the full durability
 backlog. It proves that one incoming request was authored by its declared
 immediate author, that the runtime selected one exact immutable version of
 that request, and that lifecycle processing and provider capture stayed bound
@@ -27,7 +27,7 @@ custody, and secret migration are not acceptance criteria here. This is a scope
 boundary, not a claim that the current schemas already enforce ACP or encrypt
 those values.
 
-The active dependency chain is:
+The checkpoint dependency chain is:
 
 1. **Signed ingress boundary.** Every request-producing node has a registered
    signing identity, and the accepted commit is verified against the document's
@@ -51,21 +51,33 @@ The active dependency chain is:
    remains `CapturedOnly` until its other evidence dimensions are complete.
 
 #1065 implements this signed-ingest milestone end to end, with the embedded
-DefraDB signing/runtime support carried by DefraDB #1325. Request producers
+DefraDB signing/runtime support carried by DefraDB #1352. Request producers
 declare the actual node signer separately from requester attribution and target
 agent identity; atomic claim verifies the exact source and claim commits; and
 provider capture re-verifies the durable chain.
 
-Two post-ingest checkpoints are now layered onto that foundation:
+The following bounded checkpoints are layered onto that foundation at
+`f6d03cb6`:
 
-- finalized transcript facts are immutable create-and-compare records, and the
+- finalized transcript facts are immutable create-and-compare records, mutable
+  in-flight text lives in `AgentMessageDraft`, and the
   provider manifest names the exact signed message versions it loaded; and
 - reconciled document-runtime behaviors retain the exact signed principal,
   behavior, backend, profile, optional tool selection, and canonically ordered
   effective skill versions used to build the active slot. A CID-only change
-  rotates the runtime generation, and the same bundle is captured before send.
+  rotates the runtime generation, and the same bundle is captured before send;
+- the exact provider-attempt fence binds signed `InferenceCall` V1 to immutable
+  `RenderedRequest`, binds V2 back to that render before send, and preserves the
+  relationship in terminal V3. Queue-only attempts have no render;
+- terminal response repair converges on immutable, signer-verified
+  `AgentResponseOutcome` facts bound to exact request and final-message
+  versions; and
+- tool/subagent transitions, compaction and fork source manifests, event
+  activation/delivery admission, and restart recovery use the same
+  exact-document, exact-version, conflict-visible discipline in their bounded
+  implemented paths.
 
-The next checkpoint implements the provider-attempt edge from #1075. A normal
+The provider-attempt checkpoint from #1075 is implemented. A normal
 or one-off provider call creates a signed running `InferenceCall` version V1.
 The immutable `RenderedRequest` pins V1 by `_docID`, composite CID, and verified
 signer DID; before the transport may send, an exact conditional mutation
@@ -80,10 +92,12 @@ provider receipt; crash recovery must not upgrade it into such a claim.
 This is bounded direct evidence, not the immutable published
 `ResolvedAgentGeneration` described in Slice 6. The manifest remains
 `CapturedOnly`: it does not yet prove completeness of the skill candidate set,
-MCP availability, the host tool ceiling, compaction inputs, placement/lease
-authority, ACP authorization, or encryption.
+MCP availability, the host tool ceiling, or placement/lease authority, and a
+compaction capture does not yet bind its rendered manifest directly to every
+compaction source version. ACP authorization and encryption also remain outside
+this checkpoint.
 
-### Active milestone acceptance
+### Checkpoint acceptance
 
 - unsigned, malformed, declared-author-mismatched, replayed,
   and ambiguous duplicate requests fail before prompt assembly or tool use;
@@ -123,8 +137,8 @@ requires the deployment assignment and lease epoch in Slice 7.
   cryptographic erasure are later work. This milestone assumes their eventual
   presence and makes no confidentiality claim.
 - Commit signer versus claimed principal is tracked by Gents #1064. Its narrow
-  request-ingress phase is part of the active milestone; broader signer wiring
-  remains follow-up work.
+  request-ingress phase is part of the implemented checkpoint; broader signer
+  wiring remains follow-up work.
 - `RenderedRequest` consumer work is tracked by Gents #1066. The audit tightens
   its proposed inference join from an ordinal/logical value to an exact
   `InferenceCall` document-version edge.
@@ -133,8 +147,8 @@ requires the deployment assignment and lease epoch in Slice 7.
 
 ## Broader durability backlog
 
-The slices below preserve the findings from the full schema audit. They are not
-prerequisites for the active signed-ingest milestone unless that milestone
+The slices below preserve the findings from the full schema audit. They were not
+prerequisites for the signed-ingest checkpoint unless that checkpoint
 explicitly cites them.
 
 ### Former Slice 1: secret and placement fence (deferred)
@@ -183,7 +197,7 @@ class instead of scattering `_docID` plumbing across the runtime:
    current same-store fixtures cover admission and policy only, not multi-host
    replication.
    The two-node conformance fixture now verifies a remote signed bridge and
-   exactly-once child materialization. DefraDB #1325 also moves signed query
+   exactly-once child materialization. DefraDB #1352 also moves signed query
    execution onto a stable runtime so spawned replication work survives query
    completion and caller-runtime cancellation.
 4. **Session and transcript identity:** replace `limit: 1` selection with an
@@ -199,19 +213,20 @@ Goals are lower priority: their duplicate policy already loads the full set,
 orders it deterministically, and mutates exact `_docID`s. Existence probes that
 only answer a conservative boolean are likewise not physical-identity defects.
 
-## Deferred fact graph foundation
+## Partially implemented fact graph foundation
 
-### Slice 3: append-only transcript and full tool output
+### Slice 3: append-only transcript and full tool output (partial)
 
 **Guarantee:** a committed transcript fact is never rewritten and promised
 full tool output is either durable or explicitly reported missing.
 
-Start in the transcript/tool Lean models. Add conformance cases for immutable
-idempotency, pair closure, multi-writer sequence conflict, fork lineage, and
-spill failure. Then replace message/compaction fact upserts with create-and-
-compare, declare order scope, and make the full output edge explicit.
+The immutable finalized-message/draft split, exact transcript references,
+compaction source manifests, fork lineage, and several tool/subagent edges are
+implemented at `f6d03cb6`. Full tool-output retention/failure semantics,
+multi-writer ordering and late-backfill coverage, and draft lifecycle/retention
+remain under #1073.
 
-### Slice 4: exact provider-attempt edge (active in #1075)
+### Slice 4: exact provider-attempt edge (implemented core; consumer follow-up open)
 
 **Guarantee:** every provider send is associated with one running
 `InferenceCall` version and one immutable `RenderedRequest`, and queue-only
@@ -228,6 +243,30 @@ provider-send fence, including explicit one-off calls. The central reader and
 timeline integration remain #1066 follow-up work. Until a later transport
 receipt fact exists, projections must distinguish `rendered/send-authorized`
 from `sent`, `received`, or `processed`.
+
+## Remaining slices after `f6d03cb6`
+
+The checkpoint above does not complete the schema epic. The remaining critical
+work is:
+
+- **Slice 5:** split immutable request intent from fenced execution authority
+  (#1071);
+- **Slice 6:** publish a complete immutable `ResolvedAgentGeneration`, including
+  candidate and availability evidence beyond the bounded selected-core-config
+  bundle;
+- **Slice 7:** add deployment assignment and lease-epoch fencing (#1079);
+- **Slice 8:** build stable, regenerable timeline/adapter projections from a
+  frozen exact source manifest and central `RenderedRequest` reader (#1066);
+- **Slice 9:** make approvals exact-version-bound authorization facts;
+- **Slice 10:** install and test DefraDB ACP policies/history access, with
+  encryption and key custody remaining their own deferred workstream; and
+- **Slice 11:** implement archive/restore, legal hold, evidence downgrade, and
+  coordinated purge receipts (#1078).
+
+The open Track A-D issues and their child issues remain authoritative for work
+not named in this summary, including full tool-output, automation, network,
+placement, retention, and lower-priority normalization contracts. All
+unresolved collection decisions remain `Provisional` in the ledger.
 
 ### Slice 5: request intent and execution authority
 
@@ -324,7 +363,7 @@ DefraDB #1318 + 1 + identity model ───────────────
 Verified provenance requires 3 + 4 + 5 + 6 + 8 + 10 + Gents #1064.
 ```
 
-This graph describes the broader backlog only. It does not supersede the active
+This graph describes the broader backlog only. It does not supersede the bounded
 signed-ingest chain above. Each later implementation issue must name its exact
 Lean changes (or explain why it is plumbing), conformance cases, schema
 epoch/successor decision, and full repository gates.
