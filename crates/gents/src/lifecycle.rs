@@ -43,10 +43,23 @@ fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str
 }
 
 fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+    // DefraDB's GraphQL surface accepts `create_<Collection>` while the
+    // response data may expose the normalized `add_<Collection>` field. Read
+    // both so callers keep the exact create result instead of falling back to
+    // a non-unique logical-ID lookup.
+    let normalized_add_key = key
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"));
     response
         .data
         .as_ref()
-        .and_then(|data| data.get(key))
+        .and_then(|data| {
+            data.get(key).or_else(|| {
+                normalized_add_key
+                    .as_deref()
+                    .and_then(|normalized| data.get(normalized))
+            })
+        })
         .and_then(|value| {
             value
                 .get("_docID")
@@ -107,6 +120,7 @@ impl ExecutionOrigin {
 pub struct TriggerLineage {
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
+    pub source_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

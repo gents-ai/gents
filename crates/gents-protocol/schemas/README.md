@@ -33,6 +33,7 @@ Interactive execution:
                -> AgentConversation
                -> AgentMessage
                -> AgentToolCall
+               -> AgentToolApproval
                -> AgentToolResult
                -> CompactionEntry
                -> RenderedRequest
@@ -74,16 +75,17 @@ These documents record user requests, assistant output, and conversation history
 
 | Collection | Key fields | References | Written by | Read by |
 |------------|------------|------------|------------|---------|
-| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason`, `interrupt_requested_at`, `valid_until` | belongs to an agent/session/behavior | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
-| `InferenceCall` | `call_id`, `request_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to a request/backend | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
-| `AgentResponse` | `request_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence`, `interrupted_at` | latest response for a request; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
+| `AgentRequest` | `request_id`, `agent_did`, `behavior_id`, `session_id`, sampling overrides, `metadata`, `status`, `lifecycle_state`, `backend_id`, `failure_reason`, `interrupt_requested_at`, `valid_until` | `_docID` is the authoritative request identity; logical retry, supersession, and subagent fields have matching physical request/tool-call document edges | `chat`, `request submit`, lifecycle transitions | router, CLI inspection, recovery |
+| `InferenceCall` | `call_id`, `request_id`, `request_doc_id`, `backend_id`, `call_kind`, `call_state`, queue/timing/token fields | belongs to an exact physical request document/backend; `request_id` remains correlation-only | admission controller at terminal call state | benchmarking, RL reward shaping, debugging |
+| `AgentResponse` | `request_id`, `request_doc_id`, `agent_did`, `behavior_id`, `session_id`, `status`, `content`, `reasoning`, `error_message`, `progress_seq`, `materialized_message_sequence`, `interrupted_at` | latest response for an exact physical request document; also the in-flight streaming overlay until committed into transcript | streaming/runtime code | `chat`, `response show`, `response wait`, TUI, rich clients |
 | `AgentSession` | `session_id`, `behavior_id`, `status`, `started`, `ended` | ties a sequence of requests to one behavior | session manager | `chat`, inspection, recovery |
 | `AgentConversation` | `session_id`, `agent_did`, `behavior_id`, `title`, `preview_text`, `status`, `latest_request_id` | high-level conversation summary per session | session/conversation layer | UI and inspection |
-| `AgentMessage` | `message_key`, `session_id`, `sequence`, `role`, `content`, `timestamp` | ordered transcript entries | session/history layer | chat history, TUI, debugging |
-| `AgentToolCall` | `tool_call_key`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status`, trace enrichment fields | concrete tool invocation records within a session | runtime/tool persistence | chat progress, TUI, diagnostics |
-| `AgentToolResult` | `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized tool result persistence | tool persistence hook | compaction and later inspection |
-| `CompactionEntry` | `compaction_key`, `session_id`, `summary`, `messages_compacted`, token counts | persisted compaction summaries | compaction layer | session reconstruction and debugging |
-| `RenderedRequest` | `capture_key`, `request_doc_id`, `request_commit_cid`, `request_id`, `session_id`, `capture_scope`, `turn_index`, `attempt`, `request_json`, `prompt_hash`, `tools_hash`, `provenance_json` | one durable fact per provider attempt: the exact HTTP request body and exact DefraDB request version current before send | `rendered_request::transport::RenderedRequestCapturingHttpClient`, the innermost transport in every provider stack, through `rendered_request::sink::DefraRenderedRequestSink` (installed by default) | trace projections, capture-verified reconstruction |
+| `AgentMessage` | `message_key`, `session_id`, `request_id`, `request_doc_id`, `sequence`, `role`, `content`, `timestamp` | ordered transcript facts bound to the exact request document that produced them | session/history layer | chat history, timeline, adapters, debugging |
+| `AgentToolCall` | `tool_call_key`, `request_id`, `request_doc_id`, `session_id`, `tool_name`, `tool_call_id`, `args`, `result`, `status`, trace enrichment fields | concrete tool invocation facts bound to their exact request document | runtime/tool persistence | chat progress, timeline, adapters, diagnostics |
+| `AgentToolApproval` | `approval_id`, `tool_call_doc_id`, `tool_call_id`, `request_id`, `decision`, `approver_did` | decision bound to the exact tool-call document; logical IDs remain correlation fields | approval lifecycle | tool execution and audit projections |
+| `AgentToolResult` | `tool_call_doc_id`, `agent_did`, `session_id`, `tool_name`, `tool_input`, `output_text`, `truncated`, `discarded_because_interrupted` | normalized or spilled result bound to the exact tool-call document | tool persistence hook | transcript/tool-output loading and inspection |
+| `CompactionEntry` | `compaction_key`, `session_id`, `request_id`, `request_doc_id`, `summary`, `messages_compacted`, token counts | transcript-reduction fact bound to the exact request document active during compaction | compaction layer | session reconstruction, timeline, and debugging |
+| `RenderedRequest` | `capture_key`, `request_doc_id`, `request_commit_cid`, `request_id`, `session_id`, `capture_scope`, `turn_index`, `attempt`, `request_json`, `provenance_json` | one durable fact per provider attempt: the exact HTTP request body and exact DefraDB request version current before send; DefraDB CIDs provide integrity without shadow payload hashes | `rendered_request::transport::RenderedRequestCapturingHttpClient`, the innermost transport in every provider stack, through `rendered_request::sink::DefraRenderedRequestSink` (installed by default) | trace projections, capture-verified reconstruction |
 
 ### Tasks, Schedules, and Event Triggers
 
@@ -140,7 +142,7 @@ The normal CLI path is:
 
 1. `chat` or `request submit` writes `AgentRequest`
 2. runtime claims and executes the request
-3. an explicitly configured rendered-request capture sink may observe each provider-bound request in memory before streaming starts
+3. the default rendered-request capture sink persists each exact provider-bound request body and the current request commit before streaming starts
 4. streaming writes `AgentResponse`
 5. transcript/session layers write `AgentSession`, `AgentConversation`, `AgentMessage`
 6. once the final assistant message is committed, `AgentResponse.materialized_message_sequence`
@@ -162,20 +164,33 @@ new generation.
 
 ## Branchable vs Non-Branchable
 
-Several operational collections are marked `@branchable`:
+Shared configuration and durable fact collections are marked `@branchable`,
+including:
 
 - `AgentConversation`
+- `AgentPrincipal`
+- `AgentBehavior`
+- `AgentMemory`
 - `AgentMessage`
 - `AgentRequest`
 - `AgentResponse`
-- `AgentRuntime`
 - `AgentSession`
+- `AgentToolApproval`
 - `AgentToolCall`
 - `AgentToolResult`
 - `CompactionEntry`
 - `RenderedRequest`
+- `InferenceCall`
+- `InferenceProfile`
+- `ToolSelection`
+- `Skill`
+- `DatastoreToolSurface`
+- `ToolServiceRegistry`
+- `ProjectionAcpBinding`
 - `Task`
 - `Schedule`
+- `EventTrigger`
+- the network membership, pairing, peer registry, and remote configuration ledgers
 
 These are the documents where preserving observable history matters most.
 
@@ -187,15 +202,17 @@ recreated), and it is the precondition for branchable collection sync and for
 collection-scoped ACP read decisions. Choose it when the collection is created
 or never.
 
-The core configuration collections are not branchable:
+Host-local state and secrets are not branchable:
 
-- `AgentPrincipal`
-- `AgentBehavior`
-- `ToolSelection`
 - `InferenceBackend`
-- `InferenceProfile`
+- `OAuthCredential`
+- `WorkspaceRoot`
+- `AgentRuntime`
+- `ToolServiceHealthState`
+- local pairing and replication intents
 
-Those are treated as current desired state rather than append-only history.
+Those documents describe one host's endpoint, credential, filesystem, process,
+health, or reconciliation state rather than portable agent facts.
 
 ## Source of Truth Boundaries
 

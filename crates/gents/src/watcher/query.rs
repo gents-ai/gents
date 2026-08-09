@@ -22,7 +22,9 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     deadline
                     subagent_depth
                     caused_by_parent_request_id
+                    caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id
+                    caused_by_parent_tool_call_doc_id
 "#;
 
 impl DefraWatcher {
@@ -239,7 +241,9 @@ struct AgentRequestRow {
     deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
     status: String,
     lifecycle_state: Option<String>,
     interrupt_requested_at: Option<String>,
@@ -319,7 +323,9 @@ impl AgentRequestRow {
             deadline: normalize_optional_string(self.deadline),
             subagent_depth: self.subagent_depth.unwrap_or(0),
             caused_by_parent_request_id: self.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
         };
         validate_agent_request_subagent_coherence(&req)?;
         Ok(req)

@@ -353,8 +353,14 @@ async fn setup_parent_hook_on_db(
     )
     .await
     .expect("parent hook");
-    hook.set_active_request_id(Some(case.parent_request_id.clone()))
-        .await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &case.parent_request_id).await;
+    hook.set_active_request_binding(
+        Some(case.parent_request_id.clone()),
+        Some(parent_request_doc_id),
+        None,
+    )
+    .await;
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;
 

@@ -265,8 +265,6 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
             model_name: "test-model"
             source: "openai_responses"
             request_json: "{}"
-            prompt_hash: "ph"
-            tools_hash: "th"
             provenance_json: "{\"version\":1}"
             created_at: "2026-08-06T00:00:00Z"
         }) { capture_key turn_index attempt capture_version }

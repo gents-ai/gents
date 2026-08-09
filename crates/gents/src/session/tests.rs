@@ -55,6 +55,8 @@ async fn compaction_entries_track_files_cumulatively() {
         &node,
         "session-1",
         "did:test:test",
+        "request-1",
+        "request-doc-1",
         "First summary",
         &["/tmp/a.rs".to_string()],
         &["/tmp/b.rs".to_string()],
@@ -68,6 +70,8 @@ async fn compaction_entries_track_files_cumulatively() {
         &node,
         "session-1",
         "did:test:test",
+        "request-2",
+        "request-doc-2",
         "Second summary",
         &["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
         &["/tmp/d.rs".to_string()],
@@ -83,6 +87,112 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn compaction_entry_stores_exact_request_document_edge() {
+    let data_path =
+        std::env::temp_dir().join(format!("gents-compaction-edge-{}", uuid::Uuid::new_v4()));
+    let node = defra_node::EmbeddedNode::builder()
+        .data_path(&data_path)
+        .build()
+        .await
+        .unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    let request_id = "request-exact-edge";
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request_id}",
+                    agent_did: "did:test:test",
+                    session_id: "session-exact-edge",
+                    content: "compact me",
+                    status: "processing",
+                    lifecycle_state: "processing",
+                    created_at: "{created_at}"
+                }}) {{ _docID }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "creating request: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{
+                    _docID
+                }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "loading request: {:?}",
+        response.errors
+    );
+    let request_rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("request rows");
+    assert_eq!(request_rows.len(), 1, "request lookup must be unambiguous");
+    let request_doc_id = request_rows[0]
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .expect("created request _docID");
+
+    save_compaction_entry(
+        &node,
+        "session-exact-edge",
+        "did:test:test",
+        request_id,
+        request_doc_id,
+        "Exact edge summary",
+        &[],
+        &[],
+        3,
+        600,
+        120,
+    )
+    .await
+    .unwrap();
+
+    let response = node
+        .execute(
+            r#"{
+                CompactionEntry(
+                    filter: { compaction_key: { _eq: "session-exact-edge:1" } },
+                    limit: 1
+                ) {
+                    request_id
+                    request_doc_id
+                }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "querying compaction: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("CompactionEntry"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("compaction row");
+    assert_eq!(row["request_id"], request_id);
+    assert_eq!(row["request_doc_id"], request_doc_id);
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

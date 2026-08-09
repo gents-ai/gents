@@ -1234,8 +1234,6 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         tools_json: serde_json::json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
-        prompt_hash: "0".repeat(64),
-        tools_hash: "0".repeat(64),
         provenance_json: serde_json::to_value(
             gents::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
@@ -1294,8 +1292,6 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 model_name
                 source
                 request_json
-                prompt_hash
-                tools_hash
                 provenance_json
             }}
         }}"#,

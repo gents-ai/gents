@@ -50,15 +50,9 @@ fn assert_projection_records_match_schema(
 async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
     }
@@ -373,15 +367,9 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
 async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
     }
@@ -710,15 +698,9 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
 async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_trace_export_rows(&node).await?;
     }
@@ -1064,8 +1046,12 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
 
     let serialized = serde_json::to_string(&projection)?;
     assert!(
-        serialized.contains("req-acp-child"),
-        "allowed parent delegation metadata should retain child request id: {projection:#}"
+        !serialized.contains("req-acp-child"),
+        "ACP-filtered projection leaked an unreadable child request id: {projection:#}"
+    );
+    assert!(
+        !serialized.contains("req-forged-child"),
+        "timeline included a child linked to a different physical parent: {projection:#}"
     );
     for denied_text in [
         "child private request",
@@ -1093,10 +1079,10 @@ async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Resul
     assert!(
         tool_events.iter().any(|tool_event| {
             tool_event.get("request_id").and_then(Value::as_str) == Some("req-acp")
-                && tool_event.get("child_request_id").and_then(Value::as_str)
-                    == Some("req-acp-child")
+                && tool_event.get("id").and_then(Value::as_str) == Some("call-delegate")
+                && tool_event.get("child_request_id").is_none()
         }),
-        "ACP-filtered projection should retain allowed parent tool event child edge: {projection:#}"
+        "ACP-filtered projection should retain the allowed parent tool event without its unreadable child edge: {projection:#}"
     );
 
     let messages = projection
@@ -1215,6 +1201,64 @@ fn trace_project_eval_jsonl_lines(
         .collect::<Result<Vec<_>>>()
 }
 
+async fn initialized_trace_node(
+    cwd: &std::path::Path,
+    agent_home: &std::path::Path,
+) -> Result<EmbeddedNode> {
+    let home = agent_home.to_str().context("agent home utf8")?;
+    let init = run_init_json(
+        cwd,
+        &[
+            "--identity-only",
+            "--agent-name",
+            "trace-test",
+            "--home",
+            home,
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("identity-only init output missing key_path")?;
+    let _identity = gents::KeyIdentity::load_or_create(key_path, None)
+        .context("loading initialized trace identity")?;
+
+    EmbeddedNode::builder()
+        .data_path(agent_home.join("data"))
+        .with_storage_backend(StorageBackend::RocksDb)
+        .with_node_identity_did(agent_did)
+        .build()
+        .await
+        .context("opening initialized embedded node")
+}
+
+async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Result<String> {
+    let response = node.execute(query).await;
+    if response.has_errors() {
+        anyhow::bail!("GraphQL mutation failed: {:?}", response.errors);
+    }
+    let create_key = format!("create_{collection}");
+    let add_key = format!("add_{collection}");
+    let value = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(&create_key).or_else(|| data.get(&add_key)))
+        .with_context(|| format!("{collection} mutation response missing create/add field"))?;
+    value
+        .get("_docID")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .as_array()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("_docID"))
+                .and_then(Value::as_str)
+        })
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("{collection} mutation response missing _docID"))
+}
+
 async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
@@ -1266,7 +1310,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         }"#,
     )
     .await?;
-    exec(
+    let root_request_doc_id = exec_doc_id(
         node,
         r#"mutation {
             create_AgentRequest(input: {
@@ -1284,68 +1328,17 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 retry_count: 0
             }) { _docID }
         }"#,
+        "AgentRequest",
     )
     .await?;
     exec(
         node,
-        r#"mutation {
-            create_AgentRequest(input: {
-                request_id: "req-child",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
-                session_id: "session-child",
-                content: "Review the README finding",
-                metadata: "",
-                status: "completed",
-                lifecycle_state: "complete",
-                backend_id: "studios-cluster",
-                failure_reason: "",
-                created_at: "2026-05-04T12:00:04Z",
-                retry_count: 0,
-                caused_by_parent_request_id: "req-1",
-                caused_by_parent_tool_call_id: "call-fail"
-            }) { _docID }
-        }"#,
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentSession(input: {
-                session_id: "session-child",
-                agent_name: "Reviewer",
-                behavior_id: "reviewer",
-                started: "2026-05-04T12:00:04Z",
-                status: "active"
-            }) { _docID }
-        }"#,
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentConversation(input: {
-                session_id: "session-child",
-                agent_name: "Reviewer",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
-                title: "Child trace export test",
-                title_source: "test",
-                preview_text: "Review the README finding",
-                status: "active",
-                created_at: "2026-05-04T12:00:04Z",
-                updated_at: "2026-05-04T12:00:07Z",
-                latest_request_id: "req-child"
-            }) { _docID }
-        }"#,
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentResponse(input: {
+        &format!(
+            r#"mutation {{
+            create_AgentResponse(input: {{
                 response_key: "req-1",
                 request_id: "req-1",
+                request_doc_id: "{}",
                 agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-1",
@@ -1359,46 +1352,10 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 materialized_at: "2026-05-04T12:00:06Z",
                 created_at: "2026-05-04T12:00:01Z",
                 completed_at: "2026-05-04T12:00:06Z"
-            }) { _docID }
-        }"#,
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentResponse(input: {
-                response_key: "req-child",
-                request_id: "req-child",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
-                session_id: "session-child",
-                content: "reviewer private child response",
-                reasoning: "child reasoning",
-                status: "completed",
-                error_message: "",
-                token_count: 8,
-                progress_seq: 1,
-                materialized_message_sequence: 1,
-                materialized_at: "2026-05-04T12:00:07Z",
-                created_at: "2026-05-04T12:00:04Z",
-                completed_at: "2026-05-04T12:00:07Z"
-            }) { _docID }
-        }"#,
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentMessage(input: {
-                message_key: "session-child:1",
-                session_id: "session-child",
-                request_id: "req-child",
-                sequence: 1,
-                role: "assistant",
-                content: "reviewer private child message",
-                timestamp: "2026-05-04T12:00:06Z"
-            }) { _docID }
-        }"#,
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&root_request_doc_id)
+        ),
     )
     .await?;
 
@@ -1450,12 +1407,15 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:2",
                     session_id: "session-1",
+                    request_id: "req-1",
+                    request_doc_id: "{}",
                     sequence: 2,
                     role: "assistant",
                     content: "{}",
                     timestamp: "2026-05-04T12:00:02Z"
                 }}) {{ _docID }}
             }}"#,
+            escape_graphql_string(&root_request_doc_id),
             escape_graphql_string(&success_message)
         ),
     )
@@ -1467,12 +1427,15 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:3",
                     session_id: "session-1",
+                    request_id: "req-1",
+                    request_doc_id: "{}",
                     sequence: 3,
                     role: "assistant",
                     content: "{}",
                     timestamp: "2026-05-04T12:00:03Z"
                 }}) {{ _docID }}
             }}"#,
+            escape_graphql_string(&root_request_doc_id),
             escape_graphql_string(&failed_message)
         ),
     )
@@ -1484,32 +1447,17 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-1:4",
                     session_id: "session-1",
+                    request_id: "req-1",
+                    request_doc_id: "{}",
                     sequence: 4,
                     role: "assistant",
                     content: "{}",
                     timestamp: "2026-05-04T12:00:04Z"
                 }}) {{ _docID }}
             }}"#,
+            escape_graphql_string(&root_request_doc_id),
             escape_graphql_string(&missing_tool_message)
         ),
-    )
-    .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentToolCall(input: {
-                tool_call_key: "session-1:call-success",
-                session_id: "session-1",
-                message_sequence: 2,
-                tool_name: "read",
-                tool_call_id: "call-success",
-                args: "{\"path\":\"README.md\"}",
-                result: "README contents",
-                status: "completed",
-                started_at: "2026-05-04T12:00:02Z",
-                completed_at: "2026-05-04T12:00:03Z"
-            }) { _docID }
-        }"#,
     )
     .await?;
     exec(
@@ -1517,7 +1465,32 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         &format!(
             r#"mutation {{
             create_AgentToolCall(input: {{
+                tool_call_key: "session-1:call-success",
+                request_id: "req-1",
+                request_doc_id: "{}",
+                session_id: "session-1",
+                message_sequence: 2,
+                tool_name: "read",
+                tool_call_id: "call-success",
+                args: "{{\"path\":\"README.md\"}}",
+                result: "README contents",
+                status: "completed",
+                started_at: "2026-05-04T12:00:02Z",
+                completed_at: "2026-05-04T12:00:03Z"
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&root_request_doc_id)
+        ),
+    )
+    .await?;
+    let parent_tool_call_doc_id = exec_doc_id(
+        node,
+        &format!(
+            r#"mutation {{
+            create_AgentToolCall(input: {{
                 tool_call_key: "session-1:call-fail",
+                request_id: "req-1",
+                request_doc_id: "{}",
                 session_id: "session-1",
                 message_sequence: 3,
                 tool_name: "bash",
@@ -1525,11 +1498,122 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 args: "{{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}}",
                 result: "{}",
                 status: "completed",
+                child_request_id: "req-child",
                 started_at: "2026-05-04T12:00:03Z",
                 completed_at: "2026-05-04T12:00:04.500Z"
             }}) {{ _docID }}
         }}"#,
+            escape_graphql_string(&root_request_doc_id),
             escape_graphql_string(&failed_result)
+        ),
+        "AgentToolCall",
+    )
+    .await?;
+
+    exec(
+        node,
+        r#"mutation {
+            create_AgentSession(input: {
+                session_id: "session-child",
+                agent_name: "Reviewer",
+                behavior_id: "reviewer",
+                started: "2026-05-04T12:00:04Z",
+                status: "active"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    exec(
+        node,
+        r#"mutation {
+            create_AgentConversation(input: {
+                session_id: "session-child",
+                agent_name: "Reviewer",
+                agent_did: "did:test:reviewer",
+                behavior_id: "reviewer",
+                title: "Child trace export test",
+                title_source: "test",
+                preview_text: "Review the README finding",
+                status: "active",
+                created_at: "2026-05-04T12:00:04Z",
+                updated_at: "2026-05-04T12:00:07Z",
+                latest_request_id: "req-child"
+            }) { _docID }
+        }"#,
+    )
+    .await?;
+    let child_request_doc_id = exec_doc_id(
+        node,
+        &format!(
+            r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "req-child",
+                agent_did: "did:test:reviewer",
+                behavior_id: "reviewer",
+                session_id: "session-child",
+                content: "Review the README finding",
+                metadata: "",
+                status: "completed",
+                lifecycle_state: "complete",
+                backend_id: "studios-cluster",
+                failure_reason: "",
+                created_at: "2026-05-04T12:00:04Z",
+                retry_count: 0,
+                caused_by_parent_request_id: "req-1",
+                caused_by_parent_request_doc_id: "{}",
+                caused_by_parent_tool_call_id: "call-fail",
+                caused_by_parent_tool_call_doc_id: "{}"
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&root_request_doc_id),
+            escape_graphql_string(&parent_tool_call_doc_id)
+        ),
+        "AgentRequest",
+    )
+    .await?;
+    exec(
+        node,
+        &format!(
+            r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "req-child",
+                request_id: "req-child",
+                request_doc_id: "{}",
+                agent_did: "did:test:reviewer",
+                behavior_id: "reviewer",
+                session_id: "session-child",
+                content: "reviewer private child response",
+                reasoning: "child reasoning",
+                status: "completed",
+                error_message: "",
+                token_count: 8,
+                progress_seq: 1,
+                materialized_message_sequence: 1,
+                materialized_at: "2026-05-04T12:00:07Z",
+                created_at: "2026-05-04T12:00:04Z",
+                completed_at: "2026-05-04T12:00:07Z"
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&child_request_doc_id)
+        ),
+    )
+    .await?;
+    exec(
+        node,
+        &format!(
+            r#"mutation {{
+            create_AgentMessage(input: {{
+                message_key: "session-child:1",
+                session_id: "session-child",
+                request_id: "req-child",
+                request_doc_id: "{}",
+                sequence: 1,
+                role: "assistant",
+                content: "reviewer private child message",
+                timestamp: "2026-05-04T12:00:06Z"
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&child_request_doc_id)
         ),
     )
     .await?;
@@ -1552,6 +1636,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "session-1:call-missing-tool",
+                    request_id: "req-1",
+                    request_doc_id: "{}",
                     session_id: "session-1",
                     message_sequence: 4,
                     tool_name: "describe_tool",
@@ -1563,6 +1649,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                     completed_at: "2026-05-04T12:00:04.250Z"
                 }}) {{ _docID }}
             }}"#,
+            escape_graphql_string(&root_request_doc_id),
             escape_graphql_string(&missing_tool_result)
         ),
     )
@@ -1600,7 +1687,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         }"#,
     )
     .await?;
-    exec(
+    let deadline_request_doc_id = exec_doc_id(
         node,
         r#"mutation {
             create_AgentRequest(input: {
@@ -1618,14 +1705,17 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 retry_count: 0
             }) { _docID }
         }"#,
+        "AgentRequest",
     )
     .await?;
     exec(
         node,
-        r#"mutation {
-            create_AgentResponse(input: {
+        &format!(
+            r#"mutation {{
+            create_AgentResponse(input: {{
                 response_key: "req-deadline",
                 request_id: "req-deadline",
+                request_doc_id: "{}",
                 agent_did: "did:test:amy",
                 behavior_id: "amy",
                 session_id: "session-2",
@@ -1639,8 +1729,10 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 materialized_at: "2026-05-04T13:00:10Z",
                 created_at: "2026-05-04T13:00:01Z",
                 completed_at: "2026-05-04T13:00:10Z"
-            }) { _docID }
-        }"#,
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&deadline_request_doc_id)
+        ),
     )
     .await?;
     let deadline_message =
@@ -1652,32 +1744,40 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 create_AgentMessage(input: {{
                     message_key: "session-2:2",
                     session_id: "session-2",
+                    request_id: "req-deadline",
+                    request_doc_id: "{}",
                     sequence: 2,
                     role: "assistant",
                     content: "{}",
                     timestamp: "2026-05-04T13:00:02Z"
                 }}) {{ _docID }}
             }}"#,
+            escape_graphql_string(&deadline_request_doc_id),
             escape_graphql_string(&deadline_message)
         ),
     )
     .await?;
     exec(
         node,
-        r#"mutation {
-            create_AgentToolCall(input: {
+        &format!(
+            r#"mutation {{
+            create_AgentToolCall(input: {{
                 tool_call_key: "session-2:call-deadline",
+                request_id: "req-deadline",
+                request_doc_id: "{}",
                 session_id: "session-2",
                 message_sequence: 2,
                 tool_name: "read",
                 tool_call_id: "call-deadline",
-                args: "{\"path\":\"README.md\"}",
+                args: "{{\"path\":\"README.md\"}}",
                 result: "README contents",
                 status: "completed",
                 started_at: "2026-05-04T13:00:02Z",
                 completed_at: "2026-05-04T13:00:03Z"
-            }) { _docID }
-        }"#,
+            }}) {{ _docID }}
+        }}"#,
+            escape_graphql_string(&deadline_request_doc_id)
+        ),
     )
     .await?;
     Ok(())
@@ -1764,6 +1864,8 @@ async fn projection_graphql_mock(
     let query = body.query.as_str();
     let response = if query.contains("AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
+    } else if query.contains("RenderedRequest(") {
+        json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("AgentMessage(") {
         json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
     } else if query.contains("AgentToolCall(") {
@@ -1778,6 +1880,8 @@ async fn projection_graphql_mock(
         json!({ "data": { "InferenceCall": [] } })
     } else if query.contains("RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
+    } else if query.contains("CompactionEntry(") {
+        json!({ "data": { "CompactionEntry": [] } })
     } else {
         json!({
             "errors": [{
@@ -1810,13 +1914,13 @@ async fn projection_acp_mock(
 }
 
 fn projection_mock_agent_requests(query: &str) -> Value {
-    if query.contains("filter: { caused_by_parent_request_id") {
-        json!([projection_mock_child_request()])
-    } else if query.contains("filter: { session_id") {
+    if query.contains("filter: { caused_by_parent_request_doc_id") {
         json!([
-            projection_mock_root_request(),
-            projection_mock_child_request()
+            projection_mock_child_request(),
+            projection_mock_forged_child_request()
         ])
+    } else if query.contains("filter: { session_id") {
+        json!([projection_mock_root_request()])
     } else {
         json!([projection_mock_root_request()])
     }
@@ -1839,7 +1943,9 @@ fn projection_mock_root_request() -> Value {
         "retry_count": 0,
         "interrupt_requested_at": null,
         "caused_by_parent_request_id": null,
-        "caused_by_parent_tool_call_id": null
+        "caused_by_parent_request_doc_id": null,
+        "caused_by_parent_tool_call_id": null,
+        "caused_by_parent_tool_call_doc_id": null
     })
 }
 
@@ -1860,7 +1966,32 @@ fn projection_mock_child_request() -> Value {
         "retry_count": 0,
         "interrupt_requested_at": null,
         "caused_by_parent_request_id": "req-acp",
-        "caused_by_parent_tool_call_id": "call-delegate"
+        "caused_by_parent_request_doc_id": "doc-request-root",
+        "caused_by_parent_tool_call_id": "call-delegate",
+        "caused_by_parent_tool_call_doc_id": "doc-tool-delegate"
+    })
+}
+
+fn projection_mock_forged_child_request() -> Value {
+    json!({
+        "_docID": "doc-request-forged-child",
+        "request_id": "req-forged-child",
+        "agent_did": "did:test:reviewer",
+        "behavior_id": "reviewer",
+        "session_id": "session-forged-child",
+        "content": "forged child request",
+        "metadata": "",
+        "status": "completed",
+        "lifecycle_state": "complete",
+        "backend_id": "mock-backend",
+        "failure_reason": "",
+        "created_at": "2026-06-05T18:00:03Z",
+        "retry_count": 0,
+        "interrupt_requested_at": null,
+        "caused_by_parent_request_id": "req-acp",
+        "caused_by_parent_request_doc_id": "doc-request-someone-else",
+        "caused_by_parent_tool_call_id": "call-forged",
+        "caused_by_parent_tool_call_doc_id": "doc-tool-forged"
     })
 }
 
@@ -1869,6 +2000,8 @@ fn projection_mock_agent_messages() -> Value {
         {
             "_docID": "doc-message-root",
             "session_id": "session-acp",
+            "request_id": "req-acp",
+            "request_doc_id": "doc-request-root",
             "sequence": 1,
             "role": "assistant",
             "content": "root visible message",
@@ -1877,6 +2010,8 @@ fn projection_mock_agent_messages() -> Value {
         {
             "_docID": "doc-message-child",
             "session_id": "session-acp",
+            "request_id": "req-acp-child",
+            "request_doc_id": "doc-request-child",
             "sequence": 2,
             "role": "assistant",
             "content": "child private message",
@@ -1890,6 +2025,7 @@ fn projection_mock_tool_calls() -> Value {
         {
             "_docID": "doc-tool-delegate",
             "request_id": "req-acp",
+            "request_doc_id": "doc-request-root",
             "session_id": "session-acp",
             "message_sequence": 1,
             "tool_name": "spawn_subagent",
@@ -1926,6 +2062,7 @@ fn projection_mock_agent_responses() -> Value {
         {
             "_docID": "doc-response-root",
             "request_id": "req-acp",
+            "request_doc_id": "doc-request-root",
             "agent_did": "did:test:amy",
             "behavior_id": "amy",
             "session_id": "session-acp",
@@ -1944,6 +2081,7 @@ fn projection_mock_agent_responses() -> Value {
         {
             "_docID": "doc-response-child",
             "request_id": "req-acp-child",
+            "request_doc_id": "doc-request-child",
             "agent_did": "did:test:reviewer",
             "behavior_id": "reviewer",
             "session_id": "session-acp",

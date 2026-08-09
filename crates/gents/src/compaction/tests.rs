@@ -2196,6 +2196,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         &node,
         "session-1",
         "did:test:test",
+        "request-compaction-test",
+        "request-doc-compaction-test",
         &summary,
         &result.files_read,
         &result.files_modified,

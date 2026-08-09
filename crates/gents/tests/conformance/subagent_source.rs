@@ -159,7 +159,9 @@ struct ChildRequestRow {
     lifecycle_state: Option<String>,
     subagent_depth: Option<i64>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
 }
@@ -187,7 +189,9 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
                 lifecycle_state
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
                 caused_by_trigger_id
                 caused_by_trigger_kind
             }}
@@ -257,18 +261,36 @@ async fn trusted_path_uses_targeted_bridge_without_parent_request() {
         child.caused_by_parent_request_id.as_deref(),
         Some(parent_request_id)
     );
+    assert_eq!(
+        child.caused_by_parent_request_doc_id.as_deref(),
+        Some(format!("remote-doc-{parent_request_id}").as_str())
+    );
+    assert!(child.caused_by_parent_tool_call_doc_id.is_some());
 }
 
 #[tokio::test]
 async fn trusted_path_normalizes_requester_did_before_stamping_route() {
     let db = test_db("r3-subagent-source-xdep-requester-normalization").await;
     let child_request_id = "r3-child-normalized-requester";
+    let (parent_request_doc_id, parent_tool_call_doc_id) = write_targeted_cross_deployment_bridge(
+        db.node.as_ref(),
+        "did:key:zNormalizedRequester",
+        "r3-parent-not-replicated",
+        "r3-tc-normalized-requester",
+        child_request_id,
+        "test",
+        crate::support::AGENT_DID,
+        0,
+    )
+    .await;
 
     create_subagent_request_with_trusted_parent_request_id(
         db.node.as_ref(),
         child_request_id.to_string(),
         "r3-parent-not-replicated".to_string(),
+        parent_request_doc_id,
         "r3-tc-normalized-requester".to_string(),
+        parent_tool_call_doc_id,
         0,
         crate::support::AGENT_DID.to_string(),
         "test".to_string(),
@@ -382,7 +404,7 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
     let parent_request_id = "r3-parent-spawn";
     let parent_tool_call_id = "r3-tc-spawn";
     let child_request_id = "r3-child-spawn";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -411,7 +433,8 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -446,7 +469,7 @@ async fn subagent_source_rejects_mismatched_spawn_target_did_and_args() {
     let child_request_id = "r3-child-target-mismatch";
     let parent_session_id = "r3-session-target-mismatch";
     let mismatched_args_did = "did:key:zArgsTargetMismatch";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -476,7 +499,8 @@ async fn subagent_source_rejects_mismatched_spawn_target_did_and_args() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -499,7 +523,7 @@ async fn subagent_source_rejects_unauthorized_target_without_child_request() {
     let parent_tool_call_id = "r3-tc-unauthorized";
     let child_request_id = "r3-child-unauthorized";
     let parent_session_id = "r3-session-unauthorized";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -528,7 +552,8 @@ async fn subagent_source_rejects_unauthorized_target_without_child_request() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -553,7 +578,7 @@ async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_activ
     let child_request_id = "r3-child-unauthorized-inactive";
     let parent_session_id = "r3-session-unauthorized-inactive";
     let target_behavior_id = "not-active-or-authorized";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -582,7 +607,8 @@ async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_activ
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -614,7 +640,7 @@ async fn subagent_source_rejects_when_spawn_disabled_even_with_authorized_target
     let parent_tool_call_id = "r3-tc-spawn-disabled";
     let child_request_id = "r3-child-spawn-disabled";
     let parent_session_id = "r3-session-spawn-disabled";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -643,7 +669,8 @@ async fn subagent_source_rejects_when_spawn_disabled_even_with_authorized_target
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -675,7 +702,7 @@ async fn subagent_source_rejects_background_when_background_disabled() {
     let parent_tool_call_id = "r3-tc-background-disabled";
     let child_request_id = "r3-child-background-disabled";
     let parent_session_id = "r3-session-background-disabled";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -705,7 +732,8 @@ async fn subagent_source_rejects_background_when_background_disabled() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -726,7 +754,7 @@ async fn subagent_source_ignores_native_tool_call_without_child_request_id() {
     let running = boot_agent(&db, "r3-subagent-source-native").await;
     let parent_request_id = "r3-parent-native";
     let parent_tool_call_id = "r3-tc-native";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -746,7 +774,8 @@ async fn subagent_source_ignores_native_tool_call_without_child_request_id() {
         "read_file".to_string(),
         "{}".to_string(),
         chrono::Utc::now() + chrono::Duration::minutes(5),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -766,7 +795,9 @@ async fn create_subagent_request_rejects_nonexistent_parent_request() {
         db.node.as_ref(),
         "r3-child-missing-parent".to_string(),
         "missing-parent-request".to_string(),
+        "missing-parent-request-doc".to_string(),
         "r3-tc-missing-parent".to_string(),
+        "missing-parent-tool-call-doc".to_string(),
         0,
         crate::support::AGENT_DID.to_string(),
         "test".to_string(),
@@ -785,9 +816,66 @@ async fn create_subagent_request_rejects_nonexistent_parent_request() {
 }
 
 #[tokio::test]
+async fn create_subagent_request_rejects_tool_call_from_another_parent_document() {
+    let db = test_db("r3-subagent-source-mismatched-tool-parent").await;
+    let first_parent_doc_id = crate::support::create_request(
+        db.node.as_ref(),
+        "r3-parent-first",
+        "r3-parent-first-session",
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    let second_parent_doc_id = crate::support::create_request(
+        db.node.as_ref(),
+        "r3-parent-second",
+        "r3-parent-second-session",
+        "processing",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+    let mut bridge = ToolCallLifecycle::new(
+        db.node.clone(),
+        "r3-parent-first".to_string(),
+        "r3-parent-first-session".to_string(),
+        crate::support::AGENT_DID.to_string(),
+        "r3-parent-mismatch-tool".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .with_request_doc_id(Some(first_parent_doc_id));
+    bridge.start_running().await.unwrap();
+
+    let error = create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        "r3-child-mismatched-tool-parent".to_string(),
+        "r3-parent-second".to_string(),
+        second_parent_doc_id,
+        "r3-parent-mismatch-tool".to_string(),
+        bridge.doc_id().expect("bridge document id").to_string(),
+        0,
+        crate::support::AGENT_DID.to_string(),
+        "test".to_string(),
+        "prompt".to_string(),
+        None,
+    )
+    .await
+    .expect_err("bridge request_doc_id must agree with the exact parent document");
+    assert!(
+        matches!(
+            error.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::ParentLinkageIncoherent)
+        ),
+        "expected ParentLinkageIncoherent, got {error:?}"
+    );
+}
+
+#[tokio::test]
 async fn create_subagent_request_enforces_depth_boundary() {
     let db = test_db("r3-subagent-source-depth").await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         "r3-parent-depth",
         "r3-session-depth",
@@ -795,12 +883,28 @@ async fn create_subagent_request_enforces_depth_boundary() {
         &chrono::Utc::now().to_rfc3339(),
     )
     .await;
+    let mut bridge = ToolCallLifecycle::new(
+        db.node.clone(),
+        "r3-parent-depth".to_string(),
+        "r3-session-depth".to_string(),
+        crate::support::AGENT_DID.to_string(),
+        "r3-tc-depth-max".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
+    bridge.start_running().await.unwrap();
+    let parent_tool_call_doc_id = bridge.doc_id().expect("bridge document id").to_string();
 
     let child_id = create_subagent_request_with_request_id(
         db.node.as_ref(),
         "r3-child-depth-max".to_string(),
         "r3-parent-depth".to_string(),
+        parent_request_doc_id,
         "r3-tc-depth-max".to_string(),
+        parent_tool_call_doc_id,
         MAX_SUBAGENT_DEPTH - 1,
         crate::support::AGENT_DID.to_string(),
         "test".to_string(),
@@ -828,7 +932,9 @@ async fn create_subagent_request_enforces_depth_boundary() {
         db.node.as_ref(),
         "r3-child-depth-over".to_string(),
         "r3-parent-depth".to_string(),
+        "r3-parent-depth-doc".to_string(),
         "r3-tc-depth-over".to_string(),
+        "r3-tc-depth-over-doc".to_string(),
         MAX_SUBAGENT_DEPTH,
         crate::support::AGENT_DID.to_string(),
         "test".to_string(),
@@ -849,7 +955,9 @@ async fn create_subagent_request_enforces_depth_boundary() {
         db.node.as_ref(),
         "r3-child-depth-overflow".to_string(),
         "r3-parent-depth".to_string(),
+        "r3-parent-depth-doc".to_string(),
         "r3-tc-depth-overflow".to_string(),
+        "r3-tc-depth-overflow-doc".to_string(),
         u32::MAX,
         crate::support::AGENT_DID.to_string(),
         "test".to_string(),
@@ -874,7 +982,7 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     let parent_request_id = "r3-parent-cascade";
     let parent_tool_call_id = "r3-tc-cascade";
     let child_request_id = "r3-child-cascade";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -903,7 +1011,8 @@ async fn cascade_after_source_spawn_reaches_child_request() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
 
@@ -1011,7 +1120,7 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     let parent_request_id = "r3-parent-did-anchor";
     let parent_tool_call_id = "r3-tc-did-anchor";
     let child_request_id = "r3-child-did-anchor";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &agent_did,
         &behavior_id,
@@ -1042,7 +1151,8 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         remote_did.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -1062,7 +1172,7 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
     let parent_request_id = "r3-parent-orphan-cancel";
     let parent_tool_call_id = "r3-tc-orphan-cancel";
     let child_request_id = "r3-child-orphan-cancel";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -1095,7 +1205,8 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -1129,7 +1240,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     let parent_session_id = "r3-session-xdep-flag-off";
     let parent_tool_call_id = "r3-tc-xdep-flag-off";
     let child_request_id = "r3-child-xdep-flag-off";
-    create_remote_parent_request(
+    let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1151,6 +1262,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     write_cross_deployment_bridge(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1187,7 +1299,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     let parent_session_id = "r3-session-xdep-flag-on";
     let parent_tool_call_id = "r3-tc-xdep-flag-on";
     let child_request_id = "r3-child-xdep-flag-on";
-    create_remote_parent_request(
+    let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1209,6 +1321,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     write_cross_deployment_bridge(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1244,7 +1357,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     let parent_session_id = "r3-session-xdep-wrong-host";
     let parent_tool_call_id = "r3-tc-xdep-wrong-host";
     let child_request_id = "r3-child-xdep-wrong-host";
-    create_remote_parent_request(
+    let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1266,6 +1379,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     write_cross_deployment_bridge(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1302,7 +1416,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
     let parent_session_id = "r3-session-xdep-missing-target";
     let parent_tool_call_id = "r3-tc-xdep-missing-target";
     let child_request_id = "r3-child-xdep-missing-target";
-    create_remote_parent_request(
+    let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1324,6 +1438,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
     write_cross_deployment_bridge_with_spawn_target(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1400,7 +1515,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
         .await
         .unwrap();
 
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1411,6 +1526,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     create_orphan_cross_deployment_tool_call(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1453,7 +1569,7 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
         true,
     )
     .await;
-    create_remote_parent_request(
+    let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1463,6 +1579,7 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
     create_orphan_cross_deployment_tool_call(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1491,7 +1608,7 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     let parent_request_id = "r3-parent-orphan-cancel-race";
     let parent_tool_call_id = "r3-tc-orphan-cancel-race";
     let child_request_id = "r3-child-orphan-cancel-race";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -1520,7 +1637,8 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
 
     let node_for_interrupt = db.node.clone();
     let parent_for_interrupt = parent_request_id.to_string();
@@ -1550,7 +1668,7 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     let parent_request_id = "r3-parent-orphan-dead";
     let parent_tool_call_id = "r3-tc-orphan-dead";
     let child_request_id = "r3-child-orphan-dead";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -1581,7 +1699,8 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -1602,7 +1721,7 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
     let parent_request_id = "r3-parent-cascade-completed";
     let parent_tool_call_id = "r3-tc-cascade-completed";
     let child_request_id = "r3-child-cascade-completed";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -1633,7 +1752,8 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -1654,7 +1774,7 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
     let parent_request_id = "r3-parent-detached-interrupted";
     let parent_tool_call_id = "r3-tc-detached-interrupted";
     let child_request_id = "r3-child-detached-interrupted";
-    create_runtime_request(
+    let parent_request_doc_id = create_runtime_request(
         db.node.as_ref(),
         &running.booted.agent_did,
         &running.behavior_id,
@@ -1688,7 +1808,8 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
         CancelPolicy::Detach,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -1718,7 +1839,7 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
         true,
     )
     .await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1729,6 +1850,7 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
     create_orphan_subagent_tool_call(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1780,7 +1902,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
         true,
     )
     .await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1791,6 +1913,7 @@ async fn recovery_rejects_unauthorized_orphan_child_request() {
     create_orphan_subagent_tool_call(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1828,7 +1951,7 @@ async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target
         true,
     )
     .await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1839,6 +1962,7 @@ async fn recovery_rejects_orphan_when_spawn_disabled_even_with_authorized_target
     create_orphan_subagent_tool_call(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -1875,7 +1999,7 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
         false,
     )
     .await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
         parent_request_id,
         parent_session_id,
@@ -1886,6 +2010,7 @@ async fn recovery_rejects_background_orphan_when_background_disabled() {
     create_orphan_subagent_tool_call_with_await_mode(
         db.node.as_ref(),
         parent_request_id,
+        &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -2028,9 +2153,10 @@ async fn write_targeted_cross_deployment_bridge(
     target_behavior_id: &str,
     target_agent_did: &str,
     parent_subagent_depth: u32,
-) {
+) -> (String, String) {
     let parent_session_id = format!("session-{parent_tool_call_id}");
     let tool_call_key = format!("{parent_session_id}:{parent_tool_call_id}");
+    let parent_request_doc_id = format!("remote-doc-{parent_request_id}");
     let args = serde_json::json!({
         "name": target_behavior_id,
         "agent_did": target_agent_did,
@@ -2046,6 +2172,7 @@ async fn write_targeted_cross_deployment_bridge(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
                 session_id: "{parent_session_id}",
                 agent_did: "{coordinator_did}",
                 message_sequence: 1,
@@ -2065,6 +2192,7 @@ async fn write_targeted_cross_deployment_bridge(
         }}"#,
         tool_call_key = escape_graphql_string(&tool_call_key),
         parent_request_id = escape_graphql_string(parent_request_id),
+        parent_request_doc_id = escape_graphql_string(&parent_request_doc_id),
         parent_session_id = escape_graphql_string(&parent_session_id),
         coordinator_did = escape_graphql_string(coordinator_did),
         parent_tool_call_id = escape_graphql_string(parent_tool_call_id),
@@ -2078,6 +2206,29 @@ async fn write_targeted_cross_deployment_bridge(
         "create targeted AgentToolCall failed: {:?}",
         response.errors
     );
+    let escaped_tool_call_key = escape_graphql_string(&tool_call_key);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ tool_call_key: {{ _eq: "{escaped_tool_call_key}" }} }},
+                limit: 2
+            ) {{ _docID }}
+        }}"#
+    );
+    #[derive(Deserialize)]
+    struct BridgeDocRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+    }
+    let response = node.execute(&query).await;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value::<Vec<BridgeDocRow>>(value.clone()).ok())
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 1, "targeted bridge must be exact");
+    (parent_request_doc_id, rows[0].doc_id.clone())
 }
 
 async fn create_remote_parent_request(
@@ -2085,7 +2236,7 @@ async fn create_remote_parent_request(
     remote_agent_did: &str,
     parent_request_id: &str,
     parent_session_id: &str,
-) {
+) -> String {
     let escaped_request_id = escape_graphql_string(parent_request_id);
     let escaped_agent_did = escape_graphql_string(remote_agent_did);
     let escaped_session_id = escape_graphql_string(parent_session_id);
@@ -2118,12 +2269,34 @@ async fn create_remote_parent_request(
         "create remote parent AgentRequest failed: {:?}",
         response.errors
     );
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 2
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("remote parent AgentRequest rows");
+    assert_eq!(rows.len(), 1, "remote parent request must be exact");
+    rows[0]
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .expect("remote parent AgentRequest _docID")
+        .to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn write_cross_deployment_bridge(
     node: &EmbeddedNode,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
@@ -2133,6 +2306,7 @@ async fn write_cross_deployment_bridge(
     write_cross_deployment_bridge_with_spawn_target(
         node,
         parent_request_id,
+        parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -2147,6 +2321,7 @@ async fn write_cross_deployment_bridge(
 async fn write_cross_deployment_bridge_with_spawn_target(
     node: &EmbeddedNode,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
@@ -2155,6 +2330,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
     spawn_target_did: Option<&str>,
 ) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
@@ -2177,6 +2353,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{escaped_parent_request_id}",
+                request_doc_id: "{escaped_parent_request_doc_id}",
                 session_id: "{escaped_parent_session_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
@@ -2210,6 +2387,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
 async fn create_orphan_cross_deployment_tool_call(
     node: &EmbeddedNode,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
@@ -2218,6 +2396,7 @@ async fn create_orphan_cross_deployment_tool_call(
     target_behavior_id: &str,
 ) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
@@ -2238,6 +2417,7 @@ async fn create_orphan_cross_deployment_tool_call(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{escaped_parent_request_id}",
+                request_doc_id: "{escaped_parent_request_doc_id}",
                 agent_did: "{agent_did}",
                 session_id: "{escaped_parent_session_id}",
                 message_sequence: 1,
@@ -2293,6 +2473,7 @@ async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
 async fn create_orphan_subagent_tool_call(
     node: &EmbeddedNode,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
@@ -2300,6 +2481,7 @@ async fn create_orphan_subagent_tool_call(
     create_orphan_subagent_tool_call_with_await_mode(
         node,
         parent_request_id,
+        parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
@@ -2311,12 +2493,14 @@ async fn create_orphan_subagent_tool_call(
 async fn create_orphan_subagent_tool_call_with_await_mode(
     node: &EmbeddedNode,
     parent_request_id: &str,
+    parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
     await_mode: AwaitMode,
 ) {
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    let escaped_parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let escaped_child_request_id = escape_graphql_string(child_request_id);
@@ -2336,6 +2520,7 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 request_id: "{escaped_parent_request_id}",
+                request_doc_id: "{escaped_parent_request_doc_id}",
                 agent_did: "{agent_did}",
                 session_id: "{escaped_parent_session_id}",
                 message_sequence: 1,

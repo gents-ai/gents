@@ -3,7 +3,7 @@
 //! ([`ConfigAccess::Graphql`] or [`ConfigAccess::Local`]). Lifted from the
 //! CLI `trace` command so the desktop client shares one fetcher.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
@@ -12,10 +12,10 @@ use serde_json::Value;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
-    build_run_timeline, RunTimeline, RunTimelineRows, TimelineConversationRow,
-    TimelineInferenceCallRow, TimelineMessageRow, TimelineRenderedRequestRef,
-    TimelineRenderedRequestRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
-    TimelineToolCallRow,
+    build_run_timeline, RunTimeline, RunTimelineRows, TimelineCompactionRow,
+    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
+    TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
+    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
 
@@ -38,7 +38,22 @@ pub async fn load_run_timeline_rows(
     };
     ensure_unique_timeline_request_ids(&requests)?;
     merge_timeline_request(&mut requests, request.clone())?;
-    for child in load_timeline_child_requests(access, &request.request_id).await? {
+    let request_doc_id = request
+        .doc_id
+        .as_deref()
+        .context("timeline root AgentRequest has no _docID")?;
+    for child in load_timeline_child_requests(access, request_doc_id).await? {
+        if child.caused_by_parent_request_doc_id.as_deref() != Some(request_doc_id) {
+            continue;
+        }
+        if child.caused_by_parent_request_id.as_deref() != Some(request.request_id.as_str()) {
+            anyhow::bail!(
+                "child AgentRequest {} physical parent is {}, but logical parent is {:?}",
+                child.request_id,
+                request_doc_id,
+                child.caused_by_parent_request_id
+            );
+        }
         merge_timeline_request(&mut requests, child)?;
     }
 
@@ -51,18 +66,20 @@ pub async fn load_run_timeline_rows(
     let mut messages = Vec::new();
     let mut tool_calls = Vec::new();
     let mut responses = Vec::new();
+    let mut compactions = Vec::new();
     for session_id in &session_ids {
         messages.extend(load_timeline_messages_for_session(access, session_id).await?);
         tool_calls.extend(load_timeline_tool_calls_for_session(access, session_id).await?);
         responses.extend(load_timeline_responses_for_session(access, session_id).await?);
+        compactions.extend(load_timeline_compactions_for_session(access, session_id).await?);
     }
     if session_ids.is_empty() || root_session_id.is_none() {
-        responses.extend(load_timeline_responses_for_request(access, &request.request_id).await?);
+        responses.extend(load_timeline_responses_for_request(access, request_doc_id).await?);
     }
     let mut inference_calls = Vec::new();
-    for request_id in timeline_request_ids(&requests) {
+    for request_doc_id in timeline_request_doc_ids(&requests)? {
         inference_calls
-            .extend(load_timeline_inference_calls_for_request(access, &request_id).await?);
+            .extend(load_timeline_inference_calls_for_request(access, &request_doc_id).await?);
     }
     let mut rendered_requests = Vec::new();
     for session_id in &session_ids {
@@ -74,6 +91,17 @@ pub async fn load_run_timeline_rows(
             load_timeline_rendered_requests_for_request(access, &request.request_id).await?,
         );
     }
+
+    let request_bindings = timeline_request_bindings(&requests, &request)?;
+    validate_request_scoped_rows(
+        &request_bindings,
+        &messages,
+        &tool_calls,
+        &responses,
+        &inference_calls,
+        &compactions,
+    )?;
+    validate_child_tool_bridges(&request, &requests, &tool_calls)?;
 
     let session = match root_session_id.as_deref() {
         Some(session_id) => load_timeline_session(access, session_id).await?,
@@ -92,6 +120,7 @@ pub async fn load_run_timeline_rows(
         messages,
         tool_calls,
         inference_calls,
+        compactions,
         responses,
         rendered_requests,
         rendered_request_refs,
@@ -123,11 +152,14 @@ async fn load_timeline_request_by_id(
                 created_at
                 retry_count
                 interrupt_requested_at
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-                execution_origin
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_source_doc_id
+                caused_by_parent_request_id
+                caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
+                execution_origin
             }}
         }}"#,
         escape_graphql_string(request_id)
@@ -166,11 +198,14 @@ async fn load_timeline_requests_for_session(
                 created_at
                 retry_count
                 interrupt_requested_at
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-                execution_origin
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_source_doc_id
+                caused_by_parent_request_id
+                caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
+                execution_origin
             }}
         }}"#,
         escape_graphql_string(session_id)
@@ -180,12 +215,12 @@ async fn load_timeline_requests_for_session(
 
 async fn load_timeline_child_requests(
     access: &ConfigAccess,
-    parent_request_id: &str,
+    parent_request_doc_id: &str,
 ) -> Result<Vec<TimelineRequestRow>> {
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }},
+                filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -202,14 +237,17 @@ async fn load_timeline_child_requests(
                 created_at
                 retry_count
                 interrupt_requested_at
-                caused_by_parent_request_id
-                caused_by_parent_tool_call_id
-                execution_origin
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_source_doc_id
+                caused_by_parent_request_id
+                caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
+                execution_origin
             }}
         }}"#,
-        escape_graphql_string(parent_request_id)
+        escape_graphql_string(parent_request_doc_id)
     );
     load_rows(access, "AgentRequest", &query).await
 }
@@ -227,6 +265,7 @@ async fn load_timeline_messages_for_session(
                 _docID
                 session_id
                 request_id
+                request_doc_id
                 sequence
                 role
                 content
@@ -236,30 +275,7 @@ async fn load_timeline_messages_for_session(
         }}"#,
         escape_graphql_string(session_id)
     );
-    match load_rows(access, "AgentMessage", &query).await {
-        Ok(rows) => Ok(rows),
-        Err(error) if error.to_string().contains("request_id") => {
-            let fallback_query = format!(
-                r#"{{
-                    AgentMessage(
-                        filter: {{ session_id: {{ _eq: "{}" }} }},
-                        order: {{ sequence: ASC }}
-                    ) {{
-                        _docID
-                        session_id
-                        sequence
-                        role
-                        content
-                        reasoning
-                        timestamp
-                    }}
-                }}"#,
-                escape_graphql_string(session_id)
-            );
-            load_rows(access, "AgentMessage", &fallback_query).await
-        }
-        Err(error) => Err(error),
-    }
+    load_rows(access, "AgentMessage", &query).await
 }
 
 async fn load_timeline_tool_calls_for_session(
@@ -274,6 +290,7 @@ async fn load_timeline_tool_calls_for_session(
             ) {{
                 _docID
                 request_id
+                request_doc_id
                 session_id
                 message_sequence
                 tool_name
@@ -320,6 +337,7 @@ async fn load_timeline_responses_for_session(
             ) {{
                 _docID
                 request_id
+                request_doc_id
                 agent_did
                 behavior_id
                 session_id
@@ -343,16 +361,17 @@ async fn load_timeline_responses_for_session(
 
 async fn load_timeline_responses_for_request(
     access: &ConfigAccess,
-    request_id: &str,
+    request_doc_id: &str,
 ) -> Result<Vec<TimelineResponseRow>> {
     let query = format!(
         r#"{{
             AgentResponse(
-                filter: {{ request_id: {{ _eq: "{}" }} }},
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
                 request_id
+                request_doc_id
                 agent_did
                 behavior_id
                 session_id
@@ -369,24 +388,25 @@ async fn load_timeline_responses_for_request(
                 interrupted_at
             }}
         }}"#,
-        escape_graphql_string(request_id)
+        escape_graphql_string(request_doc_id)
     );
     load_rows(access, "AgentResponse", &query).await
 }
 
 async fn load_timeline_inference_calls_for_request(
     access: &ConfigAccess,
-    request_id: &str,
+    request_doc_id: &str,
 ) -> Result<Vec<TimelineInferenceCallRow>> {
     let query = format!(
         r#"{{
             InferenceCall(
-                filter: {{ request_id: {{ _eq: "{}" }} }},
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ call_seq: ASC }}
             ) {{
                 _docID
                 call_id
                 request_id
+                request_doc_id
                 call_seq
                 attempt
                 call_state
@@ -401,7 +421,7 @@ async fn load_timeline_inference_calls_for_request(
                 cached_input_tokens
             }}
         }}"#,
-        escape_graphql_string(request_id)
+        escape_graphql_string(request_doc_id)
     );
     load_rows(access, "InferenceCall", &query).await
 }
@@ -473,6 +493,34 @@ async fn load_timeline_rendered_requests_for_request(
         escape_graphql_string(request_id)
     );
     load_rows(access, "RenderedRequest", &query).await
+}
+
+async fn load_timeline_compactions_for_session(
+    access: &ConfigAccess,
+    session_id: &str,
+) -> Result<Vec<TimelineCompactionRow>> {
+    let query = format!(
+        r#"{{
+            CompactionEntry(
+                filter: {{ session_id: {{ _eq: "{}" }} }},
+                order: {{ sequence: ASC }}
+            ) {{
+                _docID
+                compaction_key
+                request_id
+                request_doc_id
+                session_id
+                sequence
+                summary
+                messages_compacted
+                original_tokens
+                compacted_tokens
+                created_at
+            }}
+        }}"#,
+        escape_graphql_string(session_id)
+    );
+    load_rows(access, "CompactionEntry", &query).await
 }
 
 async fn load_timeline_rendered_request_refs(
@@ -609,16 +657,213 @@ fn timeline_session_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
         .collect()
 }
 
-fn timeline_request_ids(requests: &[TimelineRequestRow]) -> Vec<String> {
-    requests
+fn timeline_request_doc_ids(requests: &[TimelineRequestRow]) -> Result<Vec<String>> {
+    let doc_ids = requests
         .iter()
-        .filter_map(|request| {
-            let request_id = request.request_id.trim();
-            (!request_id.is_empty()).then_some(request_id.to_string())
+        .map(|request| {
+            required_lineage_value(
+                "AgentRequest",
+                &request.request_id,
+                "_docID",
+                request.doc_id.as_deref(),
+            )
+            .map(ToOwned::to_owned)
         })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .collect::<Result<BTreeSet<_>>>()?;
+    Ok(doc_ids.into_iter().collect())
+}
+
+fn timeline_request_bindings(
+    requests: &[TimelineRequestRow],
+    root: &TimelineRequestRow,
+) -> Result<BTreeMap<String, String>> {
+    let mut bindings = BTreeMap::new();
+    for request in requests.iter().chain(std::iter::once(root)) {
+        let doc_id = required_lineage_value(
+            "AgentRequest",
+            &request.request_id,
+            "_docID",
+            request.doc_id.as_deref(),
+        )?;
+        match bindings.insert(doc_id.to_string(), request.request_id.clone()) {
+            Some(existing) if existing != request.request_id => anyhow::bail!(
+                "AgentRequest _docID {doc_id} is bound to both {existing} and {}",
+                request.request_id
+            ),
+            _ => {}
+        }
+    }
+    Ok(bindings)
+}
+
+fn validate_request_scoped_rows(
+    bindings: &BTreeMap<String, String>,
+    messages: &[TimelineMessageRow],
+    tool_calls: &[TimelineToolCallRow],
+    responses: &[TimelineResponseRow],
+    inference_calls: &[TimelineInferenceCallRow],
+    compactions: &[TimelineCompactionRow],
+) -> Result<()> {
+    for row in messages {
+        validate_optional_request_binding(
+            bindings,
+            "AgentMessage",
+            row.doc_id.as_deref().unwrap_or("<unknown>"),
+            row.request_id.as_deref(),
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in tool_calls {
+        validate_optional_request_binding(
+            bindings,
+            "AgentToolCall",
+            row.doc_id.as_deref().unwrap_or(&row.tool_call_id),
+            row.request_id.as_deref(),
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in responses {
+        validate_required_request_binding(
+            bindings,
+            "AgentResponse",
+            row.doc_id.as_deref().unwrap_or(&row.request_id),
+            &row.request_id,
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in inference_calls {
+        validate_required_request_binding(
+            bindings,
+            "InferenceCall",
+            row.doc_id.as_deref().unwrap_or(&row.call_id),
+            &row.request_id,
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in compactions {
+        // A fork copies compaction state so the child session can preserve its
+        // prompt-reduction boundary, but it does not copy the parent requests.
+        // Such imported session context is intentionally unbound; any bound
+        // compaction must still resolve as an exact logical/physical pair.
+        validate_optional_request_binding(
+            bindings,
+            "CompactionEntry",
+            row.doc_id.as_deref().unwrap_or(&row.compaction_key),
+            Some(&row.request_id),
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_optional_request_binding(
+    bindings: &BTreeMap<String, String>,
+    collection: &str,
+    label: &str,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
+) -> Result<()> {
+    match (nonempty(request_id), nonempty(request_doc_id)) {
+        (None, None) => Ok(()),
+        (Some(request_id), Some(request_doc_id)) => {
+            validate_binding_pair(bindings, collection, label, request_id, request_doc_id)
+        }
+        _ => anyhow::bail!(
+            "{collection} {label} has incomplete request lineage: request_id={request_id:?} request_doc_id={request_doc_id:?}"
+        ),
+    }
+}
+
+fn validate_required_request_binding(
+    bindings: &BTreeMap<String, String>,
+    collection: &str,
+    label: &str,
+    request_id: &str,
+    request_doc_id: Option<&str>,
+) -> Result<()> {
+    let request_id = required_lineage_value(collection, label, "request_id", Some(request_id))?;
+    let request_doc_id =
+        required_lineage_value(collection, label, "request_doc_id", request_doc_id)?;
+    validate_binding_pair(bindings, collection, label, request_id, request_doc_id)
+}
+
+fn validate_binding_pair(
+    bindings: &BTreeMap<String, String>,
+    collection: &str,
+    label: &str,
+    request_id: &str,
+    request_doc_id: &str,
+) -> Result<()> {
+    match bindings.get(request_doc_id) {
+        Some(expected) if expected == request_id => Ok(()),
+        Some(expected) => anyhow::bail!(
+            "{collection} {label} request_doc_id {request_doc_id} belongs to {expected}, not {request_id}"
+        ),
+        None => anyhow::bail!(
+            "{collection} {label} points to AgentRequest {request_doc_id}, which is outside this timeline"
+        ),
+    }
+}
+
+fn validate_child_tool_bridges(
+    root: &TimelineRequestRow,
+    requests: &[TimelineRequestRow],
+    tool_calls: &[TimelineToolCallRow],
+) -> Result<()> {
+    let root_doc_id = required_lineage_value(
+        "AgentRequest",
+        &root.request_id,
+        "_docID",
+        root.doc_id.as_deref(),
+    )?;
+    for child in requests.iter().filter(|request| {
+        nonempty(request.caused_by_parent_request_doc_id.as_deref()) == Some(root_doc_id)
+    }) {
+        let tool_doc_id = nonempty(child.caused_by_parent_tool_call_doc_id.as_deref());
+        let logical_tool_id = nonempty(child.caused_by_parent_tool_call_id.as_deref());
+        let (tool_doc_id, logical_tool_id) = match (tool_doc_id, logical_tool_id) {
+            (None, None) => continue,
+            (Some(tool_doc_id), Some(logical_tool_id)) => (tool_doc_id, logical_tool_id),
+            _ => anyhow::bail!(
+                "child AgentRequest {} has incomplete parent tool lineage",
+                child.request_id
+            ),
+        };
+        let tool = tool_calls
+            .iter()
+            .find(|tool| nonempty(tool.doc_id.as_deref()) == Some(tool_doc_id))
+            .with_context(|| {
+                format!(
+                    "child AgentRequest {} points to missing AgentToolCall {tool_doc_id}",
+                    child.request_id
+                )
+            })?;
+        if nonempty(tool.request_doc_id.as_deref()) != Some(root_doc_id)
+            || nonempty(tool.request_id.as_deref()) != Some(root.request_id.as_str())
+            || tool.tool_call_id != logical_tool_id
+            || nonempty(tool.child_request_id.as_deref()) != Some(child.request_id.as_str())
+        {
+            anyhow::bail!(
+                "child AgentRequest {} has a mismatched physical AgentToolCall bridge {}",
+                child.request_id,
+                tool_doc_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn required_lineage_value<'a>(
+    collection: &str,
+    label: &str,
+    field: &str,
+    value: Option<&'a str>,
+) -> Result<&'a str> {
+    nonempty(value).with_context(|| format!("{collection} {label} has no {field}"))
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 async fn load_rows<T>(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<T>>
@@ -655,5 +900,111 @@ async fn rows_or_empty_if_collection_missing(
             Ok(Vec::new())
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bindings() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("doc-root".to_string(), "req-root".to_string()),
+            ("doc-child".to_string(), "req-child".to_string()),
+        ])
+    }
+
+    #[test]
+    fn physical_request_edge_rejects_forged_logical_join() {
+        let error = validate_required_request_binding(
+            &bindings(),
+            "AgentResponse",
+            "response-1",
+            "req-root",
+            Some("doc-child"),
+        )
+        .expect_err("mismatched physical edge must fail closed");
+        assert!(error.to_string().contains("belongs to req-child"));
+    }
+
+    #[test]
+    fn genuinely_unbound_context_row_is_permitted_but_half_binding_is_not() {
+        validate_optional_request_binding(
+            &bindings(),
+            "AgentMessage",
+            "message-context",
+            None,
+            None,
+        )
+        .expect("unbound context message");
+        let error = validate_optional_request_binding(
+            &bindings(),
+            "AgentMessage",
+            "message-forged",
+            Some("req-root"),
+            None,
+        )
+        .expect_err("partial binding must fail closed");
+        assert!(error.to_string().contains("incomplete request lineage"));
+    }
+
+    #[test]
+    fn child_bridge_requires_the_exact_parent_tool_document() {
+        let root = TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            ..Default::default()
+        };
+        let child = TimelineRequestRow {
+            doc_id: Some("doc-child".to_string()),
+            request_id: "req-child".to_string(),
+            caused_by_parent_request_id: Some("req-root".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+            caused_by_parent_tool_call_id: Some("call-parent".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("doc-forged-tool".to_string()),
+            ..Default::default()
+        };
+        let tool = TimelineToolCallRow {
+            doc_id: Some("doc-real-tool".to_string()),
+            request_id: Some("req-root".to_string()),
+            request_doc_id: Some("doc-root".to_string()),
+            tool_call_id: "call-parent".to_string(),
+            child_request_id: Some("req-child".to_string()),
+            ..Default::default()
+        };
+
+        let error = validate_child_tool_bridges(&root, &[root.clone(), child], &[tool])
+            .expect_err("forged tool document edge must fail closed");
+        assert!(error.to_string().contains("missing AgentToolCall"));
+    }
+
+    #[test]
+    fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
+        let root = TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            ..Default::default()
+        };
+        let direct_child = TimelineRequestRow {
+            doc_id: Some("doc-direct".to_string()),
+            request_id: "req-direct".to_string(),
+            caused_by_parent_request_id: Some("req-root".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+            ..Default::default()
+        };
+        validate_child_tool_bridges(&root, &[root.clone(), direct_child], &[])
+            .expect("direct parent lineage does not fabricate a tool delegation");
+
+        let half_bridge = TimelineRequestRow {
+            doc_id: Some("doc-half".to_string()),
+            request_id: "req-half".to_string(),
+            caused_by_parent_request_id: Some("req-root".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+            caused_by_parent_tool_call_id: Some("call-only".to_string()),
+            ..Default::default()
+        };
+        let error = validate_child_tool_bridges(&root, &[root.clone(), half_bridge], &[])
+            .expect_err("half tool bridge must fail closed");
+        assert!(error.to_string().contains("incomplete parent tool lineage"));
     }
 }

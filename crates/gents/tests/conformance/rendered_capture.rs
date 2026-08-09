@@ -144,8 +144,6 @@ fn rendered_in_scope(
         tools_json: json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
-        prompt_hash: String::new(),
-        tools_hash: String::new(),
         provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
             capture_scope.to_string(),
             None,

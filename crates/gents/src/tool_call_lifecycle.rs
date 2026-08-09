@@ -287,6 +287,7 @@ pub use transition::IllegalToolCallTransition;
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
     request_id: String,
+    request_doc_id: Option<String>,
     session_id: String,
     /// DID of the agent that owns the session this tool call belongs to. Stamped
     /// onto the AgentToolCall row at create so filtered replication can scope the
@@ -313,7 +314,8 @@ pub struct ToolCallLifecycle {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn doc_id(&self) -> Option<&str> {
+    /// Exact DefraDB document identifier after the first persisted transition.
+    pub fn doc_id(&self) -> Option<&str> {
         self.doc_id.as_deref()
     }
 
@@ -334,6 +336,7 @@ impl ToolCallLifecycle {
         Self {
             node,
             request_id,
+            request_doc_id: None,
             session_id,
             agent_did,
             requester_did: None,
@@ -365,6 +368,12 @@ impl ToolCallLifecycle {
         self
     }
 
+    /// Attach the exact owning AgentRequest document to the persisted tool call.
+    pub fn with_request_doc_id(mut self, request_doc_id: Option<String>) -> Self {
+        self.request_doc_id = request_doc_id.filter(|doc_id| !doc_id.trim().is_empty());
+        self
+    }
+
     /// Constructor for the subagent invocation path. Sets child_request_id (the
     /// link to the spawned child AgentRequest) and lets the caller pick await_mode
     /// and cancel_policy. Synchronous and does not persist — first transition
@@ -388,6 +397,7 @@ impl ToolCallLifecycle {
         Self {
             node,
             request_id,
+            request_doc_id: None,
             session_id,
             agent_did,
             requester_did: None,
@@ -428,6 +438,7 @@ impl ToolCallLifecycle {
         Self {
             node,
             request_id,
+            request_doc_id: None,
             session_id,
             agent_did,
             requester_did: None,

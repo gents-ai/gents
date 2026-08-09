@@ -608,6 +608,8 @@ pub async fn fetch_tool_result_snapshots_for_session(
 pub struct CompactionEntrySnapshot {
     pub compaction_key: String,
     pub session_id: String,
+    pub request_id: String,
+    pub request_doc_id: String,
     pub sequence: u32,
     pub summary: String,
     pub messages_compacted: u32,
@@ -625,7 +627,7 @@ pub async fn fetch_compaction_entry_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
             ) {{
-                compaction_key session_id sequence summary messages_compacted created_at
+                compaction_key session_id request_id request_doc_id sequence summary messages_compacted created_at
             }}
         }}"#
     );

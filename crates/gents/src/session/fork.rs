@@ -464,7 +464,7 @@ async fn copy_messages(
                     sequence: {{ _lt: {cut_seq} }}
                 }},
                 order: {{ sequence: ASC }}
-            ) {{ request_id requester_did sequence role content reasoning timestamp }}
+            ) {{ requester_did sequence role content reasoning timestamp }}
         }}"#
     );
     let resp = executor.execute_graphql(&query).await?;
@@ -487,7 +487,6 @@ async fn copy_messages(
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
-        let request_id = row.get("request_id").and_then(|v| v.as_str());
         let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let message_key = format!("{child_session_escaped}:{sequence}");
         mutation_fields.push(format!(
@@ -495,7 +494,8 @@ async fn copy_messages(
                     message_key: "{message_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
-                    request_id: {request_id},
+                    request_id: "",
+                    request_doc_id: "",
                     requester_did: {requester_did},
                     sequence: {sequence},
                     role: "{role_escaped}",
@@ -508,7 +508,6 @@ async fn copy_messages(
             content_escaped = escape_graphql_string(content),
             reasoning_escaped = escape_graphql_string(reasoning),
             timestamp_escaped = escape_graphql_string(timestamp),
-            request_id = nullable_string_literal(request_id),
             requester_did = nullable_string_literal(requester_did),
         ));
     }
@@ -533,7 +532,7 @@ async fn copy_tool_calls(
                 }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state
+                requester_did message_sequence tool_name tool_call_id args result status lifecycle_state
                 started_at completed_at selected_service_id selected_tool_name tool_failure_class
                 denial_reason denied_argv denied_command denied_argument denied_subcommand
                 denied_prefix policy_mode policy_network
@@ -584,7 +583,6 @@ async fn copy_tool_calls(
         let policy_network = row.get("policy_network").and_then(|v| v.as_str());
         let cancel_cause = row.get("cancel_cause").and_then(|v| v.as_str());
         let latency_ms = row.get("latency_ms").and_then(json_i64);
-        let request_id = row.get("request_id").and_then(|v| v.as_str());
         let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
@@ -593,7 +591,8 @@ async fn copy_tool_calls(
                     tool_call_key: "{tool_call_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
-                    request_id: {request_id},
+                    request_id: "",
+                    request_doc_id: "",
                     requester_did: {requester_did},
                     message_sequence: {message_sequence},
                     tool_name: "{tool_name_escaped}",
@@ -639,7 +638,6 @@ async fn copy_tool_calls(
             policy_network = nullable_string_literal(policy_network),
             cancel_cause = nullable_string_literal(cancel_cause),
             latency_ms = nullable_i64_literal(latency_ms),
-            request_id = nullable_string_literal(request_id),
             requester_did = nullable_string_literal(requester_did),
         ));
     }
@@ -664,7 +662,7 @@ async fn copy_tool_results(
                     created_at: {{ _lt: "{escaped_cut_ts}" }}
                 }},
                 order: {{ created_at: ASC }}
-            ) {{ tool_call_doc_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
+            ) {{ tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
         }}"#
     );
     let resp = executor.execute_graphql(&query).await?;
@@ -679,7 +677,6 @@ async fn copy_tool_results(
     let child_agent_did_escaped = escape_graphql_string(child_agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
-        let tool_call_doc_id = row.get("tool_call_doc_id").and_then(|v| v.as_str());
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
         let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
         let output_text = row
@@ -701,7 +698,7 @@ async fn copy_tool_results(
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         mutation_fields.push(format!(
             r#"tool_result_{index}: create_AgentToolResult(input: {{
-                    tool_call_doc_id: {tool_call_doc_id},
+                    tool_call_doc_id: "",
                     agent_did: "{child_agent_did_escaped}",
                     session_id: "{child_session_escaped}",
                     tool_name: "{tool_name_escaped}",
@@ -713,7 +710,6 @@ async fn copy_tool_results(
                     created_at: "{created_at_escaped}"
                 }}) {{ _docID }}
             "#,
-            tool_call_doc_id = nullable_string_literal(tool_call_doc_id),
             tool_name_escaped = escape_graphql_string(tool_name),
             tool_input_escaped = escape_graphql_string(tool_input),
             output_text_escaped = escape_graphql_string(output_text),
@@ -793,6 +789,8 @@ async fn copy_compaction_entries(
                     compaction_key: "{compaction_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
+                    request_id: "",
+                    request_doc_id: "",
                     sequence: {sequence},
                     summary: "{summary_escaped}",
                     files_read: "{files_read_escaped}",

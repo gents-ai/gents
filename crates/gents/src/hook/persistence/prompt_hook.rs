@@ -308,6 +308,7 @@ impl DefraSessionHook {
         let result: anyhow::Result<()> = async {
             let (session_id, request_id, deadline_at, seq) =
                 self.ensure_assistant_turn_sequence().await?;
+            let request_doc_id = self.active_request_doc_id_or_reload(&request_id).await?;
             self.state.lock().await.register_tool_result_identity(
                 internal_call_id,
                 None,
@@ -325,7 +326,8 @@ impl DefraSessionHook {
                 args.to_string(),
                 deadline_at,
             )
-            .with_requester_did(self.active_requester_did().await);
+            .with_requester_did(self.active_requester_did().await)
+            .with_request_doc_id(request_doc_id);
             if hold_required {
                 lc.hold_for_approval().await?;
             } else {

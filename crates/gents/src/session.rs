@@ -65,6 +65,14 @@ pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String 
         .unwrap_or_default()
 }
 
+pub(crate) fn request_doc_id_create_field(request_doc_id: Option<&str>) -> String {
+    request_doc_id
+        .map(str::trim)
+        .filter(|doc_id| !doc_id.is_empty())
+        .map(|doc_id| format!(r#"request_doc_id: "{}","#, escape_graphql_string(doc_id)))
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionEntry {
     pub session_id: String,

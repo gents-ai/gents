@@ -324,6 +324,7 @@ pub(crate) async fn enqueue_goal_continuation(
     let escaped_created_at = escape_graphql_string(&now);
     let escaped_goal_id = escape_graphql_string(goal_id);
     let escaped_parent_request_id = escape_graphql_string(&parent.request_id);
+    let escaped_parent_request_doc_id = escape_graphql_string(&parent.doc_id);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -344,6 +345,7 @@ pub(crate) async fn enqueue_goal_continuation(
                 caused_by_trigger_id: "{escaped_goal_id}",
                 caused_by_trigger_kind: "goal",
                 caused_by_parent_request_id: "{escaped_parent_request_id}",
+                caused_by_parent_request_doc_id: "{escaped_parent_request_doc_id}",
                 failure_reason: "",
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
@@ -424,12 +426,14 @@ pub async fn reconcile_coalesced_pending_request(
                         status: "superseded",
                         lifecycle_state: "superseded",
                         superseded_by_request: "{survivor_request_id}",
+                        superseded_by_request_doc_id: "{survivor_doc_id}",
                         failure_reason: "coalesced into earlier queued request",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
-            }}"#
+            }}"#,
+            survivor_doc_id = escape_graphql_string(&survivor.doc_id),
         );
         crate::retry::execute_graphql_with_terminal_persistence_retry(
             node,
@@ -550,24 +554,37 @@ async fn parent_behavior_id(node: &EmbeddedNode, parent: &AgentRequest) -> Resul
 fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
     match (
         parent.caused_by_parent_request_id.as_deref(),
+        parent.caused_by_parent_request_doc_id.as_deref(),
         parent.caused_by_parent_tool_call_id.as_deref(),
+        parent.caused_by_parent_tool_call_doc_id.as_deref(),
     ) {
-        (Some(parent_request_id), Some(parent_tool_call_id))
-            if !parent_request_id.trim().is_empty() && !parent_tool_call_id.trim().is_empty() =>
+        (
+            Some(parent_request_id),
+            Some(parent_request_doc_id),
+            Some(parent_tool_call_id),
+            Some(parent_tool_call_doc_id),
+        ) if !parent_request_id.trim().is_empty() && !parent_tool_call_id.trim().is_empty() => {
+            format!(
+                r#",
+                caused_by_parent_request_id: "{}",
+                caused_by_parent_request_doc_id: "{}",
+                caused_by_parent_tool_call_id: "{}",
+                caused_by_parent_tool_call_doc_id: "{}""#,
+                escape_graphql_string(parent_request_id),
+                escape_graphql_string(parent_request_doc_id),
+                escape_graphql_string(parent_tool_call_id),
+                escape_graphql_string(parent_tool_call_doc_id),
+            )
+        }
+        (Some(parent_request_id), Some(parent_request_doc_id), None, None)
+            if !parent_request_id.trim().is_empty() =>
         {
             format!(
                 r#",
                 caused_by_parent_request_id: "{}",
-                caused_by_parent_tool_call_id: "{}""#,
+                caused_by_parent_request_doc_id: "{}""#,
                 escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_tool_call_id),
-            )
-        }
-        (Some(parent_request_id), None) if !parent_request_id.trim().is_empty() => {
-            format!(
-                r#",
-                caused_by_parent_request_id: "{}""#,
-                escape_graphql_string(parent_request_id),
+                escape_graphql_string(parent_request_doc_id),
             )
         }
         _ => String::new(),
@@ -580,7 +597,7 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
+                limit: 2
             ) {{
                 _docID
             }}
@@ -593,7 +610,7 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<
             response.errors
         );
     }
-    extract_single_doc_id(&response, "AgentRequest").ok_or_else(|| {
+    exact_request_doc_id_from_response(&response, request_id)?.ok_or_else(|| {
         anyhow::anyhow!("queued AgentRequest request_id={request_id} not found after create")
     })
 }
@@ -608,7 +625,7 @@ async fn lookup_request_doc_id_optional(
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 order: {{ created_at: ASC }},
-                limit: 1
+                limit: 2
             ) {{ _docID }}
         }}"#
     );
@@ -619,7 +636,31 @@ async fn lookup_request_doc_id_optional(
             response.errors
         );
     }
-    Ok(extract_single_doc_id(&response, "AgentRequest"))
+    exact_request_doc_id_from_response(&response, request_id)
+}
+
+fn exact_request_doc_id_from_response(
+    response: &defra_node::QueryResponse,
+    request_id: &str,
+) -> Result<Option<String>> {
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if rows.len() > 1 {
+        anyhow::bail!(
+            "AgentRequest request_id={request_id} is ambiguous across {} documents",
+            rows.len()
+        );
+    }
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
 }
 
 pub async fn drain_automated_wakeups(
@@ -761,9 +802,12 @@ mod tests {
         lifecycle_state: Option<String>,
         execution_origin: String,
         superseded_by_request: Option<String>,
+        superseded_by_request_doc_id: Option<String>,
         subagent_depth: Option<u32>,
         caused_by_parent_request_id: Option<String>,
+        caused_by_parent_request_doc_id: Option<String>,
         caused_by_parent_tool_call_id: Option<String>,
+        caused_by_parent_tool_call_doc_id: Option<String>,
     }
 
     fn hints(source: QueueSource, policy: QueuePolicy) -> QueueHints {
@@ -795,7 +839,9 @@ mod tests {
             deadline: None,
             subagent_depth: 2,
             caused_by_parent_request_id: Some("root-parent-request".to_string()),
+            caused_by_parent_request_doc_id: Some("root-parent-request-doc".to_string()),
             caused_by_parent_tool_call_id: Some("root-parent-tool-call".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("root-parent-tool-call-doc".to_string()),
         }
     }
 
@@ -836,9 +882,12 @@ mod tests {
                     lifecycle_state
                     execution_origin
                     superseded_by_request
+                    superseded_by_request_doc_id
                     subagent_depth
                     caused_by_parent_request_id
+                    caused_by_parent_request_doc_id
                     caused_by_parent_tool_call_id
+                    caused_by_parent_tool_call_doc_id
                 }}
             }}"#
         );
@@ -891,10 +940,25 @@ mod tests {
             }}"#,
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
-        session::execute_mutation_with_retry(node, &mutation, "insert_raw_queue_request")
+        let response =
+            session::execute_mutation_with_retry(node, &mutation, "insert_raw_queue_request")
+                .await
+                .unwrap();
+        extract_single_doc_id(&response, "create_AgentRequest")
+            .expect("raw queue create returns _docID")
+    }
+
+    #[tokio::test]
+    async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
+        let db = test_db("ambiguous-request-doc-lookup").await;
+        let metadata = queue_metadata_json(&hints(QueueSource::User, QueuePolicy::Append));
+        insert_raw_queue_request(&db.node, "duplicate-logical-id", "session-a", &metadata).await;
+        insert_raw_queue_request(&db.node, "duplicate-logical-id", "session-b", &metadata).await;
+
+        let error = lookup_request_doc_id_optional(&db.node, "duplicate-logical-id")
             .await
-            .unwrap();
-        lookup_request_doc_id(node, request_id).await.unwrap()
+            .expect_err("duplicate logical ids must not resolve to an arbitrary document");
+        assert!(error.to_string().contains("ambiguous across 2 documents"));
     }
 
     #[test]
@@ -1105,8 +1169,16 @@ mod tests {
             Some("root-parent-request")
         );
         assert_eq!(
+            row.caused_by_parent_request_doc_id.as_deref(),
+            Some("root-parent-request-doc")
+        );
+        assert_eq!(
             row.caused_by_parent_tool_call_id.as_deref(),
             Some("root-parent-tool-call")
+        );
+        assert_eq!(
+            row.caused_by_parent_tool_call_doc_id.as_deref(),
+            Some("root-parent-tool-call-doc")
         );
         assert!(is_automated_wakeup(row.metadata.as_deref()));
     }
@@ -1217,6 +1289,10 @@ mod tests {
             duplicate.superseded_by_request.as_deref(),
             Some(survivor.request_id.as_str())
         );
+        assert_eq!(
+            duplicate.superseded_by_request_doc_id.as_deref(),
+            Some(survivor.doc_id.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1271,6 +1347,10 @@ mod tests {
         assert_eq!(
             duplicate.superseded_by_request.as_deref(),
             Some("req-preexisting-coalesce-survivor")
+        );
+        assert_eq!(
+            duplicate.superseded_by_request_doc_id.as_deref(),
+            Some(survivor.doc_id.as_str())
         );
     }
 

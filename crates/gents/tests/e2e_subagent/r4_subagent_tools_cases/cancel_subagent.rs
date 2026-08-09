@@ -75,6 +75,8 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     .await;
 
     let grandchild_request_id = "cancel-subagent-active-grandchild";
+    let child_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &child_request_id).await;
     let mut descendant_bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         child_request_id.clone(),
@@ -89,13 +91,20 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
         agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(child_request_doc_id.clone()));
     descendant_bridge.start_running().await.unwrap();
+    let descendant_bridge_doc_id = descendant_bridge
+        .doc_id()
+        .expect("descendant bridge document id")
+        .to_string();
     let _grandchild_session_id = create_subagent_request_with_request_id(
         db.node.as_ref(),
         grandchild_request_id.to_string(),
         child_request_id.clone(),
+        child_request_doc_id,
         "internal-cancel-descendant".to_string(),
+        descendant_bridge_doc_id,
         1,
         agent_did.clone(),
         CHILD_BEHAVIOR_ID.to_string(),

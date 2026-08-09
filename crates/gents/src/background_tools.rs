@@ -415,7 +415,9 @@ struct AgentRequestQueueRow {
     deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1310,6 +1312,7 @@ pub(crate) async fn append_steering_request(
         message,
         None,
         Some(&enqueued.request_id),
+        Some(&enqueued.doc_id),
     )
     .await?;
 
@@ -1433,7 +1436,9 @@ async fn load_agent_request_for_queue(
                 deadline
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -1466,7 +1471,13 @@ async fn load_agent_request_for_queue(
         deadline: normalize_optional_string(row.deadline),
         subagent_depth: row.subagent_depth.unwrap_or(0),
         caused_by_parent_request_id: normalize_optional_string(row.caused_by_parent_request_id),
+        caused_by_parent_request_doc_id: normalize_optional_string(
+            row.caused_by_parent_request_doc_id,
+        ),
         caused_by_parent_tool_call_id: normalize_optional_string(row.caused_by_parent_tool_call_id),
+        caused_by_parent_tool_call_doc_id: normalize_optional_string(
+            row.caused_by_parent_tool_call_doc_id,
+        ),
     };
     validate_agent_request_subagent_coherence(&request)?;
     Ok(Some(request))

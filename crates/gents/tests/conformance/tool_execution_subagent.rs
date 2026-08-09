@@ -1160,7 +1160,7 @@ async fn integration_v3_schema_defaults_populate_correctly() {
 #[tokio::test]
 async fn integration_create_subagent_request_at_max_depth_succeeds() {
     let db = test_db("tc-sa-csr-1").await;
-    crate::support::create_request(
+    let parent_request_doc_id = crate::support::create_request(
         &db.node,
         "parent-req-csr-1",
         "parent-sess-csr-1",
@@ -1169,10 +1169,27 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
     )
     .await;
 
+    let mut bridge = ToolCallLifecycle::new(
+        db.node.clone(),
+        "parent-req-csr-1".to_string(),
+        "parent-sess-csr-1".to_string(),
+        crate::support::AGENT_DID.to_string(),
+        "parent-tc-csr-1".to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        test_deadline(),
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
+    bridge.start_running().await.unwrap();
+    let parent_tool_call_doc_id = bridge.doc_id().expect("bridge document id").to_string();
+
     let new_id = create_subagent_request(
         &db.node,
         "parent-req-csr-1".to_string(),
+        parent_request_doc_id.clone(),
         "parent-tc-csr-1".to_string(),
+        parent_tool_call_doc_id.clone(),
         MAX_SUBAGENT_DEPTH - 1,
         crate::support::AGENT_DID.to_string(),
         "behavior-csr-1".to_string(),
@@ -1191,7 +1208,9 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
                 lifecycle_state
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
                 caused_by_trigger_id
                 caused_by_trigger_kind
             }}
@@ -1214,8 +1233,16 @@ async fn integration_create_subagent_request_at_max_depth_succeeds() {
         Some("parent-req-csr-1")
     );
     assert_eq!(
+        row["caused_by_parent_request_doc_id"].as_str(),
+        Some(parent_request_doc_id.as_str())
+    );
+    assert_eq!(
         row["caused_by_parent_tool_call_id"].as_str(),
         Some("parent-tc-csr-1")
+    );
+    assert_eq!(
+        row["caused_by_parent_tool_call_doc_id"].as_str(),
+        Some(parent_tool_call_doc_id.as_str())
     );
     assert_eq!(
         row["caused_by_trigger_id"].as_str(),
@@ -1230,7 +1257,9 @@ async fn integration_create_subagent_request_above_max_depth_fails() {
     let err = create_subagent_request(
         &db.node,
         "parent-req-csr-2".to_string(),
+        "parent-req-doc-csr-2".to_string(),
         "parent-tc-csr-2".to_string(),
+        "parent-tc-doc-csr-2".to_string(),
         MAX_SUBAGENT_DEPTH,
         crate::support::AGENT_DID.to_string(),
         "behavior-csr-2".to_string(),
@@ -1255,7 +1284,9 @@ async fn integration_create_subagent_request_empty_parent_fields_fails() {
     let err = create_subagent_request(
         &db.node,
         "".to_string(),
+        "parent-request-doc".to_string(),
         "parent-tc".to_string(),
+        "parent-tool-call-doc".to_string(),
         0,
         crate::support::AGENT_DID.to_string(),
         "behavior".to_string(),
@@ -1275,7 +1306,9 @@ async fn integration_create_subagent_request_empty_parent_fields_fails() {
     let err = create_subagent_request(
         &db.node,
         "parent-req".to_string(),
+        "parent-request-doc".to_string(),
         "".to_string(),
+        "parent-tool-call-doc".to_string(),
         0,
         crate::support::AGENT_DID.to_string(),
         "behavior".to_string(),

@@ -4,6 +4,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use gents_protocol::transcript::{present_persisted_message, PresentedMessageRole};
+
 use crate::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent, TimelineRequestEvent,
     TimelineResponseEvent,
@@ -129,8 +131,18 @@ pub struct ProjectionProvenance {
     pub source_projection_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
+    pub source_version_status: ProjectionSourceVersionStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_request_refs: Vec<RenderedRequestProvenanceRef>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionSourceVersionStatus {
+    /// The projection was built from the latest visible DefraDB documents.
+    /// Their exact composite versions are not pinned in this envelope.
+    #[default]
+    CurrentStateCapturedOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -435,11 +447,17 @@ pub fn build_adapter_projection(
             source_projection_id: RUN_TIMELINE_PROJECTION_ID.to_string(),
             source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
             actor_did: context.actor_did.clone(),
+            source_version_status: ProjectionSourceVersionStatus::CurrentStateCapturedOnly,
             rendered_request_refs: timeline
                 .rendered_request_refs
                 .iter()
                 .map(|reference| RenderedRequestProvenanceRef {
-                    capture_doc_id: reference.doc_id.clone(),
+                    capture_doc_id: match context.redaction_mode {
+                        ProjectionRedactionMode::Public => "[redacted]".to_string(),
+                        ProjectionRedactionMode::Full | ProjectionRedactionMode::TrainingSafe => {
+                            reference.doc_id.clone()
+                        }
+                    },
                     request_doc_id: reference.request_doc_id.clone(),
                     request_commit_cid: reference.request_commit_cid.clone(),
                 })
@@ -1524,6 +1542,7 @@ fn provenance_schema() -> Value {
             "runtime": { "const": "gents" },
             "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
             "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
+            "source_version_status": { "const": "current_state_captured_only" },
             "actor_did": optional_string_schema(),
             "rendered_request_refs": {
                 "type": "array",
@@ -1851,6 +1870,7 @@ fn build_openai_codex_run_trace(
             // native item shapes are additionalProperties:false throughout.
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
+            RunTimelineEvent::Compaction(_) => {}
             RunTimelineEvent::Message(event) => {
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
@@ -1878,7 +1898,8 @@ fn build_openai_codex_run_trace(
                 items.push(OpenAiCodexTraceItem::Response {
                     id: event.request_id.clone(),
                     status: event.status.clone(),
-                    output: redact_option(event.content.as_deref(), context),
+                    output: projected_response_output(timeline, event)
+                        .map(|output| redact_str(&output, context)),
                     reasoning: redact_option(event.reasoning.as_deref(), context),
                     error: redact_option(event.error_message.as_deref(), context),
                     timestamp: event.timestamp.clone(),
@@ -1963,6 +1984,18 @@ fn build_langgraph_state_history(
                 None,
                 Some(event.call_state.clone()),
                 None,
+                None,
+            ),
+            RunTimelineEvent::Compaction(event) => (
+                format!("compaction:{}", event.compaction_key),
+                "compaction".to_string(),
+                Some(event.request_id.clone()),
+                None,
+                None,
+                None,
+                None,
+                Some("completed".to_string()),
+                Some(redact_str(&event.summary, context)),
                 None,
             ),
             RunTimelineEvent::Message(event) => (
@@ -2053,10 +2086,10 @@ fn build_langgraph_state_history(
         }
     }
 
-    if let Some(response) = last_response(timeline) {
+    if let Some(output) = root_final_output(timeline) {
         values.insert(
             "final_output".to_string(),
-            json!(redact_option(response.content.as_deref(), context)),
+            json!(redact_str(&output, context)),
         );
     }
     if let Some(rendered_captures) = rendered_captures_json(timeline) {
@@ -2152,6 +2185,7 @@ fn build_multi_agent_task(
             // multi-agent native shape is additionalProperties:false.
             RunTimelineEvent::RenderedRequest(_) => {}
             RunTimelineEvent::InferenceCall(_) => {}
+            RunTimelineEvent::Compaction(_) => {}
             RunTimelineEvent::Message(message) => {
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),
@@ -2311,11 +2345,60 @@ fn timeline_request_input(
     })
 }
 
-fn last_response(timeline: &RunTimeline) -> Option<&TimelineResponseEvent> {
+fn projected_response_output(
+    timeline: &RunTimeline,
+    response: &TimelineResponseEvent,
+) -> Option<String> {
+    nonempty_str(response.content.as_deref())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let sequence = response.materialized_message_sequence?;
+            timeline.events.iter().find_map(|event| match event {
+                RunTimelineEvent::Message(message)
+                    if message.request_id.as_deref() == Some(response.request_id.as_str())
+                        && message.sequence == sequence =>
+                {
+                    presented_assistant_message(message.role.as_str(), message.content.as_str())
+                }
+                _ => None,
+            })
+        })
+}
+
+fn root_final_output(timeline: &RunTimeline) -> Option<String> {
+    if let Some(response) = timeline.events.iter().rev().find_map(|event| match event {
+        RunTimelineEvent::Response(response) if response.request_id == timeline.request_id => {
+            Some(response)
+        }
+        _ => None,
+    }) {
+        return projected_response_output(timeline, response);
+    }
+
     timeline.events.iter().rev().find_map(|event| match event {
-        RunTimelineEvent::Response(response) => Some(response),
+        RunTimelineEvent::Message(message)
+            if message.request_id.as_deref() == Some(timeline.request_id.as_str()) =>
+        {
+            presented_assistant_message(message.role.as_str(), message.content.as_str())
+        }
         _ => None,
     })
+}
+
+fn presented_assistant_message(role: &str, content: &str) -> Option<String> {
+    let role = if role.eq_ignore_ascii_case("agent") {
+        "assistant"
+    } else {
+        role
+    };
+    let presented = present_persisted_message(role, content);
+    (presented.role == PresentedMessageRole::Assistant)
+        .then_some(presented.body_markdown)
+        .and_then(|content| nonempty_str(Some(&content)).map(ToOwned::to_owned))
+}
+
+fn nonempty_str(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn push_participant(

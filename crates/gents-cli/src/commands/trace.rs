@@ -369,6 +369,7 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentResponse",
     "InferenceCall",
+    "CompactionEntry",
     "AgentSession",
     "AgentConversation",
 ];
@@ -702,6 +703,21 @@ async fn apply_projection_acp_read_filter(
         }
     }
 
+    let mut filtered_compactions = Vec::new();
+    for compaction in rows.compactions {
+        let doc_id = required_doc_id(
+            "CompactionEntry",
+            compaction.compaction_key.as_str(),
+            &compaction.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("CompactionEntry"), doc_id)
+            .await?
+        {
+            filtered_compactions.push(compaction);
+        }
+    }
+
     let session = match rows.session {
         Some(session) => {
             let doc_id =
@@ -744,6 +760,7 @@ async fn apply_projection_acp_read_filter(
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
         inference_calls: filtered_inference_calls,
+        compactions: filtered_compactions,
         responses: filtered_responses,
         // Passed through unfiltered: ACP enforcement is DefraDB's, not this
         // filter's. Reads executed under a requester identity return only the
@@ -956,6 +973,9 @@ fn should_keep_scoped_timeline_event(
             .request_id
             .as_deref()
             .is_some_and(|request_id| allowed_request_ids.contains(request_id)),
+        RunTimelineEvent::Compaction(compaction) => {
+            allowed_request_ids.contains(&compaction.request_id)
+        }
         RunTimelineEvent::Message(message) => scoped_request_id_allowed(
             message.request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -2292,6 +2312,7 @@ mod tests {
                     doc_id: Some("doc-message-allowed".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-root".to_string()),
+                    request_doc_id: Some("doc-request-root".to_string()),
                     sequence: 1,
                     role: "user".to_string(),
                     content: "allowed".to_string(),
@@ -2302,6 +2323,7 @@ mod tests {
                     doc_id: Some("doc-message-denied".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-child".to_string()),
+                    request_doc_id: Some("doc-request-child".to_string()),
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: "denied".to_string(),
@@ -2369,6 +2391,7 @@ mod tests {
                 },
             ],
             rendered_requests: Vec::new(),
+            compactions: Vec::new(),
             rendered_request_refs: Vec::new(),
         }
     }

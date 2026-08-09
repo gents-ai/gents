@@ -418,7 +418,9 @@ mod tests {
             deadline: None,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
+            caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
+            caused_by_parent_tool_call_doc_id: None,
         }
     }
 

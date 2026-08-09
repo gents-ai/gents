@@ -27,6 +27,7 @@ fn session_state_for_test() -> SessionState {
     SessionState {
         session_id: Some("session-1".to_string()),
         current_request_id: None,
+        current_request_doc_id: None,
         current_requester_did: None,
         request_deadline_at: None,
         approval_required_tools: Vec::new(),
@@ -62,8 +63,9 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
         FailurePolicy::default(),
     );
 
-    hook.set_active_request_lineage(
+    hook.set_active_request_binding(
         Some("request-a".to_string()),
+        Some("request-doc-a".to_string()),
         Some("did:test:coordinator".to_string()),
     )
     .await;
@@ -74,6 +76,62 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
     assert_eq!(state.current_request_id.as_deref(), Some("request-b"));
     assert_eq!(state.current_requester_did, None);
     drop(state);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn request_lineage_resolves_doc_id_and_prompt_tool_path_reloads_legacy_binding() {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    create_interruptible_request(node.as_ref(), "request-lineage", &session_id).await;
+
+    hook.set_active_request_lineage(
+        Some("request-lineage".to_string()),
+        Some("did:test:requester".to_string()),
+    )
+    .await
+    .unwrap();
+    let expected_doc_id = hook
+        .state
+        .lock()
+        .await
+        .current_request_doc_id
+        .clone()
+        .expect("resolved request doc id");
+
+    hook.set_active_request_id(Some("request-lineage".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    assert!(matches!(
+        hook.on_tool_call("read", None, "lineage-reload", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let row = fetch_tool_call_row(&node, &session_id, "lineage-reload").await;
+    assert_eq!(
+        row.get("request_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_doc_id.as_str())
+    );
     node.shutdown().await;
 }
 
@@ -478,6 +536,7 @@ async fn fetch_tool_call_row(
                 ) {{
                     _docID
                     request_id
+                    request_doc_id
                     deadline_at
                     lifecycle_state
                     result
@@ -571,8 +630,12 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let deadline = chrono::DateTime::parse_from_rfc3339("2026-05-08T12:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    hook.set_active_request_id(Some("req-deadline".to_string()))
-        .await;
+    hook.set_active_request_binding(
+        Some("req-deadline".to_string()),
+        Some("request-doc-deadline".to_string()),
+        None,
+    )
+    .await;
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
@@ -585,6 +648,10 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     assert_eq!(
         row.get("request_id").and_then(|value| value.as_str()),
         Some("req-deadline")
+    );
+    assert_eq!(
+        row.get("request_doc_id").and_then(|value| value.as_str()),
+        Some("request-doc-deadline")
     );
     let observed_deadline = chrono::DateTime::parse_from_rfc3339(
         row.get("deadline_at")
@@ -756,7 +823,11 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         FailurePolicy::default(),
     );
     hook1
-        .set_active_request_id(Some("req-retry".to_string()))
+        .set_active_request_binding(
+            Some("req-retry".to_string()),
+            Some("request-doc-retry".to_string()),
+            None,
+        )
         .await;
     assert!(matches!(
         hook1
@@ -778,7 +849,11 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     .await
     .unwrap();
     hook2
-        .set_active_request_id(Some("req-retry".to_string()))
+        .set_active_request_binding(
+            Some("req-retry".to_string()),
+            Some("request-doc-retry".to_string()),
+            None,
+        )
         .await;
     assert!(matches!(
         hook2
@@ -806,6 +881,22 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         2,
         "retry must not duplicate turn-1 messages; expected [context, prompt], got {history:?}"
     );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let data = response.data.unwrap();
+    let rows = data["AgentMessage"].as_array().expect("message rows");
+    assert!(rows
+        .iter()
+        .all(|row| row["request_doc_id"] == "request-doc-retry"));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

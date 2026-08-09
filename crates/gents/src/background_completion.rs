@@ -555,7 +555,10 @@ async fn project_background_subagent_completion_inner(
     let Some(parent_request_id) = non_empty(linkage.caused_by_parent_request_id.as_deref()) else {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     };
-    if non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none() {
+    if non_empty(linkage.caused_by_parent_request_doc_id.as_deref()).is_none()
+        || non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none()
+        || non_empty(linkage.caused_by_parent_tool_call_doc_id.as_deref()).is_none()
+    {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     }
     if !request_is_locally_owned(node, parent_request_id, local_did).await? {
@@ -712,6 +715,7 @@ pub(crate) async fn append_background_tool_completion(
                     &notification,
                     None,
                     Some(&notification_request_id),
+                    Some(parent_request.doc_id.as_str()),
                     &notification_message_key,
                     None,
                 )
@@ -915,6 +919,7 @@ async fn ensure_projection_side_effects(
                     &notification,
                     None,
                     Some(&notification_request_id),
+                    Some(parent_request.doc_id.as_str()),
                     &notification_message_key,
                     None,
                 )
@@ -1393,7 +1398,9 @@ impl BackgroundCompletionObserver {
 #[derive(Debug, Deserialize)]
 struct ChildLinkageRow {
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 async fn load_child_linkage(
@@ -1408,7 +1415,9 @@ async fn load_child_linkage(
                 limit: 1
             ) {{
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -1510,7 +1519,9 @@ struct AgentRequestQueueRow {
     deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 async fn load_agent_request_for_queue(
@@ -1541,7 +1552,9 @@ async fn load_agent_request_for_queue(
                 deadline
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -1575,7 +1588,13 @@ async fn load_agent_request_for_queue(
         deadline: normalize_optional_string(row.deadline),
         subagent_depth: row.subagent_depth.unwrap_or(0),
         caused_by_parent_request_id: normalize_optional_string(row.caused_by_parent_request_id),
+        caused_by_parent_request_doc_id: normalize_optional_string(
+            row.caused_by_parent_request_doc_id,
+        ),
         caused_by_parent_tool_call_id: normalize_optional_string(row.caused_by_parent_tool_call_id),
+        caused_by_parent_tool_call_doc_id: normalize_optional_string(
+            row.caused_by_parent_tool_call_doc_id,
+        ),
     };
     validate_agent_request_subagent_coherence(&request)?;
     Ok(Some(request))

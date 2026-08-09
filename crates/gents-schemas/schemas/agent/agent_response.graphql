@@ -1,6 +1,7 @@
 type AgentResponse @branchable {
     response_key: String @index(unique: true)
     request_id: String @index
+    request_doc_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     behavior_id: String @index

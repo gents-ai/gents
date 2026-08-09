@@ -70,7 +70,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -404,7 +406,9 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -566,7 +570,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -629,6 +635,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         &notification,
         None,
         Some(&request_id),
+        None,
     )
     .await
     .unwrap();
@@ -753,7 +760,9 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -899,7 +908,9 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -1057,7 +1068,9 @@ async fn post_tool_resumed_resets_response_tail() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
 
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -1189,7 +1202,9 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
@@ -1323,7 +1338,9 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),

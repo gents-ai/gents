@@ -39,15 +39,28 @@ pub struct AgentRequest {
     pub deadline: Option<String>,
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
+    pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
+    pub caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
+    let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
+    let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
     let request_only_control_link =
         has_parent_req && !has_parent_tc && (is_steering_queue(req) || is_goal_queue(req));
+    if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
     if has_parent_req != has_parent_tc && !request_only_control_link {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
+    if req.subagent_depth > 0
+        && !request_only_control_link
+        && !(has_parent_req && has_parent_tc && has_parent_req_doc && has_parent_tc_doc)
+    {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     let is_top_level = !has_parent_req;

@@ -126,6 +126,16 @@
                       "id": {
                         "type": "string"
                       },
+                      "reasoning": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "request_id": {
                         "anyOf": [
                           {
@@ -360,6 +370,29 @@
             }
           ]
         },
+        "rendered_request_refs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capture_doc_id": {
+                "type": "string"
+              },
+              "request_commit_cid": {
+                "type": "string"
+              },
+              "request_doc_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "capture_doc_id",
+              "request_doc_id",
+              "request_commit_cid"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
         "runtime": {
           "const": "gents"
         },
@@ -368,6 +401,9 @@
         },
         "source_projection_version": {
           "const": "v1"
+        },
+        "source_version_status": {
+          "const": "current_state_captured_only"
         }
       },
       "required": [
@@ -542,6 +578,16 @@
       ]
     },
     "source_behavior_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_request_doc_id": {
       "anyOf": [
         {
           "type": "string"

@@ -22,6 +22,8 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default)]
+    pub compactions: Vec<TimelineCompactionRow>,
+    #[serde(default)]
     pub responses: Vec<TimelineResponseRow>,
     #[serde(default)]
     pub rendered_requests: Vec<TimelineRenderedRequestRow>,
@@ -94,15 +96,21 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interrupt_requested_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caused_by_parent_request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caused_by_parent_tool_call_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_origin: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_trigger_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caused_by_trigger_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_source_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_parent_request_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub caused_by_parent_request_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub caused_by_parent_tool_call_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_origin: Option<String>,
     #[serde(default, skip_serializing_if = "RetrySummary::is_empty")]
     pub retry_summary: RetrySummary,
 }
@@ -129,6 +137,8 @@ pub struct TimelineMessageRow {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub request_doc_id: Option<String>,
     #[serde(default)]
     pub sequence: i64,
     #[serde(default)]
@@ -147,6 +157,8 @@ pub struct TimelineResponseRow {
     pub doc_id: Option<String>,
     #[serde(default)]
     pub request_id: String,
+    #[serde(default, skip_serializing)]
+    pub request_doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -185,6 +197,8 @@ pub struct TimelineInferenceCallRow {
     pub call_id: String,
     #[serde(default)]
     pub request_id: String,
+    #[serde(default, skip_serializing)]
+    pub request_doc_id: Option<String>,
     #[serde(default)]
     pub call_seq: i64,
     #[serde(default)]
@@ -258,6 +272,8 @@ pub struct TimelineToolCallRow {
     pub doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub request_doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -315,6 +331,32 @@ pub struct TimelineToolCallRow {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCompactionRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub compaction_key: String,
+    #[serde(default)]
+    pub request_id: String,
+    #[serde(default, skip_serializing)]
+    pub request_doc_id: Option<String>,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub sequence: i64,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub messages_compacted: i64,
+    #[serde(default)]
+    pub original_tokens: i64,
+    #[serde(default)]
+    pub compacted_tokens: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
     #[serde(default, rename = "_docID", skip_serializing)]
     pub doc_id: Option<String>,
@@ -368,9 +410,24 @@ pub enum RunTimelineEvent {
     Request(TimelineRequestEvent),
     RenderedRequest(TimelineRenderedRequestEvent),
     InferenceCall(TimelineInferenceCallEvent),
+    Compaction(TimelineCompactionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
     Response(TimelineResponseEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCompactionEvent {
+    pub compaction_key: String,
+    pub request_id: String,
+    pub session_id: String,
+    pub sequence: i64,
+    pub summary: String,
+    pub messages_compacted: i64,
+    pub original_tokens: i64,
+    pub compacted_tokens: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,6 +437,12 @@ pub struct TimelineRequestEvent {
     pub parent_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caused_by_trigger_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caused_by_trigger_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caused_by_source_doc_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -572,17 +635,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     let session_id = rows.request.session_id.clone();
     let mut included_request_ids = BTreeSet::from([root_request_id.clone()]);
     for request in &rows.requests {
-        if request
-            .caused_by_parent_request_id
-            .as_deref()
-            .is_some_and(|parent| parent == root_request_id)
+        if request.request_id != root_request_id
+            && child_bridge_is_corroborated(&rows.request, request, &rows.tool_calls)
         {
             included_request_ids.insert(request.request_id.clone());
-        }
-    }
-    for tool_call in &rows.tool_calls {
-        if let Some(child_request_id) = nonempty(tool_call.child_request_id.as_deref()) {
-            included_request_ids.insert(child_request_id.to_string());
         }
     }
     let inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
@@ -628,6 +684,22 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
             events.push(RunTimelineEvent::RenderedRequest(rendered_request_event(
                 rendered,
             )));
+        }
+    }
+
+    for compaction in &rows.compactions {
+        if included_request_ids.contains(&compaction.request_id) {
+            events.push(RunTimelineEvent::Compaction(TimelineCompactionEvent {
+                compaction_key: compaction.compaction_key.clone(),
+                request_id: compaction.request_id.clone(),
+                session_id: compaction.session_id.clone(),
+                sequence: compaction.sequence,
+                summary: compaction.summary.clone(),
+                messages_compacted: compaction.messages_compacted,
+                original_tokens: compaction.original_tokens,
+                compacted_tokens: compaction.compacted_tokens,
+                timestamp: compaction.created_at.clone(),
+            }));
         }
     }
 
@@ -689,7 +761,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 await_mode: tool_call.await_mode.clone(),
                 cancel_policy: tool_call.cancel_policy.clone(),
                 cancel_cause: tool_call.cancel_cause.clone(),
-                child_request_id: tool_call.child_request_id.clone(),
+                child_request_id: tool_call
+                    .child_request_id
+                    .clone()
+                    .filter(|request_id| included_request_ids.contains(request_id)),
                 started_at: tool_call.started_at.clone(),
                 completed_at: tool_call.completed_at.clone(),
             }));
@@ -702,9 +777,9 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 request_id: response.request_id.clone(),
                 session_id: response.session_id.clone(),
                 status: response.status.clone(),
-                content: response.content.clone(),
-                reasoning: response.reasoning.clone(),
-                error_message: response.error_message.clone(),
+                content: nonempty(response.content.as_deref()).map(ToOwned::to_owned),
+                reasoning: nonempty(response.reasoning.as_deref()).map(ToOwned::to_owned),
+                error_message: nonempty(response.error_message.as_deref()).map(ToOwned::to_owned),
                 materialized_message_sequence: response.materialized_message_sequence,
                 timestamp: first_nonempty([
                     response.completed_at.as_deref(),
@@ -746,6 +821,54 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         rendered_request_refs: rows.rendered_request_refs,
         events,
     }
+}
+
+fn child_bridge_is_corroborated(
+    root_request: &TimelineRequestRow,
+    child_request: &TimelineRequestRow,
+    tool_calls: &[TimelineToolCallRow],
+) -> bool {
+    let Some(root_doc_id) = nonempty(root_request.doc_id.as_deref()) else {
+        return false;
+    };
+    if nonempty(child_request.caused_by_parent_request_id.as_deref())
+        != Some(root_request.request_id.as_str())
+        || nonempty(child_request.caused_by_parent_request_doc_id.as_deref()) != Some(root_doc_id)
+    {
+        return false;
+    }
+    if request_only_control_link_is_corroborated(child_request) {
+        return true;
+    }
+    let (Some(parent_tool_doc_id), Some(parent_tool_call_id)) = (
+        nonempty(child_request.caused_by_parent_tool_call_doc_id.as_deref()),
+        nonempty(child_request.caused_by_parent_tool_call_id.as_deref()),
+    ) else {
+        return false;
+    };
+    tool_calls.iter().any(|tool_call| {
+        nonempty(tool_call.doc_id.as_deref()) == Some(parent_tool_doc_id)
+            && nonempty(tool_call.request_doc_id.as_deref()) == Some(root_doc_id)
+            && nonempty(tool_call.request_id.as_deref()) == Some(root_request.request_id.as_str())
+            && tool_call.tool_call_id == parent_tool_call_id
+            && nonempty(tool_call.child_request_id.as_deref())
+                == Some(child_request.request_id.as_str())
+    })
+}
+
+fn request_only_control_link_is_corroborated(request: &TimelineRequestRow) -> bool {
+    if nonempty(request.caused_by_parent_tool_call_id.as_deref()).is_some()
+        || nonempty(request.caused_by_parent_tool_call_doc_id.as_deref()).is_some()
+    {
+        return false;
+    }
+    crate::lifecycle::queue::parse_queue_hints(request.metadata.as_deref()).is_some_and(|hints| {
+        matches!(
+            hints.source,
+            crate::lifecycle::queue::QueueSource::Steering
+                | crate::lifecycle::queue::QueueSource::Goal
+        )
+    })
 }
 
 fn sorted_inference_calls(
@@ -822,6 +945,9 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         request_id: request.request_id.clone(),
         parent_request_id: request.caused_by_parent_request_id.clone(),
         parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
+        caused_by_trigger_id: request.caused_by_trigger_id.clone(),
+        caused_by_trigger_kind: request.caused_by_trigger_kind.clone(),
+        caused_by_source_doc_id: request.caused_by_source_doc_id.clone(),
         agent_did: request.agent_did.clone(),
         behavior_id: request.behavior_id.clone(),
         session_id: request.session_id.clone(),
@@ -1050,6 +1176,16 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             event.call_seq,
             event.call_id.clone(),
         ),
+        RunTimelineEvent::Compaction(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            3,
+            event.sequence,
+            event.compaction_key.clone(),
+        ),
         RunTimelineEvent::Message(event) => (
             event
                 .timestamp
@@ -1131,26 +1267,34 @@ mod tests {
     fn builds_ordered_timeline_with_inferred_tool_call_and_child_request() {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
+                doc_id: Some("doc-req-1".to_string()),
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
                 behavior_id: Some("amy".to_string()),
                 session_id: Some("session-1".to_string()),
                 lifecycle_state: Some("complete".to_string()),
+                caused_by_trigger_id: Some("trigger-1".to_string()),
+                caused_by_trigger_kind: Some("event".to_string()),
+                caused_by_source_doc_id: Some("source-doc-1".to_string()),
                 created_at: Some("2026-05-04T12:00:01Z".to_string()),
                 ..Default::default()
             },
             requests: vec![
                 TimelineRequestRow {
+                    doc_id: Some("doc-req-1".to_string()),
                     request_id: "req-1".to_string(),
                     session_id: Some("session-1".to_string()),
                     created_at: Some("2026-05-04T12:00:01Z".to_string()),
                     ..Default::default()
                 },
                 TimelineRequestRow {
+                    doc_id: Some("doc-child-1".to_string()),
                     request_id: "child-1".to_string(),
                     session_id: Some("session-2".to_string()),
                     caused_by_parent_request_id: Some("req-1".to_string()),
+                    caused_by_parent_request_doc_id: Some("doc-req-1".to_string()),
                     caused_by_parent_tool_call_id: Some("call-delegate".to_string()),
+                    caused_by_parent_tool_call_doc_id: Some("doc-call-delegate".to_string()),
                     created_at: Some("2026-05-04T12:00:04Z".to_string()),
                     ..Default::default()
                 },
@@ -1159,6 +1303,7 @@ mod tests {
                 doc_id: None,
                 session_id: "session-1".to_string(),
                 request_id: Some("req-1".to_string()),
+                request_doc_id: None,
                 sequence: 2,
                 role: "assistant".to_string(),
                 content: "calling tool".to_string(),
@@ -1166,6 +1311,9 @@ mod tests {
                 timestamp: Some("2026-05-04T12:00:02Z".to_string()),
             }],
             tool_calls: vec![TimelineToolCallRow {
+                doc_id: Some("doc-call-delegate".to_string()),
+                request_id: Some("req-1".to_string()),
+                request_doc_id: Some("doc-req-1".to_string()),
                 session_id: "session-1".to_string(),
                 message_sequence: Some(2),
                 tool_name: "delegate".to_string(),
@@ -1194,6 +1342,15 @@ mod tests {
         assert_eq!(timeline.child_request_ids, vec!["child-1"]);
         assert_eq!(timeline.events.len(), 5);
         assert!(matches!(timeline.events[0], RunTimelineEvent::Request(_)));
+        let RunTimelineEvent::Request(request) = &timeline.events[0] else {
+            unreachable!();
+        };
+        assert_eq!(request.caused_by_trigger_id.as_deref(), Some("trigger-1"));
+        assert_eq!(request.caused_by_trigger_kind.as_deref(), Some("event"));
+        assert_eq!(
+            request.caused_by_source_doc_id.as_deref(),
+            Some("source-doc-1")
+        );
         assert!(matches!(timeline.events[1], RunTimelineEvent::Message(_)));
         assert!(matches!(timeline.events[2], RunTimelineEvent::ToolCall(_)));
         assert!(matches!(timeline.events[3], RunTimelineEvent::Request(_)));
@@ -1527,6 +1684,120 @@ mod tests {
                 recovered: false,
             }
         );
+    }
+
+    #[test]
+    fn compaction_is_a_stably_identified_timeline_event() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-root".to_string()),
+                request_id: "req-root".to_string(),
+                session_id: Some("session-root".to_string()),
+                created_at: Some("2026-05-04T12:00:00Z".to_string()),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                doc_id: Some("doc-root".to_string()),
+                request_id: "req-root".to_string(),
+                session_id: Some("session-root".to_string()),
+                ..Default::default()
+            }],
+            compactions: vec![TimelineCompactionRow {
+                doc_id: Some("doc-compact".to_string()),
+                compaction_key: "session-root:1".to_string(),
+                request_id: "req-root".to_string(),
+                request_doc_id: Some("doc-root".to_string()),
+                session_id: "session-root".to_string(),
+                sequence: 1,
+                summary: "durable compact summary".to_string(),
+                messages_compacted: 8,
+                original_tokens: 900,
+                compacted_tokens: 120,
+                created_at: Some("2026-05-04T12:00:02Z".to_string()),
+            }],
+            ..Default::default()
+        });
+
+        let event = timeline.events.iter().find_map(|event| match event {
+            RunTimelineEvent::Compaction(event) => Some(event),
+            _ => None,
+        });
+        let event = event.expect("compaction event");
+        assert_eq!(event.compaction_key, "session-root:1");
+        assert_eq!(event.request_id, "req-root");
+        assert_eq!(event.summary, "durable compact summary");
+    }
+
+    #[test]
+    fn request_only_steering_and_goal_links_are_included_without_tool_bridges() {
+        let control_request = |request_id: &str, source: &str| TimelineRequestRow {
+            doc_id: Some(format!("doc-{request_id}")),
+            request_id: request_id.to_string(),
+            metadata: Some(format!(
+                r#"{{"queue":{{"source":"{source}","policy":"append","key":null,"queued_after_request_id":"req-root"}}}}"#
+            )),
+            caused_by_parent_request_id: Some("req-root".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+            ..Default::default()
+        };
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-root".to_string()),
+                request_id: "req-root".to_string(),
+                ..Default::default()
+            },
+            requests: vec![
+                control_request("goal-child", "goal"),
+                control_request("steering-child", "steering"),
+                control_request("ordinary-child", "user"),
+            ],
+            ..Default::default()
+        });
+
+        assert_eq!(
+            timeline.child_request_ids,
+            vec!["goal-child", "steering-child"]
+        );
+        assert!(!timeline.events.iter().any(|event| {
+            matches!(event, RunTimelineEvent::Request(request) if request.request_id == "ordinary-child")
+        }));
+    }
+
+    #[test]
+    fn logical_child_id_without_physical_bridge_is_not_emitted() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-root".to_string()),
+                request_id: "req-root".to_string(),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                doc_id: Some("doc-forged-child".to_string()),
+                request_id: "forged-child".to_string(),
+                caused_by_parent_request_id: Some("req-root".to_string()),
+                caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+                caused_by_parent_tool_call_id: Some("call-real".to_string()),
+                caused_by_parent_tool_call_doc_id: Some("doc-wrong-tool".to_string()),
+                ..Default::default()
+            }],
+            tool_calls: vec![TimelineToolCallRow {
+                doc_id: Some("doc-real-tool".to_string()),
+                request_id: Some("req-root".to_string()),
+                request_doc_id: Some("doc-root".to_string()),
+                tool_call_id: "call-real".to_string(),
+                child_request_id: Some("forged-child".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert!(timeline.child_request_ids.is_empty());
+        assert!(!timeline.events.iter().any(|event| {
+            matches!(event, RunTimelineEvent::Request(request) if request.request_id == "forged-child")
+        }));
+        assert!(!timeline.events.iter().any(|event| {
+            matches!(event, RunTimelineEvent::ToolCall(tool) if tool.child_request_id.is_some())
+        }));
     }
 
     fn inference_call(

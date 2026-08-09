@@ -183,20 +183,8 @@ async fn create_child_and_bridge(
     message_sequence: u32,
 ) -> (String, String) {
     let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
-    create_subagent_request_with_request_id(
-        node.as_ref(),
-        child_request_id.clone(),
-        parent_request_id.to_string(),
-        tool_call_id.to_string(),
-        0,
-        AGENT_DID.to_string(),
-        CHILD_BEHAVIOR_ID.to_string(),
-        format!("prompt for {tool_call_id}"),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .unwrap();
-    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(node.as_ref(), parent_request_id).await;
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         node.clone(),
@@ -217,8 +205,27 @@ async fn create_child_and_bridge(
         CancelPolicy::Cascade,
         child_request_id.clone(),
         AGENT_DID.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    let parent_tool_call_doc_id = lifecycle.doc_id().expect("bridge document id").to_string();
+
+    create_subagent_request_with_request_id(
+        node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.to_string(),
+        parent_request_doc_id,
+        tool_call_id.to_string(),
+        parent_tool_call_doc_id,
+        0,
+        AGENT_DID.to_string(),
+        CHILD_BEHAVIOR_ID.to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .unwrap();
+    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
 
     (child_request_id, child_session_id)
 }

@@ -8,9 +8,10 @@
 //! The client is DID-parameterized: [`ConfigApplyTxn::begin_local`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor — authorization is
-//! enforced at the node, not by app-level ownership checks. The CLI paths
-//! ([`ConfigAccess::execute`] / [`ConfigAccess::begin_apply_txn`]) remain
-//! identity-less, preserving their existing behavior.
+//! enforced at the node, not by app-level ownership checks. Embedded CLI paths
+//! default to the node DID and signer. HTTP paths require bearer
+//! authentication for a caller ACP identity; without it, the server still
+//! signs committed mutations as the node but evaluates the query anonymously.
 //!
 //! Write conventions (load-bearing — see `CLAUDE.md`):
 //! - every interpolated value goes through

@@ -31,7 +31,9 @@ pub const MAX_SUBAGENT_DEPTH: u32 = 3;
 pub async fn create_subagent_request(
     node: &EmbeddedNode,
     parent_request_id: String,
+    parent_request_doc_id: String,
     parent_tool_call_id: String,
+    parent_tool_call_doc_id: String,
     parent_subagent_depth: u32,
     agent_did: String,
     behavior_id: String,
@@ -43,7 +45,9 @@ pub async fn create_subagent_request(
         node,
         new_request_id,
         parent_request_id,
+        parent_request_doc_id,
         parent_tool_call_id,
+        parent_tool_call_doc_id,
         parent_subagent_depth,
         agent_did,
         behavior_id,
@@ -63,16 +67,20 @@ pub async fn create_subagent_request(
 ///
 ///   1. `parent_subagent_depth + 1 ≤ MAX_SUBAGENT_DEPTH`. Returns
 ///      `IllegalToolCallTransition::SubagentDepthExceeded` otherwise.
-///   2. Both `parent_request_id` and `parent_tool_call_id` non-empty.
+///   2. Both logical identifiers (`parent_request_id` and
+///      `parent_tool_call_id`) and both physical document identifiers
+///      (`parent_request_doc_id` and `parent_tool_call_doc_id`) are non-empty.
 ///      Returns `IllegalToolCallTransition::ParentLinkageIncoherent`
 ///      otherwise. (A child must reference both parent identifiers; the
 ///      well-formedness invariant in `watcher.rs::validate_subagent_fields`
-///      requires that `subagent_depth > 0` documents have both fields
+///      requires that `subagent_depth > 0` documents have all four fields
 ///      populated.)
-///   3. On the same-node path, `parent_request_id` resolves to an existing
-///      `AgentRequest` owned by the same `agent_did` as the child request. The
-///      trusted cross-deployment path instead requires a non-empty requester
-///      DID and treats the targeted bridge as the durable parent edge.
+///   3. On the same-node path, `parent_request_doc_id` resolves to an existing
+///      `AgentRequest` whose logical id and owner match the supplied values.
+///      Both paths require `parent_tool_call_doc_id` to resolve to an
+///      `AgentToolCall` whose request document and logical tool-call id match.
+///      The trusted cross-deployment path additionally requires a non-empty
+///      requester DID.
 ///
 /// On success returns the child `request_id`.
 ///
@@ -81,8 +89,8 @@ pub async fn create_subagent_request(
 ///     UUID.
 ///   - `lifecycle_state` is initialized to `"pending"`.
 ///   - `subagent_depth = parent_subagent_depth + 1`.
-///   - `caused_by_parent_request_id` / `caused_by_parent_tool_call_id`
-///     carry the parent linkage.
+///   - The logical and physical `caused_by_parent_*` pairs carry the parent
+///     linkage.
 ///   - Trigger lineage fields identify the bridge edge:
 ///     `caused_by_trigger_kind = "subagent"` and
 ///     `caused_by_trigger_id = parent_tool_call_id`.
@@ -91,7 +99,9 @@ pub async fn create_subagent_request_with_request_id(
     node: &EmbeddedNode,
     request_id: String,
     parent_request_id: String,
+    parent_request_doc_id: String,
     parent_tool_call_id: String,
+    parent_tool_call_doc_id: String,
     parent_subagent_depth: u32,
     agent_did: String,
     behavior_id: String,
@@ -110,6 +120,7 @@ pub async fn create_subagent_request_with_request_id(
         deadline,
         true,
         None,
+        (parent_request_doc_id, parent_tool_call_doc_id),
     )
     .await
 }
@@ -123,7 +134,9 @@ pub async fn create_subagent_request_with_trusted_parent_request_id(
     node: &EmbeddedNode,
     request_id: String,
     parent_request_id: String,
+    parent_request_doc_id: String,
     parent_tool_call_id: String,
+    parent_tool_call_doc_id: String,
     parent_subagent_depth: u32,
     agent_did: String,
     behavior_id: String,
@@ -143,6 +156,7 @@ pub async fn create_subagent_request_with_trusted_parent_request_id(
         deadline,
         false,
         Some(requester_did),
+        (parent_request_doc_id, parent_tool_call_doc_id),
     )
     .await
 }
@@ -160,6 +174,7 @@ async fn create_subagent_request_inner(
     deadline: Option<DateTime<Utc>>,
     require_parent_agent_match: bool,
     requester_did: Option<String>,
+    parent_doc_ids: (String, String),
 ) -> Result<String> {
     // 1. Depth check (pure precondition, fires before any DB I/O).
     if parent_subagent_depth >= MAX_SUBAGENT_DEPTH {
@@ -172,7 +187,12 @@ async fn create_subagent_request_inner(
     let requester_did = requester_did.map(|did| did.trim().to_owned());
 
     // 2. Coherence check (pure precondition, fires before any DB I/O).
-    if request_id.is_empty() || parent_request_id.is_empty() || parent_tool_call_id.is_empty() {
+    if request_id.is_empty()
+        || parent_request_id.is_empty()
+        || parent_tool_call_id.is_empty()
+        || parent_doc_ids.0.trim().is_empty()
+        || parent_doc_ids.1.trim().is_empty()
+    {
         return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
     }
 
@@ -181,8 +201,8 @@ async fn create_subagent_request_inner(
     // as its durable parent edge; copying the entire parent request to every
     // possible host is neither necessary nor pair-scoped (#683).
     if require_parent_agent_match {
-        let parent_agent_did = parent_request_agent_did(node, &parent_request_id).await?;
-        if parent_agent_did.as_deref() != Some(agent_did.as_str()) {
+        let parent = load_parent_request_by_doc_id(node, &parent_doc_ids.0).await?;
+        if parent.request_id != parent_request_id || parent.agent_did != agent_did {
             return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
         }
     } else if requester_did.as_deref().is_none_or(str::is_empty) {
@@ -209,6 +229,20 @@ async fn create_subagent_request_inner(
     let escaped_created_at = escape_graphql_string(&now);
     let escaped_parent_request_id = escape_graphql_string(&parent_request_id);
     let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
+    validate_parent_tool_call(
+        node,
+        &parent_doc_ids.1,
+        &parent_doc_ids.0,
+        &parent_tool_call_id,
+    )
+    .await?;
+    let parent_doc_fields = format!(
+        r#"
+                caused_by_parent_request_doc_id: "{}",
+                caused_by_parent_tool_call_doc_id: "{}","#,
+        escape_graphql_string(&parent_doc_ids.0),
+        escape_graphql_string(&parent_doc_ids.1),
+    );
     let metadata_field = selected_skill_metadata_field(&prompt_selection.selected_skill_ids);
 
     let deadline_field = deadline
@@ -246,6 +280,7 @@ async fn create_subagent_request_inner(
                 max_retries: {max_retries},
                 subagent_depth: {new_subagent_depth},
                 caused_by_parent_request_id: "{escaped_parent_request_id}",
+                {parent_doc_fields}
                 caused_by_parent_tool_call_id: "{escaped_parent_tool_call_id}",
                 caused_by_trigger_id: "{escaped_parent_tool_call_id}",
                 caused_by_trigger_kind: "subagent"
@@ -277,36 +312,80 @@ fn selected_skill_metadata_field(selected_skill_ids: &[String]) -> String {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestLookupRow {
+    request_id: String,
     agent_did: String,
 }
 
-async fn parent_request_agent_did(
+async fn load_parent_request_by_doc_id(
     node: &EmbeddedNode,
-    parent_request_id: &str,
-) -> Result<Option<String>> {
-    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
+    parent_request_doc_id: &str,
+) -> Result<ParentRequestLookupRow> {
+    let escaped_doc_id = escape_graphql_string(parent_request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_parent_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
-            ) {{ agent_did }}
+            ) {{ request_id agent_did }}
         }}"#
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
         anyhow::bail!(
-            "query parent AgentRequest for create_subagent_request failed: {:?}",
+            "query exact parent AgentRequest failed: {:?}",
             response.errors
         );
     }
-    let rows: Vec<ParentRequestLookupRow> = response
+    let mut rows: Vec<ParentRequestLookupRow> = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
-    Ok(rows.into_iter().next().map(|row| row.agent_did))
+    rows.pop()
+        .ok_or_else(|| anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent))
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentToolCallLookupRow {
+    request_doc_id: String,
+    tool_call_id: String,
+}
+
+async fn validate_parent_tool_call(
+    node: &EmbeddedNode,
+    parent_tool_call_doc_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+) -> Result<()> {
+    let tool_doc_id = escape_graphql_string(parent_tool_call_doc_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{tool_doc_id}" }} }},
+                limit: 1
+            ) {{ request_doc_id tool_call_id }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!("query parent AgentToolCall failed: {:?}", response.errors);
+    }
+    let rows: Vec<ParentToolCallLookupRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    match rows.as_slice() {
+        [row]
+            if row.request_doc_id == parent_request_doc_id
+                && row.tool_call_id == parent_tool_call_id =>
+        {
+            Ok(())
+        }
+        _ => Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent)),
+    }
 }
 
 #[cfg(test)]

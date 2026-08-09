@@ -65,7 +65,9 @@ fn request(request_id: &str) -> AgentRequest {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 
@@ -75,6 +77,9 @@ async fn current_session_id_reflects_request_scope() {
     assert_eq!(super::current_session_id(), None);
 
     let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
+    let pending = context.next_call("runtime-test");
+    assert_eq!(pending.request_id, "req-x");
+    assert_eq!(pending.request_doc_id, "doc-req-x");
     scope_request(context, async {
         assert_eq!(
             super::current_session_id().as_deref(),
@@ -185,6 +190,14 @@ fn rust_literal_call_states_from_admission_sources() -> Vec<&'static str> {
 fn assert_inference_call_rows_use_lean_vocabulary(rows: &[Value]) {
     let lean_states = lean_inference_call_states();
     for row in rows {
+        let request_doc_id = row
+            .get("request_doc_id")
+            .and_then(Value::as_str)
+            .expect("InferenceCall row must include request_doc_id");
+        assert!(
+            !request_doc_id.is_empty(),
+            "InferenceCall.request_doc_id must name the physical AgentRequest document"
+        );
         let state = row
             .get("call_state")
             .and_then(Value::as_str)
@@ -202,6 +215,7 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
             r#"{
                 InferenceCall(order: { call_seq: ASC }) {
                     request_id
+                    request_doc_id
                     call_seq
                     backend_id
                     behavior_id
@@ -1189,6 +1203,7 @@ fn pending_call(request_id: &str, backend_id: &str) -> super::controller::Pendin
         call_id: format!("call-{request_id}"),
         runtime_instance_id: "runtime-test".to_string(),
         request_id: request_id.to_string(),
+        request_doc_id: format!("doc-{request_id}"),
         call_seq: 1,
         backend_id: backend_id.to_string(),
         behavior_id: "default".to_string(),

@@ -296,6 +296,7 @@ async fn fail_routed_request(
         .begin_with_requester_did(
             &request.session_id,
             &request.request_id,
+            Some(&request.doc_id),
             behavior_id,
             request.requester_did.as_deref(),
         )

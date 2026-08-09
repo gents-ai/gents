@@ -75,8 +75,6 @@ impl DefraRenderedRequestSink {
                     model_name
                     source
                     request_json
-                    prompt_hash
-                    tools_hash
                     provenance_json
                 }}
             }}"#,
@@ -143,8 +141,6 @@ impl DefraRenderedRequestSink {
                     model_name: "{model_name}",
                     source: "{source}",
                     request_json: "{request_json}",
-                    prompt_hash: "{prompt_hash}",
-                    tools_hash: "{tools_hash}",
                     provenance_json: "{provenance_json}",
                     created_at: "{created_at}"
                 }}) {{ _docID }}
@@ -165,8 +161,6 @@ impl DefraRenderedRequestSink {
             model_name = escape_graphql_string(&rendered.model_name),
             source = escape_graphql_string(&source),
             request_json = escape_graphql_string(request_json),
-            prompt_hash = escape_graphql_string(&rendered.prompt_hash),
-            tools_hash = escape_graphql_string(&rendered.tools_hash),
             provenance_json = escape_graphql_string(provenance_json),
             created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         );
@@ -309,8 +303,6 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         "model_name": rendered.model_name,
         "source": source,
         "request_json": canonical_json(&rendered.request_json),
-        "prompt_hash": rendered.prompt_hash,
-        "tools_hash": rendered.tools_hash,
         "provenance_json": canonical_json(&rendered.provenance_json),
     })))
 }

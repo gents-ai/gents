@@ -6,6 +6,7 @@ use crate::llm::tool::ToolDyn;
 use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -215,6 +216,7 @@ struct ToolResultIdentity {
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
+    current_request_doc_id: Option<String>,
     current_requester_did: Option<String>,
     request_deadline_at: Option<DateTime<Utc>>,
     approval_required_tools: Vec<String>,
@@ -225,6 +227,12 @@ struct SessionState {
     persisted_tool_result_message_sequences: HashMap<String, u32>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
     initialized: bool,
+}
+
+#[derive(Deserialize)]
+struct ActiveRequestDocRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
 }
 
 impl SessionState {
@@ -434,6 +442,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: None,
                 current_request_id: None,
+                current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
                 approval_required_tools: Vec::new(),
@@ -476,6 +485,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
                 current_request_id: None,
+                current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
                 approval_required_tools: Vec::new(),
@@ -557,21 +567,107 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        self.set_active_request_lineage(request_id, None).await;
+        let mut state = self.state.lock().await;
+        state.current_request_id = request_id;
+        state.current_request_doc_id = None;
+        state.current_requester_did = None;
     }
 
     pub async fn set_active_request_lineage(
         &self,
         request_id: Option<String>,
         requester_did: Option<String>,
+    ) -> anyhow::Result<()> {
+        let request_doc_id = match request_id.as_deref() {
+            Some(request_id) => Some(
+                self.request_doc_id_for_request(request_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("active AgentRequest {request_id} not found"))?,
+            ),
+            None => None,
+        };
+        self.set_active_request_binding(request_id, request_doc_id, requester_did)
+            .await;
+        Ok(())
+    }
+
+    pub async fn set_active_request_binding(
+        &self,
+        request_id: Option<String>,
+        request_doc_id: Option<String>,
+        requester_did: Option<String>,
     ) {
         let mut state = self.state.lock().await;
         state.current_request_id = request_id;
+        state.current_request_doc_id = request_doc_id;
         state.current_requester_did = requester_did;
     }
 
     async fn active_requester_did(&self) -> Option<String> {
         self.state.lock().await.current_requester_did.clone()
+    }
+
+    async fn active_request_doc_id(&self) -> Option<String> {
+        self.state.lock().await.current_request_doc_id.clone()
+    }
+
+    async fn active_request_doc_id_or_reload(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        // Hooks may also be used for session-only transcript capture, where
+        // there is deliberately no AgentRequest to bind. Keep that state
+        // wholly unbound instead of trying to resolve an empty logical id.
+        if request_id.trim().is_empty() {
+            return Ok(None);
+        }
+        {
+            let state = self.state.lock().await;
+            if state.current_request_id.as_deref() != Some(request_id) {
+                anyhow::bail!("active request changed while resolving document provenance");
+            }
+            if state.current_request_doc_id.is_some() {
+                return Ok(state.current_request_doc_id.clone());
+            }
+        }
+
+        let Some(doc_id) = self.request_doc_id_for_request(request_id).await? else {
+            return Ok(None);
+        };
+        let mut state = self.state.lock().await;
+        if state.current_request_id.as_deref() != Some(request_id) {
+            anyhow::bail!("active request changed while resolving document provenance");
+        }
+        if state.current_request_doc_id.is_none() {
+            state.current_request_doc_id = Some(doc_id);
+        }
+        Ok(state.current_request_doc_id.clone())
+    }
+
+    async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
+        let request_id = crate::graphql::escape_graphql_string(request_id);
+        let query = format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                    limit: 2
+                ) {{ _docID }}
+            }}"#
+        );
+        let response = crate::graphql::graphql_with_transaction_retry(
+            self.node.as_ref(),
+            &query,
+            "resolve_active_request_doc_id",
+        )
+        .await?;
+        let mut rows = crate::graphql::rows::<ActiveRequestDocRow>(&response, "AgentRequest")?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => Ok(rows.pop().map(|row| row.doc_id)),
+            count => anyhow::bail!(
+                "active request id resolved to {count} AgentRequest documents; expected one"
+            ),
+        }
     }
 
     pub(crate) async fn register_stream_tool_call_identity(

@@ -184,8 +184,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .await?
                 .with_background_tool_registry(self.background_tool_registry.clone())
                 .with_background_execution_registry(self.background_execution_registry.clone());
-                hook.set_active_request_lineage(
+                hook.set_active_request_binding(
                     Some(request.request_id.clone()),
+                    Some(request.doc_id.clone()),
                     request.requester_did.clone(),
                 )
                 .await;
@@ -574,6 +575,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .begin_with_requester_did(
                 &request.session_id,
                 &request.request_id,
+                Some(&request.doc_id),
                 behavior_id,
                 request.requester_did.as_deref(),
             )
@@ -726,7 +728,11 @@ mod tests {
                     created_at: "{created_at}",
                     retry_count: 0,
                     max_retries: 3,
-                    subagent_depth: 1
+                    subagent_depth: 1,
+                    caused_by_parent_request_id: "parent-request",
+                    caused_by_parent_request_doc_id: "parent-request-doc",
+                    caused_by_parent_tool_call_id: "parent-tool-call",
+                    caused_by_parent_tool_call_doc_id: "parent-tool-call-doc"
                 }}) {{ _docID }}
             }}"#
         );
@@ -791,7 +797,9 @@ mod tests {
             deadline: None,
             subagent_depth: 1,
             caused_by_parent_request_id: Some("parent-request".to_string()),
+            caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
         }
     }
 

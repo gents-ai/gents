@@ -24,7 +24,7 @@ memory.
 | Collection | Scope | Branchable | Identity/version contract | Retention | Primary consumers |
 | --- | --- | --- | --- | --- | --- |
 | `InferenceBackend` | Local desired endpoint, secret, and probe observation | No | `backend_id`, `_docID`; local snapshot only | SECRET + OP | runtime reconcile, health, UI |
-| `InferenceCall` | Shared provider-attempt lifecycle | **Yes** | `call_id`, `_docID`, CID at transitions; exact request/config refs | FACT | timeline, adapters, compaction |
+| `InferenceCall` | Shared provider-attempt lifecycle | **Yes** | `call_id`, `_docID`, immutable `request_doc_id`, CID at transitions | FACT | timeline, adapters, compaction |
 | `InferenceProfile` | Shared generation and retry policy | **Yes** | `profile_id`, `_docID`, CID at use | CFG | provider assembly, directory, UI |
 | `OAuthCredential` | Local provider credential | No | `credential_id`, `_docID`; do not export ordinary CID manifests | SECRET | provider authentication |
 | `ToolServiceHealthState` | Local probe and backoff observation | No | `service_id`, `_docID` | OP | service reconcile, UI |
@@ -51,21 +51,32 @@ consumer-proven decision rather than an immediate schema split.
 | `AgentConversation` | Shared rebuildable conversation summary | Yes | `session_id`, `_docID`; source rows authoritative | PROJ | desktop, CLI, Codex shim |
 | `AgentDirectoryEntry` | Shared rebuildable availability projection | Yes | `directory_key`, `_docID`; retain config source CIDs | PROJ | discovery, UI, P2P |
 | `AgentMemory` | Shared principal memory | Yes | `memory_id`, `_docID`, CID at prompt use | MEM | memory and prompt assembly |
-| `AgentMessage` | Shared durable transcript event | Yes | `message_key`, `_docID`, fact CID | FACT | timeline, adapters, history |
+| `AgentMessage` | Shared durable transcript event | Yes | `message_key`, `_docID`, immutable `request_doc_id`, fact CID | FACT | timeline, adapters, history |
 | `AgentSession` | Shared conversation/run envelope | Yes | `session_id`, `_docID`, CID at transitions | FACT | timeline, UI, history |
 | `AgentRequest` | Shared command, input, lineage, and lifecycle | Yes | `request_id` is correlation only; `_docID` authoritative; admission/transition CID | FACT | watcher, owned loop, projections |
-| `AgentResponse` | Shared streaming/materialized response | Yes | `response_key`, `_docID`, CID at transitions | FACT | stream processor, timeline, UI |
-| `AgentToolApproval` | Shared tool decision fact | Yes | `approval_id`, `_docID`, fact CID | FACT + SEC | tool lifecycle, timeline |
-| `AgentToolCall` | Shared tool invocation lifecycle | Yes | `tool_call_key`, `_docID`, CID at transitions | FACT | owned loop, timeline, adapters |
-| `AgentToolResult` | Shared full or spilled tool output | Yes | `_docID` currently physical identity; origin edge under review | FACT | transcript/tool-output loading |
-| `CompactionEntry` | Shared transcript reduction fact | Yes | `compaction_key`, `_docID`, fact CID; source CIDs desirable | FACT | history and compaction |
+| `AgentResponse` | Shared streaming/materialized response | Yes | `response_key`, `_docID`, immutable `request_doc_id`, CID at transitions | FACT | stream processor, timeline, UI |
+| `AgentToolApproval` | Shared tool decision fact | Yes | `approval_id`, `_docID`, immutable `tool_call_doc_id`, fact CID | FACT + SEC | tool lifecycle, timeline |
+| `AgentToolCall` | Shared tool invocation lifecycle | Yes | `tool_call_key`, `_docID`, immutable `request_doc_id`, CID at transitions | FACT | owned loop, timeline, adapters |
+| `AgentToolResult` | Shared full or spilled tool output | Yes | `_docID`, immutable `tool_call_doc_id`, fact CID | FACT | transcript/tool-output loading |
+| `CompactionEntry` | Shared transcript reduction fact | Yes | `compaction_key`, `_docID`, immutable `request_doc_id`, fact CID | FACT | history and compaction |
 | `Goal` | Shared goal lifecycle | Yes | `goal_id`, `_docID`, CID at transitions | FACT | goal runtime, timeline, UI |
 | `RenderedRequest` | Shared exact provider request capture | Yes | `capture_key`, `_docID`, fact CID, exact `AgentRequest` CID | FACT | provenance, replay, debugging |
 
 Queries by `AgentRequest.request_id` must prove cardinality and fail closed on
-duplicates. `AgentToolResult` needs a durable origin edge only if its current
-load path cannot prove the originating tool call; this remains gated on the
-writer/consumer audit rather than assumed from schema shape alone.
+duplicates. Request-scoped messages, responses, and inference calls retain the
+logical id for operator correlation but bind directly to the authoritative
+`AgentRequest._docID`. Tool approvals and spilled results likewise bind to the
+exact `AgentToolCall._docID` rather than trusting a provider-supplied call id.
+Retry, supersession, and subagent lineage retain their operator-facing logical
+IDs, but each edge also records the exact parent, survivor, or bridge document
+ID. Writers validate logical and physical halves together; readers reject
+ambiguous or forged joins rather than choosing the first logical-ID match.
+
+`RenderedRequest` is the immutable provider-bound body plus the request commit
+that was current immediately before send. Timeline and adapter output is a
+`CapturedOnly` projection over that capture and the current DefraDB fact graph;
+it must not be described as a historically version-pinned reconstruction of
+every transcript/config row until those source CIDs are captured explicitly.
 
 ## Automation
 
@@ -101,13 +112,12 @@ that a split is necessary.
 
 The matrix deliberately leaves only evidence-backed work:
 
-1. Finish the writer audit: every production write must use an identity-aware
-   DefraDB path or document why its transaction path is exceptional.
-2. Finish the identifier/hash audit: keep logical IDs for correlation and
-   idempotency, but remove hashes that merely duplicate DefraDB CIDs.
-3. Resolve `AgentToolResult` origin joins from its actual writer/loader.
-4. Decide exact config and transcript CID capture from the projections and
-   replay guarantees that consume it.
-5. Exercise signed provenance plus timeline and all adapter projections through
+1. Exercise signed provenance plus timeline and all adapter projections through
    the real single-node demo. DefraDB P2P/CRDT replication is a later test of
    the same document contract, not a new runtime control plane.
+2. Add authenticated caller identity to the remote HTTP GraphQL envelope before
+   treating remote requests as caller-signed ACP evidence. Embedded runtime
+   writes and explicit local transactions already use the node signer.
+3. Decide whether a future historical-replay requirement justifies capturing
+   exact config and transcript source CIDs. Current projections deliberately
+   advertise current-snapshot `CapturedOnly` provenance instead.

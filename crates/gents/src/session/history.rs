@@ -59,7 +59,7 @@ pub(crate) async fn save_message(
     reasoning: Option<&str>,
 ) -> Result<()> {
     save_message_with_requester_did(
-        node, session_id, agent_did, None, sequence, role, content, reasoning,
+        node, session_id, agent_did, None, sequence, role, content, reasoning, None, None,
     )
     .await
 }
@@ -74,6 +74,8 @@ pub(crate) async fn save_message_with_requester_did(
     role: &str,
     content: &str,
     reasoning: Option<&str>,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
 ) -> Result<()> {
     let escaped_session_id = escape_graphql_string(session_id);
     let message_key = format!("{escaped_session_id}:{sequence}");
@@ -86,6 +88,8 @@ pub(crate) async fn save_message_with_requester_did(
         role,
         content,
         reasoning,
+        request_id,
+        request_doc_id,
         &message_key,
     )
     .await
@@ -101,6 +105,8 @@ async fn save_message_inner(
     role: &str,
     content: &str,
     reasoning: Option<&str>,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
     escaped_message_key: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -108,6 +114,8 @@ async fn save_message_inner(
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let requester_did_field = super::requester_did_create_field(requester_did);
+    let request_doc_id_field = super::request_doc_id_create_field(request_doc_id);
+    let escaped_request_id = escape_graphql_string(request_id.unwrap_or(""));
     let escaped_role = escape_graphql_string(role);
     // #492: persist the durable reasoning copy alongside content. Empty/absent
     // reasoning is written as "" so the field round-trips deterministically.
@@ -124,6 +132,8 @@ async fn save_message_inner(
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
+                    {request_doc_id_field}
+                    request_id: "{escaped_request_id}",
                     sequence: {sequence},
                     role: "{escaped_role}",
                     content: "{escaped}",
@@ -153,6 +163,7 @@ pub(crate) async fn append_message_with_requester_did(
     content: &str,
     reasoning: Option<&str>,
     request_id: Option<&str>,
+    request_doc_id: Option<&str>,
 ) -> Result<u32> {
     let mut attempts = 0;
     loop {
@@ -168,6 +179,7 @@ pub(crate) async fn append_message_with_requester_did(
             content,
             reasoning,
             request_id,
+            request_doc_id,
             None,
         )
         .await
@@ -202,6 +214,7 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
     content: &str,
     reasoning: Option<&str>,
     request_id: Option<&str>,
+    request_doc_id: Option<&str>,
     message_key: &str,
     preferred_sequence: Option<u32>,
 ) -> Result<(u32, bool)> {
@@ -228,6 +241,7 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
             content,
             reasoning,
             request_id,
+            request_doc_id,
             Some(message_key),
         )
         .await
@@ -447,6 +461,7 @@ async fn create_message(
     content: &str,
     reasoning: Option<&str>,
     request_id: Option<&str>,
+    request_doc_id: Option<&str>,
     message_key: Option<&str>,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -462,6 +477,7 @@ async fn create_message(
     // hook is built per attempt and cannot dedup in memory). Empty when the
     // write is not request-scoped (background/fork paths).
     let escaped_request_id = escape_graphql_string(request_id.unwrap_or(""));
+    let request_doc_id_field = super::request_doc_id_create_field(request_doc_id);
     let message_key = message_key
         .map(escape_graphql_string)
         .unwrap_or_else(|| format!("{escaped_session_id}:{sequence}"));
@@ -474,6 +490,7 @@ async fn create_message(
                 agent_did: "{escaped_agent_did}",
                 {requester_did_field}
                 request_id: "{escaped_request_id}",
+                {request_doc_id_field}
                 sequence: {sequence},
                 role: "{escaped_role}",
                 content: "{escaped}",

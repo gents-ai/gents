@@ -501,6 +501,8 @@ mod tests {
             "assistant",
             "child result",
             None,
+            None,
+            None,
         )
         .await
         .expect("create routed AgentMessage");
@@ -509,7 +511,7 @@ mod tests {
             agent_did,
             Duration::from_secs(60),
         )
-        .begin_with_requester_did(&session_id, &request_id, behavior_id, requester_did)
+        .begin_with_requester_did(&session_id, &request_id, None, behavior_id, requester_did)
         .await
         .expect("create routed AgentResponse");
     }

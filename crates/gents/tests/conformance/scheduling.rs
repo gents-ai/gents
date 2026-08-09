@@ -598,6 +598,7 @@ async fn fires_at_next_run_at() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-fires".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -838,6 +839,7 @@ async fn serial_skips_when_prior_active_runtime() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-serial-skip".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -968,6 +970,7 @@ async fn latest_only_supersedes_prior_fire() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-latest-only".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     let prior = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1006,6 +1009,7 @@ async fn latest_only_supersedes_prior_fire() {
     let new_lineage = TriggerLineage {
         trigger_id: Some("sched-latest-only".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     let new_fire = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1130,6 +1134,7 @@ async fn serial_gate_is_scoped_by_agent_did() {
     let lineage = TriggerLineage {
         trigger_id: Some("host-check".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1173,6 +1178,7 @@ async fn serial_gate_ignores_expired_claims() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-expired".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
     let orphan = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1241,6 +1247,7 @@ async fn supersede_only_touches_own_agent_requests() {
         let lineage = TriggerLineage {
             trigger_id: Some("host-check".to_string()),
             trigger_kind: Some("schedule".to_string()),
+            source_doc_id: None,
         };
         RequestLifecycle::materialize_claimed_with_execution_binding(
             db.node.clone(),

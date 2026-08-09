@@ -30,6 +30,7 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-e2e".to_string()),
         trigger_kind: Some("schedule".to_string()),
+        source_doc_id: None,
     };
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
@@ -51,6 +52,7 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_source_doc_id
                 execution_origin
                 lifecycle_state
             }}
@@ -81,6 +83,12 @@ async fn scheduled_fire_persists_trigger_lineage_on_agent_request() {
         row.get("caused_by_trigger_kind").and_then(|v| v.as_str()),
         Some("schedule"),
         "caused_by_trigger_kind missing or wrong: {row}"
+    );
+    assert!(
+        row.get("caused_by_source_doc_id")
+            .and_then(|v| v.as_str())
+            .is_none(),
+        "scheduled fires must not persist event source-document lineage: {row}"
     );
     assert_eq!(
         row.get("execution_origin").and_then(|v| v.as_str()),

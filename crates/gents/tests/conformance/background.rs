@@ -65,7 +65,9 @@ struct BackgroundTheoremChildRequestRow {
     deadline: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
     status: String,
     lifecycle_state: Option<String>,
 }
@@ -96,7 +98,9 @@ impl BackgroundTheoremChildRequestRow {
                 .and_then(|value| (!value.trim().is_empty()).then_some(value)),
             subagent_depth: self.subagent_depth.unwrap_or(0),
             caused_by_parent_request_id: self.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
         }
     }
 }
@@ -258,7 +262,9 @@ async fn setup_background_spawn_fixture(
     )
     .await
     .expect("resume background theorem parent hook");
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    let request_doc_id = crate::support::exact_request_doc_id(db.node.as_ref(), &request_id).await;
+    hook.set_active_request_binding(Some(request_id.clone()), Some(request_doc_id), None)
+        .await;
     hook.set_request_deadline_at(Some(parent_deadline)).await;
 
     (db, hook, session_id, request_id, parent_deadline)
@@ -438,7 +444,9 @@ async fn fetch_background_theorem_child_request(
                 deadline
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
                 status
                 lifecycle_state
             }}
@@ -475,7 +483,9 @@ async fn fetch_background_theorem_child_request_optional(
                 deadline
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
                 status
                 lifecycle_state
             }}
@@ -1833,25 +1843,13 @@ async fn seed_bridge_step_fixture(
         .await;
     }
 
-    gents::tool_call_lifecycle::create_subagent_request_with_request_id(
-        db.node.as_ref(),
-        child_request_id.clone(),
-        parent_request_id.clone(),
-        tool_call_id.clone(),
-        0,
-        AGENT_DID.to_string(),
-        "bridge-step-child".to_string(),
-        format!("prompt for {tool_call_id}"),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .expect("create bridged child request");
-
     let cancel_policy = match case.cancel_policy.as_str() {
         "cascade" => CancelPolicy::Cascade,
         "detach" => CancelPolicy::Detach,
         other => panic!("unhandled cancel policy {other}"),
     };
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &parent_request_id).await;
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.clone(),
@@ -1866,8 +1864,26 @@ async fn seed_bridge_step_fixture(
         cancel_policy,
         child_request_id.clone(),
         "did:test:target".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    let parent_tool_call_doc_id = lifecycle.doc_id().expect("bridge document id").to_string();
+
+    gents::tool_call_lifecycle::create_subagent_request_with_request_id(
+        db.node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.clone(),
+        parent_request_doc_id,
+        tool_call_id.clone(),
+        parent_tool_call_doc_id,
+        0,
+        AGENT_DID.to_string(),
+        "bridge-step-child".to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .expect("create bridged child request");
 
     (
         db,

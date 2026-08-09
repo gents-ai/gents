@@ -69,3 +69,60 @@ fn test_escape_graphql_string() {
     assert_eq!(escape_graphql_string("back\\slash"), "back\\\\slash");
     assert_eq!(escape_graphql_string("mixed\"\n\\"), "mixed\\\"\\n\\\\");
 }
+
+#[test]
+fn single_mutation_document_normalizes_create_to_add_response_key() {
+    let response = QueryResponse::success(serde_json::json!({
+        "add_AgentRequest": [{ "_docID": "doc-1" }]
+    }));
+
+    let document = single_mutation_document(&response, "create_AgentRequest")
+        .unwrap()
+        .expect("normalized mutation document");
+    assert_eq!(document["_docID"], "doc-1");
+}
+
+#[test]
+fn single_mutation_document_rejects_duplicate_normalized_keys() {
+    let response = QueryResponse::success(serde_json::json!({
+        "create_AgentRequest": { "_docID": "doc-create" },
+        "add_AgentRequest": [{ "_docID": "doc-add" }]
+    }));
+
+    let error = single_mutation_document(&response, "create_AgentRequest").unwrap_err();
+    assert!(error.to_string().contains("returned both"));
+}
+
+#[test]
+fn mutation_composite_version_rejects_concurrent_newest_heads() {
+    let response = QueryResponse::success(serde_json::json!({
+        "update_AgentRequest": [{
+            "_version": [
+                { "cid": "bafy-head-a", "height": 7, "fieldName": "_C" },
+                { "cid": "bafy-head-b", "height": 7, "fieldName": "_C" },
+                { "cid": "bafy-parent", "height": 6, "fieldName": "_C" }
+            ]
+        }]
+    }));
+
+    let error = mutation_composite_version(&response, "update_AgentRequest").unwrap_err();
+    assert!(error.to_string().contains("mutation version is ambiguous"));
+}
+
+#[test]
+fn mutation_composite_version_accepts_unique_newest_composite() {
+    let response = QueryResponse::success(serde_json::json!({
+        "add_AgentRequest": [{
+            "_version": [
+                { "cid": "bafy-field", "height": 8, "fieldName": "status" },
+                { "cid": "bafy-new", "height": 8, "fieldName": "_C" },
+                { "cid": "bafy-old", "height": 7, "fieldName": "_C" }
+            ]
+        }]
+    }));
+
+    let commit = mutation_composite_version(&response, "create_AgentRequest")
+        .unwrap()
+        .expect("composite commit");
+    assert_eq!(commit.cid, "bafy-new");
+}

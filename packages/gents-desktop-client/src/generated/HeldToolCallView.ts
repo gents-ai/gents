@@ -3,4 +3,4 @@
 /**
  * One tool call held in `awaitingApproval`, as shown in the Holds strip.
  */
-export type HeldToolCallView = { toolCallId: string, requestId: string | null, sessionId: string | null, agentDid: string | null, toolName: string | null, args: string | null, deadlineAt: string | null, };
+export type HeldToolCallView = { toolCallDocId: string, toolCallId: string, requestId: string | null, sessionId: string | null, agentDid: string | null, toolName: string | null, args: string | null, deadlineAt: string | null, };

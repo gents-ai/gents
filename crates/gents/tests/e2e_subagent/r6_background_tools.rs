@@ -981,7 +981,8 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     .await;
     let requester_did = "did:key:same-requester";
     hook.set_active_request_lineage(Some(origin_request_id), Some(requester_did.to_string()))
-        .await;
+        .await
+        .unwrap();
 
     let receipt = skip_reason_json(
         hook.on_tool_call(
@@ -1004,7 +1005,8 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     )
     .await;
     hook.set_active_request_lineage(Some(next_request_id), Some(requester_did.to_string()))
-        .await;
+        .await
+        .unwrap();
 
     let listed = skip_reason_json(
         hook.on_tool_call("list_processes", None, "meta-list-cross-turn", r#"{}"#)
@@ -1063,7 +1065,8 @@ async fn process_controls_deny_different_requester_in_same_session() {
     )
     .await;
     hook.set_active_request_lineage(Some(request_id.clone()), Some("did:key:owner".to_string()))
-        .await;
+        .await
+        .unwrap();
     let receipt = skip_reason_json(
         hook.on_tool_call(
             "spawn_process",
@@ -1075,11 +1078,18 @@ async fn process_controls_deny_different_requester_in_same_session() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    hook.set_active_request_lineage(
-        Some(format!("{request_id}-other")),
-        Some("did:key:other".to_string()),
+    let other_request_id = format!("{request_id}-other");
+    crate::support::create_request(
+        db.node.as_ref(),
+        &other_request_id,
+        &session_id,
+        "processing",
+        "2026-05-14T00:00:02Z",
     )
     .await;
+    hook.set_active_request_lineage(Some(other_request_id), Some("did:key:other".to_string()))
+        .await
+        .unwrap();
     let listed = skip_reason_json(
         hook.on_tool_call("list_processes", None, "meta-list-cross-requester", r#"{}"#)
             .await,
@@ -1121,7 +1131,8 @@ async fn process_controls_deny_different_requester_in_same_session() {
     assert_eq!(row.cancel_cause.as_deref(), None);
 
     hook.set_active_request_lineage(Some(request_id), Some("did:key:owner".to_string()))
-        .await;
+        .await
+        .unwrap();
     let _ = hook
         .on_tool_call(
             "cancel_process",

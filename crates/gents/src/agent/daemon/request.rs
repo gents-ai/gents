@@ -216,6 +216,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             &request.session_id,
                             &request.agent_did,
                             request.requester_did.as_deref(),
+                            &request.request_id,
+                            &request.doc_id,
                             &summary,
                             &result.files_read,
                             &result.files_modified,
@@ -275,6 +277,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .begin_with_requester_did(
                     &request.session_id,
                     &request.request_id,
+                    Some(&request.doc_id),
                     lifecycle.behavior_id(),
                     request.requester_did.as_deref(),
                 )

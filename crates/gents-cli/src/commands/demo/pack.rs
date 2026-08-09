@@ -21,7 +21,7 @@ use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
 use crate::desired_state::interpolate::interpolate;
 use crate::graphql_access::post_graphql;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, validate_collection_identifier};
 
 #[derive(Debug, Deserialize)]
 struct PackManifest {
@@ -69,6 +69,18 @@ struct PackExpect {
     projections: Vec<String>,
     #[serde(default)]
     signed_provenance: bool,
+    #[serde(default)]
+    required_tool_call_trigger_ids: Vec<String>,
+    #[serde(default)]
+    source_edges: Vec<SourceEdgeExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceEdgeExpectation {
+    producer_trigger_id: String,
+    producer_tool_name: String,
+    consumer_trigger_id: String,
+    source_collection: String,
 }
 
 /// Resolve a pack by path, or by name under `demo/`.
@@ -229,6 +241,7 @@ struct StageResult {
     trigger_id: String,
     request_id: String,
     lifecycle_state: String,
+    caused_by_source_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,7 +250,23 @@ struct StageProvenance {
     request_doc_id: String,
     rendered_request_count: usize,
     request_commit_cids: Vec<String>,
+    request_fact_counts: BTreeMap<String, usize>,
     signer_identity: String,
+}
+
+#[derive(Debug, Clone)]
+struct SourceEdgeEvidence {
+    producer_trigger_id: String,
+    producer_request_id: String,
+    producer_request_doc_id: String,
+    producer_tool_name: String,
+    producer_tool_call_doc_id: String,
+    source_collection: String,
+    source_doc_id: String,
+    source_commit_cids: Vec<String>,
+    consumer_trigger_id: String,
+    consumer_request_id: String,
+    consumer_request_doc_id: String,
 }
 
 async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Value>> {
@@ -279,10 +308,75 @@ fn commit_has_signer(commit: &Value, signer_identity: &str) -> bool {
         == Some(signer_identity)
 }
 
+fn require_signed_commits(
+    collection: &str,
+    doc_id: &str,
+    commits: &[Value],
+    signer_identity: &str,
+) -> Result<()> {
+    if commits.is_empty() {
+        bail!("{collection} {doc_id} has no composite commits");
+    }
+    if let Some(unsigned) = commits
+        .iter()
+        .find(|commit| !commit_has_signer(commit, signer_identity))
+    {
+        bail!(
+            "{collection} {doc_id} commit {} was not signed by the node identity",
+            unsigned
+                .get("cid")
+                .and_then(Value::as_str)
+                .unwrap_or("(unknown)")
+        );
+    }
+    Ok(())
+}
+
+async fn verify_request_fact_collection(
+    graphql: &str,
+    stage: &StageResult,
+    request_doc_id: &str,
+    signer_identity: &str,
+    collection: &str,
+    required: bool,
+    extra_fields: &str,
+) -> Result<Vec<Value>> {
+    let query = format!(
+        r#"{{ {collection}(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{
+            _docID
+            request_doc_id
+            {extra_fields}
+        }} }}"#,
+        escape_graphql_string(request_doc_id),
+    );
+    let rows = graphql_rows(graphql, collection, &query).await?;
+    if required && rows.is_empty() {
+        bail!(
+            "completed request {} has no durable {collection} facts",
+            stage.request_id
+        );
+    }
+
+    for row in &rows {
+        let doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .with_context(|| format!("{collection} provenance query returned no _docID"))?;
+        if row.get("request_doc_id").and_then(Value::as_str) != Some(request_doc_id) {
+            bail!("{collection} {doc_id} does not point to AgentRequest {request_doc_id}");
+        }
+        let commits = composite_commits(graphql, doc_id).await?;
+        require_signed_commits(collection, doc_id, &commits, signer_identity)?;
+    }
+    Ok(rows)
+}
+
 async fn verify_stage_provenance(
     graphql: &str,
     stage: &StageResult,
     signer_identity: &str,
+    require_tool_call: bool,
 ) -> Result<StageProvenance> {
     let request_query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
@@ -303,14 +397,20 @@ async fn verify_stage_provenance(
         .context("AgentRequest provenance query returned no _docID")?
         .to_string();
     let request_commits = composite_commits(graphql, &request_doc_id).await?;
+    require_signed_commits(
+        "AgentRequest",
+        &request_doc_id,
+        &request_commits,
+        signer_identity,
+    )?;
 
     let rendered_query = format!(
-        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{
+        r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{
             _docID
             request_doc_id
             request_commit_cid
         }} }}"#,
-        escape_graphql_string(&stage.request_id),
+        escape_graphql_string(&request_doc_id),
     );
     let rendered_rows = graphql_rows(graphql, "RenderedRequest", &rendered_query).await?;
     if rendered_rows.is_empty() {
@@ -351,24 +451,258 @@ async fn verify_stage_provenance(
             bail!("AgentRequest commit {request_commit_cid} was not signed by the node identity");
         }
         let rendered_commits = composite_commits(graphql, rendered_doc_id).await?;
-        if !rendered_commits
-            .iter()
-            .any(|commit| commit_has_signer(commit, signer_identity))
-        {
-            bail!("RenderedRequest {rendered_doc_id} was not signed by the node identity");
-        }
+        require_signed_commits(
+            "RenderedRequest",
+            rendered_doc_id,
+            &rendered_commits,
+            signer_identity,
+        )?;
         request_commit_cids.push(request_commit_cid.to_string());
     }
     request_commit_cids.sort();
     request_commit_cids.dedup();
+
+    let mut request_fact_counts = BTreeMap::new();
+    for (collection, required, extra_fields) in [
+        ("AgentResponse", true, "status content reasoning"),
+        ("AgentMessage", true, "role content reasoning"),
+        ("InferenceCall", true, "call_state"),
+        (
+            "AgentToolCall",
+            require_tool_call,
+            "status tool_name result",
+        ),
+        ("CompactionEntry", false, "summary"),
+    ] {
+        let rows = verify_request_fact_collection(
+            graphql,
+            stage,
+            &request_doc_id,
+            signer_identity,
+            collection,
+            required,
+            extra_fields,
+        )
+        .await?;
+        match collection {
+            "AgentResponse"
+                if !rows.iter().any(|row| {
+                    matches!(
+                        row.get("status").and_then(Value::as_str),
+                        Some("complete" | "completed")
+                    )
+                }) =>
+            {
+                bail!(
+                    "completed request {} has no terminal AgentResponse",
+                    stage.request_id
+                );
+            }
+            "AgentMessage"
+                if !rows.iter().any(|row| {
+                    row.get("role").and_then(Value::as_str) == Some("assistant")
+                        && ["content", "reasoning"].iter().any(|field| {
+                            row.get(*field)
+                                .and_then(Value::as_str)
+                                .is_some_and(|value| !value.trim().is_empty())
+                        })
+                }) =>
+            {
+                bail!(
+                    "completed request {} has no materialized assistant AgentMessage",
+                    stage.request_id
+                );
+            }
+            _ => {}
+        }
+        request_fact_counts.insert(collection.to_string(), rows.len());
+    }
 
     Ok(StageProvenance {
         request_id: stage.request_id.clone(),
         request_doc_id,
         rendered_request_count: rendered_rows.len(),
         request_commit_cids,
+        request_fact_counts,
         signer_identity: signer_identity.to_string(),
     })
+}
+
+fn created_doc_reference<'a>(result: &'a str, collection: &str) -> Option<&'a str> {
+    let mut parts = result.split_whitespace();
+    if parts.next() != Some("created") || parts.next() != Some(collection) {
+        return None;
+    }
+    let doc_id = parts.next().filter(|value| !value.is_empty())?;
+    parts.next().is_none().then_some(doc_id)
+}
+
+fn stage_for_trigger<'a>(stages: &'a [StageResult], trigger_id: &str) -> Result<&'a StageResult> {
+    let mut matching = stages.iter().filter(|stage| stage.trigger_id == trigger_id);
+    let stage = matching
+        .next()
+        .with_context(|| format!("source edge trigger {trigger_id} produced no stage"))?;
+    if matching.next().is_some() {
+        bail!("source edge trigger {trigger_id} produced multiple stages");
+    }
+    Ok(stage)
+}
+
+fn provenance_for_stage<'a>(
+    provenance: &'a [StageProvenance],
+    stage: &StageResult,
+) -> Result<&'a StageProvenance> {
+    provenance
+        .iter()
+        .find(|evidence| evidence.request_id == stage.request_id)
+        .with_context(|| {
+            format!(
+                "source edge stage {} has no signed request provenance",
+                stage.request_id
+            )
+        })
+}
+
+async fn verify_source_edges(
+    graphql: &str,
+    expected_edges: &[SourceEdgeExpectation],
+    stages: &[StageResult],
+    provenance: &[StageProvenance],
+    signer_identity: &str,
+) -> Result<Vec<SourceEdgeEvidence>> {
+    let mut evidence = Vec::with_capacity(expected_edges.len());
+    for expected in expected_edges {
+        validate_collection_identifier(&expected.source_collection).with_context(|| {
+            format!(
+                "source edge {} -> {} has invalid source collection",
+                expected.producer_trigger_id, expected.consumer_trigger_id
+            )
+        })?;
+        let producer = stage_for_trigger(stages, &expected.producer_trigger_id)?;
+        let consumer = stage_for_trigger(stages, &expected.consumer_trigger_id)?;
+        let producer_provenance = provenance_for_stage(provenance, producer)?;
+        let consumer_provenance = provenance_for_stage(provenance, consumer)?;
+        let source_doc_id = consumer
+            .caused_by_source_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .with_context(|| {
+                format!(
+                    "consumer request {} records no caused_by_source_doc_id",
+                    consumer.request_id
+                )
+            })?;
+
+        let tool_query = format!(
+            r#"{{ AgentToolCall(filter: {{
+                request_doc_id: {{ _eq: "{}" }},
+                tool_name: {{ _eq: "{}" }}
+            }}) {{
+                _docID
+                request_doc_id
+                tool_name
+                result
+            }} }}"#,
+            escape_graphql_string(&producer_provenance.request_doc_id),
+            escape_graphql_string(&expected.producer_tool_name),
+        );
+        let tool_rows = graphql_rows(graphql, "AgentToolCall", &tool_query).await?;
+        let matching_tool_rows = tool_rows
+            .iter()
+            .filter(|row| {
+                row.get("request_doc_id").and_then(Value::as_str)
+                    == Some(producer_provenance.request_doc_id.as_str())
+                    && row.get("tool_name").and_then(Value::as_str)
+                        == Some(expected.producer_tool_name.as_str())
+                    && row
+                        .get("result")
+                        .and_then(Value::as_str)
+                        .and_then(|result| {
+                            created_doc_reference(result, &expected.source_collection)
+                        })
+                        == Some(source_doc_id)
+            })
+            .collect::<Vec<_>>();
+        if matching_tool_rows.len() != 1 {
+            bail!(
+                "producer request {} has {} {} results referencing {} {}",
+                producer.request_id,
+                matching_tool_rows.len(),
+                expected.producer_tool_name,
+                expected.source_collection,
+                source_doc_id
+            );
+        }
+        let tool_row = matching_tool_rows[0];
+        let tool_call_doc_id = tool_row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("source-edge AgentToolCall returned no _docID")?;
+        if tool_row.get("request_doc_id").and_then(Value::as_str)
+            != Some(producer_provenance.request_doc_id.as_str())
+        {
+            bail!(
+                "AgentToolCall {tool_call_doc_id} does not point to producer AgentRequest {}",
+                producer_provenance.request_doc_id
+            );
+        }
+        let tool_commits = composite_commits(graphql, tool_call_doc_id).await?;
+        require_signed_commits(
+            "AgentToolCall",
+            tool_call_doc_id,
+            &tool_commits,
+            signer_identity,
+        )?;
+
+        let source_query = format!(
+            r#"{{ {}(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
+            expected.source_collection,
+            escape_graphql_string(source_doc_id),
+        );
+        let source_rows = graphql_rows(graphql, &expected.source_collection, &source_query).await?;
+        if source_rows.len() != 1
+            || source_rows[0].get("_docID").and_then(Value::as_str) != Some(source_doc_id)
+        {
+            bail!(
+                "consumer request {} points to {} {}, which resolved to {} documents",
+                consumer.request_id,
+                expected.source_collection,
+                source_doc_id,
+                source_rows.len()
+            );
+        }
+        let source_commits = composite_commits(graphql, source_doc_id).await?;
+        require_signed_commits(
+            &expected.source_collection,
+            source_doc_id,
+            &source_commits,
+            signer_identity,
+        )?;
+        let mut source_commit_cids = source_commits
+            .iter()
+            .filter_map(|commit| commit.get("cid").and_then(Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        source_commit_cids.sort();
+        source_commit_cids.dedup();
+
+        evidence.push(SourceEdgeEvidence {
+            producer_trigger_id: producer.trigger_id.clone(),
+            producer_request_id: producer.request_id.clone(),
+            producer_request_doc_id: producer_provenance.request_doc_id.clone(),
+            producer_tool_name: expected.producer_tool_name.clone(),
+            producer_tool_call_doc_id: tool_call_doc_id.to_string(),
+            source_collection: expected.source_collection.clone(),
+            source_doc_id: source_doc_id.to_string(),
+            source_commit_cids,
+            consumer_trigger_id: consumer.trigger_id.clone(),
+            consumer_request_id: consumer.request_id.clone(),
+            consumer_request_doc_id: consumer_provenance.request_doc_id.clone(),
+        });
+    }
+    Ok(evidence)
 }
 
 async fn render_projection_artifacts(
@@ -441,7 +775,7 @@ async fn await_stages(
         let mut done: Vec<StageResult> = Vec::new();
         for trigger_id in trigger_ids {
             let query = format!(
-                r#"{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
+                r#"{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state caused_by_source_doc_id }} }}"#,
                 escape_graphql_string(trigger_id)
             );
             let Ok(resp) = post_graphql(graphql, &query).await else {
@@ -464,6 +798,10 @@ async fn await_stages(
                             .unwrap_or_default()
                             .to_string(),
                         lifecycle_state: state.to_string(),
+                        caused_by_source_doc_id: row
+                            .get("caused_by_source_doc_id")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
                     });
                     break;
                 }
@@ -666,17 +1004,34 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             let mut evidence = Vec::with_capacity(stages.len());
             for stage in &stages {
                 evidence.push(
-                    verify_stage_provenance(&graphql, stage, &signer_identity)
-                        .await
-                        .with_context(|| {
-                            format!("verifying signed provenance for {}", stage.request_id)
-                        })?,
+                    verify_stage_provenance(
+                        &graphql,
+                        stage,
+                        &signer_identity,
+                        manifest
+                            .expect
+                            .required_tool_call_trigger_ids
+                            .contains(&stage.trigger_id),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!("verifying signed provenance for {}", stage.request_id)
+                    })?,
                 );
             }
             evidence
         } else {
             Vec::new()
         };
+        let source_edges = verify_source_edges(
+            &graphql,
+            &manifest.expect.source_edges,
+            &stages,
+            &provenance,
+            &signer_identity,
+        )
+        .await
+        .context("verifying durable source edges")?;
         let projection_artifacts = render_projection_artifacts(
             &bin,
             &graphql,
@@ -690,6 +1045,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             stages,
             counts,
             provenance,
+            source_edges,
             projection_artifacts,
             prompt_tokens,
             completion_tokens,
@@ -699,15 +1055,22 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
 
     let _ = server.start_kill();
 
-    let (stages, counts, provenance, projection_artifacts, prompt_tokens, completion_tokens) =
-        match outcome {
-            Ok(values) => values,
-            Err(error) => {
-                eprintln!("\nrun failed: {error:#}");
-                eprintln!("server log: {}", log.display());
-                return Err(error);
-            }
-        };
+    let (
+        stages,
+        counts,
+        provenance,
+        source_edges,
+        projection_artifacts,
+        prompt_tokens,
+        completion_tokens,
+    ) = match outcome {
+        Ok(values) => values,
+        Err(error) => {
+            eprintln!("\nrun failed: {error:#}");
+            eprintln!("server log: {}", log.display());
+            return Err(error);
+        }
+    };
 
     let elapsed = started.elapsed();
     let mut failures: Vec<String> = Vec::new();
@@ -740,6 +1103,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "trigger_id": s.trigger_id,
             "request_id": s.request_id,
             "lifecycle_state": s.lifecycle_state,
+            "caused_by_source_doc_id": s.caused_by_source_doc_id,
         })).collect::<Vec<_>>(),
         "collection_counts": counts,
         "provenance": provenance.iter().map(|evidence| json!({
@@ -747,7 +1111,21 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "request_doc_id": evidence.request_doc_id,
             "rendered_request_count": evidence.rendered_request_count,
             "request_commit_cids": evidence.request_commit_cids,
+            "request_fact_counts": evidence.request_fact_counts,
             "signer_identity": evidence.signer_identity,
+        })).collect::<Vec<_>>(),
+        "source_edges": source_edges.iter().map(|edge| json!({
+            "producer_trigger_id": edge.producer_trigger_id,
+            "producer_request_id": edge.producer_request_id,
+            "producer_request_doc_id": edge.producer_request_doc_id,
+            "producer_tool_name": edge.producer_tool_name,
+            "producer_tool_call_doc_id": edge.producer_tool_call_doc_id,
+            "source_collection": edge.source_collection,
+            "source_doc_id": edge.source_doc_id,
+            "source_commit_cids": edge.source_commit_cids,
+            "consumer_trigger_id": edge.consumer_trigger_id,
+            "consumer_request_id": edge.consumer_request_id,
+            "consumer_request_doc_id": edge.consumer_request_doc_id,
         })).collect::<Vec<_>>(),
         "projection_artifacts": projection_artifacts,
         "prompt_tokens": prompt_tokens,
@@ -839,5 +1217,48 @@ mod tests {
             "gents behavior started behavior_id=exp-stage1",
             "ExperimentJob"
         ));
+    }
+
+    #[test]
+    fn signed_fact_gate_requires_every_composite_commit_to_have_the_node_signer() {
+        let signer = "did:key:zNode";
+        let signed = json!({
+            "cid": "bafy-signed",
+            "signature": { "identity": signer, "type": "ES256K" }
+        });
+        let unsigned = json!({ "cid": "bafy-unsigned", "signature": null });
+
+        assert!(require_signed_commits("AgentMessage", "doc-1", &[signed.clone()], signer).is_ok());
+        assert!(require_signed_commits("AgentMessage", "doc-1", &[], signer).is_err());
+        let error = require_signed_commits("AgentMessage", "doc-1", &[signed, unsigned], signer)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bafy-unsigned"), "{error}");
+    }
+
+    #[test]
+    fn created_doc_reference_requires_the_exact_collection_and_doc_token() {
+        assert_eq!(
+            created_doc_reference("created ExperimentFinding bae-source", "ExperimentFinding"),
+            Some("bae-source")
+        );
+        assert_eq!(
+            created_doc_reference("created OtherFinding bae-source", "ExperimentFinding"),
+            None
+        );
+        assert_eq!(
+            created_doc_reference(
+                "created ExperimentFinding bae-source trailing",
+                "ExperimentFinding"
+            ),
+            None
+        );
+        assert_eq!(
+            created_doc_reference(
+                "prefix created ExperimentFinding bae-source",
+                "ExperimentFinding"
+            ),
+            None
+        );
     }
 }

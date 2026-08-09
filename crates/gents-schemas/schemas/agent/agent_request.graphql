@@ -5,9 +5,11 @@ type AgentRequest @branchable {
     behavior_id: String @index
     session_id: String @index
     retry_parent_request: String
+    retry_parent_request_doc_id: String @index @immutable
     retry_root_request: String
     retry_key: String @index(unique: true) @immutable
     superseded_by_request: String
+    superseded_by_request_doc_id: String @index
     content: String
     temperature: Float
     top_p: Float
@@ -20,6 +22,7 @@ type AgentRequest @branchable {
     execution_origin: String
     caused_by_trigger_id: String @index
     caused_by_trigger_kind: String @index
+    caused_by_source_doc_id: String @index @immutable
     failure_reason: String
     terminalized_at: String @index
     terminal_redrive_attempts: Int @index
@@ -32,5 +35,7 @@ type AgentRequest @branchable {
     valid_until: String                  # NEW: RFC3339; null = no TTL
     subagent_depth: Int
     caused_by_parent_request_id: String @index
+    caused_by_parent_request_doc_id: String @index @immutable
     caused_by_parent_tool_call_id: String @index
+    caused_by_parent_tool_call_doc_id: String @index @immutable
 }

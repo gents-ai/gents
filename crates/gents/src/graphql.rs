@@ -111,8 +111,28 @@ pub fn single_mutation_document<'a>(
     response: &'a QueryResponse,
     field: &str,
 ) -> Result<Option<&'a Value>> {
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+    let Some(data) = response.data.as_ref().and_then(Value::as_object) else {
         return Ok(None);
+    };
+    let normalized_field = field
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"))
+        .or_else(|| {
+            field
+                .strip_prefix("add_")
+                .map(|collection| format!("create_{collection}"))
+        });
+    let direct = data.get(field);
+    let normalized = normalized_field
+        .as_deref()
+        .and_then(|field| data.get(field));
+    let value = match (direct, normalized) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "mutation response returned both {field} and {}; expected one normalized field",
+            normalized_field.expect("normalized field exists")
+        ),
+        (Some(value), None) | (None, Some(value)) => value,
+        (None, None) => return Ok(None),
     };
     match value {
         Value::Object(_) => Ok(Some(value)),
@@ -174,6 +194,18 @@ pub fn mutation_composite_version(
             .cmp(&left.height)
             .then_with(|| left.cid.cmp(&right.cid))
     });
+    let Some(newest) = commits.first() else {
+        return Ok(None);
+    };
+    if commits
+        .get(1)
+        .is_some_and(|candidate| candidate.height == newest.height)
+    {
+        anyhow::bail!(
+            "{field} returned multiple composite commits at newest height {}; mutation version is ambiguous",
+            newest.height
+        );
+    }
     Ok(commits.into_iter().next())
 }
 

@@ -157,6 +157,7 @@ impl AdmissionRegistry {
         use std::sync::atomic::AtomicU64;
         let context = AdmissionCallContext {
             request_id: request_id.into(),
+            request_doc_id: "doc-test".to_string(),
             backend_id: backend_id.into(),
             behavior_id: behavior_id.into(),
             agent_did: agent_did.into(),

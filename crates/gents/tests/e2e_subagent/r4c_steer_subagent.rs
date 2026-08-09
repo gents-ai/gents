@@ -678,6 +678,8 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
     .await;
 
     let grandchild_request_id = "r4c-steer-grandchild";
+    let child_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &child_request_id).await;
     let mut descendant_bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         child_request_id.clone(),
@@ -692,13 +694,20 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
         AGENT_DID.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(child_request_doc_id.clone()));
     descendant_bridge.start_running().await.unwrap();
+    let descendant_bridge_doc_id = descendant_bridge
+        .doc_id()
+        .expect("descendant bridge document id")
+        .to_string();
     let _grandchild_session_id = create_subagent_request_with_request_id(
         db.node.as_ref(),
         grandchild_request_id.to_string(),
         child_request_id.clone(),
+        child_request_doc_id,
         "internal-steer-descendant".to_string(),
+        descendant_bridge_doc_id,
         1,
         AGENT_DID.to_string(),
         CHILD_BEHAVIOR_ID.to_string(),

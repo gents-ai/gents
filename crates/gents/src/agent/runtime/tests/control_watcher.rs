@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use crate::ProcessLifecycleState;
 
 async fn update_agent_principal_enabled(
     node: &defra_node::EmbeddedNode,
@@ -50,6 +51,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    runtime_status
+        .set_process_state(ProcessLifecycleState::Recovering)
+        .await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
@@ -79,8 +83,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         shutdown_rx,
     ));
 
-    tokio::task::yield_now().await;
-    let debouncing = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let debouncing =
+        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     assert_eq!(debouncing.reconcile_phase, "debouncing");
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
     tokio::task::yield_now().await;
@@ -134,6 +138,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
     let backend_health = agent.backend_health();
     let behavior_id = agent.default_behavior_id().to_string();
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    runtime_status
+        .set_process_state(ProcessLifecycleState::Recovering)
+        .await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
     let (health_tx, health_rx) = mpsc::channel::<()>(1);
@@ -161,8 +168,8 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .await;
     health_tx.send(()).await.unwrap();
 
-    tokio::task::yield_now().await;
-    let debouncing = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let debouncing =
+        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     assert_eq!(debouncing.reconcile_phase, "debouncing");
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
     tokio::task::yield_now().await;
@@ -196,7 +203,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .await;
     health_tx.send(()).await.unwrap();
 
-    tokio::task::yield_now().await;
+    wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
     tokio::task::yield_now().await;
 
@@ -244,6 +251,9 @@ async fn control_watcher_recovers_after_resolve_error() {
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    runtime_status
+        .set_process_state(ProcessLifecycleState::Recovering)
+        .await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 
@@ -261,11 +271,11 @@ async fn control_watcher_recovers_after_resolve_error() {
     tokio::task::yield_now().await;
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), false).await;
 
-    tokio::task::yield_now().await;
+    wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
-    tokio::task::yield_now().await;
     assert!(proposal_rx.try_recv().is_err());
-    let failed_status = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let failed_status =
+        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "idle").await;
     assert_eq!(failed_status.reconcile_phase, "idle");
     assert_eq!(failed_status.active_generation, 0);
     assert_eq!(failed_status.last_reconcile_result, "error");
@@ -273,13 +283,13 @@ async fn control_watcher_recovers_after_resolve_error() {
 
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), true).await;
 
-    tokio::task::yield_now().await;
+    wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
-    tokio::task::yield_now().await;
+    let recovered_status =
+        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "resolving").await;
 
     let snapshot = proposal_rx.recv().await.expect("recovered snapshot");
     assert_eq!(snapshot.default_behavior_id, agent.default_behavior_id());
-    let recovered_status = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
     assert_eq!(recovered_status.reconcile_phase, "resolving");
 
     let _ = shutdown_tx.send(true);
@@ -313,6 +323,9 @@ async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() 
         .cloned()
         .expect("document-backed agent");
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    runtime_status
+        .set_process_state(ProcessLifecycleState::Recovering)
+        .await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
 

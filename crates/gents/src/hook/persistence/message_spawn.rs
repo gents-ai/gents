@@ -20,7 +20,13 @@ impl DefraSessionHook {
 
         let content = serde_json::to_string(message)?;
         let reasoning = gents_protocol::transcript::extract_message_reasoning(message);
-        let (session_id, building_sequence, current_request_id, current_requester_did) = {
+        let (
+            session_id,
+            building_sequence,
+            current_request_id,
+            current_request_doc_id,
+            current_requester_did,
+        ) = {
             let state = self.state.lock().await;
             let session_id = state
                 .session_id
@@ -34,6 +40,7 @@ impl DefraSessionHook {
                 session_id,
                 building_sequence,
                 state.current_request_id.clone(),
+                state.current_request_doc_id.clone(),
                 state.current_requester_did.clone(),
             )
         };
@@ -49,6 +56,8 @@ impl DefraSessionHook {
                     "assistant",
                     &content,
                     reasoning.as_deref(),
+                    current_request_id.as_deref(),
+                    current_request_doc_id.as_deref(),
                 )
                 .await?;
                 sequence
@@ -63,6 +72,7 @@ impl DefraSessionHook {
                     &content,
                     reasoning.as_deref(),
                     current_request_id.as_deref(),
+                    current_request_doc_id.as_deref(),
                 )
                 .await?
             }
@@ -94,6 +104,7 @@ impl DefraSessionHook {
             message_key,
             existing_sequence,
             current_request_id,
+            current_request_doc_id,
             current_requester_did,
             preferred_sequence,
         ) = {
@@ -118,6 +129,7 @@ impl DefraSessionHook {
                 message_key,
                 existing_sequence,
                 state.current_request_id.clone(),
+                state.current_request_doc_id.clone(),
                 state.current_requester_did.clone(),
                 state.sequence.checked_add(1),
             )
@@ -165,6 +177,7 @@ impl DefraSessionHook {
                 &content,
                 reasoning,
                 current_request_id.as_deref(),
+                current_request_doc_id.as_deref(),
                 message_key,
                 preferred_sequence,
             )
@@ -204,6 +217,7 @@ impl DefraSessionHook {
                 &content,
                 reasoning,
                 current_request_id.as_deref(),
+                current_request_doc_id.as_deref(),
             )
             .await?;
             let mut state = self.state.lock().await;
@@ -254,6 +268,8 @@ impl DefraSessionHook {
             role,
             &content,
             reasoning,
+            current_request_id.as_deref(),
+            current_request_doc_id.as_deref(),
         )
         .await?;
         Ok(sequence)
@@ -784,7 +800,8 @@ impl DefraSessionHook {
             child_request_id.clone(),
             target_agent_did,
         )
-        .with_requester_did(self.active_requester_did().await);
+        .with_requester_did(self.active_requester_did().await)
+        .with_request_doc_id(self.active_request_doc_id().await);
         if await_mode == AwaitMode::Background {
             let timeout_secs =
                 effective_context_cross_deployment_spawn_timeout_seconds(&parent_context);

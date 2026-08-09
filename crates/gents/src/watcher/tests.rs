@@ -52,6 +52,7 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
                 .to_string(),
         ),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
         ..base_request()
     };
@@ -74,7 +75,24 @@ fn validate_rejects_subagent_depth_zero_with_parent_fields() {
     let req = AgentRequest {
         subagent_depth: 0,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+}
+
+#[test]
+fn validate_rejects_logical_parent_without_physical_parent() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        metadata: Some(
+            r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":null}}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: None,
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_err());
@@ -85,7 +103,9 @@ fn validate_accepts_top_level_request() {
     let req = AgentRequest {
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_ok());
@@ -96,7 +116,9 @@ fn validate_accepts_subagent_request() {
     let req = AgentRequest {
         subagent_depth: 1,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_ok());
@@ -122,7 +144,9 @@ fn agent_request_clone() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let cloned = req.clone();
     assert_eq!(cloned.doc_id, "abc");
@@ -186,7 +210,9 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 

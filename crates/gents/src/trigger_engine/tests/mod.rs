@@ -107,6 +107,7 @@ struct MaterializeGate {
 /// to queue.
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
+    materialize_source_doc_ids: Arc<Mutex<Vec<Option<String>>>>,
     next_request_id: AtomicUsize,
     nonterminal_for: NonterminalRequests,
     /// DIDs the engine passed to the concurrency gate / supersede, in call
@@ -124,6 +125,7 @@ impl SpyMaterializer {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             materialize_calls: Arc::new(Mutex::new(Vec::new())),
+            materialize_source_doc_ids: Arc::new(Mutex::new(Vec::new())),
             next_request_id: AtomicUsize::new(0),
             nonterminal_for: Arc::new(Mutex::new(HashMap::new())),
             gate_dids: Arc::new(Mutex::new(Vec::new())),
@@ -138,6 +140,10 @@ impl SpyMaterializer {
 
     fn calls(&self) -> Vec<MaterializeCall> {
         self.materialize_calls.lock().unwrap().clone()
+    }
+
+    fn source_doc_ids(&self) -> Vec<Option<String>> {
+        self.materialize_source_doc_ids.lock().unwrap().clone()
     }
 
     fn supersede_calls(&self) -> Vec<SupersedeCall> {
@@ -222,6 +228,7 @@ impl MaterializerHandle for SpyMaterializer {
         _task: &ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        source_doc_id: Option<&str>,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
         let entry = (
@@ -230,6 +237,8 @@ impl MaterializerHandle for SpyMaterializer {
             rendered_prompt.to_owned(),
         );
         let calls = self.materialize_calls.clone();
+        let source_doc_ids = self.materialize_source_doc_ids.clone();
+        let source_doc_id = source_doc_id.map(str::to_owned);
         let nonterminal_for = self.nonterminal_for.clone();
         let nonterminal_key = trigger_id.map(|id| (id.to_owned(), trigger_kind));
         let track_materialized_nonterminal =
@@ -247,6 +256,7 @@ impl MaterializerHandle for SpyMaterializer {
                 tokio::time::sleep(d).await;
             }
             calls.lock().unwrap().push(entry);
+            source_doc_ids.lock().unwrap().push(source_doc_id);
             if let (true, Some(key)) = (track_materialized_nonterminal, nonterminal_key) {
                 nonterminal_for
                     .lock()

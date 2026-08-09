@@ -3,6 +3,8 @@ type CompactionEntry @branchable {
     session_id: String @index
     agent_did: String @index @immutable
     requester_did: String @index @immutable
+    request_id: String @index
+    request_doc_id: String @index @immutable
     sequence: Int @index
     summary: String
     files_read: String
