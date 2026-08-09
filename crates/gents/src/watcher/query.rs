@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use super::{validate_agent_request_subagent_coherence, AgentRequest, DefraWatcher};
 
-const AGENT_REQUEST_FIELDS: &str = r#"
+pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
                     agent_did
@@ -164,6 +164,18 @@ fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<A
         Some(value) => Ok(serde_json::from_value(value.clone())?),
         None => Ok(Vec::new()),
     }
+}
+
+pub(crate) fn agent_request_from_mutation_response(
+    response: &defra_node::QueryResponse,
+    field: &str,
+) -> anyhow::Result<Option<AgentRequest>> {
+    crate::graphql::single_mutation_document(response, field)?
+        .cloned()
+        .map(serde_json::from_value::<AgentRequestRow>)
+        .transpose()?
+        .map(AgentRequestRow::into_agent_request)
+        .transpose()
 }
 
 fn claimable_pending_rows(

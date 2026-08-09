@@ -245,12 +245,13 @@ impl RequestLifecycle {
             .and_then(parse_rfc3339_utc)
             .unwrap_or(synthesized_deadline_at);
         let deadline = deadline_at.to_rfc3339();
-        let doc_id = &self.request.doc_id;
+        let doc_id = self.request.doc_id.clone();
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
         let escaped_behavior_id = escape_graphql_string(&self.behavior_id);
         let execution_origin = self.execution_origin.as_str();
+        let request_fields = crate::watcher::AGENT_REQUEST_FIELDS;
 
         let mutation = format!(
             r#"mutation {{
@@ -269,7 +270,13 @@ impl RequestLifecycle {
                         claimed_at: "{escaped_claimed_at}",
                         deadline: "{escaped_deadline}"
                     }}
-                ) {{ _docID }}
+                ) {{{request_fields}
+                    status
+                    lifecycle_state
+                    interrupt_requested_at
+                    valid_until
+                    _version {{ cid height fieldName }}
+                }}
             }}"#,
             lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
         );
@@ -277,30 +284,36 @@ impl RequestLifecycle {
         let resp =
             session::execute_mutation_with_retry(&self.node, &mutation, "claim_request").await?;
 
-        if !resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("update_AgentRequest"))
-            .is_some_and(response_has_documents)
-        {
-            match self.request_status().await? {
-                Some(status) if status == "processing" => {
-                    tracing::debug!(doc_id = %doc_id, "claimed via post-update verification");
-                }
-                Some(status) => {
-                    anyhow::bail!("request {} is no longer pending (status={status})", doc_id)
-                }
-                None => anyhow::bail!("request {} disappeared while claiming", doc_id),
-            }
-        } else {
-            tracing::debug!(
-                doc_id = %doc_id,
-                deadline = %deadline,
-                backend_id = %self.backend_id,
-                execution_origin,
-                "claimed agent request with deadline"
+        let claimed_request =
+            crate::watcher::agent_request_from_mutation_response(&resp, "update_AgentRequest")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "request {doc_id} was not pending when this runtime attempted to claim it"
+                    )
+                })?;
+        let request_commit_cid =
+            crate::graphql::mutation_composite_version(&resp, "update_AgentRequest")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "claimed AgentRequest {doc_id} returned no composite DefraDB version"
+                    )
+                })?
+                .cid;
+        if claimed_request.doc_id != doc_id {
+            anyhow::bail!(
+                "claim for AgentRequest {doc_id} returned document {}",
+                claimed_request.doc_id
             );
         }
+        self.request = claimed_request;
+        self.request_commit_cid = Some(request_commit_cid);
+        tracing::debug!(
+            doc_id = %doc_id,
+            deadline = %deadline,
+            backend_id = %self.backend_id,
+            execution_origin,
+            "claimed agent request with exact DefraDB version"
+        );
 
         self.state = LocalLifecycleState::Claimed;
         self.claimed_deadline_at = Some(deadline_at);
@@ -448,6 +461,22 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )
         .await;
+        let first_doc_id = first.doc_id.clone();
+        let refresh = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{first_doc_id}" }} }},
+                    input: {{ content: "refreshed before claim" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        crate::graphql::graphql_with_transaction_retry(
+            node.as_ref(),
+            &refresh,
+            "refresh_pending_request_before_claim",
+        )
+        .await
+        .unwrap();
         let second = insert_pending_request(
             node.as_ref(),
             "same-session-request-2",
@@ -466,7 +495,7 @@ mod tests {
             TEST_BACKEND_ID,
         );
         let mut second_lifecycle = RequestLifecycle::new_with_execution_binding(
-            node,
+            node.clone(),
             TEST_BEHAVIOR_ID,
             TEST_AGENT_DID,
             second,
@@ -478,6 +507,47 @@ mod tests {
         assert_eq!(
             first_lifecycle.claim_with_identity().await.unwrap(),
             ClaimOutcome::Claimed
+        );
+        assert_eq!(
+            first_lifecycle.request().content,
+            "refreshed before claim",
+            "the runtime must process fields returned by the claim mutation, not a stale watcher row"
+        );
+        let claimed_cid = first_lifecycle
+            .request_commit_cid()
+            .expect("successful claim records its exact DefraDB commit")
+            .to_string();
+
+        let post_claim_update = format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{first_doc_id}" }} }},
+                    input: {{ content: "changed after claim" }}
+                ) {{ _docID }}
+            }}"#
+        );
+        crate::graphql::graphql_with_transaction_retry(
+            node.as_ref(),
+            &post_claim_update,
+            "update_request_after_claim",
+        )
+        .await
+        .unwrap();
+        let commits = crate::graphql::composite_commits(
+            node.as_ref(),
+            &first_doc_id,
+            "verify_exact_claim_version",
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            commits.first().map(|commit| commit.cid.as_str()),
+            Some(claimed_cid.as_str()),
+            "a later update must not rebind the lifecycle's request version"
+        );
+        assert!(
+            commits.iter().any(|commit| commit.cid == claimed_cid),
+            "the recorded claim CID must be a real composite commit"
         );
         assert_eq!(
             second_lifecycle.claim_with_identity().await.unwrap(),

@@ -774,11 +774,6 @@ async fn update_conversation_status_by_doc_id(
         latest_request_id = escape_graphql_string(&canonical.latest_request_id),
     );
 
-    let resp =
-        crate::retry::execute_graphql_with_conflict_retry(node, &mutation, "recover_conversation")
-            .await;
-    if resp.has_errors() {
-        anyhow::bail!("recovering conversation doc_id={doc_id}: {:?}", resp.errors);
-    }
+    crate::graphql::graphql_with_transaction_retry(node, &mutation, "recover_conversation").await?;
     Ok(())
 }

@@ -1385,6 +1385,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
     let context = RenderedRequestContext {
         request_doc_id: "doc-1".to_string(),
+        request_commit_cid: "bafy-request-commit".to_string(),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),
@@ -1440,6 +1441,7 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
     let model = ScriptedModel::new(Vec::new());
     let context = RenderedRequestContext {
         request_doc_id: "doc-empty".to_string(),
+        request_commit_cid: "bafy-request-commit".to_string(),
         request_id: "req-empty".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

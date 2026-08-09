@@ -1,4 +1,4 @@
-type ConsumedInviteNonce {
+type ConsumedInviteNonce @branchable {
     # The single-use nonce of a pairing-invite token that has been redeemed by a
     # join. The unique index makes the join atomic with respect to replay: the
     # first join records the nonce; any later join presenting the same token

@@ -1255,6 +1255,7 @@ async fn load_tool_calls(
                 limit: {limit}
             ) {{
                 session_id
+                request_id
                 message_sequence
                 tool_name
                 tool_call_id
@@ -1275,7 +1276,7 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
                 request_id
                 agent_did
@@ -1293,11 +1294,14 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
         }}"#,
         escape_graphql_string(request_id)
     );
-    load_rows::<RequestRow>(access, "AgentRequest", &query)
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+    let mut rows = load_rows::<RequestRow>(access, "AgentRequest", &query).await?;
+    match rows.len() {
+        0 => Err(anyhow::anyhow!("request {request_id} not found")),
+        1 => Ok(rows.remove(0)),
+        count => anyhow::bail!(
+            "request_id {request_id} is ambiguous across {count} AgentRequest documents"
+        ),
+    }
 }
 
 async fn load_requests_for_sessions(
@@ -1530,6 +1534,20 @@ fn infer_request_for_tool_call<'a>(
     requests: &[&'a RequestRow],
     responses: &[&ResponseRow],
 ) -> Option<&'a RequestRow> {
+    if let Some(request_id) = tool_call
+        .request_id
+        .as_deref()
+        .filter(|request_id| !request_id.is_empty())
+    {
+        // AgentToolCall.request_id is the durable provenance edge. If it names
+        // a request that was not loaded, do not silently reassign the call by
+        // timestamp or message position.
+        return requests
+            .iter()
+            .copied()
+            .find(|request| request.request_id == request_id);
+    }
+
     if let Some(sequence) = tool_call.message_sequence {
         if let Some(response) = responses
             .iter()
@@ -1693,6 +1711,8 @@ trait HasSessionId {
 struct ToolCallRow {
     #[serde(default)]
     session_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
     #[serde(default)]
     message_sequence: Option<i64>,
     #[serde(default)]
@@ -2372,6 +2392,7 @@ mod tests {
     fn empty_tool_call() -> ToolCallRow {
         ToolCallRow {
             session_id: String::new(),
+            request_id: None,
             message_sequence: None,
             tool_name: String::new(),
             tool_call_id: String::new(),

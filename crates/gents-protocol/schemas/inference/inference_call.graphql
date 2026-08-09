@@ -1,4 +1,4 @@
-type InferenceCall {
+type InferenceCall @branchable {
     call_id: String @index(unique: true)
     runtime_instance_id: String @index
     request_id: String @index

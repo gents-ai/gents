@@ -1,4 +1,4 @@
-type ToolServiceRegistry {
+type ToolServiceRegistry @branchable {
     service_id: String @index(unique: true)
     display_name: String
     description: String

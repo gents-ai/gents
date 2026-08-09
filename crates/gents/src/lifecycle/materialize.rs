@@ -142,18 +142,12 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::retry::execute_graphql_with_conflict_retry(
+    let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &mutation,
         "materialize_pending_agent_request",
     )
-    .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "create pending AgentRequest with trigger lineage failed: {:?}",
-            response.errors
-        );
-    }
+    .await?;
 
     let doc_id = resolve_created_agent_request_doc_id(
         node,
@@ -247,6 +241,7 @@ impl RequestLifecycle {
             backend_id: backend_id.into(),
             failure_reason: None,
             request,
+            request_commit_cid: None,
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
@@ -320,21 +315,21 @@ impl RequestLifecycle {
                     deadline: "{escaped_deadline}",
                     retry_count: 0,
                     max_retries: {max_retries}
-                }}) {{ _docID }}
+                }}) {{
+                    _docID
+                    _version {{ cid height fieldName }}
+                }}
             }}"#,
             lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
 
-        let resp = crate::retry::execute_graphql_with_conflict_retry(
+        let resp = crate::graphql::graphql_with_transaction_retry(
             node.as_ref(),
             &mutation,
             "materialize_claimed_agent_request",
         )
-        .await;
-        if resp.has_errors() {
-            anyhow::bail!("creating claimed AgentRequest failed: {:?}", resp.errors);
-        }
+        .await?;
 
         let doc_id = resolve_created_agent_request_doc_id(
             node.as_ref(),
@@ -345,26 +340,14 @@ impl RequestLifecycle {
             "add_AgentRequest returned no _docID",
         )
         .await?;
-
-        let lineage_mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                    input: {{
-                        retry_parent_request: "",
-                        retry_root_request: "{escaped_retry_root_request}",
-                        superseded_by_request: ""
-                    }}
-                ) {{ _docID }}
-            }}"#,
-        );
-        let lineage_resp = node.execute(&lineage_mutation).await;
-        if lineage_resp.has_errors() {
-            anyhow::bail!(
-                "persisting request lineage for materialized AgentRequest failed: {:?}",
-                lineage_resp.errors
-            );
-        }
+        let request_commit_cid =
+            crate::graphql::mutation_composite_version(&resp, "add_AgentRequest")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "materialized AgentRequest {doc_id} returned no composite version"
+                    )
+                })?
+                .cid;
 
         let request = AgentRequest {
             doc_id,
@@ -408,6 +391,7 @@ impl RequestLifecycle {
             backend_id,
             failure_reason: None,
             request,
+            request_commit_cid: Some(request_commit_cid),
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,

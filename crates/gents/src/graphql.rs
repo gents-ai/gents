@@ -16,9 +16,214 @@
 //! `EventTrigger.filter` is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::Value;
+
 pub use gents_protocol::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
 };
+
+pub const DEFRA_DB_CONFLICT_MAX_RETRIES: u32 = 3;
+pub const DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS: u64 = 100;
+
+const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
+    Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
+    Duration::from_millis(800),
+);
+
+/// Execute GraphQL through the node's identity-aware retry path.
+///
+/// This is the low-level form for callers that intentionally inspect GraphQL
+/// errors. Most callers should use [`graphql_with_transaction_retry`].
+pub async fn graphql_response_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> QueryResponse {
+    let started = std::time::Instant::now();
+    let response = node.execute_with_retry(graphql, GRAPHQL_RETRY_POLICY).await;
+    let elapsed = started.elapsed();
+    if elapsed > Duration::from_secs(1) {
+        tracing::warn!(
+            operation,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "DefraDB GraphQL completed"
+        );
+    } else {
+        tracing::debug!(
+            operation,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "DefraDB GraphQL completed"
+        );
+    }
+    response
+}
+
+/// Execute identity-aware GraphQL with transaction-conflict retry and fail on
+/// GraphQL errors.
+pub async fn graphql_with_transaction_retry(
+    node: &EmbeddedNode,
+    graphql: &str,
+    operation: &str,
+) -> Result<QueryResponse> {
+    let response = graphql_response_with_transaction_retry(node, graphql, operation).await;
+    ensure_no_errors(&response, operation)?;
+    Ok(response)
+}
+
+pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
+    if response.has_errors() {
+        anyhow::bail!("{operation} failed: {:?}", response.errors);
+    }
+    Ok(())
+}
+
+pub fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+}
+
+pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    Ok(rows(response, field)?.into_iter().next())
+}
+
+/// Return the single document selected by a create/update mutation.
+///
+/// DefraDB has returned both an object and a one-element array for mutation
+/// fields across API generations. Normalizing that shape here keeps callers
+/// from growing subtly different response parsers. More than one row is an
+/// error because none of the provenance-bearing mutations are bulk writes.
+pub fn single_mutation_document<'a>(
+    response: &'a QueryResponse,
+    field: &str,
+) -> Result<Option<&'a Value>> {
+    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Object(_) => Ok(Some(value)),
+        Value::Array(rows) => match rows.as_slice() {
+            [] => Ok(None),
+            [row] => Ok(Some(row)),
+            _ => anyhow::bail!(
+                "{field} returned {} documents; expected at most one",
+                rows.len()
+            ),
+        },
+        _ => anyhow::bail!("{field} returned an unexpected mutation response shape"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CompositeCommit {
+    pub cid: String,
+    pub height: i64,
+    #[serde(rename = "fieldName")]
+    pub field_name: String,
+    #[serde(default)]
+    pub signature: Option<CommitSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CommitSignature {
+    #[serde(default)]
+    pub identity: String,
+    #[serde(rename = "type", default)]
+    pub signature_type: String,
+}
+
+/// Read the exact newest composite commit exposed by a mutation's `_version`
+/// selection. DefraDB returns the full version history newest-first today; we
+/// still sort explicitly so the contract does not depend on response order.
+pub fn mutation_composite_version(
+    response: &QueryResponse,
+    field: &str,
+) -> Result<Option<CompositeCommit>> {
+    let Some(document) = single_mutation_document(response, field)? else {
+        return Ok(None);
+    };
+    let versions = document
+        .get("_version")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("{field} returned no _version array"))?;
+    let mut commits = versions
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<CompositeCommit>)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect::<Vec<_>>();
+    commits.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| left.cid.cmp(&right.cid))
+    });
+    Ok(commits.into_iter().next())
+}
+
+/// Load a document's DefraDB-native composite versions, newest first.
+///
+/// The returned CID is the time-travel reference; signature fields are the
+/// stored commit evidence and must not be confused with application DID
+/// columns on the document.
+pub async fn composite_commits(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    operation: &str,
+) -> Result<Vec<CompositeCommit>> {
+    let query = format!(
+        r#"query {{
+            _commits(docID: "{}") {{
+                cid
+                height
+                fieldName
+                signature {{ identity type }}
+            }}
+        }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let response = graphql_with_transaction_retry(node, &query, operation).await?;
+    // DefraDB applies this filter in memory and an invalid GraphQL filter can
+    // degrade to no filter. Fetch the field name and enforce the composite
+    // selection here instead of trusting that behavior.
+    let mut commits = rows::<CompositeCommit>(&response, "_commits")?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect::<Vec<_>>();
+    commits.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| left.cid.cmp(&right.cid))
+    });
+    Ok(commits)
+}
+
+pub fn is_defradb_transaction_conflict_text(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("transaction conflict")
+}
+
+pub fn defradb_conflict_retry_backoff(retry_index: u32) -> Duration {
+    Duration::from_millis(
+        DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS.saturating_mul(1u64 << retry_index.min(10)),
+    )
+}
 
 pub fn escape_graphql_string(s: &str) -> String {
     s.replace('\\', "\\\\")

@@ -101,7 +101,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 
-    let node = crate::persistent_node_builder(&data_dir)
+    let node = crate::persistent_node_builder_with_stored_identity(&home, &data_dir)?
         .build()
         .await
         .with_context(|| {

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::render::{render_filter, validate_identifier};
+use crate::graphql::{graphql_response_with_transaction_retry, graphql_with_transaction_retry};
 
 pub const DEFAULT_LIMIT: u32 = 50;
 pub const MAX_LIMIT: u32 = 1000;
@@ -210,13 +211,8 @@ pub(crate) async fn fetch_collection_schema(
     collection: &str,
 ) -> Result<Option<super::schema::CollectionSchema>> {
     let query = super::schema::introspection_query(collection)?;
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        bail!(
-            "schema introspection for {collection:?} failed: {:?}",
-            resp.errors
-        );
-    }
+    let operation = format!("schema introspection for {collection:?}");
+    let resp = graphql_with_transaction_retry(node, &query, &operation).await?;
     Ok(super::schema::parse_collection_schema(resp.data.as_ref()))
 }
 
@@ -226,7 +222,9 @@ pub(crate) async fn execute_query(
     scope: &CollectionScope,
 ) -> Result<Value> {
     let query = build_query(params, scope)?;
-    let resp = node.execute(&query).await;
+    // Keep the raw response here because this tool enriches DefraDB's error
+    // with a collection-schema diagnostic before returning it to the agent.
+    let resp = graphql_response_with_transaction_retry(node, &query, "defra_query").await;
     if resp.has_errors() {
         let raw = format!("{:?}", resp.errors);
         let diagnostic = match fetch_collection_schema(node, &params.collection).await {

@@ -192,6 +192,30 @@ impl<'a> ConfigApplyTxn<'a> {
 }
 
 impl ConfigAccess {
+    /// Execute and commit one statement through the authoritative path for the
+    /// selected backend.
+    ///
+    /// Embedded nodes use `EmbeddedNode::execute_with_retry` via
+    /// `ConfigAccess::execute`, which installs the node's commit-signing
+    /// context. HTTP uses an explicit transaction so the server publishes the
+    /// commit event consumed by a running runtime.
+    pub async fn execute_committed(&self, query: &str) -> Result<Value> {
+        if matches!(self, Self::Local(_)) {
+            return self.execute(query).await;
+        }
+        let txn = self.begin_apply_txn().await?;
+        match txn.execute(query).await {
+            Ok(response) => {
+                txn.commit().await?;
+                Ok(response)
+            }
+            Err(error) => {
+                let _ = txn.discard().await;
+                Err(error)
+            }
+        }
+    }
+
     /// Begin a write transaction on the underlying backend.
     pub async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {

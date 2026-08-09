@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
@@ -221,16 +221,12 @@ async fn tick_registry(
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Heartbeat);
-    let response = crate::retry::execute_graphql_with_conflict_retry(
+    crate::graphql::graphql_with_transaction_retry(
         node,
         &mutation,
         "upsert_peer_registry_heartbeat",
     )
-    .await;
-
-    if response.has_errors() {
-        bail!("upsert_PeerRegistry failed: {:?}", response.errors);
-    }
+    .await?;
 
     tracing::debug!(
         peer_id = %peer_id,

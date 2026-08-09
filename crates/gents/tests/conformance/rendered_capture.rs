@@ -128,6 +128,7 @@ fn rendered_in_scope(
         .expect("capture key"),
         capture_version: CAPTURE_VERSION,
         request_doc_id,
+        request_commit_cid: format!("bafy-request-commit-{request}"),
         request_id: format!("logical-request-{request}"),
         capture_scope: capture_scope.to_string(),
         turn_index,

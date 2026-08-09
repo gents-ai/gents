@@ -66,10 +66,6 @@ impl RequestLifecycle {
         })
     }
 
-    pub(super) async fn request_status(&self) -> Result<Option<String>> {
-        Ok(self.request_view().await?.map(|row| row.status))
-    }
-
     pub(super) async fn request_view(&self) -> Result<Option<RequestViewRow>> {
         let doc_id = &self.request.doc_id;
         let query = format!(

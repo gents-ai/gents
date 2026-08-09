@@ -19,6 +19,8 @@
   "default_prompt": "List three risks of running agents with database write access. Be brief.",
   "expect": {
     "trigger_ids": ["exp-stage1", "exp-stage2"],
+    "signed_provenance": true,
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {
       "ExperimentFinding": 1
     }

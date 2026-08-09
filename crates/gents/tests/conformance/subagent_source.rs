@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::graphql::graphql_response_with_transaction_retry as execute_graphql_with_conflict_retry;
 use gents::interrupt::{fetch_interrupt_requested_at, interrupt_request};
-use gents::retry::execute_graphql_with_conflict_retry;
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,

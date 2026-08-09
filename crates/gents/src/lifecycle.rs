@@ -241,6 +241,7 @@ pub struct RequestLifecycle {
     backend_id: String,
     failure_reason: Option<String>,
     request: AgentRequest,
+    request_commit_cid: Option<String>,
     response_doc_id: Option<String>,
     progress_seq: u32,
     deadline_duration_secs: u64,
@@ -252,6 +253,12 @@ pub struct RequestLifecycle {
 impl RequestLifecycle {
     pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.claimed_deadline_at
+    }
+
+    /// Exact composite commit produced by the successful claim/materialization
+    /// mutation. This is the version whose request fields the runtime uses.
+    pub(crate) fn request_commit_cid(&self) -> Option<&str> {
+        self.request_commit_cid.as_deref()
     }
 
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {

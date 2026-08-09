@@ -103,6 +103,9 @@ pub struct RenderedRequestContext {
     /// invalid duplicate logical id exists in the collection. Empty only for a
     /// one-shot run, which does not author an `AgentRequest` document.
     pub request_doc_id: String,
+    /// Exact composite DefraDB commit returned by the mutation that claimed
+    /// this request. Empty only for a one-shot run.
+    pub request_commit_cid: String,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -117,9 +120,27 @@ pub struct RenderedRequestContext {
 }
 
 impl RenderedRequestContext {
+    #[cfg(test)]
     pub(crate) fn for_request(request: &crate::watcher::AgentRequest, model_name: String) -> Self {
+        Self::for_request_version(request, "", model_name)
+    }
+
+    pub(crate) fn for_claimed_request(
+        request: &crate::watcher::AgentRequest,
+        request_commit_cid: &str,
+        model_name: String,
+    ) -> Self {
+        Self::for_request_version(request, request_commit_cid, model_name)
+    }
+
+    fn for_request_version(
+        request: &crate::watcher::AgentRequest,
+        request_commit_cid: &str,
+        model_name: String,
+    ) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
+            request_commit_cid: request_commit_cid.to_string(),
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -201,6 +222,9 @@ pub struct RenderedCompletionRequest {
     /// remains alongside it for user-facing correlation and queries. Empty for
     /// a one-shot run, which has no `AgentRequest` document.
     pub request_doc_id: String,
+    /// Exact composite version of `request_doc_id` that supplied the runtime
+    /// input. The CID is DefraDB's native time-travel and integrity reference.
+    pub request_commit_cid: String,
     pub request_id: String,
     /// Which completion loop inside the request issued this call, e.g.
     /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
@@ -282,6 +306,7 @@ pub(crate) fn build_rendered_completion_request(
         capture_key,
         capture_version: CAPTURE_VERSION,
         request_doc_id: context.request_doc_id.clone(),
+        request_commit_cid: context.request_commit_cid.clone(),
         request_id: context.request_id.clone(),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -435,6 +460,7 @@ mod tests {
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
+            request_commit_cid: "bafy-request-commit".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),

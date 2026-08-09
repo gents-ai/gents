@@ -1,8 +1,12 @@
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents::identity::{
+    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity, KeyIdentity,
+};
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, INIT_CONFIG_FILE_NAME, RUNTIME_STATE_FILE_NAME};
@@ -56,6 +60,94 @@ pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfi
     let state = serde_json::from_slice(&bytes)
         .with_context(|| format!("decoding init config {}", path.display()))?;
     Ok(Some(state))
+}
+
+/// Load and register the signer recorded by an initialized home.
+///
+/// Every embedded-node entry point uses this same loader so opening the data
+/// directory outside `gents server` does not silently produce unsigned commits.
+pub(crate) fn load_initialized_home_identity(
+    home_dir: &Path,
+    config: &StoredInitConfig,
+) -> Result<Arc<dyn AgentIdentity>> {
+    let expected_did = config.agent_did.trim();
+    if expected_did.is_empty() {
+        anyhow::bail!("initialized home {} has no agent DID", home_dir.display());
+    }
+
+    let identity: Arc<dyn AgentIdentity> = if let Some(key_path) = config
+        .key_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let key_path = PathBuf::from(key_path);
+        if !key_path.exists() {
+            anyhow::bail!(
+                "initialized home agent DID {expected_did} requires identity key {} to already exist",
+                key_path.display()
+            );
+        }
+        Arc::new(
+            KeyIdentity::load_or_create(&key_path, None)
+                .with_context(|| format!("loading identity key {}", key_path.display()))?,
+        )
+    } else {
+        match config
+            .identity_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some("macos-keychain") => {
+                let label = config
+                    .keychain_label
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "initialized home {} uses macos-keychain but has no keychain_label",
+                            home_dir.display()
+                        )
+                    })?;
+                Arc::new(
+                    load_macos_keychain_identity(label, None)
+                        .with_context(|| format!("loading macOS keychain identity {label}"))?,
+                )
+            }
+            Some("macos-secure-enclave") => {
+                let label = config
+                    .secure_enclave_label
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "initialized home {} uses macos-secure-enclave but has no secure_enclave_label",
+                            home_dir.display()
+                        )
+                    })?;
+                Arc::new(
+                    load_macos_secure_enclave_identity(label, None).with_context(|| {
+                        format!("loading macOS Secure Enclave identity {label}")
+                    })?,
+                )
+            }
+            backend => anyhow::bail!(
+                "initialized home {} has no key_path and unsupported identity_backend {backend:?}",
+                home_dir.display()
+            ),
+        }
+    };
+
+    if identity.did() != expected_did {
+        anyhow::bail!(
+            "initialized home agent DID {expected_did} does not match loaded identity DID {}",
+            identity.did()
+        );
+    }
+    Ok(identity)
 }
 
 pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {

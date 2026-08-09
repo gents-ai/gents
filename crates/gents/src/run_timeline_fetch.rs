@@ -99,7 +99,7 @@ async fn load_timeline_request_by_id(
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
                 _docID
                 request_id
@@ -124,11 +124,14 @@ async fn load_timeline_request_by_id(
         }}"#,
         escape_graphql_string(request_id)
     );
-    load_rows::<TimelineRequestRow>(access, "AgentRequest", &query)
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+    let mut rows = load_rows::<TimelineRequestRow>(access, "AgentRequest", &query).await?;
+    match rows.len() {
+        0 => Err(anyhow::anyhow!("request {request_id} not found")),
+        1 => Ok(rows.remove(0)),
+        count => anyhow::bail!(
+            "request_id {request_id} is ambiguous across {count} AgentRequest documents"
+        ),
+    }
 }
 
 async fn load_timeline_requests_for_session(

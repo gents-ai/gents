@@ -1,4 +1,4 @@
-type InferenceProfile {
+type InferenceProfile @branchable {
     profile_id: String @index(unique: true)
     display_name: String
     context_window: Int

@@ -8,8 +8,7 @@ use anyhow::{Context, Result};
 use axum::http::Uri;
 use gents::defra_node::EmbeddedNode;
 use gents::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity,
-    DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
+    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, ProcessLifecycleObserver,
     ProcessLifecycleState, ToolCeiling,
 };
 use serde_json::{json, Value};
@@ -811,9 +810,10 @@ fn resolve_server_identity(
             .context("creating or loading agent identity key")?,
     );
     ensure_identity_matches_init_config(init_config, identity.did())?;
+    let node_identity_did = identity.did().to_string();
     Ok(ServerIdentity {
         identity,
-        node_identity_did: None,
+        node_identity_did: Some(node_identity_did),
     })
 }
 
@@ -821,68 +821,11 @@ fn resolve_no_key_server_identity(
     config: &StoredInitConfig,
     home_dir: &Path,
 ) -> Result<ServerIdentity> {
-    let backend = config
-        .identity_backend
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "initialized home {} has agent DID {} but no key_path or identity_backend",
-                home_dir.display(),
-                config.agent_did
-            )
-        })?;
-    match backend {
-        "macos-keychain" => {
-            let label = config
-                .keychain_label
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "initialized home {} uses macos-keychain but has no keychain_label",
-                        home_dir.display()
-                    )
-                })?;
-            let identity = Arc::new(
-                load_macos_keychain_identity(label, None)
-                    .with_context(|| format!("loading macOS keychain identity {label}"))?,
-            );
-            ensure_identity_matches_init_config(Some(config), identity.did())?;
-            Ok(ServerIdentity {
-                node_identity_did: Some(identity.did().to_string()),
-                identity,
-            })
-        }
-        "macos-secure-enclave" => {
-            let label = config
-                .secure_enclave_label
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "initialized home {} uses macos-secure-enclave but has no secure_enclave_label",
-                        home_dir.display()
-                    )
-                })?;
-            let identity = Arc::new(
-                load_macos_secure_enclave_identity(label, None)
-                    .with_context(|| format!("loading macOS Secure Enclave identity {label}"))?,
-            );
-            ensure_identity_matches_init_config(Some(config), identity.did())?;
-            Ok(ServerIdentity {
-                node_identity_did: Some(identity.did().to_string()),
-                identity,
-            })
-        }
-        other => anyhow::bail!(
-            "initialized home {} uses unsupported identity_backend {other:?} without key_path",
-            home_dir.display()
-        ),
-    }
+    let identity = crate::load_initialized_home_identity(home_dir, config)?;
+    Ok(ServerIdentity {
+        node_identity_did: Some(identity.did().to_string()),
+        identity,
+    })
 }
 
 fn default_p2p_transport() -> String {

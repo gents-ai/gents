@@ -1,4 +1,4 @@
-type DatastoreToolSurface {
+type DatastoreToolSurface @branchable {
     surface_id: String @index(unique: true)
     agent_did: String @index
     display_name: String

@@ -45,15 +45,27 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // It must stay a single scope instance: the per-kind sequence that
         // keeps the inference loop, the summarizer, and the summarizer's JSON
         // fallback from colliding on `(turn 0, attempt 0)` lives in the scope.
+        let request_commit_cid = lifecycle.request_commit_cid().ok_or_else(|| {
+            anyhow::anyhow!(
+                "claimed AgentRequest {} has no exact DefraDB commit CID",
+                request.doc_id
+            )
+        })?;
+        let capture_context = crate::rendered_request::RenderedRequestContext::for_claimed_request(
+            &request,
+            request_commit_cid,
+            self.behavior.model_name.clone(),
+        );
         let capture_scope = crate::rendered_request::scope::scope_from_factory(
-            crate::rendered_request::RenderedRequestContext::for_request(
-                &request,
-                self.behavior.model_name.clone(),
-            ),
+            capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
         let handled = admission::scope_request(admission_context, async {
-            self.spawn_conversation_title_generation(&request, title_admission_context);
+            self.spawn_conversation_title_generation(
+                &request,
+                title_admission_context,
+                capture_context,
+            );
 
             let selected_skill_ids = selected_skill_ids(request.metadata.as_deref());
             let skill_reminders = self

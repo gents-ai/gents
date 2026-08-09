@@ -65,6 +65,10 @@ struct PackExpect {
     trigger_ids: Vec<String>,
     #[serde(default)]
     collection_counts: BTreeMap<String, u64>,
+    #[serde(default)]
+    projections: Vec<String>,
+    #[serde(default)]
+    signed_provenance: bool,
 }
 
 /// Resolve a pack by path, or by name under `demo/`.
@@ -225,6 +229,206 @@ struct StageResult {
     trigger_id: String,
     request_id: String,
     lifecycle_state: String,
+}
+
+#[derive(Debug, Clone)]
+struct StageProvenance {
+    request_id: String,
+    request_doc_id: String,
+    rendered_request_count: usize,
+    request_commit_cids: Vec<String>,
+    signer_identity: String,
+}
+
+async fn graphql_rows(graphql: &str, field: &str, query: &str) -> Result<Vec<Value>> {
+    let response = post_graphql(graphql, query).await?;
+    if let Some(errors) = response.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            bail!("GraphQL {field} query failed: {errors:?}");
+        }
+    }
+    response
+        .pointer(&format!("/data/{field}"))
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("GraphQL {field} query returned no row array"))
+}
+
+async fn composite_commits(graphql: &str, doc_id: &str) -> Result<Vec<Value>> {
+    let query = format!(
+        r#"query {{
+            _commits(docID: "{}") {{
+                cid
+                fieldName
+                signature {{ identity type }}
+            }}
+        }}"#,
+        escape_graphql_string(doc_id),
+    );
+    Ok(graphql_rows(graphql, "_commits", &query)
+        .await?
+        .into_iter()
+        .filter(|commit| commit.get("fieldName").and_then(Value::as_str) == Some("_C"))
+        .collect())
+}
+
+fn commit_has_signer(commit: &Value, signer_identity: &str) -> bool {
+    commit
+        .pointer("/signature/identity")
+        .and_then(Value::as_str)
+        == Some(signer_identity)
+}
+
+async fn verify_stage_provenance(
+    graphql: &str,
+    stage: &StageResult,
+    signer_identity: &str,
+) -> Result<StageProvenance> {
+    let request_query = format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
+        escape_graphql_string(&stage.request_id),
+    );
+    let request_rows = graphql_rows(graphql, "AgentRequest", &request_query).await?;
+    if request_rows.len() != 1 {
+        bail!(
+            "request {} resolved to {} AgentRequest documents; provenance requires exactly one",
+            stage.request_id,
+            request_rows.len()
+        );
+    }
+    let request_doc_id = request_rows[0]
+        .get("_docID")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("AgentRequest provenance query returned no _docID")?
+        .to_string();
+    let request_commits = composite_commits(graphql, &request_doc_id).await?;
+
+    let rendered_query = format!(
+        r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{
+            _docID
+            request_doc_id
+            request_commit_cid
+        }} }}"#,
+        escape_graphql_string(&stage.request_id),
+    );
+    let rendered_rows = graphql_rows(graphql, "RenderedRequest", &rendered_query).await?;
+    if rendered_rows.is_empty() {
+        bail!(
+            "request {} completed without a durable RenderedRequest",
+            stage.request_id
+        );
+    }
+
+    let mut request_commit_cids = Vec::with_capacity(rendered_rows.len());
+    for row in &rendered_rows {
+        let rendered_doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("RenderedRequest provenance query returned no _docID")?;
+        if row.get("request_doc_id").and_then(Value::as_str) != Some(&request_doc_id) {
+            bail!(
+                "RenderedRequest {rendered_doc_id} does not point to AgentRequest {request_doc_id}"
+            );
+        }
+        let request_commit_cid = row
+            .get("request_commit_cid")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .with_context(|| {
+                format!("RenderedRequest {rendered_doc_id} has no exact request commit CID")
+            })?;
+        let Some(request_commit) = request_commits
+            .iter()
+            .find(|commit| commit.get("cid").and_then(Value::as_str) == Some(request_commit_cid))
+        else {
+            bail!(
+                "RenderedRequest {rendered_doc_id} pins unknown AgentRequest commit {request_commit_cid}"
+            );
+        };
+        if !commit_has_signer(request_commit, signer_identity) {
+            bail!("AgentRequest commit {request_commit_cid} was not signed by the node identity");
+        }
+        let rendered_commits = composite_commits(graphql, rendered_doc_id).await?;
+        if !rendered_commits
+            .iter()
+            .any(|commit| commit_has_signer(commit, signer_identity))
+        {
+            bail!("RenderedRequest {rendered_doc_id} was not signed by the node identity");
+        }
+        request_commit_cids.push(request_commit_cid.to_string());
+    }
+    request_commit_cids.sort();
+    request_commit_cids.dedup();
+
+    Ok(StageProvenance {
+        request_id: stage.request_id.clone(),
+        request_doc_id,
+        rendered_request_count: rendered_rows.len(),
+        request_commit_cids,
+        signer_identity: signer_identity.to_string(),
+    })
+}
+
+async fn render_projection_artifacts(
+    bin: &Path,
+    graphql: &str,
+    run_dir: &Path,
+    stages: &[StageResult],
+    projections: &[String],
+) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+    let artifact_dir = run_dir.join("projections");
+    std::fs::create_dir_all(&artifact_dir)
+        .with_context(|| format!("creating projection directory {}", artifact_dir.display()))?;
+    let mut artifacts = BTreeMap::new();
+    for stage in stages {
+        let timeline_args = vec![
+            "trace".to_string(),
+            "timeline".to_string(),
+            "--graphql".to_string(),
+            graphql.to_string(),
+            "--request-id".to_string(),
+            stage.request_id.clone(),
+        ];
+        let timeline = run_cli_json(bin, &timeline_args)
+            .await
+            .with_context(|| format!("projecting timeline for request {}", stage.request_id))?;
+        let timeline_path = artifact_dir.join(format!("{}-timeline.json", stage.request_id));
+        std::fs::write(&timeline_path, serde_json::to_vec_pretty(&timeline)?)
+            .with_context(|| format!("writing {}", timeline_path.display()))?;
+
+        let mut request_artifacts =
+            BTreeMap::from([("timeline".to_string(), path_arg(&timeline_path))]);
+        for projection in projections {
+            let project_args = vec![
+                "trace".to_string(),
+                "project".to_string(),
+                "--graphql".to_string(),
+                graphql.to_string(),
+                "--request-id".to_string(),
+                stage.request_id.clone(),
+                "--projection".to_string(),
+                projection.clone(),
+            ];
+            let projected = run_cli_json(bin, &project_args).await.with_context(|| {
+                format!(
+                    "rendering {projection} projection for request {}",
+                    stage.request_id
+                )
+            })?;
+            let projection_path = artifact_dir.join(format!(
+                "{}-{}.json",
+                stage.request_id,
+                projection.replace('_', "-")
+            ));
+            std::fs::write(&projection_path, serde_json::to_vec_pretty(&projected)?)
+                .with_context(|| format!("writing {}", projection_path.display()))?;
+            request_artifacts.insert(projection.clone(), path_arg(&projection_path));
+        }
+        artifacts.insert(stage.request_id.clone(), request_artifacts);
+    }
+    Ok(artifacts)
 }
 
 async fn await_stages(
@@ -457,21 +661,53 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
         }
+        let signer_identity = gents::identity::commit_signer_identity_for_did(&agent_did)?;
+        let provenance = if manifest.expect.signed_provenance {
+            let mut evidence = Vec::with_capacity(stages.len());
+            for stage in &stages {
+                evidence.push(
+                    verify_stage_provenance(&graphql, stage, &signer_identity)
+                        .await
+                        .with_context(|| {
+                            format!("verifying signed provenance for {}", stage.request_id)
+                        })?,
+                );
+            }
+            evidence
+        } else {
+            Vec::new()
+        };
+        let projection_artifacts = render_projection_artifacts(
+            &bin,
+            &graphql,
+            &run_dir,
+            &stages,
+            &manifest.expect.projections,
+        )
+        .await?;
         let (prompt_tokens, completion_tokens) = token_totals(&graphql).await;
-        Ok::<_, anyhow::Error>((stages, counts, prompt_tokens, completion_tokens))
+        Ok::<_, anyhow::Error>((
+            stages,
+            counts,
+            provenance,
+            projection_artifacts,
+            prompt_tokens,
+            completion_tokens,
+        ))
     }
     .await;
 
     let _ = server.start_kill();
 
-    let (stages, counts, prompt_tokens, completion_tokens) = match outcome {
-        Ok(values) => values,
-        Err(error) => {
-            eprintln!("\nrun failed: {error:#}");
-            eprintln!("server log: {}", log.display());
-            return Err(error);
-        }
-    };
+    let (stages, counts, provenance, projection_artifacts, prompt_tokens, completion_tokens) =
+        match outcome {
+            Ok(values) => values,
+            Err(error) => {
+                eprintln!("\nrun failed: {error:#}");
+                eprintln!("server log: {}", log.display());
+                return Err(error);
+            }
+        };
 
     let elapsed = started.elapsed();
     let mut failures: Vec<String> = Vec::new();
@@ -506,6 +742,14 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             "lifecycle_state": s.lifecycle_state,
         })).collect::<Vec<_>>(),
         "collection_counts": counts,
+        "provenance": provenance.iter().map(|evidence| json!({
+            "request_id": evidence.request_id,
+            "request_doc_id": evidence.request_doc_id,
+            "rendered_request_count": evidence.rendered_request_count,
+            "request_commit_cids": evidence.request_commit_cids,
+            "signer_identity": evidence.signer_identity,
+        })).collect::<Vec<_>>(),
+        "projection_artifacts": projection_artifacts,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "ok": failures.is_empty(),

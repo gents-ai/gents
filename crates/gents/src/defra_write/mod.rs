@@ -38,7 +38,7 @@ use defra_node::EmbeddedNode;
 use serde_json::{json, Map, Value};
 
 use crate::document_config::WriteToolDecl;
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_write";
 
@@ -181,15 +181,11 @@ impl crate::llm::tool::Tool for BoundedWriteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let mutation = self.build_mutation(&args.0)?;
 
-        let resp = self.node.execute(&mutation).await;
-        if resp.has_errors() {
-            return Err(DefraWriteError(anyhow!(
-                "write to {:?} via tool `{}` failed: {:?}",
-                self.decl.collection,
-                self.decl.tool_name,
-                resp.errors
-            )));
-        }
+        let operation = format!(
+            "write to {:?} via tool `{}`",
+            self.decl.collection, self.decl.tool_name
+        );
+        let resp = graphql_with_transaction_retry(&self.node, &mutation, &operation).await?;
 
         let doc_id = extract_doc_id(resp.data.as_ref(), &self.decl.collection)
             .ok_or_else(|| anyhow!("write to {:?} returned no _docID", self.decl.collection))?;

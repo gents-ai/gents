@@ -179,7 +179,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 /// the directive: `WorkspaceRoot`, `AgentNetwork`, `PeerEndpoint`, and
 /// `RenderedRequest` are branchable but deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
-    AGENT_RUNTIME_NAME,
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
     AGENT_CONVERSATION_NAME,
@@ -244,6 +243,26 @@ mod tests {
 
         for name in ALL_COLLECTION_NAMES {
             assert!(seen.insert(*name), "duplicate collection name: {name}");
+        }
+    }
+
+    #[test]
+    fn every_bulk_sync_collection_is_branchable() {
+        for name in BRANCHABLE_COLLECTION_NAMES {
+            let sdl = ALL_COLLECTION_NAMES
+                .iter()
+                .position(|candidate| candidate == name)
+                .map(|index| ALL[index])
+                .unwrap_or_else(|| panic!("bulk-sync collection {name} has no registered SDL"));
+            let declaration = sdl
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with("type "))
+                .unwrap_or_else(|| panic!("bulk-sync collection {name} has no type declaration"));
+            assert!(
+                declaration.contains("@branchable"),
+                "bulk-sync collection {name} must be @branchable: {declaration}"
+            );
         }
     }
 }

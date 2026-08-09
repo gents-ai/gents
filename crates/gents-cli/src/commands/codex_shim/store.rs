@@ -1,8 +1,9 @@
 use anyhow::Result;
 use gents::defra_node::{EmbeddedNode, QueryRequest};
+use gents::graphql::graphql_with_transaction_retry;
 use gents::retry::{
-    defradb_conflict_retry_backoff, execute_graphql_with_conflict_retry,
-    is_defradb_transaction_conflict_text, DEFRA_DB_CONFLICT_MAX_RETRIES,
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
@@ -15,10 +16,7 @@ use crate::materialized_message_query;
 /// reconciliation writes are still in flight, and an unretried auto-commit
 /// surfaces a raw `transaction conflict` to the Codex client (#933).
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
-    let response = execute_graphql_with_conflict_retry(node, query, "codex shim store").await;
-    if response.has_errors() {
-        anyhow::bail!("GENTS Codex shim query failed: {:?}", response.errors);
-    }
+    let response = graphql_with_transaction_retry(node, query, "codex shim store").await?;
     Ok(json!({
         "data": response.data.unwrap_or_else(|| json!({})),
     }))

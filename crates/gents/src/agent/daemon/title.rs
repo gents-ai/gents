@@ -22,6 +22,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &self,
         request: &AgentRequest,
         admission_context: AdmissionCallContext,
+        capture_context: crate::rendered_request::RenderedRequestContext,
     ) {
         let node = Arc::clone(&self.node);
         let behavior_did = self.behavior.agent_did().to_string();
@@ -46,10 +47,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // inherited by `tokio::spawn`. The capture scope therefore has to be
         // installed here, or `title_config`'s arming sink would find no ambient
         // scope and this provider call would be the one that stays uncaptured.
-        let capture_context = crate::rendered_request::RenderedRequestContext::for_request(
-            &request,
-            self.behavior.model_name.clone(),
-        );
         let capture_factory = self.rendered_request_capture_factory.clone();
 
         tokio::spawn(async move {
