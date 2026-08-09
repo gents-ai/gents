@@ -11,7 +11,7 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{
     default_data_dir, graphql_diagnostic_hint, graphql_rows, graphql_string_list_literal,
-    print_json, resolve_agent_did, resolve_config_access, resolve_home_dir,
+    load_config_identity, print_json, resolve_agent_did, resolve_config_access, resolve_home_dir,
 };
 
 const SESSION_FIELDS: &str = "session_id agent_name behavior_id started ended status";
@@ -79,8 +79,13 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         .context("resolving caller agent_did")?;
 
     if let Some(graphql) = args.graphql.as_deref() {
+        let home = resolve_home_dir(args.home.as_deref());
+        let access = crate::authenticated_graphql_access(&home, graphql).await?;
+        let ConfigAccess::Graphql(access) = access else {
+            unreachable!("authenticated GraphQL constructor returned local access")
+        };
         let outcome = fork_via_http(
-            graphql,
+            access,
             ForkParams {
                 source_session_id: &args.from,
                 fork_at_user_turn: args.at_user_turn,
@@ -100,18 +105,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     // cannot run while `gents server` is running against the same home.
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
-
-    let node = crate::persistent_node_builder(&data_dir)
-        .build()
-        .await
-        .with_context(|| {
-            format!(
-                "opening embedded node at {}. If `gents server` is running against \
-                 the same home, stop it first — fork holds an exclusive lock on the data \
-                 directory. To fork against the running server, rerun with --graphql.",
-                data_dir.display()
-            )
-        })?;
+    let node = open_offline_fork_node(&home, &data_dir).await?;
     gents::ensure_runtime_schemas(&node)
         .await
         .context("ensuring runtime schemas")?;
@@ -132,23 +126,85 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     Ok(())
 }
 
+async fn open_offline_fork_node(
+    home: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Result<gents::defra_node::EmbeddedNode> {
+    // Loading the stored identity also registers its signing material with
+    // DefraDB. Binding that DID to the node ensures fork reads and writes are
+    // authenticated and their commits carry the same principal as the home.
+    let identity =
+        load_config_identity(home).context("loading signing identity for offline session fork")?;
+    crate::persistent_node_builder(data_dir)
+        .with_node_identity_did(identity.did())
+        .build()
+        .await
+        .with_context(|| {
+            format!(
+                "opening embedded node at {}. If `gents server` is running against \
+                 the same home, stop it first — fork holds an exclusive lock on the data \
+                 directory. To fork against the running server, rerun with --graphql.",
+                data_dir.display()
+            )
+        })
+}
+
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
     let args = session_id
         .map(|id| {
             format!(
-                r#"(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1)"#,
+                r#"(filter: {{ session_id: {{ _eq: "{}" }} }})"#,
                 escape_graphql_string(id)
             )
         })
         .unwrap_or_default();
+    let fields = if session_id.is_some() {
+        format!("_docID agent_did requester_did {SESSION_FIELDS}")
+    } else {
+        SESSION_FIELDS.to_string()
+    };
     let query = format!(
         r#"{{
             AgentSession{args} {{
-                {SESSION_FIELDS}
+                {fields}
             }}
         }}"#
     );
-    graphql_rows(access, "AgentSession", &query).await
+    let rows = graphql_rows(access, "AgentSession", &query).await?;
+    let Some(session_id) = session_id else {
+        // Listing is presentation-only and deliberately exposes the complete
+        // result set; it does not select one row as authority.
+        return Ok(rows);
+    };
+    for row in &rows {
+        if row.get("session_id").and_then(Value::as_str) != Some(session_id) {
+            anyhow::bail!(
+                "AgentSession logical key mismatch while showing session_id={session_id}: {row}"
+            );
+        }
+    }
+    let selected = gents::session::resolve_exact_logical_match(
+        "AgentSession",
+        "session_id",
+        session_id,
+        rows,
+        |row| {
+            row.get("_docID")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        },
+    )?;
+    Ok(selected
+        .into_iter()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                object.remove("_docID");
+                object.remove("agent_did");
+                object.remove("requester_did");
+            }
+            row
+        })
+        .collect())
 }
 
 async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()> {
@@ -324,5 +380,120 @@ fn map_graphql_fork_error(error: ForkError, graphql: &str) -> anyhow::Error {
             graphql_diagnostic_hint(graphql)
         ),
         other => map_fork_error(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use gents::{AgentIdentity, KeyIdentity};
+
+    use super::*;
+    use crate::cli::args::ToolCeilingArg;
+    use crate::{default_key_path, write_init_config, StoredInitConfig};
+
+    #[tokio::test]
+    async fn offline_fork_node_uses_initialized_home_signer() {
+        let home = tempfile::tempdir().unwrap();
+        let key_path = default_key_path(home.path(), "fork-agent");
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        let identity = KeyIdentity::load_or_create(&key_path, None).unwrap();
+        write_init_config(
+            home.path(),
+            &StoredInitConfig {
+                home: home.path().to_string_lossy().to_string(),
+                agent_name: "fork-agent".to_string(),
+                agent_did: identity.did().to_string(),
+                key_path: Some(key_path.to_string_lossy().to_string()),
+                identity_backend: Some("file".to_string()),
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: ToolCeilingArg::Readonly,
+                tool_root: None,
+            },
+        )
+        .unwrap();
+
+        let data_dir = default_data_dir(home.path());
+        let node = open_offline_fork_node(home.path(), &data_dir)
+            .await
+            .unwrap();
+
+        assert_eq!(node.node_identity_did(), Some(identity.did()));
+    }
+
+    #[tokio::test]
+    async fn offline_fork_node_refuses_home_without_signer() {
+        let home = tempfile::tempdir().unwrap();
+        let data_dir = default_data_dir(home.path());
+
+        let error = match open_offline_fork_node(home.path(), &data_dir).await {
+            Ok(_) => panic!("offline fork node must require an initialized signer"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("loading signing identity for offline session fork"),
+            "{error:#}"
+        );
+        assert!(!data_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn session_show_query_rejects_complete_logical_twin_set() {
+        let node = gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .unwrap();
+        node.add_schema(
+            r#"
+            type AgentSession {
+                session_id: String
+                agent_name: String
+                agent_did: String
+                requester_did: String
+                behavior_id: String
+                started: DateTime
+                ended: DateTime
+                status: String
+            }
+            "#,
+        )
+        .await
+        .unwrap();
+        for owner in ["did:key:z-owner-a", "did:key:z-owner-b"] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_AgentSession(input: {{
+                            session_id: "duplicate-session"
+                            agent_name: "agent"
+                            agent_did: "{owner}"
+                            behavior_id: "behavior"
+                            started: "2026-08-08T00:00:00Z"
+                            status: "active"
+                        }}) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let access = ConfigAccess::Local(Arc::new(node));
+        let error = query_sessions(&access, Some("duplicate-session"))
+            .await
+            .expect_err("session show must not select a logical twin");
+        assert!(
+            error
+                .downcast_ref::<gents::session::LogicalDocumentResolutionError>()
+                .is_some_and(|error| matches!(
+                    error,
+                    gents::session::LogicalDocumentResolutionError::Conflict(_)
+                )),
+            "expected typed AgentSession conflict, got {error:#}"
+        );
     }
 }

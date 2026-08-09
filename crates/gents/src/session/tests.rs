@@ -94,6 +94,35 @@ async fn message_row(
     response.data.unwrap()[collection][0].clone()
 }
 
+async fn save_unlinked_compaction_test_message(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    sequence: u32,
+    content: &str,
+) {
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentMessage(input: {{
+                    message_key: "{session_id}:{sequence}"
+                    session_id: "{session_id}"
+                    agent_did: "{agent_did}"
+                    sequence: {sequence}
+                    role: "user"
+                    content: "{content}"
+                    reasoning: ""
+                    timestamp: "2026-08-08T00:00:0{sequence}Z"
+                }}) {{ _docID }}
+            }}"#,
+            session_id = crate::graphql::escape_graphql_string(session_id),
+            agent_did = crate::graphql::escape_graphql_string(agent_did),
+            content = crate::graphql::escape_graphql_string(content),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
 #[tokio::test]
 async fn agent_message_draft_finalizes_exactly_once_and_final_fact_is_immutable() {
     let (node, signer_did, _key_dir) = message_test_node().await;
@@ -170,6 +199,7 @@ async fn agent_message_draft_finalizes_exactly_once_and_final_fact_is_immutable(
     assert_eq!(loaded.fact_refs[0].sequence, 1);
     assert_eq!(loaded.fact_refs[0].doc_id, finalized_doc_id);
     assert!(!loaded.fact_refs[0].composite_commit_cid.is_empty());
+    assert!(!loaded.fact_refs[0].collection_version_id.is_empty());
     assert_eq!(loaded.fact_refs[0].signer_did, signer_did);
 
     save_message_with_requester_did(
@@ -331,7 +361,250 @@ async fn compaction_entries_track_files_cumulatively() {
 }
 
 #[tokio::test]
-async fn forked_compaction_verifies_source_signer_independently_of_agent_did() {
+async fn compaction_manifest_rejects_schema_version_rebinding_in_every_source_class() {
+    let (node, signer_did, _key_dir) = message_test_node().await;
+    let session_id = "compaction-schema-rebinding-session";
+    let behavior_id = "compaction-schema-rebinding-behavior";
+    let config_provenance = create_test_config_provenance(&node, &signer_did, behavior_id)
+        .await
+        .unwrap();
+    let content = serde_json::to_string(&Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "first".to_owned(),
+        })],
+    })
+    .unwrap();
+    save_unlinked_compaction_test_message(&node, session_id, &signer_did, 1, &content).await;
+    let first_history = load_history_with_refs(&node, session_id).await.unwrap();
+    save_compaction_entry(
+        &node,
+        session_id,
+        &signer_did,
+        "first",
+        &[],
+        &[],
+        1,
+        100,
+        20,
+        CompactionSourceManifest::new(
+            session_id,
+            behavior_id,
+            first_history.fact_refs,
+            config_provenance.clone(),
+            Vec::new(),
+            1,
+            0,
+            1,
+        ),
+    )
+    .await
+    .unwrap();
+
+    save_unlinked_compaction_test_message(&node, session_id, &signer_did, 2, &content).await;
+    let history = load_history_with_refs(&node, session_id).await.unwrap();
+    let previous = load_compaction_entries_for_agent(&node, session_id, &signer_did)
+        .await
+        .unwrap();
+    assert!(history
+        .fact_refs
+        .iter()
+        .all(|fact| !fact.collection_version_id.is_empty()));
+    assert!(previous
+        .fact_refs
+        .iter()
+        .all(|fact| !fact.collection_version_id.is_empty()));
+
+    let valid = CompactionSourceManifest::new(
+        session_id,
+        behavior_id,
+        history.fact_refs,
+        config_provenance,
+        previous.fact_refs,
+        2,
+        1,
+        1,
+    );
+
+    let mut transcript_rebound = valid.clone();
+    transcript_rebound.transcript_snapshot[0].collection_version_id = "wrong-schema".to_string();
+    let transcript_error = save_compaction_entry(
+        &node,
+        session_id,
+        &signer_did,
+        "rebound transcript",
+        &[],
+        &[],
+        1,
+        100,
+        20,
+        transcript_rebound,
+    )
+    .await
+    .unwrap_err();
+    let transcript_error_chain = format!("{transcript_error:#}");
+    assert!(
+        transcript_error_chain.contains("pinned schema"),
+        "{transcript_error:#}"
+    );
+
+    let mut config_rebound = valid.clone();
+    config_rebound
+        .config_provenance
+        .principal
+        .collection_version_id = "wrong-schema".to_string();
+    let config_error = save_compaction_entry(
+        &node,
+        session_id,
+        &signer_did,
+        "rebound config",
+        &[],
+        &[],
+        1,
+        100,
+        20,
+        config_rebound,
+    )
+    .await
+    .unwrap_err();
+    let config_error_chain = format!("{config_error:#}");
+    assert!(
+        config_error_chain.contains("pinned schema"),
+        "{config_error:#}"
+    );
+
+    let mut prior_rebound = valid;
+    prior_rebound.prior_compactions[0].collection_version_id = "wrong-schema".to_string();
+    let prior_error = save_compaction_entry(
+        &node,
+        session_id,
+        &signer_did,
+        "rebound prior",
+        &[],
+        &[],
+        1,
+        100,
+        20,
+        prior_rebound,
+    )
+    .await
+    .unwrap_err();
+    let prior_error_chain = format!("{prior_error:#}");
+    assert!(
+        prior_error_chain.contains("pinned schema"),
+        "{prior_error:#}"
+    );
+}
+
+#[test]
+fn durable_source_refs_do_not_deserialize_without_collection_version_identity() {
+    assert!(serde_json::from_value::<MessageFactRef>(serde_json::json!({
+        "sequence": 1,
+        "doc_id": "message-doc",
+        "composite_commit_cid": "message-cid",
+        "signer_did": "did:key:signer"
+    }))
+    .is_err());
+    assert!(
+        serde_json::from_value::<CompactionFactRef>(serde_json::json!({
+            "sequence": 1,
+            "source": {
+                "version": { "doc_id": "compaction-doc", "composite_commit_cid": "compaction-cid" },
+                "signer_did": "did:key:signer"
+            }
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<crate::ConfigFactRef>(serde_json::json!({
+            "collection": "AgentPrincipal",
+            "logical_id": "did:key:agent",
+            "source": {
+                "version": { "doc_id": "principal-doc", "composite_commit_cid": "principal-cid" },
+                "signer_did": "did:key:signer"
+            }
+        }))
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn compaction_manifest_rejects_an_exact_message_from_another_session() {
+    let (node, signer_did, _key_dir) = message_test_node().await;
+    let behavior_id = "compaction-wrong-session-behavior";
+    let config_provenance = create_test_config_provenance(&node, &signer_did, behavior_id)
+        .await
+        .unwrap();
+    let content = serde_json::to_string(&Message::User {
+        content: vec![UserContent::Text(Text {
+            text: "wrong session".to_owned(),
+        })],
+    })
+    .unwrap();
+    save_message(
+        &node,
+        "source-session",
+        &signer_did,
+        1,
+        "user",
+        &content,
+        None,
+    )
+    .await
+    .unwrap();
+    let wrong_history = load_history_with_refs(&node, "source-session")
+        .await
+        .unwrap();
+    let manifest = CompactionSourceManifest::new(
+        "target-session",
+        behavior_id,
+        wrong_history.fact_refs,
+        config_provenance,
+        Vec::new(),
+        1,
+        0,
+        1,
+    );
+    let manifest_json =
+        crate::rendered_request::canonical_json_string(&serde_json::to_value(&manifest).unwrap())
+            .unwrap();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_CompactionEntry(input: {{
+                    compaction_key: "target-session:1"
+                    session_id: "target-session"
+                    agent_did: "{}"
+                    sequence: 1
+                    summary: "forged cross-session summary"
+                    files_read: "[]"
+                    files_modified: "[]"
+                    messages_compacted: 1
+                    original_tokens: 100
+                    compacted_tokens: 25
+                    source_manifest_version: 2
+                    source_manifest_json: "{}"
+                    created_at: "2026-08-08T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#,
+            crate::graphql::escape_graphql_string(&signer_did),
+            crate::graphql::escape_graphql_string(&manifest_json),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let error = load_compaction_entries(&node, "target-session")
+        .await
+        .expect_err("an exact message from another session must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("does not bind compaction transcript"),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
+async fn forked_compaction_rejects_an_unproven_payload_derivation() {
     let (node, signer_did, _key_dir) = message_test_node().await;
     let semantic_agent_did = "did:test:semantic-agent";
     assert_ne!(semantic_agent_did, signer_did);
@@ -424,7 +697,7 @@ async fn forked_compaction_verifies_source_signer_independently_of_agent_did() {
                     messages_compacted: 1
                     original_tokens: 100
                     compacted_tokens: 25
-                    source_manifest_version: 1
+                    source_manifest_version: 2
                     source_manifest_json: "{}"
                     created_at: "2026-08-08T00:00:00Z"
                     fork_source_doc_id: "{}"
@@ -441,11 +714,13 @@ async fn forked_compaction_verifies_source_signer_independently_of_agent_did() {
         .await;
     assert!(!child.has_errors(), "{:?}", child.errors);
 
-    let entries = load_compaction_entries(&node, "fork-child-session")
+    let error = load_compaction_entries(&node, "fork-child-session")
         .await
-        .unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].summary, "derived summary");
+        .expect_err("a fork edge alone must not authorize arbitrary child contents");
+    assert!(
+        error.to_string().contains("fork source") || error.to_string().contains("source manifest"),
+        "{error:#}"
+    );
 }
 
 #[tokio::test]
@@ -569,6 +844,154 @@ async fn create_session_with_id_is_idempotent() {
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn duplicate_session_logical_id_fails_closed_without_arbitrary_update() {
+    // Model a pre-index/replicated collection: current schemas prevent local
+    // twins, but old stores and P2P merge can still expose them to readers.
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema(
+        r#"
+        type AgentSession {
+            session_id: String
+            agent_name: String
+            agent_did: String
+            requester_did: String
+            behavior_id: String
+            started: DateTime
+            ended: DateTime
+            status: String
+        }
+        "#,
+    )
+    .await
+    .unwrap();
+
+    for (agent_did, behavior_id, status) in [
+        ("did:key:z-owner-a", "behavior-a", "active"),
+        ("did:key:z-owner-b", "behavior-b", "paused"),
+    ] {
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentSession(input: {{
+                        session_id: "duplicate-session"
+                        agent_name: "agent"
+                        agent_did: "{agent_did}"
+                        behavior_id: "{behavior_id}"
+                        started: "2026-08-08T00:00:00Z"
+                        status: "{status}"
+                    }}) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+    }
+
+    let error = close_session(&node, "duplicate-session")
+        .await
+        .expect_err("logical twins must not select a session to close");
+    assert!(
+        error
+            .downcast_ref::<LogicalDocumentResolutionError>()
+            .is_some_and(|error| matches!(error, LogicalDocumentResolutionError::Conflict(_))),
+        "expected typed AgentSession conflict, got {error:#}"
+    );
+
+    let response = node
+        .execute(
+            r#"{
+                AgentSession(filter: { session_id: { _eq: "duplicate-session" } }) {
+                    _docID status ended
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mut states = response.data.unwrap()["AgentSession"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["status"].as_str().unwrap().to_string(),
+                row.get("ended")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+            )
+        })
+        .collect::<Vec<_>>();
+    states.sort();
+    assert_eq!(
+        states,
+        vec![("active".to_string(), None), ("paused".to_string(), None)],
+        "duplicate rejection must leave every physical session untouched"
+    );
+}
+
+#[tokio::test]
+async fn session_ensure_rejects_singleton_immutable_owner_mismatch() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema(
+        r#"
+        type AgentSession {
+            session_id: String
+            agent_name: String
+            agent_did: String
+            requester_did: String
+            behavior_id: String
+            started: DateTime
+            ended: DateTime
+            status: String
+        }
+        "#,
+    )
+    .await
+    .unwrap();
+    let response = node
+        .execute(
+            r#"mutation {
+                create_AgentSession(input: {
+                    session_id: "owned-session"
+                    agent_name: "foreign"
+                    agent_did: "did:key:z-foreign"
+                    behavior_id: "behavior"
+                    started: "2026-08-08T00:00:00Z"
+                    status: "paused"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let error = ensure_session_with_behavior_id(
+        &node,
+        "owned-session",
+        "local",
+        "did:key:z-local",
+        "behavior",
+    )
+    .await
+    .expect_err("a logical key must not authorize a different owner");
+    assert!(
+        error.to_string().contains("immutable owner mismatch"),
+        "{error:#}"
+    );
+
+    let response = node
+        .execute(
+            r#"{
+                AgentSession(filter: { session_id: { _eq: "owned-session" } }) {
+                    agent_name agent_did status
+                }
+            }"#,
+        )
+        .await;
+    let row = &response.data.unwrap()["AgentSession"][0];
+    assert_eq!(row["agent_name"], "foreign");
+    assert_eq!(row["agent_did"], "did:key:z-foreign");
+    assert_eq!(row["status"], "paused");
 }
 
 #[tokio::test]

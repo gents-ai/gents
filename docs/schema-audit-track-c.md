@@ -57,27 +57,42 @@ the authorization/redaction decision used to produce the view.
   complete skill candidate set, MCP registry/discovery and health observations,
   host tool ceiling, compaction inputs for the provider call, placement/lease
   authority, ACP authorization, encryption, or a durable read decision.
-- `RunTimelineRows` currently loads `AgentRequest`, `AgentSession`,
-  `AgentConversation`, `AgentMessage`, `AgentToolCall`, `AgentResponse`, and
-  `InferenceCall`. Tool result and approval facts are now loaded through their
-  exact `_docID`/composite-CID/signer edges and verified against the physical
-  historical `AgentToolCall`. It still does not load `RenderedRequest`,
-  compaction entries, or a complete source-version manifest for the other rows.
-- Finalized `CompactionEntry` facts now carry a canonical exact-source manifest
-  over their signed transcript snapshot and prior compaction facts, with
-  create-and-compare and pre-finalization re-verification. This is durable
-  compaction evidence, but the central timeline/projection path does not yet
-  consume it or explain compacted omissions.
-- `run_timeline_fetch.rs` begins with `AgentRequest(request_id, order:
-  created_at DESC, limit: 1)` and discovers related rows through logical IDs.
-  This is a current-head operational view, not an exact historical read.
+- `RunTimelineRows` loads requests, session/conversation projections, finalized
+  messages, tool calls and their immutable result/approval facts, live response
+  materializations, immutable response outcomes, inference attempts,
+  `RenderedRequest`, and compaction entries. On the local path every discovered
+  row is reloaded at an exact `_C` composite CID and records its verified signer
+  and DefraDB `collectionVersionId`.
+- Finalized `CompactionEntry` facts now carry canonical v2 exact-source
+  manifests over their signed transcript snapshot and prior compaction facts.
+  Every transcript, configuration, and prior-compaction reference binds the
+  source collection's DefraDB `collectionVersionId` in addition to `_docID`,
+  composite CID, and verified signer DID. Create-and-compare and
+  pre-finalization verification reject schema-, document-, CID-, or
+  signer-rebinding. The central timeline path exact-reloads every supported
+  transcript, config, prior-compaction, and fork source edge and rejects partial
+  or rebound lineage.
+- `run_timeline_fetch.rs` accepts either a logical request id or an exact
+  request `_docID` plus `_C` composite CID. Logical twins and ambiguous current
+  heads fail closed; an exact historical root remains selectable after later
+  heads exist. Related source discovery still uses several logical/session
+  queries, so exact membership of found rows does not prove domain completeness.
 - `build_run_timeline` creates deterministic output only after its selected
   rows are known. Timestamp/order keys cannot make an ambiguous source query
   historically exact.
-- Adapter envelopes declare projection id/version, source logical IDs,
-  redaction mode, and a small provenance record. They do not contain the source
-  document-version manifest, source schema versions, ACP policy/version and
-  decision evidence, or signer evidence required for durable export.
+- Adapter envelope v2 records runtime and projection versions, caller-supplied
+  RFC3339 build time, actor DID, redaction algorithm version, and the frozen
+  source manifest. Each included source pins collection, DefraDB schema version,
+  `_docID`, `_C` composite CID, and verified signer. A local export built from
+  open logical/session scans is explicitly `partial_exact` with canonical
+  coverage gaps; only a closed-domain manifest with no gaps may be
+  `verified_exact`, and explicit omissions also keep the export
+  `partial_exact` until omission receipts are implemented. Remote GraphQL reads
+  use the initialized principal's exact-Host DefraDB bearer, and remote fork
+  evidence verifies each advertised commit key/type through DefraDB's
+  authenticated block-signature endpoint before deriving its signer DID. This
+  establishes authenticated transport and signer evidence; open-domain source
+  discovery still keeps the projection `partial_exact`.
 - CLI `trace project` can discover a `ProjectionAcpBinding`, requires an actor
   DID and remote GraphQL access when enforcing ACP, asks DefraDB for per-document
   read decisions, and filters denied child rows. It fails closed when the root
@@ -242,14 +257,14 @@ source selection is part of the durability contract.
 
 | Surface | Current source selection | Target identity/order contract |
 | --- | --- | --- |
-| Root request | logical id, newest timestamp, `limit: 1` | caller-selected `_docID`; exact composite CID; duplicate logical ids fail |
-| Related requests | session and parent logical ids | durable edges frozen to exact CIDs |
-| Messages | session id, sequence ascending | exact CIDs; uniqueness/order scope `(session document, sequence)` with deterministic conflict handling |
-| Tool calls/results/approvals | exact signed result/approval facts are verified against the physical historical tool call, but the complete lifecycle/attempt graph is not frozen in a source manifest | include every lifecycle fact by `_docID`/CID and preserve attempt/order edges |
-| Responses/inference | logical request/session ids | exact attempt/materialization versions, stable attempt and progress ordering |
-| Compaction | not a timeline source | include checkpoint/source-range facts so omitted transcript is explainable |
-| Rendered request | not a timeline source | join exact request version; expose body/field CID subject to ACP/redaction |
-| Adapter outputs | projection `v1` over current rows | immutable manifest + projection and redaction algorithm versions |
+| Root request | logical selection rejects twins/ambiguous heads; exact `_docID` + `_C` selector supported | retain exact selector and close the remaining related-source domains |
+| Related requests | found rows are exact-reloaded, but session/parent scans are declared open extents | replace logical discovery with durable exact relationship/domain manifests |
+| Messages | found finalized facts are exact-reloaded and semantic twins fail closed; the session set remains open | exact transcript head/range manifest with stable semantic membership/order |
+| Tool calls/results/approvals | current and historical call versions plus result/approval facts are exact-verified; the complete session call set remains open | include every lifecycle fact and close attempt/order cardinality |
+| Responses/inference | exact membership and outcome/final-message edges are verified; logical/session attempt sets remain open | durable attempt/materialization domain heads and stable progress ordering |
+| Compaction | exact entry plus transcript/config/prior/fork manifests are consumed; the complete session compaction set remains open | exact session compaction head closes the retained prefix |
+| Rendered request | exact render, admission call, transcript, and bounded config edges are consumed; provider body is type-fenced out of ordinary timelines | retain exact relationship and expose body only in authorized projection variants |
+| Adapter outputs | projection `v2` carries versioned provenance and `verified_exact`/`partial_exact`/`unavailable` status | close source domains and add durable ACP/omission receipts plus archive replay |
 
 Retry, fork, and compaction edges must remain relationships in the manifest,
 not be reconstructed solely from timestamps. Ordering keys require a declared
@@ -299,9 +314,12 @@ as a final deterministic presentation tie-breaker, not as causal proof.
    replay conformance suites.
 6. Define trust classes and provenance for external adapter imports.
 
-Track C is **provisional** overall. `RenderedRequest` now has signed exact
-request/claim, inference-attempt, transcript, and bounded core-config evidence;
-tool results/approvals and finalized compactions also have narrower exact-source
-foundations. The projection pipeline still does not freeze or consume those
-facts as one complete source manifest and is not yet a durable, independently
-verifiable export path.
+Track C is **provisional** overall. The local projection pipeline now freezes
+and consumes exact signed request, response/outcome, inference/render,
+transcript, tool, bounded config, and compaction sources in a versioned manifest.
+It explicitly reports `partial_exact` while logical/session extents, the
+multi-query observation, or explicit source omissions remain open, rather than
+converting exact membership of discovered rows into a false completeness claim.
+Full `verified_exact`
+exports still require durable per-domain heads/cardinality manifests, atomic or
+equivalently fenced observation, ACP/omission receipts, and archive replay.

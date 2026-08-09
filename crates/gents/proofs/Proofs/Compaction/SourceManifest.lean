@@ -12,12 +12,21 @@ structure ExactRef where
   ordinal : Nat
   docId : Nat
   compositeCommitCid : Nat
+  collectionVersionId : Nat
   signerDid : Nat
   signatureValid : Bool
+  compositeVersion : Bool
+  sessionId : Nat
+  agentDid : Nat
+  requestLineageValid : Bool
+  sourceGraphValid : Bool
+  compactedCount : Nat
   deriving BEq, DecidableEq, Repr
 
 def ExactRef.complete (ref : ExactRef) : Bool :=
-  ref.docId != 0 && ref.compositeCommitCid != 0 && ref.signerDid != 0 && ref.signatureValid
+  ref.docId != 0 && ref.compositeCommitCid != 0 && ref.collectionVersionId != 0
+    && ref.signerDid != 0
+    && ref.signatureValid && ref.compositeVersion
 
 def exactOrder : List ExactRef → Bool
   | [] | [_] => true
@@ -26,6 +35,7 @@ def exactOrder : List ExactRef → Bool
 structure Manifest where
   version : Nat
   sessionId : Nat
+  agentDid : Nat
   behaviorId : Nat
   transcript : List ExactRef
   config : List ExactRef
@@ -36,16 +46,27 @@ structure Manifest where
   deriving BEq, DecidableEq, Repr
 
 def Manifest.valid (manifest : Manifest) : Bool :=
-  manifest.version == 1
+  manifest.version == 2
     && manifest.sessionId != 0
+    && manifest.agentDid != 0
     && manifest.behaviorId != 0
     && !manifest.transcript.isEmpty
     && manifest.transcript.all ExactRef.complete
+    && manifest.transcript.all fun ref =>
+      ref.sessionId == manifest.sessionId
+        && ref.agentDid == manifest.agentDid
+        && ref.requestLineageValid
     && exactOrder manifest.transcript
     && !manifest.config.isEmpty
     && manifest.config.all ExactRef.complete
     && manifest.priorCompactions.all ExactRef.complete
+    && manifest.priorCompactions.all fun ref =>
+      ref.sessionId == manifest.sessionId
+        && ref.agentDid == manifest.agentDid
+        && ref.sourceGraphValid
     && exactOrder manifest.priorCompactions
+    && manifest.priorCompactedCount
+      == (manifest.priorCompactions.map (·.compactedCount)).sum
     && manifest.priorCompactedCount <= manifest.providerViewCount
     && manifest.compactorInputCount
       <= manifest.providerViewCount - manifest.priorCompactedCount

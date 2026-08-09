@@ -323,6 +323,13 @@ impl DefraStreamWriter {
         doc_id: &str,
         fact: &crate::MessageFactRef,
     ) -> Result<()> {
+        if fact.doc_id.trim().is_empty()
+            || fact.composite_commit_cid.trim().is_empty()
+            || fact.collection_version_id.trim().is_empty()
+            || fact.signer_did.trim().is_empty()
+        {
+            anyhow::bail!("final AgentMessage binding requires complete exact provenance");
+        }
         if fact.signer_did != self.agent_did {
             anyhow::bail!(
                 "final AgentMessage signer {} does not match response writer {}",
@@ -346,12 +353,14 @@ impl DefraStreamWriter {
                         status: {{ _eq: "streaming" }},
                         final_message_doc_id: {{ _eq: null }},
                         final_message_composite_commit_cid: {{ _eq: null }},
+                        final_message_collection_version_id: {{ _eq: null }},
                         final_message_signer_did: {{ _eq: null }},
                         final_message_sequence: {{ _eq: null }}
                     }},
                     input: {{
                         final_message_doc_id: "{message_doc_id}",
                         final_message_composite_commit_cid: "{message_cid}",
+                        final_message_collection_version_id: "{message_collection_version_id}",
                         final_message_signer_did: "{message_signer}",
                         final_message_sequence: {message_sequence},
                         materialized_message_sequence: {message_sequence},
@@ -361,6 +370,7 @@ impl DefraStreamWriter {
             }}"#,
             message_doc_id = escape_graphql_string(&fact.doc_id),
             message_cid = escape_graphql_string(&fact.composite_commit_cid),
+            message_collection_version_id = escape_graphql_string(&fact.collection_version_id),
             message_signer = escape_graphql_string(&fact.signer_did),
             message_sequence = fact.sequence,
             materialized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
@@ -384,6 +394,8 @@ impl DefraStreamWriter {
         if current.final_message_doc_id.as_deref() != Some(fact.doc_id.as_str())
             || current.final_message_composite_commit_cid.as_deref()
                 != Some(fact.composite_commit_cid.as_str())
+            || current.final_message_collection_version_id.as_deref()
+                != Some(fact.collection_version_id.as_str())
             || current.final_message_signer_did.as_deref() != Some(fact.signer_did.as_str())
             || current.final_message_sequence != Some(fact.sequence)
         {
@@ -854,24 +866,34 @@ fn final_message_ref_from_response(
     let fields_present = [
         response.final_message_doc_id.is_some(),
         response.final_message_composite_commit_cid.is_some(),
+        response.final_message_collection_version_id.is_some(),
         response.final_message_signer_did.is_some(),
         response.final_message_sequence.is_some(),
     ];
     if fields_present.iter().all(|present| !present) {
         return Ok(None);
     }
-    let (Some(doc_id), Some(composite_commit_cid), Some(signer_did), Some(sequence)) = (
+    let (
+        Some(doc_id),
+        Some(composite_commit_cid),
+        Some(collection_version_id),
+        Some(signer_did),
+        Some(sequence),
+    ) = (
         response.final_message_doc_id.clone(),
         response.final_message_composite_commit_cid.clone(),
+        response.final_message_collection_version_id.clone(),
         response.final_message_signer_did.clone(),
         response.final_message_sequence,
-    ) else {
+    )
+    else {
         anyhow::bail!("AgentResponse has a partial final-message binding");
     };
     Ok(Some(crate::MessageFactRef {
         sequence,
         doc_id,
         composite_commit_cid,
+        collection_version_id,
         signer_did,
     }))
 }

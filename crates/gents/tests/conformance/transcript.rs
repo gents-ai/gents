@@ -800,11 +800,12 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
     )
     .await;
     drop(hook);
+    let agent_did = signed_materializer_agent_did(&db).to_string();
     let observer = DefraSessionHook::resume_or_create_with_identity_policy(
         db.node.clone(),
         &session_id,
         AGENT_NAME,
-        AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await

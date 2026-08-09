@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -100,7 +100,7 @@ pub struct SubagentTreeAccess {
 
 pub enum TreeQueryAccess {
     Local(Arc<EmbeddedNode>),
-    Graphql(String),
+    Graphql(gents::AuthenticatedGraphql),
 }
 
 impl TreeQueryAccess {
@@ -122,7 +122,9 @@ impl TreeQueryAccess {
                 }))
             }
             Self::Graphql(endpoint) => {
-                execute_graphql_async(endpoint, query, GraphqlRequestOptions::default()).await
+                endpoint
+                    .execute(query, GraphqlRequestOptions::default())
+                    .await
             }
         }
     }

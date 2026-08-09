@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::AuthenticatedGraphql;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -48,7 +49,7 @@ struct RequestRow {
     status: Option<String>,
 }
 
-pub(crate) async fn load_fleet_snapshot(graphql: &str) -> Result<FleetSnapshot> {
+pub(crate) async fn load_fleet_snapshot(graphql: &AuthenticatedGraphql) -> Result<FleetSnapshot> {
     let generated_at = Utc::now();
     let response = post_graphql(graphql, fleet_query()).await?;
     let envelope = decode_fleet_response(response)?;

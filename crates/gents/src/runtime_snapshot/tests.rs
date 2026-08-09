@@ -56,6 +56,7 @@ fn config_fact(collection: &str, logical_id: &str, cid: &str) -> crate::ConfigFa
     crate::ConfigFactRef::new(
         collection,
         logical_id,
+        format!("schema-{collection}"),
         crate::SignedDocumentVersionRef::new(
             crate::DocumentVersionRef::new(format!("doc-{collection}-{logical_id}"), cid),
             "did:key:verified-config-writer",

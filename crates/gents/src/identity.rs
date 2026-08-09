@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -61,6 +62,19 @@ pub trait AgentIdentity: Send + Sync {
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>>;
 
     async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool>;
+
+    /// Mint a DefraDB-compatible HTTP bearer token for an exact request Host.
+    ///
+    /// DefraDB authenticates HTTP document access by verifying a signed JWT
+    /// whose `aud` claim equals the lowercase HTTP `Host` header (including a
+    /// non-default port). This is deliberately distinct from semantic fields
+    /// such as `requester_did`: only this token establishes the ACP actor.
+    async fn defradb_bearer_token(&self, _audience: &str, _duration: Duration) -> Result<String> {
+        anyhow::bail!(
+            "identity {} cannot mint a DefraDB HTTP bearer token",
+            self.did()
+        )
+    }
 
     fn service_account(&self) -> Option<&ServiceAccount>;
 }
@@ -157,6 +171,10 @@ impl AgentIdentity for KeyIdentity {
         };
 
         verify_with_public_key(did, public_key, payload, signature)
+    }
+
+    async fn defradb_bearer_token(&self, audience: &str, duration: Duration) -> Result<String> {
+        mint_defradb_bearer_token(self.identity.as_ref(), audience, duration)
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
@@ -271,6 +289,24 @@ impl AgentIdentity for RegisteredIdentity {
         };
 
         verify_with_public_key(did, public_key, payload, signature)
+    }
+
+    async fn defradb_bearer_token(&self, audience: &str, duration: Duration) -> Result<String> {
+        if !self.config.private_key_bytes.is_empty() {
+            let identity = raw_identity_from_signing_config(&self.config)?;
+            return mint_defradb_bearer_token(&identity, audience, duration);
+        }
+
+        let did = self.did.clone();
+        let config = self.config.clone();
+        let audience = audience.to_string();
+        tokio::task::spawn_blocking(move || {
+            let identity = RemoteTokenIdentity::new(&did, &config)?;
+            mint_defradb_bearer_token(&identity, &audience, duration)
+        })
+        .await
+        .context("joining DefraDB remote bearer signing task")?
+        .with_context(|| format!("minting DefraDB HTTP bearer token for {}", self.did))
     }
 
     fn service_account(&self) -> Option<&ServiceAccount> {
@@ -619,6 +655,98 @@ fn raw_identity_from_signing_config(config: &SigningConfig) -> Result<RawIdentit
     )
     .map_err(anyhow::Error::from)
     .context("constructing identity from DefraDB signing config")
+}
+
+fn mint_defradb_bearer_token(
+    identity: &impl identity::FullIdentity,
+    audience: &str,
+    duration: Duration,
+) -> Result<String> {
+    let audience = audience.trim();
+    if audience.is_empty() {
+        anyhow::bail!("DefraDB bearer audience must not be empty");
+    }
+    let bytes = identity::new_token(identity, duration, Some(audience.to_string()), None)
+        .map_err(anyhow::Error::from)
+        .context("minting DefraDB HTTP bearer token")?;
+    String::from_utf8(bytes).context("DefraDB HTTP bearer token was not UTF-8")
+}
+
+/// Adapter that lets DefraDB's JWT encoder use registered hardware/remote
+/// signers without exporting private key material.
+struct RemoteTokenIdentity {
+    did: String,
+    key_type: crypto::KeyType,
+    public_key: Box<dyn crypto::PublicKey>,
+    remote_signer: Arc<dyn RemoteSigner>,
+    authorization: Option<defra_core::signing::SigningAuthorization>,
+}
+
+impl RemoteTokenIdentity {
+    fn new(did: &str, config: &SigningConfig) -> Result<Self> {
+        let key_type = signing_key_type_to_crypto_key_type(config.key_type)?;
+        let public_key = crypto::public_key_from_bytes(key_type, &config.public_key_bytes)
+            .map_err(anyhow::Error::from)
+            .context("loading registered identity public key for bearer token")?;
+        let remote_signer = config.remote_signer.clone().ok_or_else(|| {
+            anyhow!("registered identity has neither local key material nor a remote signer")
+        })?;
+        Ok(Self {
+            did: did.to_string(),
+            key_type,
+            public_key,
+            remote_signer,
+            authorization: config.signing_authorization.clone(),
+        })
+    }
+}
+
+impl crypto::Key for RemoteTokenIdentity {
+    fn equal(&self, other: &dyn crypto::Key) -> bool {
+        self.key_type == other.key_type() && self.public_key.raw() == other.raw()
+    }
+
+    // No private bytes are exposed. The public bytes provide a stable,
+    // non-secret identity for the base Key trait's comparison/debug helpers.
+    fn raw(&self) -> &[u8] {
+        self.public_key.raw()
+    }
+
+    fn key_type(&self) -> crypto::KeyType {
+        self.key_type
+    }
+}
+
+impl crypto::PrivateKey for RemoteTokenIdentity {
+    fn sign(&self, data: &[u8]) -> defra_core::Result<Vec<u8>> {
+        self.remote_signer
+            .sign_sync(data, self.authorization.as_ref())
+            .map_err(defra_core::Error::Other)
+    }
+
+    fn public_key(&self) -> &dyn crypto::PublicKey {
+        self.public_key.as_ref()
+    }
+}
+
+impl identity::Identity for RemoteTokenIdentity {
+    fn pub_key(&self) -> &dyn crypto::PublicKey {
+        self.public_key.as_ref()
+    }
+
+    fn did(&self) -> identity::Result<identity::Did> {
+        identity::Did::new(&self.did)
+    }
+}
+
+impl identity::FullIdentity for RemoteTokenIdentity {
+    fn priv_key(&self) -> &dyn crypto::PrivateKey {
+        self
+    }
+
+    fn sign(&self, data: &[u8]) -> defra_core::Result<Vec<u8>> {
+        crypto::PrivateKey::sign(self, data)
+    }
 }
 
 fn signing_key_type_to_crypto_key_type(key_type: SigningKeyType) -> Result<crypto::KeyType> {

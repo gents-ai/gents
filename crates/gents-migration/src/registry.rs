@@ -346,12 +346,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
         gents_protocol::schemas::AGENT_RESPONSE,
-        "bafyreifxg2qvw5lexb75muxjzsdkkoptzpx33jawmosnwwasgxrezi4hau"
+        "bafyreiarqm554pxlb6nndoht7m446dm65v6jkgwq3ieiuf4acpfxvnxywe"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_OUTCOME_NAME,
         gents_protocol::schemas::AGENT_RESPONSE_OUTCOME,
-        "bafyreifosr4zpbfmozhozm6xddhigex6fxo326wpptav22eij2yqlcigfi"
+        "bafyreia6cxfjyhgovm2pssuzhy4n7uit3s7yqkbjjue5tp55muhirtmrza"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,

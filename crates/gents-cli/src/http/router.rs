@@ -29,7 +29,7 @@ const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHttpState {
-    pub(crate) graphql: String,
+    pub(crate) graphql: gents::AuthenticatedGraphql,
     pub(crate) agent_name: String,
     pub(crate) agent_did: String,
     pub(crate) started_at: String,
@@ -45,7 +45,7 @@ pub(crate) struct RuntimeHttpState {
 }
 
 pub(crate) fn runtime_contract_router(
-    graphql: String,
+    graphql: gents::AuthenticatedGraphql,
     agent_name: String,
     agent_did: String,
     // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
@@ -142,7 +142,7 @@ async fn load_p2p_metrics_for_scrape(state: &RuntimeHttpState) -> P2pMetricsSnap
 
     let fetch = crate::commands::p2p::fetch_live_http_p2p_status_with_client(
         None,
-        &state.graphql,
+        state.graphql.endpoint(),
         &state.p2p_http_client,
     );
     match tokio::time::timeout(P2P_METRICS_FETCH_BUDGET, fetch).await {
@@ -239,7 +239,8 @@ fn p2p_metrics_from_status(
 }
 
 async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
-    let mut p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
+    let mut p2p =
+        crate::commands::p2p::load_live_http_p2p_status(None, state.graphql.endpoint()).await;
     if let Some(admission) = state.p2p_admission.as_ref() {
         if let Some(map) = p2p.as_object_mut() {
             map.insert("p2p_admission".to_string(), admission.to_json());
@@ -261,7 +262,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "version": version_response().version,
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
-                "graphql": state.graphql,
+                "graphql": state.graphql.endpoint(),
                 "agent_name": state.agent_name,
                 "agent_did": state.agent_did,
                 "runtime": runtime,
@@ -278,7 +279,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "version": version_response().version,
             "started_at": state.started_at,
             "uptime_seconds": state.started_instant.elapsed().as_secs(),
-            "graphql": state.graphql,
+            "graphql": state.graphql.endpoint(),
             "agent_name": state.agent_name,
             "agent_did": state.agent_did,
             "runtime": Value::Null,
@@ -352,7 +353,7 @@ async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "version": version_response().version,
                 "started_at": state.started_at,
                 "uptime_seconds": state.started_instant.elapsed().as_secs(),
-                "graphql": state.graphql,
+                "graphql": state.graphql.endpoint(),
                 "agent_name": state.agent_name,
                 "agent_did": state.agent_did,
                 "process_state": "unknown",
@@ -413,7 +414,7 @@ fn render_self_payload(
         "version": version_response().version,
         "started_at": &state.started_at,
         "uptime_seconds": state.started_instant.elapsed().as_secs(),
-        "graphql": &state.graphql,
+        "graphql": state.graphql.endpoint(),
         "agent_name": &state.agent_name,
         "agent_did": &state.agent_did,
         "process_state": process_state,
@@ -491,7 +492,9 @@ mod tests {
 
     fn state() -> RuntimeHttpState {
         RuntimeHttpState {
-            graphql: "http://127.0.0.1:9181/api/v0/graphql".to_string(),
+            graphql: crate::graphql_access::authenticated_test_graphql_sync(
+                "http://127.0.0.1:9181/api/v0/graphql",
+            ),
             agent_name: "amy".to_string(),
             agent_did: "did:key:zAgent".to_string(),
             started_at: "2026-06-04T00:00:00Z".to_string(),

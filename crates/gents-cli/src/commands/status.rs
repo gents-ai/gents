@@ -6,15 +6,17 @@ use gents::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::StatusArgs;
-use crate::config_writes::ConfigAccess;
 use crate::shared::ConfigExportBundle;
 use crate::{
-    build_config_export_bundle, normalize_optional_string, post_graphql, print_json,
-    read_runtime_state, resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir,
+    authenticated_graphql_client, build_config_export_bundle, normalize_optional_string,
+    post_graphql, print_json, read_runtime_state, resolve_agent_did, resolve_graphql_endpoint,
+    resolve_home_dir,
 };
 
 pub(crate) async fn status(args: StatusArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql =
+        authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &agent_did).await?;
     print_json(&output)?;
@@ -23,10 +25,10 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
 
 pub(crate) async fn load_runtime_status_output(
     home: Option<&Path>,
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
 ) -> Result<Value> {
-    let unavailable_behaviors = load_live_unavailable_behaviors(graphql, agent_did).await;
+    let unavailable_behaviors = load_live_unavailable_behaviors(home, graphql, agent_did).await;
     let query = format!(
         r#"{{
             AgentRuntime(
@@ -62,10 +64,11 @@ pub(crate) async fn load_runtime_status_output(
     let liveness_value = crate::commands::status::load_liveness_value(graphql, agent_did).await;
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
-    let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
+    let p2p_status =
+        crate::commands::p2p::load_live_http_p2p_status(home, graphql.endpoint()).await;
     let mut output = json!({
         "home": home_dir,
-        "graphql": graphql,
+        "graphql": graphql.endpoint(),
         "agent_did": agent_did,
         "runtime_state": runtime_state,
         "runtime": runtime_row,
@@ -106,8 +109,11 @@ pub(crate) async fn load_runtime_status_output(
     Ok(output)
 }
 
-pub(crate) async fn load_liveness_value(graphql: &str, agent_did: &str) -> Value {
-    if let Some(liveness) = load_live_http_liveness_value(graphql).await {
+pub(crate) async fn load_liveness_value(
+    graphql: &gents::AuthenticatedGraphql,
+    agent_did: &str,
+) -> Value {
+    if let Some(liveness) = load_live_http_liveness_value(graphql.endpoint()).await {
         return liveness;
     }
     match crate::http::prometheus::load_metrics_query_data(graphql, agent_did).await {
@@ -139,10 +145,11 @@ fn runtime_status_url(graphql: &str) -> Result<String> {
 }
 
 async fn load_live_unavailable_behaviors(
-    graphql: &str,
+    _home: Option<&Path>,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
 ) -> BTreeMap<String, String> {
-    let access = ConfigAccess::Graphql(graphql.to_string());
+    let access = crate::config_writes::ConfigAccess::Graphql(graphql.clone());
     match build_config_export_bundle(&access, agent_did).await {
         Ok(bundle) => collect_unavailable_behaviors_from_bundle(&bundle),
         Err(_) => BTreeMap::new(),

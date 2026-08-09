@@ -174,7 +174,7 @@ pub(crate) async fn subagent_tree_handler(
 }
 
 pub(crate) async fn load_subagent_tree_snapshot(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     root_request_id: &str,
     include_terminal: bool,
     max_depth: usize,
@@ -294,7 +294,10 @@ fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
     }
 }
 
-async fn fetch_root_request(graphql: &str, root_request_id: &str) -> Result<Option<RequestRow>> {
+async fn fetch_root_request(
+    graphql: &gents::AuthenticatedGraphql,
+    root_request_id: &str,
+) -> Result<Option<RequestRow>> {
     let escaped = escape_graphql_string(root_request_id);
     let query = format!(
         r#"{{
@@ -319,7 +322,10 @@ async fn fetch_root_request(graphql: &str, root_request_id: &str) -> Result<Opti
     Ok(envelope.requests.into_iter().next())
 }
 
-async fn fetch_level(graphql: &str, parent_request_ids: &[String]) -> Result<LevelQueryEnvelope> {
+async fn fetch_level(
+    graphql: &gents::AuthenticatedGraphql,
+    parent_request_ids: &[String],
+) -> Result<LevelQueryEnvelope> {
     let list = parent_request_ids
         .iter()
         .map(|value| format!("\"{}\"", escape_graphql_string(value)))
@@ -517,6 +523,7 @@ mod tests {
     async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let router = crate::http::runtime_contract_router(
             graphql,
             "subagent-tree-test-agent".to_string(),
@@ -601,6 +608,7 @@ mod tests {
             level_two_empty(),
         ])
         .await?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
 
         assert_eq!(snapshot.root_request_id, "req-root");
@@ -683,6 +691,7 @@ mod tests {
             }
         });
         let (graphql, _queries) = spawn_mock_graphql(vec![root, level_one]).await?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", true, 1).await?;
         assert!(snapshot.truncated, "max_depth=1 should set truncated");
         assert_eq!(snapshot.nodes.len(), 2);
@@ -795,6 +804,7 @@ mod tests {
         });
         let (graphql, _queries) =
             spawn_mock_graphql(vec![root, level_one, level_two_empty]).await?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
         let request_ids = snapshot
             .nodes

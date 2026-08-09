@@ -163,6 +163,8 @@ mod replicated_request_convergence;
 mod request_lifecycle;
 #[path = "conformance/response_outcome.rs"]
 mod response_outcome;
+#[path = "conformance/run_timeline_manifest.rs"]
+mod run_timeline_manifest;
 #[path = "conformance/session_recovery.rs"]
 mod session_recovery;
 #[path = "conformance/startup_readiness.rs"]
@@ -497,6 +499,11 @@ fn generated_compaction_source_manifest_cases_pin_exact_immutable_sources() {
 #[test]
 fn generated_response_outcome_cases_pin_exact_immutable_outcomes() {
     response_outcome::generated_cases_pin_exact_immutable_response_outcomes();
+}
+
+#[test]
+fn generated_run_timeline_manifest_cases_pin_exact_projection_sources() {
+    run_timeline_manifest::generated_cases_pin_exact_roots_membership_order_and_omissions();
 }
 
 #[tokio::test]

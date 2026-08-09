@@ -25,6 +25,10 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         .clone()
         .or_else(|| runtime_state.as_ref().map(|state| state.graphql.clone()))
         .unwrap_or_else(|| format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"));
+    let access = crate::authenticated_graphql_access(&home_dir, &graphql).await?;
+    let crate::config_writes::ConfigAccess::Graphql(graphql) = access else {
+        unreachable!("explicit GraphQL access resolves to the HTTP variant")
+    };
     let agent_did = match args
         .agent_did
         .clone()
@@ -126,7 +130,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
 }
 
 pub(crate) async fn submit_chat_turn(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
     session_id: &str,
     behavior_id: Option<&str>,
@@ -156,7 +160,7 @@ pub(crate) async fn submit_chat_turn(
 }
 
 async fn submit_chat_turn_json(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
     session_id: &str,
     behavior_id: Option<&str>,

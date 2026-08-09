@@ -117,6 +117,7 @@ mod response_outcome;
 pub mod retry;
 pub mod run_timeline;
 pub mod run_timeline_fetch;
+pub mod run_timeline_manifest;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
@@ -148,7 +149,7 @@ pub use adapter_projection::{
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
     AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
-    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
+    ProjectionRedactionMode, ATIF_SCHEMA_VERSION, PROJECTION_REDACTION_ALGORITHM_VERSION,
 };
 pub use admission::BackendAdmissionConfig;
 pub use admission::{InferenceCall, InferenceCallRecoveryReport};
@@ -169,6 +170,7 @@ pub use config::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
+pub use config_client::{defradb_http_audience, AuthenticatedGraphql};
 pub use defra_node;
 pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{

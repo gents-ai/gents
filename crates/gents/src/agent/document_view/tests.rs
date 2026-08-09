@@ -45,6 +45,7 @@ fn test_config_record(collection: &str, logical_id: &str, doc_id: &str) -> Docum
         crate::ConfigFactRef::new(
             collection,
             logical_id,
+            format!("bafy-schema-{collection}"),
             crate::SignedDocumentVersionRef::new(
                 crate::DocumentVersionRef::new(doc_id, format!("bafy-{doc_id}")),
                 "did:key:zSigner",

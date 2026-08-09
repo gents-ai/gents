@@ -18,18 +18,30 @@ pub(super) async fn load_session_document_optional(
     node: &EmbeddedNode,
     session_id: &str,
 ) -> Result<Option<SessionDocument>> {
+    load_agent_session_exact(node, session_id).await
+}
+
+pub async fn load_agent_session_exact(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Result<Option<SessionDocument>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentSession(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }}
-                }},
-                limit: 1
+                }}
             ) {{
                 _docID
+                session_id
+                agent_name
+                agent_did
+                requester_did
                 behavior_id
                 started
+                ended
+                status
             }}
         }}"#
     );
@@ -43,13 +55,27 @@ pub(super) async fn load_session_document_optional(
         );
     }
 
-    let mut rows: Vec<SessionDocument> =
+    let rows: Vec<SessionDocument> =
         match resp.data.as_ref().and_then(|data| data.get("AgentSession")) {
             Some(value) => serde_json::from_value(value.clone())?,
             None => Vec::new(),
         };
-
-    Ok(rows.pop())
+    for row in &rows {
+        if row.session_id != session_id {
+            anyhow::bail!(
+                "AgentSession logical key mismatch: queried session_id={session_id} but _docID={} returned session_id={}",
+                row.doc_id,
+                row.session_id
+            );
+        }
+    }
+    Ok(super::resolve_exact_logical_match(
+        "AgentSession",
+        "session_id",
+        session_id,
+        rows,
+        |row| row.doc_id.as_str(),
+    )?)
 }
 
 /// Whether any `AgentResponse` in this session is still streaming.

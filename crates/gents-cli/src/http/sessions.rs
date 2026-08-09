@@ -112,7 +112,7 @@ struct CompactionRow {
 }
 
 pub(crate) async fn load_session_history_snapshot(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {

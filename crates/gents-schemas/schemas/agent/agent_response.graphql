@@ -25,6 +25,7 @@ type AgentResponse @branchable {
     # the tuple once and AgentResponseOutcome copies it exactly.
     final_message_doc_id: String
     final_message_composite_commit_cid: String
+    final_message_collection_version_id: String
     final_message_signer_did: String
     final_message_sequence: Int
     # Stable, once-bound timestamp used to make outcome publication replayable

@@ -106,7 +106,7 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         ),
         None => args.instructions.clone(),
     };
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let skill = SkillInput {
         skill_id: args.skill_id.clone(),
         agent_did: args.agent_did.clone(),
@@ -140,7 +140,7 @@ fn skill_rows(response: &Value) -> Vec<Value> {
 }
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let agent_did = escape_graphql_string(&args.agent_did);
     let query = format!(
         r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
@@ -162,7 +162,7 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let skill_id = escape_graphql_string(&args.skill_id);
     let query = format!(
         r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {EXPORT_SKILL_FIELDS} }} }}"#
@@ -176,7 +176,7 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let skill_id = escape_graphql_string(&args.skill_id);
     let mutation = format!(
         r#"mutation {{ delete_Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ _docID }} }}"#
@@ -196,7 +196,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let skill_id = escape_graphql_string(&args.skill_id);
     let mutation = format!(
         r#"mutation {{
@@ -315,7 +315,7 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     if !args.dir.is_dir() {
         anyhow::bail!("{} is not a directory", args.dir.display());
     }
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
 
     let mut imported = Vec::new();
     let mut errors = Vec::new();
@@ -504,7 +504,7 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 }
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let agent_did = escape_graphql_string(&args.agent_did);
     let query = format!(
         r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#

@@ -14,7 +14,7 @@ pub(super) async fn create_agent_request_with_retry(
     let mut last_error = None;
     for attempt in 0..5 {
         match create_agent_request(
-            state.graphql.as_ref(),
+            &state.graphql,
             state.agent_did.as_ref(),
             content,
             session_id,

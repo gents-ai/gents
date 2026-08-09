@@ -174,11 +174,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // the per-kind label sequence and hand the inference loop a label the
         // summarizer's scope had already used.
         let inference = async {
-                let hook = DefraSessionHook::resume_or_create_with_identity_policy(
+                let hook = DefraSessionHook::resume_or_create_with_identity_policy_and_requester_did(
                     self.node.clone(),
                     &request.session_id,
                     &self.behavior.behavior_id,
                     self.behavior.agent_did(),
+                    request.requester_did.as_deref(),
                     self.hook_failure_policy,
                 )
                 .await?
@@ -862,6 +863,13 @@ mod tests {
         crate::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
+        let config_provenance = crate::session::create_test_config_provenance(
+            node.as_ref(),
+            behavior.agent_did(),
+            &behavior.behavior_id,
+        )
+        .await
+        .expect("exact document-backed config provenance");
 
         let requester_did = "did:test:coordinator";
         let request = create_routed_request(node.as_ref(), &behavior, requester_did).await;
@@ -880,8 +888,8 @@ mod tests {
             node.clone(),
             behavior,
             crate::runtime_snapshot::ScopedBehaviorConfigProvenance {
-                scope: crate::rendered_request::ConfigProvenanceScope::StaticOrOneShot,
-                exact: None,
+                scope: crate::rendered_request::ConfigProvenanceScope::ReconciledDocumentRuntime,
+                exact: Some(Arc::new(config_provenance)),
             },
             Arc::new(RoutedReplyModel),
             preamble,
@@ -899,6 +907,8 @@ mod tests {
         daemon.process_request(request.clone(), shutdown_rx).await;
 
         let escaped_session_id = crate::graphql::escape_graphql_string(&request.session_id);
+        let escaped_request_doc_id = crate::graphql::escape_graphql_string(&request.doc_id);
+        let escaped_request_id = crate::graphql::escape_graphql_string(&request.request_id);
         let query = format!(
             r#"{{
                 AgentMessage(
@@ -907,6 +917,15 @@ mod tests {
                     role
                     content
                     requester_did
+                }}
+                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }}) {{
+                    status
+                    lifecycle_state
+                    failure_reason
+                }}
+                AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{
+                    status
+                    error_message
                 }}
             }}"#
         );
@@ -932,7 +951,8 @@ mod tests {
                     && row.get("requester_did").and_then(serde_json::Value::as_str)
                         == Some(requester_did)
             }),
-            "daemon-persisted assistant message must carry requester lineage; rows={rows:?}"
+            "daemon-persisted assistant message must carry requester lineage; data={:?}",
+            response.data
         );
 
         node.shutdown().await;

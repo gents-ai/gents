@@ -25,6 +25,7 @@ type AgentResponseOutcome @branchable {
 
     final_message_doc_id: String @immutable
     final_message_composite_commit_cid: String @immutable
+    final_message_collection_version_id: String @immutable
     final_message_signer_did: String @immutable
     final_message_sequence: Int @immutable
 

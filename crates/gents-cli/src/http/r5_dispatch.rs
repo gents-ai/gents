@@ -115,7 +115,7 @@ pub(crate) async fn subagent_dispatches_handler(
 }
 
 pub(crate) async fn load_subagent_dispatch_snapshot(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     parent_request_id: Option<&str>,
 ) -> Result<SubagentDispatchSnapshot> {
     let generated_at = Utc::now();
@@ -378,6 +378,7 @@ mod tests {
     async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let router = crate::http::runtime_contract_router(
             graphql,
             "r5-dispatch-test-agent".to_string(),

@@ -53,7 +53,8 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
     let mut server = spawn_server(&bin, &home, port, &home.join("server.log"))?;
     wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
-    wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
+    let graphql_access = crate::authenticated_graphql_client(&home, &graphql).await?;
+    wait_runtime_ready(&graphql_access, &agent_did, &mut server).await?;
 
     if first_run {
         seed_demo_skills(&bin, &graphql, &agent_did).await;
@@ -64,6 +65,7 @@ pub(crate) async fn demo(args: DemoArgs) -> Result<()> {
         home_a: home.clone(),
         work_a: work,
         graphql_a: graphql,
+        graphql_access_a: graphql_access,
         did_a: agent_did,
         base_port: port,
         backend,

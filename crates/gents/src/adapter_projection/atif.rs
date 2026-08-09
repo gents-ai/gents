@@ -205,9 +205,12 @@ pub(super) fn build_atif_trajectory(
             }
             RunTimelineEvent::Request(_)
             | RunTimelineEvent::InferenceCall(_)
+            | RunTimelineEvent::RenderedRequest(_)
+            | RunTimelineEvent::Compaction(_)
             | RunTimelineEvent::Message(_)
             | RunTimelineEvent::ToolCall(_)
-            | RunTimelineEvent::Response(_) => {}
+            | RunTimelineEvent::Response(_)
+            | RunTimelineEvent::ResponseOutcome(_) => {}
         }
     }
 
@@ -957,6 +960,7 @@ mod tests {
             &ProjectionContext {
                 actor_did: None,
                 redaction_mode: ProjectionRedactionMode::Public,
+                ..ProjectionContext::default()
             },
         );
         let serialized = serde_json::to_string(&trajectory).unwrap();

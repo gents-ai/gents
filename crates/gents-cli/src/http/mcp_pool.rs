@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::AuthenticatedGraphql;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use serde::{Deserialize, Serialize};
@@ -63,7 +64,7 @@ struct McpPoolEnvelope {
 }
 
 pub(crate) async fn load_mcp_pool_snapshot(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     agent_did: &str,
 ) -> Result<McpPoolSnapshot> {
     let generated_at = Utc::now();

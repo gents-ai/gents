@@ -1077,8 +1077,21 @@ pub(crate) struct TraceTimelineArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "request-id", help = "Request id to reconstruct")]
-    pub(crate) request_id: String,
+    #[arg(
+        long = "request-id",
+        help = "Logical request id to reconstruct (mutually exclusive with the exact document selector)"
+    )]
+    pub(crate) request_id: Option<String>,
+    #[arg(
+        long = "request-doc-id",
+        help = "Exact AgentRequest _docID; requires --request-composite-cid"
+    )]
+    pub(crate) request_doc_id: Option<String>,
+    #[arg(
+        long = "request-composite-cid",
+        help = "Exact AgentRequest composite commit CID; requires --request-doc-id"
+    )]
+    pub(crate) request_composite_cid: Option<String>,
     #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
     pub(crate) output_file: Option<PathBuf>,
 }
@@ -1089,8 +1102,21 @@ pub(crate) struct TraceProjectArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
-    #[arg(long = "request-id", help = "Request id to reconstruct and project")]
-    pub(crate) request_id: String,
+    #[arg(
+        long = "request-id",
+        help = "Logical request id to reconstruct and project (mutually exclusive with the exact document selector)"
+    )]
+    pub(crate) request_id: Option<String>,
+    #[arg(
+        long = "request-doc-id",
+        help = "Exact AgentRequest _docID; requires --request-composite-cid"
+    )]
+    pub(crate) request_doc_id: Option<String>,
+    #[arg(
+        long = "request-composite-cid",
+        help = "Exact AgentRequest composite commit CID; requires --request-doc-id"
+    )]
+    pub(crate) request_composite_cid: Option<String>,
     #[arg(long, value_enum, help = "Adapter projection to export")]
     pub(crate) projection: TraceProjectionArg,
     #[arg(

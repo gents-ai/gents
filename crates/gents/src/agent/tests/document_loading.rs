@@ -10,10 +10,50 @@ use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
 #[tokio::test]
+async fn document_constructor_rejects_unsigned_node_before_migrations() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let identity = Arc::new(test_identity("document-constructor-unsigned"));
+
+    let error = Gents::from_default_behavior_documents(
+        node,
+        identity.clone(),
+        DocumentRuntimeOptions::default(),
+    )
+    .await
+    .err()
+    .expect("unsigned node must be rejected");
+
+    let message = error.to_string();
+    assert!(message.contains("node is unsigned"), "{message}");
+    assert!(message.contains(identity.did()), "{message}");
+}
+
+#[tokio::test]
+async fn document_constructor_rejects_node_signer_that_differs_from_principal() {
+    let node_identity = test_identity("document-constructor-node");
+    let node = test_node_for_identity(&node_identity).await;
+    let principal_identity = Arc::new(test_identity("document-constructor-principal"));
+
+    let error = Gents::from_default_behavior_documents(
+        node,
+        principal_identity.clone(),
+        DocumentRuntimeOptions::default(),
+    )
+    .await
+    .err()
+    .expect("mismatched signer must be rejected");
+
+    let message = error.to_string();
+    assert!(message.contains("identity mismatch"), "{message}");
+    assert!(message.contains(node_identity.did()), "{message}");
+    assert!(message.contains(principal_identity.did()), "{message}");
+}
+
+#[tokio::test]
 async fn from_default_behavior_documents_marks_unbound_default_behavior_unavailable() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("bootstrap-profile"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
 
@@ -42,9 +82,9 @@ async fn from_default_behavior_documents_marks_unbound_default_behavior_unavaila
 
 #[tokio::test]
 async fn from_default_behavior_documents_composes_behavior_and_inference_profile() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("composed-profile"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
 
@@ -128,9 +168,9 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
 
 #[tokio::test]
 async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("tool-selection"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
     let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
@@ -279,9 +319,9 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
 
 #[tokio::test]
 async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_surface() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("subagent-target-disabled"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
     let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
@@ -386,9 +426,9 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
 
 #[tokio::test]
 async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("subagent-target-missing"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
     let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
@@ -466,9 +506,9 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
 
 #[tokio::test]
 async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_unavailable() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("behavior-catalog"));
+    let node = test_node_for_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
 

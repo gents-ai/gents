@@ -110,7 +110,7 @@ struct CompactionRow {
 }
 
 pub(crate) async fn load_self_view(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
 ) -> Result<(Vec<SelfBehavior>, ContextBudget, ContextIndicator)> {
     let response = post_graphql(graphql, &self_view_query(agent_did)).await?;

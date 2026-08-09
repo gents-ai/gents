@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
-use gents::ensure_runtime_schemas;
 use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
+use gents::{ensure_runtime_schemas, KeyIdentity};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -52,16 +52,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     let agent_home = tempdir.path().join("agent-home");
     let data_dir = agent_home.join("data");
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
-        ensure_runtime_schemas(&node).await?;
-        seed_trace_export_rows(&node).await?;
-    }
+    initialize_signed_trace_export_home(&agent_home, &data_dir).await?;
 
     let output = run_cli_text(
         tempdir.path(),
@@ -362,7 +353,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
     assert_eq!(
         atif_native_schema.get("$id").and_then(Value::as_str),
         Some(
-            "https://schemas.defra.ai/gents/adapter-projection/atif_trajectory/v1-native.schema.json"
+            "https://schemas.defra.ai/gents/adapter-projection/atif_trajectory/v2-native.schema.json"
         )
     );
 
@@ -375,16 +366,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     let agent_home = tempdir.path().join("agent-home");
     let data_dir = agent_home.join("data");
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
-        ensure_runtime_schemas(&node).await?;
-        seed_trace_export_rows(&node).await?;
-    }
+    let seeded = initialize_signed_trace_export_home(&agent_home, &data_dir).await?;
 
     let output = run_cli_text(
         tempdir.path(),
@@ -398,6 +380,44 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
         ],
     )?;
     let timeline = serde_json::from_str::<Value>(&output).context("parsing timeline JSON")?;
+
+    let exact_output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "timeline",
+            "--home",
+            agent_home.to_str().context("agent home utf8")?,
+            "--request-doc-id",
+            &seeded.request_doc_id,
+            "--request-composite-cid",
+            &seeded.request_composite_cid,
+        ],
+    )?;
+    let exact_timeline =
+        serde_json::from_str::<Value>(&exact_output).context("parsing exact timeline JSON")?;
+    assert_eq!(
+        exact_timeline, timeline,
+        "exact-root and logical-root selectors should reconstruct the same pinned timeline"
+    );
+
+    let field_cid_error = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "trace",
+            "timeline",
+            "--home",
+            agent_home.to_str().context("agent home utf8")?,
+            "--request-doc-id",
+            &seeded.request_doc_id,
+            "--request-composite-cid",
+            &seeded.request_content_field_cid,
+        ],
+    )?;
+    assert!(
+        field_cid_error.contains("is not the requested composite document version"),
+        "exact-root selection accepted a field commit CID:\n{field_cid_error}"
+    );
 
     assert_eq!(
         timeline.get("request_id").and_then(Value::as_str),
@@ -457,22 +477,38 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
     Ok(())
 }
 
+#[test]
+fn trace_timeline_refuses_offline_home_without_signing_identity() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let agent_home = tempdir.path().join("legacy-agent-home");
+    std::fs::create_dir_all(agent_home.join("data"))?;
+
+    let stderr = run_cli_failure_stderr(
+        tempdir.path(),
+        &[
+            "trace",
+            "timeline",
+            "--home",
+            agent_home.to_str().context("agent home utf8")?,
+            "--request-id",
+            "req-1",
+        ],
+    )?;
+    assert!(
+        stderr.contains("offline configuration access requires an initialized signing identity"),
+        "offline trace should fail closed without an initialized signer:\n{stderr}"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
     let data_dir = agent_home.join("data");
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
-        ensure_runtime_schemas(&node).await?;
-        seed_trace_export_rows(&node).await?;
-    }
+    let seeded = initialize_signed_trace_export_home(&agent_home, &data_dir).await?;
 
     let home = agent_home.to_str().context("agent home utf8")?;
     let atif = trace_project_json_with_extra_args(
@@ -612,7 +648,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         home,
         "openai-codex",
         "full",
-        &["--scope-agent-did", "did:test:amy"],
+        &["--scope-agent-did", &seeded.agent_did],
     )?;
     let scoped_openai_serialized = serde_json::to_string(&scoped_openai)?;
     assert!(
@@ -966,10 +1002,132 @@ fn trace_project_eval_jsonl_lines(
         .collect::<Result<Vec<_>>>()
 }
 
-async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
+struct SignedTraceExportHome {
+    agent_did: String,
+    request_doc_id: String,
+    request_composite_cid: String,
+    request_content_field_cid: String,
+}
+
+async fn initialize_signed_trace_export_home(
+    agent_home: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Result<SignedTraceExportHome> {
+    std::fs::create_dir_all(agent_home)
+        .with_context(|| format!("creating test agent home {}", agent_home.display()))?;
+    let agent_home_arg = agent_home.to_str().context("test agent home utf8")?;
+    let initialized = run_init_json(
+        agent_home,
+        &[
+            "--identity-only",
+            "--home",
+            agent_home_arg,
+            "--agent-name",
+            "trace-export-node",
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&initialized)?;
+    let key_path = initialized
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("identity-only init output missing key_path")?;
+    let _signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading trace-export signing key {key_path}"))?;
+
+    let node = EmbeddedNode::builder()
+        .data_path(data_dir)
+        .with_storage_backend(StorageBackend::RocksDb)
+        .with_node_identity_did(&agent_did)
+        .build()
+        .await
+        .context("opening signed embedded node")?;
+    ensure_runtime_schemas(&node).await?;
+    seed_trace_export_rows(&node, &agent_did).await?;
+    let request = node
+        .execute(
+            r#"{
+                AgentRequest(filter: { request_id: { _eq: "req-1" } }, limit: 1) {
+                    _docID
+                }
+            }"#,
+        )
+        .await;
+    anyhow::ensure!(
+        !request.has_errors(),
+        "loading seeded AgentRequest document ID failed: {:?}",
+        request.errors
+    );
+    let request_doc_id = request
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .context("seeded AgentRequest omitted _docID")?
+        .to_string();
+    let commits = node
+        .execute(&format!(
+            r#"{{
+                _commits(
+                    docID: ["{}"],
+                    filter: {{ fieldName: {{ _eq: "_C" }} }}
+                ) {{
+                    cid
+                    links {{ cid fieldName }}
+                }}
+            }}"#,
+            escape_graphql_string(&request_doc_id),
+        ))
+        .await;
+    anyhow::ensure!(
+        !commits.has_errors(),
+        "loading seeded AgentRequest commit graph failed: {:?}",
+        commits.errors
+    );
+    let commit_rows = commits
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .and_then(Value::as_array)
+        .context("seeded AgentRequest commit query omitted _commits")?;
+    anyhow::ensure!(
+        commit_rows.len() == 1,
+        "newly seeded AgentRequest should have exactly one composite commit, found {}",
+        commit_rows.len()
+    );
+    let composite = &commit_rows[0];
+    let request_composite_cid = composite
+        .get("cid")
+        .and_then(Value::as_str)
+        .context("seeded AgentRequest composite commit omitted cid")?
+        .to_string();
+    let request_content_field_cid = composite
+        .get("links")
+        .and_then(Value::as_array)
+        .and_then(|links| {
+            links
+                .iter()
+                .find(|link| link.get("fieldName").and_then(Value::as_str) == Some("content"))
+        })
+        .and_then(|link| link.get("cid"))
+        .and_then(Value::as_str)
+        .context("seeded AgentRequest composite commit omitted content field link")?
+        .to_string();
+    drop(node);
+    Ok(SignedTraceExportHome {
+        agent_did,
+        request_doc_id,
+        request_composite_cid,
+        request_content_field_cid,
+    })
+}
+
+async fn seed_trace_export_rows(node: &EmbeddedNode, agent_did: &str) -> Result<()> {
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentBehavior(input: {
                 behavior_id: "amy",
                 agent_did: "did:test:amy",
@@ -982,7 +1140,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 enabled: true,
                 created_at: "2026-05-04T12:00:00Z"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
@@ -1000,7 +1159,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentConversation(input: {
                 session_id: "session-1",
                 agent_name: "Amy",
@@ -1014,12 +1173,13 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 updated_at: "2026-05-04T12:00:05Z",
                 latest_request_id: "req-1"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-1",
                 agent_did: "did:test:amy",
@@ -1034,7 +1194,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 created_at: "2026-05-04T12:00:01Z",
                 retry_count: 0
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
@@ -1093,7 +1254,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentResponse(input: {
                 response_key: "req-1",
                 request_id: "req-1",
@@ -1111,16 +1272,17 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 created_at: "2026-05-04T12:00:01Z",
                 completed_at: "2026-05-04T12:00:06Z"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentResponse(input: {
                 response_key: "req-child",
                 request_id: "req-child",
-                agent_did: "did:test:reviewer",
+                agent_did: "did:test:amy",
                 behavior_id: "reviewer",
                 session_id: "session-child",
                 content: "reviewer private child response",
@@ -1134,7 +1296,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 created_at: "2026-05-04T12:00:04Z",
                 completed_at: "2026-05-04T12:00:07Z"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
@@ -1334,7 +1497,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentConversation(input: {
                 session_id: "session-2",
                 agent_name: "Amy",
@@ -1348,12 +1511,13 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 updated_at: "2026-05-04T13:00:10Z",
                 latest_request_id: "req-deadline"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentRequest(input: {
                 request_id: "req-deadline",
                 agent_did: "did:test:amy",
@@ -1368,12 +1532,13 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 created_at: "2026-05-04T13:00:01Z",
                 retry_count: 0
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     exec(
         node,
-        r#"mutation {
+        &r#"mutation {
             create_AgentResponse(input: {
                 response_key: "req-deadline",
                 request_id: "req-deadline",
@@ -1391,7 +1556,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 created_at: "2026-05-04T13:00:01Z",
                 completed_at: "2026-05-04T13:00:10Z"
             }) { _docID }
-        }"#,
+        }"#
+        .replace("did:test:amy", &escape_graphql_string(agent_did)),
     )
     .await?;
     let deadline_message =
@@ -1527,6 +1693,12 @@ async fn projection_graphql_mock(
         json!({ "data": { "AgentConversation": [projection_mock_conversation()] } })
     } else if query.contains("InferenceCall(") {
         json!({ "data": { "InferenceCall": [] } })
+    } else if query.contains("RenderedRequest(") {
+        json!({ "data": { "RenderedRequest": [] } })
+    } else if query.contains("AgentResponseOutcome(") {
+        json!({ "data": { "AgentResponseOutcome": [] } })
+    } else if query.contains("CompactionEntry(") {
+        json!({ "data": { "CompactionEntry": [] } })
     } else {
         json!({
             "errors": [{

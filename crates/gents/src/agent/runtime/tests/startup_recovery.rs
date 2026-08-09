@@ -109,9 +109,9 @@ async fn wait_for_backend_probe_status(
 
 #[tokio::test]
 async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-probe-rejects-model"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let mock_endpoint = MockModelEndpoint::start("different-model").unwrap();
     bind_default_behavior_backend_with_capacity_and_probe_status(
         node.as_ref(),
@@ -176,9 +176,9 @@ async fn run_agent_starts_when_startup_probe_cannot_validate_model() {
 
 #[tokio::test]
 async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_config() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-invalid-config"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),
@@ -332,9 +332,9 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
 
 #[tokio::test]
 async fn run_agent_recovers_backend_availability_without_restart() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("startup-backend-recovers"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend_with_capacity_and_probe_status(
         node.as_ref(),
         identity.did(),

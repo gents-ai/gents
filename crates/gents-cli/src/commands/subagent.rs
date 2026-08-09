@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
+use gents::AuthenticatedGraphql;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -13,8 +14,8 @@ use crate::cli::args::{SubagentCancelArgs, SubagentCommand, SubagentListArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{
-    graphql_rows, parse_duration_suffix, post_graphql, print_json, resolve_agent_did,
-    resolve_config_access, resolve_request_id,
+    graphql_rows, parse_duration_suffix, print_json, resolve_agent_did, resolve_config_access,
+    resolve_request_id,
 };
 
 const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -103,7 +104,7 @@ fn resolve_wait_timeout(wait: bool, timeout: Option<&str>) -> Result<Option<Dura
 }
 
 async fn cancel_subagent_graphql(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     request_id: &str,
     cascade: bool,
 ) -> Result<Vec<String>> {
@@ -126,7 +127,7 @@ async fn cancel_subagent_graphql(
 }
 
 async fn collect_descendant_request_ids_graphql(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     root_session_id: &str,
     affected: &mut Vec<String>,
     seen_requests: &mut BTreeSet<String>,
@@ -152,7 +153,7 @@ async fn collect_descendant_request_ids_graphql(
     Ok(())
 }
 
-async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()> {
+async fn interrupt_request_graphql(graphql: &AuthenticatedGraphql, request_id: &str) -> Result<()> {
     let row = fetch_request_row_graphql(graphql, request_id).await?;
     if row.interrupt_requested_at.is_some() {
         return Ok(());
@@ -169,7 +170,12 @@ async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()
         request_id = escape_graphql_string(request_id),
         now = escape_graphql_string(&now),
     );
-    post_graphql(graphql, &mutation).await?;
+    graphql
+        .execute(
+            &mutation,
+            gents_protocol::graphql::GraphqlRequestOptions::default(),
+        )
+        .await?;
     Ok(())
 }
 
@@ -327,7 +333,7 @@ fn push_unique(values: &mut Vec<String>, seen: &mut BTreeSet<String>, value: Str
 }
 
 async fn wait_for_terminal_graphql(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     request_ids: &[String],
     timeout: Duration,
 ) -> Result<Vec<RequestCancelSnapshot>> {
@@ -386,7 +392,7 @@ fn is_terminal_state(state: &str) -> bool {
 }
 
 async fn snapshot_requests_graphql(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     request_ids: &[String],
 ) -> Result<Vec<RequestCancelSnapshot>> {
     let mut rows = Vec::with_capacity(request_ids.len());
@@ -423,9 +429,17 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
         .join(", ")
 }
 
-async fn fetch_request_row_graphql(graphql: &str, request_id: &str) -> Result<RequestRow> {
+async fn fetch_request_row_graphql(
+    graphql: &AuthenticatedGraphql,
+    request_id: &str,
+) -> Result<RequestRow> {
     let query = request_row_query(request_id);
-    let response = post_graphql(graphql, &query).await?;
+    let response = graphql
+        .execute(
+            &query,
+            gents_protocol::graphql::GraphqlRequestOptions::default(),
+        )
+        .await?;
     request_row_from_response(&response, request_id)
 }
 
@@ -473,10 +487,15 @@ fn request_row_from_response(response: &Value, request_id: &str) -> Result<Reque
 }
 
 async fn running_subagent_bridges_graphql(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     session_id: &str,
 ) -> Result<Vec<BridgeRow>> {
-    let response = post_graphql(graphql, &running_subagent_bridges_query(session_id)).await?;
+    let response = graphql
+        .execute(
+            &running_subagent_bridges_query(session_id),
+            gents_protocol::graphql::GraphqlRequestOptions::default(),
+        )
+        .await?;
     bridge_rows_from_response(&response)
 }
 

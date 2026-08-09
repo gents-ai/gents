@@ -6,19 +6,18 @@ use gents::{discover_backend_models, BackendProviderKind};
 use serde_json::{json, Value};
 
 use crate::cli::*;
-use crate::config_writes::{
-    write_inference_backend_document, ConfigAccess, InferenceBackendUpsertDocument,
-};
+use crate::config_writes::{write_inference_backend_document, InferenceBackendUpsertDocument};
 use crate::print_json;
 use crate::shared::*;
 use crate::{
-    normalize_optional_string, post_graphql, resolve_agent_did, BackendResolutionMode,
+    authenticated_default_graphql_access, authenticated_graphql_client, normalize_optional_string,
+    post_graphql, resolve_agent_did, resolve_home_dir, BackendResolutionMode,
     EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
 pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
     let backend = resolve_backend_upsert_config(&args)?;
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = authenticated_default_graphql_access(&args.graphql).await?;
     let doc = InferenceBackendUpsertDocument {
         backend_id: args.backend_id.clone(),
         name: args.name.clone(),
@@ -137,7 +136,7 @@ async fn load_oauth_credential_for_discovery(
         );
     };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let access = ConfigAccess::Graphql(graphql);
+    let access = authenticated_default_graphql_access(&graphql).await?;
     let credential =
         crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
             .await?;
@@ -173,13 +172,13 @@ async fn resolve_backend_discovery_target(
                 "--backend-id uses the stored backend document; do not combine it with explicit preset, endpoint, provider, or auth flags"
             );
         }
-        let backend = load_backend_row(
-            args.graphql
-                .as_deref()
-                .expect("checked graphql when backend_id is set"),
-            &backend_id,
-        )
-        .await?;
+        let endpoint = args
+            .graphql
+            .as_deref()
+            .expect("checked graphql when backend_id is set");
+        let graphql =
+            authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), endpoint).await?;
+        let backend = load_backend_row(&graphql, &backend_id).await?;
         let provider_kind = BackendProviderKind::parse_optional(
             backend.get("provider_kind").and_then(Value::as_str),
         )?;
@@ -254,7 +253,10 @@ fn resolve_required_env_api_key(name: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-async fn load_backend_row(graphql: &str, backend_id: &str) -> Result<Value> {
+async fn load_backend_row(
+    graphql: &gents::AuthenticatedGraphql,
+    backend_id: &str,
+) -> Result<Value> {
     let response = post_graphql(
         graphql,
         &format!(

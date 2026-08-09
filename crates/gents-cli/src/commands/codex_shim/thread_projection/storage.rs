@@ -22,64 +22,47 @@ pub(in crate::commands::codex_shim) async fn ensure_agent_session(
     state: &ShimState,
     session_id: &str,
 ) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let escaped_session_id = escape_graphql_string(session_id);
     let agent_name = agent_name(state);
     let behavior_id = behavior_id(state);
-    let escaped_agent_name = escape_graphql_string(&agent_name);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(&behavior_id);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentSession(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                add: {{
-                    session_id: "{escaped_session_id}",
-                    agent_name: "{escaped_agent_name}",
-                    agent_did: "{escaped_agent_did}",
-                    behavior_id: "{escaped_behavior_id}",
-                    started: "{now}",
-                    status: "active"
-                }},
-                update: {{
-                    status: "active"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    query_node_json(&state.node, &mutation).await?;
-    Ok(())
+    gents::session::ensure_session_with_behavior_id(
+        state.node.as_ref(),
+        session_id,
+        &agent_name,
+        state.agent_did.as_ref(),
+        &behavior_id,
+    )
+    .await
+    .context("ensuring exact AgentSession document")
 }
 
 pub(super) async fn load_scoped_session(
     state: &ShimState,
     session_id: &str,
 ) -> Result<Option<SessionRow>> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let escaped_behavior_id = escape_graphql_string(state.behavior_id.as_ref());
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                limit: 1
-            ) {{
-                session_id
-                started
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    response
-        .pointer("/data/AgentSession/0")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .context("decoding AgentSession row")
+    let Some(session) = gents::session::load_agent_session_exact(state.node.as_ref(), session_id)
+        .await
+        .context("loading exact AgentSession document")?
+    else {
+        return Ok(None);
+    };
+    if session.agent_did.as_deref() != Some(state.agent_did.as_ref()) {
+        anyhow::bail!(
+            "session {session_id:?} belongs to agent {:?}, not shim agent {:?}",
+            session.agent_did,
+            state.agent_did
+        );
+    }
+    if session.behavior_id.as_deref() != Some(state.behavior_id.as_ref()) {
+        anyhow::bail!(
+            "session {session_id:?} is pinned to behavior {:?}, not shim behavior {:?}",
+            session.behavior_id,
+            state.behavior_id
+        );
+    }
+    Ok(Some(SessionRow {
+        session_id: session.session_id,
+        started: Some(session.started),
+    }))
 }
 
 pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<SessionRow>> {
@@ -150,22 +133,11 @@ pub(in crate::commands::codex_shim) async fn ensure_agent_session_pinning(
     state: &ShimState,
     session_id: &str,
 ) -> Result<()> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                limit: 1
-            ) {{
-                behavior_id
-            }}
-        }}"#
-    );
-    let response = query_node_json(&state.node, &query).await?;
-    let stored_behavior_id = response
-        .pointer("/data/AgentSession/0/behavior_id")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned);
+    let stored_behavior_id =
+        gents::session::load_agent_session_exact(state.node.as_ref(), session_id)
+            .await
+            .context("loading exact AgentSession document for behavior pinning")?
+            .and_then(|session| session.behavior_id);
     let bound_behavior_id = state.behavior_id.as_ref();
     if let Some(stored) = stored_behavior_id {
         if stored != bound_behavior_id {

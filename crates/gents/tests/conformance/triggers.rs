@@ -57,16 +57,15 @@
 //! externally-observable behavior *only* exists if the live subscription +
 //! filter + materialize chain runs end to end.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::{EmbeddedNode, ExecuteRetryPolicy};
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::{AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
@@ -655,7 +654,14 @@ impl BootedAgent {
 }
 
 async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &str) -> BootedAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity = db.node_identity().unwrap_or_else(|| {
+        panic!("{test_name}: event-source fixture requires a signed DefraDB node identity")
+    });
+    assert_eq!(
+        db.node.node_identity_did(),
+        Some(identity.did()),
+        "{test_name}: runtime principal must reuse the DefraDB node signer"
+    );
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_behavior_backend(
         db.node.as_ref(),

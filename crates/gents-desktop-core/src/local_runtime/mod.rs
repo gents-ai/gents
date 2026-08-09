@@ -75,6 +75,8 @@ struct StoredRuntimeState {
 
 #[derive(Debug, Deserialize)]
 struct NodeIdentityResponse {
+    #[serde(rename = "DID", alias = "NodeDID", default)]
+    did: Option<String>,
     #[serde(default)]
     peer_id: Option<String>,
 }
@@ -83,14 +85,6 @@ struct NodeIdentityResponse {
 struct ShareableAddressResponse {
     #[serde(default)]
     address: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphqlResponse {
-    #[serde(default)]
-    data: Option<Value>,
-    #[serde(default)]
-    errors: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,16 +447,20 @@ async fn fetch_graphql_runtime_connection_payload(
     let live_identity =
         http_get_json::<NodeIdentityResponse>(client, &format!("{api_base}/node/identity"))
             .await
-            .ok();
+            .context("runtime did not expose its non-document node identity")?;
     let p2p_peer_id = resolve_p2p_peer_id(
-        live_identity
-            .as_ref()
-            .and_then(|identity| identity.peer_id.as_deref()),
+        live_identity.peer_id.as_deref(),
         Some(&p2p_listen_address),
         None,
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let (agent_did, agent_name) = fetch_graphql_agent_identity(client, graphql).await?;
+    // Discovery must not issue an anonymous document query. The node DID is
+    // non-document bootstrap metadata and is also an acceptable Gents actor;
+    // authenticated document reads begin only after pairing provisions a
+    // Host-bound bearer.
+    let agent_did = normalize_optional_string(live_identity.did.as_deref())
+        .context("runtime node identity response omitted DID")?;
+    let agent_name = fallback_agent_name(&agent_did);
 
     Ok(json!({
         "status": "ok",
@@ -482,78 +480,6 @@ async fn fetch_graphql_runtime_connection_payload(
         "p2p_peer_id": p2p_peer_id,
         "p2p_shareable_address": p2p_listen_address,
     }))
-}
-
-async fn fetch_graphql_agent_identity(
-    client: &reqwest::Client,
-    graphql: &str,
-) -> Result<(String, String)> {
-    let query = r#"
-        query DesktopRuntimeIdentity {
-            AgentPrincipal { agent_did display_name enabled }
-            AgentRuntime { agent_did }
-        }
-    "#;
-    let response = client
-        .post(graphql)
-        .json(&json!({ "query": query }))
-        .send()
-        .await
-        .with_context(|| format!("sending GraphQL identity query to {graphql}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading GraphQL identity response from {graphql}"))?;
-    if !status.is_success() {
-        anyhow::bail!(
-            "GraphQL identity query to {graphql} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-    let response: GraphqlResponse = serde_json::from_slice(&body)
-        .with_context(|| format!("decoding GraphQL identity response from {graphql}"))?;
-    if let Some(errors) = response
-        .errors
-        .as_ref()
-        .filter(|errors| !errors_is_empty(errors))
-    {
-        anyhow::bail!("GraphQL identity query returned errors: {errors}");
-    }
-    let data = response
-        .data
-        .context("GraphQL identity query returned no data")?;
-    let principal = data
-        .get("AgentPrincipal")
-        .and_then(Value::as_array)
-        .and_then(|rows| {
-            rows.iter()
-                .find(|row| row.get("enabled").and_then(Value::as_bool) != Some(false))
-                .or_else(|| rows.first())
-        });
-    let runtime = data
-        .get("AgentRuntime")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first());
-    let agent_did = principal
-        .and_then(|row| string_at(row, "/agent_did"))
-        .or_else(|| runtime.and_then(|row| string_at(row, "/agent_did")))
-        .context("GraphQL identity query returned no agent_did")?
-        .to_string();
-    let agent_name = principal
-        .and_then(|row| string_at(row, "/display_name"))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| fallback_agent_name(&agent_did));
-
-    Ok((agent_did, agent_name))
-}
-
-fn errors_is_empty(errors: &Value) -> bool {
-    match errors {
-        Value::Null => true,
-        Value::Array(errors) => errors.is_empty(),
-        _ => false,
-    }
 }
 
 fn extract_status_endpoint_connection(

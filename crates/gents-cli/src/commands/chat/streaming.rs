@@ -109,7 +109,7 @@ pub(super) fn chat_progress_query(request_id: &str, session_id: &str) -> String 
 }
 
 pub(super) async fn load_existing_tool_call_keys(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     session_id: &str,
 ) -> Result<std::collections::BTreeMap<String, String>> {
     let query = format!(
@@ -145,7 +145,7 @@ pub(super) async fn load_existing_tool_call_keys(
 }
 
 pub(super) async fn stream_turn_progress(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     submitted: &SubmittedRequest,
     mut known_tool_calls: std::collections::BTreeMap<String, String>,
     timeout_secs: u64,

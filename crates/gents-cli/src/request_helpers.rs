@@ -163,7 +163,7 @@ fn response_materialized_sequence(response: &Value) -> Option<i64> {
 }
 
 pub(crate) async fn hydrate_materialized_response_content(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     response: &mut Value,
 ) -> Result<bool> {
     let content_blank = response_field_is_blank(response, "content");
@@ -223,14 +223,15 @@ pub(crate) async fn hydrate_materialized_response_content(
 }
 
 pub(crate) async fn create_agent_request(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
     content: &str,
     session_id: Option<&str>,
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
-    let source_author_did = ConfigAccess::Graphql(graphql.to_string())
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let source_author_did = access
         .node_identity_did()
         .await
         .context("creating an AgentRequest requires a signed database endpoint")?;
@@ -323,7 +324,7 @@ pub(crate) async fn create_agent_request(
         content = escape_graphql_string(&request_content),
         request_override_fields = request_override_fields,
     );
-    post_graphql(graphql, &mutation).await?;
+    access.execute(&mutation).await?;
 
     Ok(SubmittedRequest {
         request_id,
@@ -465,7 +466,7 @@ fn string_fingerprint_marker(row: Option<&serde_json::Value>, field: &str) -> Op
 }
 
 pub(crate) async fn wait_for_terminal_response(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     request_id: &str,
     timeout_secs: u64,
     poll_secs: u64,
@@ -729,7 +730,7 @@ pub(crate) struct StaleRequestView {
 }
 
 pub(crate) async fn fetch_request_view(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     request_id: &str,
 ) -> Result<StaleRequestView> {
     let query = format!(

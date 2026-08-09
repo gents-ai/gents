@@ -8,9 +8,9 @@
 //! The client is DID-parameterized: [`ConfigApplyTxn::begin_local`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor — authorization is
-//! enforced at the node, not by app-level ownership checks. The CLI paths
-//! ([`ConfigAccess::execute`] / [`ConfigAccess::begin_apply_txn`]) remain
-//! identity-less, preserving their existing behavior.
+//! enforced at the node, not by app-level ownership checks. HTTP CLI paths
+//! carry a Host-bound DefraDB JWT through [`AuthenticatedGraphql`]; access
+//! construction fails when no signing identity is available.
 //!
 //! Write conventions (load-bearing — see `CLAUDE.md`):
 //! - every interpolated value goes through
@@ -24,6 +24,7 @@ mod agent_behavior;
 mod approval;
 mod common;
 mod event_trigger;
+mod http;
 mod inference_backend;
 mod schedule;
 mod task;
@@ -35,6 +36,7 @@ pub use agent_behavior::write_agent_behavior_document;
 pub use approval::{list_held_tool_calls, write_tool_approval, HeldToolCall, ToolApprovalVerdict};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use event_trigger::write_event_trigger_document;
+pub use http::{defradb_http_audience, AuthenticatedGraphql};
 pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
 pub use schedule::write_schedule_document;
 pub use task::write_task_document;
@@ -49,13 +51,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::{json, Value};
 
 pub enum ConfigAccess {
     /// HTTP GraphQL endpoint. **Must end with `/graphql`** — transaction
     /// begin/commit/discard derive the REST API base by stripping that suffix.
-    Graphql(String),
+    Graphql(AuthenticatedGraphql),
     /// Shared so callers that already hold the node (desktop client) can
     /// construct access without moving it; `EmbeddedNode` is not `Clone`.
     Local(Arc<EmbeddedNode>),
@@ -96,12 +98,9 @@ impl ConfigAccess {
                     did: Option<String>,
                 }
 
-                let api_base = graphql_api_base(graphql)?;
-                let response = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .build()?
+                let api_base = graphql_api_base(graphql.endpoint())?;
+                let response = graphql
                     .get(format!("{api_base}/node/identity"))
-                    .send()
                     .await
                     .map_err(|error| anyhow::anyhow!("fetching node signing identity: {error}"))?;
                 let status = response.status();
@@ -172,16 +171,18 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     }
 }
 
-async fn post_graphql(graphql: &str, query: &str) -> Result<Value> {
-    execute_graphql_async(
-        graphql,
-        query,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
-    )
-    .await
-    .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql)))
+async fn post_graphql(graphql: &AuthenticatedGraphql, query: &str) -> Result<Value> {
+    graphql
+        .execute(
+            query,
+            GraphqlRequestOptions {
+                timeout: std::time::Duration::from_secs(30),
+                max_attempts: 5,
+                retry_backoff: std::time::Duration::from_millis(100),
+            },
+        )
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql.endpoint()))
+        })
 }

@@ -10,7 +10,6 @@ use crate::optional_f64_field;
 use crate::optional_i64_field;
 use crate::optional_i64_list_field;
 use crate::optional_string_field;
-use crate::post_graphql;
 use crate::print_json;
 
 pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
@@ -129,7 +128,8 @@ pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> R
         add_fields = add_fields,
         update_fields = update_fields,
     );
-    let response = post_graphql(&args.graphql, &mutation).await?;
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
+    let response = access.execute(&mutation).await?;
     let doc_id = extract_mutation_doc_id(&response, "InferenceProfile")?;
     let output = json!({
         "doc_id": doc_id,

@@ -168,7 +168,7 @@ pub(crate) struct P2pMetricsSnapshot {
 }
 
 pub(crate) async fn render_prometheus_metrics(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     local_agent_did: &str,
     measured_backend_health: &HashMap<String, gents::BackendHealthSnapshot>,
     p2p: Option<&P2pMetricsSnapshot>,
@@ -807,7 +807,9 @@ fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSy
     }
 }
 
-async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMetricsQueryData> {
+async fn load_inference_metrics_query_data(
+    graphql: &gents::AuthenticatedGraphql,
+) -> Result<InferenceMetricsQueryData> {
     let window_started_at = Utc::now() - Duration::seconds(INFERENCE_METRICS_WINDOW_SECS);
     let mut result = InferenceMetricsQueryData {
         principals: Vec::new(),
@@ -844,7 +846,7 @@ async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMet
 }
 
 async fn load_inference_metrics_page(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     query: &str,
 ) -> Result<InferenceMetricsPageData> {
     let response = post_graphql(graphql, query).await?;
@@ -1082,7 +1084,7 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
 }
 
 pub(crate) async fn load_metrics_query_data(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     local_agent_did: &str,
 ) -> Result<MetricsQueryData> {
     let response = post_graphql(

@@ -434,6 +434,7 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                 request_claim_signer_did
                 final_message_doc_id
                 final_message_composite_commit_cid
+                final_message_collection_version_id
                 final_message_signer_did
                 final_message_sequence
                 outcome_terminalized_at
@@ -508,6 +509,8 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                             .and_then(|value| value.as_str()),
                         row.get("final_message_composite_commit_cid")
                             .and_then(|value| value.as_str()),
+                        row.get("final_message_collection_version_id")
+                            .and_then(|value| value.as_str()),
                         row.get("final_message_signer_did")
                             .and_then(|value| value.as_str()),
                         row.get("final_message_sequence")
@@ -515,15 +518,20 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
                             .map(|value| value as u32),
                     );
                     let final_message = match message_fields {
-                        (None, None, None, None) => None,
-                        (Some(doc_id), Some(cid), Some(signer_did), Some(sequence)) => {
-                            Some(crate::MessageFactRef {
-                                sequence,
-                                doc_id: doc_id.to_string(),
-                                composite_commit_cid: cid.to_string(),
-                                signer_did: signer_did.to_string(),
-                            })
-                        }
+                        (None, None, None, None, None) => None,
+                        (
+                            Some(doc_id),
+                            Some(cid),
+                            Some(collection_version_id),
+                            Some(signer_did),
+                            Some(sequence),
+                        ) => Some(crate::MessageFactRef {
+                            sequence,
+                            doc_id: doc_id.to_string(),
+                            composite_commit_cid: cid.to_string(),
+                            collection_version_id: collection_version_id.to_string(),
+                            signer_did: signer_did.to_string(),
+                        }),
                         _ => anyhow::bail!(
                             "AgentResponse {doc_id} has partial final-message recovery provenance"
                         ),

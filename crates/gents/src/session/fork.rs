@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use identity::Did;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,7 @@ use crate::retry::{
     defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
     DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
+use crate::AuthenticatedGraphql;
 
 #[derive(Debug, Clone)]
 pub struct GraphqlExecuteResponse {
@@ -56,7 +57,7 @@ impl GraphqlExecuteResponse {
 pub trait GraphqlExecutor: Send + Sync {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse>;
 
-    async fn verified_signer_did(&self, cid: &str, projected: Option<&str>) -> Result<String>;
+    async fn verified_signer_did(&self, cid: &str) -> Result<String>;
 
     fn node_identity_did(&self) -> Option<&str> {
         None
@@ -79,7 +80,7 @@ impl GraphqlExecutor for EmbeddedNode {
         ))
     }
 
-    async fn verified_signer_did(&self, cid: &str, _projected: Option<&str>) -> Result<String> {
+    async fn verified_signer_did(&self, cid: &str) -> Result<String> {
         self.verified_block_signer_did(cid).await
     }
 
@@ -90,39 +91,102 @@ impl GraphqlExecutor for EmbeddedNode {
 
 #[derive(Debug, Clone)]
 pub struct HttpGraphqlExecutor {
-    endpoint: String,
+    access: AuthenticatedGraphql,
     options: GraphqlRequestOptions,
 }
 
 impl HttpGraphqlExecutor {
-    pub fn new(endpoint: impl Into<String>) -> Self {
+    pub fn new(access: AuthenticatedGraphql) -> Self {
         Self {
-            endpoint: endpoint.into(),
+            access,
             options: GraphqlRequestOptions::default(),
         }
     }
 
-    pub fn with_options(endpoint: impl Into<String>, options: GraphqlRequestOptions) -> Self {
-        Self {
-            endpoint: endpoint.into(),
-            options,
-        }
+    pub fn with_options(access: AuthenticatedGraphql, options: GraphqlRequestOptions) -> Self {
+        Self { access, options }
     }
 }
 
 #[async_trait]
 impl GraphqlExecutor for HttpGraphqlExecutor {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
-        let value = execute_graphql_async(&self.endpoint, query, self.options).await?;
+        let value = self.access.execute(query, self.options).await?;
         Ok(GraphqlExecuteResponse::from_http_value(value))
     }
 
-    async fn verified_signer_did(&self, cid: &str, projected: Option<&str>) -> Result<String> {
-        projected
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} has no verified signer projection"))
+    async fn verified_signer_did(&self, cid: &str) -> Result<String> {
+        let query = format!(
+            r#"{{ _commits(cid: ["{}"]) {{ cid signature {{ type identity }} }} }}"#,
+            escape_graphql_string(cid)
+        );
+        let response = self.execute_graphql(&query).await?;
+        if response.has_errors() {
+            anyhow::bail!(
+                "loading remote commit {cid} signature evidence failed: {}",
+                render_graphql_errors(&response)
+            );
+        }
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("_commits"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} returned no signature rows"))?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!(
+                "remote commit {cid} returned {} signature rows, expected one",
+                rows.len()
+            );
+        };
+        if row.get("cid").and_then(Value::as_str) != Some(cid) {
+            anyhow::bail!("remote signature query rebound commit {cid}");
+        }
+        let signature = row
+            .get("signature")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} has no signature"))?;
+        let public_key_hex = signature
+            .get("identity")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} omitted signature identity"))?;
+        let algorithm = signature
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} omitted signature type"))?;
+        let (key_type_name, key_type) = match algorithm {
+            "EdDSA" => ("ed25519", crypto::KeyType::Ed25519),
+            "ES256K" => ("secp256k1", crypto::KeyType::Secp256k1),
+            "ES256" => ("secp256r1", crypto::KeyType::Secp256r1),
+            other => anyhow::bail!("remote commit {cid} uses unsupported signature type {other}"),
+        };
+
+        let api_base = crate::config_client::graphql_api_base(self.access.endpoint())?;
+        let mut verify_url = reqwest::Url::parse(&format!("{api_base}/block/verify-signature"))?;
+        verify_url
+            .query_pairs_mut()
+            .append_pair("cid", cid)
+            .append_pair("public-key", public_key_hex)
+            .append_pair("type", key_type_name);
+        let response = self.access.get(verify_url).await?;
+        let status = response.status();
+        let body = response.bytes().await?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "cryptographic verification failed for remote commit {cid} (HTTP {status}): {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+
+        let public_key = crypto::public_key_from_string(key_type, public_key_hex)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("decoding verified signer key for remote commit {cid}"))?;
+        public_key
+            .did()
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("deriving verified signer DID for remote commit {cid}"))
     }
 }
 
@@ -134,16 +198,10 @@ struct ForkCommitParent {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct ForkCommitSignature {
-    identity: String,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
 struct ForkCommitRow {
     cid: String,
     #[serde(default)]
     heads: Vec<ForkCommitParent>,
-    signature: Option<ForkCommitSignature>,
 }
 
 async fn exact_current_ref(
@@ -153,7 +211,7 @@ async fn exact_current_ref(
 ) -> Result<crate::SignedDocumentVersionRef> {
     let response = executor
         .execute_graphql(&format!(
-            r#"{{ _commits(docID: ["{}"], filter: {{ fieldName: {{ _eq: "_C" }} }}) {{ cid heads {{ cid fieldName }} signature {{ identity }} }} }}"#,
+            r#"{{ _commits(docID: ["{}"], filter: {{ fieldName: {{ _eq: "_C" }} }}) {{ cid heads {{ cid fieldName }} }} }}"#,
             escape_graphql_string(doc_id)
         ))
         .await?;
@@ -187,15 +245,7 @@ async fn exact_current_ref(
             current.len()
         );
     };
-    let signer = executor
-        .verified_signer_did(
-            &current.cid,
-            current
-                .signature
-                .as_ref()
-                .map(|signature| signature.identity.as_str()),
-        )
-        .await?;
+    let signer = executor.verified_signer_did(&current.cid).await?;
     Ok(crate::SignedDocumentVersionRef::new(
         crate::DocumentVersionRef::new(doc_id, &current.cid),
         signer,
@@ -209,10 +259,7 @@ async fn exact_snapshot(
     fields: &str,
 ) -> Result<Value> {
     let verified = executor
-        .verified_signer_did(
-            &source.version.composite_commit_cid,
-            Some(&source.signer_did),
-        )
+        .verified_signer_did(&source.version.composite_commit_cid)
         .await?;
     if verified != source.signer_did {
         anyhow::bail!("{collection} exact source signer does not verify");
@@ -242,6 +289,49 @@ async fn exact_snapshot(
             rows.len()
         ),
     }
+}
+
+async fn exact_collection_version_id(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    collection: &str,
+    source: &crate::SignedDocumentVersionRef,
+) -> Result<String> {
+    let response = executor
+        .execute_graphql(&format!(
+            r#"{{ _commits(cid: ["{}"], docID: ["{}"]) {{ cid docID fieldName collectionVersionId }} }}"#,
+            escape_graphql_string(&source.version.composite_commit_cid),
+            escape_graphql_string(&source.version.doc_id),
+        ))
+        .await?;
+    if response.has_errors() {
+        anyhow::bail!(
+            "loading exact {collection} schema identity failed: {}",
+            render_graphql_errors(&response)
+        );
+    }
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("exact {collection} schema query returned no rows"))?;
+    let [row] = rows.as_slice() else {
+        anyhow::bail!(
+            "exact {collection} schema query returned {} commits, expected one",
+            rows.len()
+        );
+    };
+    if row.get("cid").and_then(Value::as_str) != Some(source.version.composite_commit_cid.as_str())
+        || row.get("docID").and_then(Value::as_str) != Some(source.version.doc_id.as_str())
+        || row.get("fieldName").and_then(Value::as_str) != Some("_C")
+    {
+        anyhow::bail!("exact {collection} schema query did not return the pinned composite commit");
+    }
+    row.get("collectionVersionId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("exact {collection} source omitted collectionVersionId"))
 }
 
 fn fork_source_fields(source: &crate::SignedDocumentVersionRef) -> String {
@@ -605,14 +695,19 @@ async fn verify_source_idle(
 }
 
 pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
+    if node.node_identity_did().is_none() {
+        return Err(ForkError::ForkCopyFailed(anyhow::anyhow!(
+            "session fork requires a signed embedded DefraDB node before any document read or write"
+        )));
+    }
     fork_with_executor(node, params).await
 }
 
 pub async fn fork_via_http(
-    graphql_endpoint: &str,
+    access: AuthenticatedGraphql,
     params: ForkParams<'_>,
 ) -> Result<ForkOutcome, ForkError> {
-    let executor = HttpGraphqlExecutor::new(graphql_endpoint);
+    let executor = HttpGraphqlExecutor::new(access);
     fork_with_executor(&executor, params).await
 }
 
@@ -869,7 +964,9 @@ async fn compute_end_cut(
 #[derive(Debug, Clone)]
 struct ForkedMessage {
     source: crate::SignedDocumentVersionRef,
+    source_collection_version_id: String,
     child: crate::SignedDocumentVersionRef,
+    child_collection_version_id: String,
     sequence: u32,
 }
 
@@ -910,6 +1007,8 @@ async fn copy_messages(
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("source AgentMessage missing _docID"))?;
         let source_ref = exact_current_ref(executor, "AgentMessage", source_doc_id).await?;
+        let source_collection_version_id =
+            exact_collection_version_id(executor, "AgentMessage", &source_ref).await?;
         let row = exact_snapshot(
             executor,
             "AgentMessage",
@@ -963,6 +1062,8 @@ async fn copy_messages(
             execute_mutation_with_retry(executor, &mutation, "fork::copy_message").await?;
         let doc_id = mutation_doc_id(&response, "create_AgentMessage")?;
         let child = verify_child_ref(executor, "AgentMessage", &doc_id, Some(node_did)).await?;
+        let child_collection_version_id =
+            exact_collection_version_id(executor, "AgentMessage", &child).await?;
         require_sole_child_key(
             executor,
             "AgentMessage",
@@ -973,7 +1074,9 @@ async fn copy_messages(
         .await?;
         copied.push(ForkedMessage {
             source: source_ref,
+            source_collection_version_id,
             child,
+            child_collection_version_id,
             sequence: u32::try_from(sequence).context("forked message sequence exceeds u32")?,
         });
     }
@@ -1471,7 +1574,7 @@ async fn copy_compaction_entries(
         .iter()
         .map(|message| (message.source.version.doc_id.as_str(), message))
         .collect::<HashMap<_, _>>();
-    let mut compaction_map: HashMap<String, (crate::SignedDocumentVersionRef, CompactionFactRef)> =
+    let mut compaction_map: HashMap<String, (CompactionFactRef, CompactionFactRef)> =
         HashMap::new();
     for row in &rows {
         let source_doc_id = row
@@ -1479,6 +1582,8 @@ async fn copy_compaction_entries(
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("source CompactionEntry missing _docID"))?;
         let source = exact_current_ref(executor, "CompactionEntry", source_doc_id).await?;
+        let source_collection_version_id =
+            exact_collection_version_id(executor, "CompactionEntry", &source).await?;
         let row = exact_snapshot(
             executor,
             "CompactionEntry",
@@ -1544,12 +1649,14 @@ async fn copy_compaction_entries(
             })?;
             if child.source.version.composite_commit_cid != fact.composite_commit_cid
                 || child.source.signer_did != fact.signer_did
+                || child.source_collection_version_id != fact.collection_version_id
                 || child.sequence != fact.sequence
             {
                 anyhow::bail!("compaction source message exact ref changed during fork");
             }
             fact.doc_id = child.child.version.doc_id.clone();
             fact.composite_commit_cid = child.child.version.composite_commit_cid.clone();
+            fact.collection_version_id = child.child_collection_version_id.clone();
             fact.signer_did = child.child.signer_did.clone();
         }
         for fact in &mut manifest.prior_compactions {
@@ -1562,8 +1669,10 @@ async fn copy_compaction_entries(
                             fact.source.version.doc_id
                         )
                     })?;
-            if source_ref.version.composite_commit_cid != fact.source.version.composite_commit_cid
-                || source_ref.signer_did != fact.source.signer_did
+            if source_ref.source.version.composite_commit_cid
+                != fact.source.version.composite_commit_cid
+                || source_ref.source.signer_did != fact.source.signer_did
+                || source_ref.collection_version_id != fact.collection_version_id
                 || child.sequence != fact.sequence
             {
                 anyhow::bail!("prior compaction exact ref changed during fork");
@@ -1617,6 +1726,8 @@ async fn copy_compaction_entries(
             execute_mutation_with_retry(executor, &mutation, "fork::copy_compaction_entry").await?;
         let doc_id = mutation_doc_id(&response, "create_CompactionEntry")?;
         let child = verify_child_ref(executor, "CompactionEntry", &doc_id, Some(node_did)).await?;
+        let child_collection_version_id =
+            exact_collection_version_id(executor, "CompactionEntry", &child).await?;
         require_sole_child_key(
             executor,
             "CompactionEntry",
@@ -1628,10 +1739,16 @@ async fn copy_compaction_entries(
         compaction_map.insert(
             source.version.doc_id.clone(),
             (
-                source,
+                CompactionFactRef {
+                    sequence: u32::try_from(sequence)
+                        .context("source compaction sequence exceeds u32")?,
+                    collection_version_id: source_collection_version_id,
+                    source,
+                },
                 CompactionFactRef {
                     sequence: u32::try_from(sequence)
                         .context("forked compaction sequence exceeds u32")?,
+                    collection_version_id: child_collection_version_id,
                     source: child,
                 },
             ),

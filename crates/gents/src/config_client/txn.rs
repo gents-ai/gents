@@ -25,21 +25,20 @@
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryRequest};
-use gents_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use identity::Did;
 use query::TransactionHandle;
 use serde_json::{json, Value};
 
-use super::{graphql_api_base, graphql_diagnostic_hint, ConfigAccess};
+use super::{graphql_api_base, graphql_diagnostic_hint, AuthenticatedGraphql, ConfigAccess};
 
 enum TxnBackend<'a> {
-    /// Numeric txn id parsed from `POST /api/v0/tx`. Identity cannot ride
-    /// this path (`QueryRequest.identity` is `#[serde(skip)]`); HTTP writes
-    /// execute under the node's ambient identity policy.
+    /// Numeric txn id parsed from `POST /api/v0/tx`. The same authenticated
+    /// client attaches its identity bearer to begin, every statement, commit,
+    /// and discard, so the transaction never falls back to an anonymous actor.
     Graphql {
-        endpoint: &'a str,
+        access: &'a AuthenticatedGraphql,
         id: String,
-        http_client: reqwest::Client,
     },
     /// Embedded transaction handle returned by `runner.begin_txn(false)`.
     /// When `identity` is set, every statement carries it as the DefraDB
@@ -60,7 +59,7 @@ impl<'a> ConfigApplyTxn<'a> {
     /// specific DID identity so document ACP applies to every statement.
     ///
     /// This is the runtime self-config entry point; the CLI apply path goes
-    /// through [`ConfigAccess::begin_apply_txn`] (identity-less).
+    /// through [`ConfigAccess::begin_apply_txn`] with its HTTP identity bearer.
     pub async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
         let handle = node
             .runner()
@@ -79,22 +78,20 @@ impl<'a> ConfigApplyTxn<'a> {
     /// Execute a GraphQL query within this transaction.
     pub async fn execute(&self, query: &str) -> Result<Value> {
         match &self.backend {
-            TxnBackend::Graphql {
-                endpoint,
-                id,
-                http_client: _,
-            } => execute_graphql_async_with_tx(
-                endpoint,
-                query,
-                GraphqlRequestOptions {
-                    timeout: std::time::Duration::from_secs(30),
-                    max_attempts: 5,
-                    retry_backoff: std::time::Duration::from_millis(100),
-                },
-                Some(id),
-            )
-            .await
-            .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(endpoint))),
+            TxnBackend::Graphql { access, id } => access
+                .execute_with_tx(
+                    query,
+                    GraphqlRequestOptions {
+                        timeout: std::time::Duration::from_secs(30),
+                        max_attempts: 5,
+                        retry_backoff: std::time::Duration::from_millis(100),
+                    },
+                    id,
+                )
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(access.endpoint()))
+                }),
             TxnBackend::Local {
                 node,
                 handle,
@@ -113,18 +110,14 @@ impl<'a> ConfigApplyTxn<'a> {
     /// Commit the transaction. Apply is durable after this returns Ok.
     pub async fn commit(self) -> Result<()> {
         match self.backend {
-            TxnBackend::Graphql {
-                endpoint,
-                id,
-                http_client,
-            } => {
+            TxnBackend::Graphql { access, id } => {
+                let endpoint = access.endpoint();
                 let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
-                    let response = http_client
+                    let response = access
                         .post(format!("{api_base}/tx/{id}"))
-                        .send()
                         .await
                         .with_context(|| format!("posting tx commit to {endpoint}"))?;
                     status = response.status();
@@ -154,18 +147,14 @@ impl<'a> ConfigApplyTxn<'a> {
     /// the original apply error remains what surfaces to the operator.
     pub async fn discard(self) -> Result<()> {
         match self.backend {
-            TxnBackend::Graphql {
-                endpoint,
-                id,
-                http_client,
-            } => {
+            TxnBackend::Graphql { access, id } => {
+                let endpoint = access.endpoint();
                 let api_base = graphql_api_base(endpoint)?;
                 let status;
                 let bytes;
                 {
-                    let response = http_client
+                    let response = access
                         .delete(format!("{api_base}/tx/{id}"))
-                        .send()
                         .await
                         .with_context(|| format!("posting tx discard to {endpoint}"))?;
                     status = response.status();
@@ -196,43 +185,30 @@ impl ConfigAccess {
     pub async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {
             ConfigAccess::Graphql(endpoint) => {
-                let api_base = graphql_api_base(endpoint)?;
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
-                let response = client
+                let api_base = graphql_api_base(endpoint.endpoint())?;
+                let response = endpoint
                     .post(format!("{api_base}/tx"))
-                    .send()
                     .await
-                    .with_context(|| format!("posting tx begin to {endpoint}"))?;
+                    .with_context(|| format!("posting tx begin to {}", endpoint.endpoint()))?;
                 let status = response.status();
-                let bytes = response
-                    .bytes()
-                    .await
-                    .with_context(|| format!("reading tx begin body from {endpoint}"))?;
+                let bytes = response.bytes().await.with_context(|| {
+                    format!("reading tx begin body from {}", endpoint.endpoint())
+                })?;
                 if !status.is_success() {
                     anyhow::bail!(
-                        "tx begin returned HTTP {status} from {endpoint}: {}",
+                        "tx begin returned HTTP {status} from {}: {}",
+                        endpoint.endpoint(),
                         String::from_utf8_lossy(&bytes)
                     );
                 }
-                let body: Value = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decoding tx begin body from {endpoint}"))?;
-                // DefraDB returns `{"id": uint64}` (numeric); accept both string
-                // and number forms so the recording test harness can use either.
-                let id = body
-                    .get("id")
-                    .and_then(|v| {
-                        v.as_str()
-                            .map(ToOwned::to_owned)
-                            .or_else(|| v.as_u64().map(|n| n.to_string()))
-                    })
-                    .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
+                let body: Value = serde_json::from_slice(&bytes).with_context(|| {
+                    format!("decoding tx begin body from {}", endpoint.endpoint())
+                })?;
+                let id = decode_txn_id(&body)?;
                 Ok(ConfigApplyTxn {
                     backend: TxnBackend::Graphql {
-                        endpoint,
+                        access: endpoint,
                         id,
-                        http_client: client,
                     },
                 })
             }
@@ -254,11 +230,44 @@ impl ConfigAccess {
     }
 }
 
+/// Decode DefraDB's numeric transaction identifier and canonicalize it before
+/// it is interpolated into either a URL path or the transaction header.
+fn decode_txn_id(body: &Value) -> Result<String> {
+    let value = body
+        .get("id")
+        .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
+    let id = if let Some(id) = value.as_u64() {
+        id
+    } else if let Some(id) = value.as_str() {
+        id.parse::<u64>()
+            .with_context(|| format!("tx begin returned non-numeric id {id:?}"))?
+    } else {
+        anyhow::bail!("tx begin returned non-numeric id: {body}");
+    };
+    Ok(id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::identity::{AgentIdentity, KeyIdentity};
 
     use super::*;
+
+    #[test]
+    fn transaction_id_is_numeric_and_canonical_before_transport() {
+        assert_eq!(decode_txn_id(&json!({"id": 42})).unwrap(), "42");
+        assert_eq!(decode_txn_id(&json!({"id": "0042"})).unwrap(), "42");
+
+        for body in [
+            json!({"id": "42/commit"}),
+            json!({"id": "42?redirect=https://attacker.invalid"}),
+            json!({"id": -1}),
+            json!({"id": null}),
+            json!({}),
+        ] {
+            assert!(decode_txn_id(&body).is_err(), "accepted {body}");
+        }
+    }
 
     #[tokio::test]
     async fn local_transaction_uses_the_configured_node_signer() {

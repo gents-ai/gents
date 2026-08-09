@@ -16,6 +16,7 @@ fn exact_record<T>(
     collection: &str,
     logical_id: String,
     expected_doc_id: &str,
+    collection_version_id: String,
     source: crate::SignedDocumentVersionRef,
     snapshot: Option<(String, T)>,
 ) -> Result<DocumentRecord<T>> {
@@ -38,9 +39,20 @@ fn exact_record<T>(
         anyhow::bail!("{collection} {expected_doc_id} has an empty logical id");
     }
     DocumentRecord::from_verified_fact(
-        crate::ConfigFactRef::new(collection, logical_id, source),
+        crate::ConfigFactRef::new(collection, logical_id, collection_version_id, source),
         value,
     )
+}
+
+async fn exact_collection_version_id(
+    node: &EmbeddedNode,
+    collection: &str,
+    source: &crate::SignedDocumentVersionRef,
+) -> Result<String> {
+    crate::document_version::verified_collection_version_id_with_identity(
+        node, collection, source, None,
+    )
+    .await
 }
 
 pub(super) async fn load_verified_principal_by_doc_id(
@@ -53,12 +65,21 @@ pub(super) async fn load_verified_principal_by_doc_id(
         doc_id,
     )
     .await?;
+    let collection_version_id =
+        exact_collection_version_id(node, "AgentPrincipal", &source).await?;
     let snapshot = load_agent_principal_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.agent_did.clone())
         .unwrap_or_default();
-    exact_record("AgentPrincipal", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "AgentPrincipal",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) async fn load_verified_behavior_by_doc_id(
@@ -71,12 +92,20 @@ pub(super) async fn load_verified_behavior_by_doc_id(
         doc_id,
     )
     .await?;
+    let collection_version_id = exact_collection_version_id(node, "AgentBehavior", &source).await?;
     let snapshot = load_agent_behavior_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.behavior_id.clone())
         .unwrap_or_default();
-    exact_record("AgentBehavior", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "AgentBehavior",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) async fn load_verified_tool_selection_by_doc_id(
@@ -89,12 +118,20 @@ pub(super) async fn load_verified_tool_selection_by_doc_id(
         doc_id,
     )
     .await?;
+    let collection_version_id = exact_collection_version_id(node, "ToolSelection", &source).await?;
     let snapshot = load_tool_selection_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.selection_id.clone())
         .unwrap_or_default();
-    exact_record("ToolSelection", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "ToolSelection",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) async fn load_verified_profile_by_doc_id(
@@ -107,13 +144,22 @@ pub(super) async fn load_verified_profile_by_doc_id(
         doc_id,
     )
     .await?;
+    let collection_version_id =
+        exact_collection_version_id(node, "InferenceProfile", &source).await?;
     let snapshot =
         load_inference_profile_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.profile_id.clone())
         .unwrap_or_default();
-    exact_record("InferenceProfile", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "InferenceProfile",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) async fn load_verified_backend_by_doc_id(
@@ -126,12 +172,21 @@ pub(super) async fn load_verified_backend_by_doc_id(
         doc_id,
     )
     .await?;
+    let collection_version_id =
+        exact_collection_version_id(node, "InferenceBackend", &source).await?;
     let snapshot = lookup_backend_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.backend_id.clone())
         .unwrap_or_default();
-    exact_record("InferenceBackend", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "InferenceBackend",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) async fn load_verified_skill_by_doc_id(
@@ -141,12 +196,20 @@ pub(super) async fn load_verified_skill_by_doc_id(
     let source =
         crate::document_version::verified_current_signed_document_version(node, "Skill", doc_id)
             .await?;
+    let collection_version_id = exact_collection_version_id(node, "Skill", &source).await?;
     let snapshot = load_skill_at_cid(node, &source.version.composite_commit_cid).await?;
     let logical_id = snapshot
         .as_ref()
         .map(|(_, value)| value.skill_id.clone())
         .unwrap_or_default();
-    exact_record("Skill", logical_id, doc_id, source, snapshot)
+    exact_record(
+        "Skill",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
 }
 
 pub(super) fn insert_unique<T>(

@@ -9,7 +9,10 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::{
     content_and_metadata_with_prompt_selected_skill_ids, wait_for_terminal_response,
 };
-use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
+use crate::{
+    authenticated_graphql_client, print_json, resolve_config_access, resolve_graphql_endpoint,
+    resolve_home_dir,
+};
 
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
@@ -18,6 +21,8 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let mut value = serde_json::to_value(&output)?;
     if args.wait {
         let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+        let graphql =
+            authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
         let response = wait_for_terminal_response(
             &graphql,
             &output.request_id,

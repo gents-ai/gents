@@ -1,8 +1,16 @@
 use std::{collections::HashSet, sync::Arc};
 
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::{Query, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
 use gents::graphql::escape_graphql_string;
-use gents::session::{fork, fork_via_http, ForkError, ForkParams};
+use gents::session::{
+    fork, fork_via_http, ForkError, ForkParams, GraphqlExecutor, HttpGraphqlExecutor,
+};
+use identity::Identity as _;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 
@@ -20,6 +28,32 @@ async fn test_db(name: &str) -> TestDb {
     let identity: Arc<dyn gents::AgentIdentity> =
         Arc::new(crate::support::fixtures::test_identity(name));
     test_db_with_identity(name, identity).await
+}
+
+#[tokio::test]
+async fn unsigned_embedded_fork_fails_before_touching_documents() {
+    // No schema is installed. Reaching the first fork query would therefore
+    // produce a collection/query failure rather than this identity boundary.
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let error = fork(
+        &node,
+        ForkParams {
+            source_session_id: "must-not-be-read",
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        ForkError::ForkCopyFailed(error) => assert!(
+            error.to_string().contains("signed embedded DefraDB node"),
+            "{error:#}"
+        ),
+        other => panic!("expected pre-query identity failure, got {other:?}"),
+    }
 }
 
 async fn exact_current_evidence(
@@ -168,6 +202,19 @@ async fn create_exact_tool_result(
 #[derive(Clone)]
 struct EmbeddedGraphqlState {
     node: Arc<defra_node::EmbeddedNode>,
+    audience: String,
+    signature_tamper: SignatureTamper,
+}
+
+#[derive(Clone, Copy, Default)]
+enum SignatureTamper {
+    #[default]
+    None,
+    MissingSignature,
+    MissingKey,
+    ForgedKey,
+    UnsupportedType,
+    RejectVerification,
 }
 
 #[derive(Deserialize)]
@@ -177,25 +224,137 @@ struct GraphqlRequest {
 
 async fn embedded_graphql_handler(
     State(state): State<EmbeddedGraphqlState>,
+    headers: HeaderMap,
     Json(request): Json<GraphqlRequest>,
-) -> Json<serde_json::Value> {
-    let response = state.node.execute(&request.query).await;
-    Json(serde_json::json!({
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Some(token) = headers
+        .get(reqwest::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "missing bearer"})),
+        );
+    };
+    let Ok(token_identity) = identity::from_token(token.as_bytes()) else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "invalid bearer"})),
+        );
+    };
+    if identity::verify_auth_token(&token_identity, &state.audience).is_err() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "wrong bearer audience"})),
+        );
+    }
+    let Ok(did) = token_identity.did() else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "invalid bearer DID"})),
+        );
+    };
+    let response = state
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(&request.query).with_identity(Some(did)),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    let mut body = serde_json::json!({
         "data": response.data,
         "errors": response.errors,
-    }))
+    });
+    if request.query.contains("_commits(cid:") {
+        if matches!(state.signature_tamper, SignatureTamper::MissingSignature) {
+            if let Some(row) = body.pointer_mut("/data/_commits/0") {
+                row["signature"] = serde_json::Value::Null;
+            }
+        }
+        let signature = body.pointer_mut("/data/_commits/0/signature");
+        match (state.signature_tamper, signature) {
+            (SignatureTamper::MissingKey, Some(signature)) => {
+                signature["identity"] = serde_json::Value::String(String::new());
+            }
+            (SignatureTamper::ForgedKey, Some(signature)) => {
+                signature["identity"] = serde_json::Value::String("00".to_string());
+            }
+            (SignatureTamper::UnsupportedType, Some(signature)) => {
+                signature["type"] = serde_json::Value::String("RS256".to_string());
+            }
+            _ => {}
+        }
+    }
+    (StatusCode::OK, Json(body))
 }
 
-async fn spawn_embedded_graphql(node: Arc<defra_node::EmbeddedNode>) -> String {
+#[derive(Deserialize)]
+struct VerifySignatureQuery {
+    cid: String,
+    #[serde(rename = "public-key")]
+    public_key: String,
+    #[serde(rename = "type")]
+    key_type: String,
+}
+
+async fn embedded_verify_signature_handler(
+    State(state): State<EmbeddedGraphqlState>,
+    headers: HeaderMap,
+    Query(query): Query<VerifySignatureQuery>,
+) -> StatusCode {
+    let authenticated = headers
+        .get(reqwest::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|token| identity::from_token(token.as_bytes()).ok())
+        .is_some_and(|identity| identity::verify_auth_token(&identity, &state.audience).is_ok());
+    if !authenticated {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if matches!(state.signature_tamper, SignatureTamper::RejectVerification) {
+        return StatusCode::FORBIDDEN;
+    }
+    let key_type = match query.key_type.as_str() {
+        "ed25519" => crypto::KeyType::Ed25519,
+        "secp256k1" => crypto::KeyType::Secp256k1,
+        "secp256r1" => crypto::KeyType::Secp256r1,
+        _ => return StatusCode::BAD_REQUEST,
+    };
+    let Ok(expected_signer) = state.node.verified_block_signer_did(&query.cid).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    let Ok(public_key) = crypto::public_key_from_string(key_type, &query.public_key) else {
+        return StatusCode::FORBIDDEN;
+    };
+    match public_key.did() {
+        Ok(did) if did == expected_signer => StatusCode::OK,
+        _ => StatusCode::FORBIDDEN,
+    }
+}
+
+async fn spawn_embedded_graphql_with_tamper(
+    node: Arc<defra_node::EmbeddedNode>,
+    signature_tamper: SignatureTamper,
+) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind embedded graphql listener");
     let addr = listener
         .local_addr()
         .expect("read embedded graphql listener addr");
+    let state = EmbeddedGraphqlState {
+        node,
+        audience: addr.to_string(),
+        signature_tamper,
+    };
     let router = Router::new()
         .route("/api/v0/graphql", post(embedded_graphql_handler))
-        .with_state(EmbeddedGraphqlState { node });
+        .route(
+            "/api/v0/block/verify-signature",
+            get(embedded_verify_signature_handler),
+        )
+        .with_state(state);
 
     tokio::spawn(async move {
         axum::serve(listener, router)
@@ -204,6 +363,52 @@ async fn spawn_embedded_graphql(node: Arc<defra_node::EmbeddedNode>) -> String {
     });
 
     format!("http://{addr}/api/v0/graphql")
+}
+
+async fn spawn_embedded_graphql(node: Arc<defra_node::EmbeddedNode>) -> String {
+    spawn_embedded_graphql_with_tamper(node, SignatureTamper::None).await
+}
+
+#[tokio::test]
+async fn remote_commit_signer_evidence_fails_closed_for_tampering() {
+    let db = test_db("fork-http-signer-tampering").await;
+    let session_id = "fork-http-signer-source";
+    create_agent_session(&db.node, session_id, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    let (_, cid, _) =
+        exact_current_evidence(&db.node, "AgentSession", "session_id", session_id).await;
+
+    for (tamper, expected) in [
+        (SignatureTamper::MissingSignature, "has no signature"),
+        (SignatureTamper::MissingKey, "omitted signature identity"),
+        (
+            SignatureTamper::ForgedKey,
+            "cryptographic verification failed",
+        ),
+        (
+            SignatureTamper::UnsupportedType,
+            "unsupported signature type",
+        ),
+        (
+            SignatureTamper::RejectVerification,
+            "cryptographic verification failed",
+        ),
+    ] {
+        let endpoint = spawn_embedded_graphql_with_tamper(db.node.clone(), tamper).await;
+        let access = gents::AuthenticatedGraphql::new(
+            endpoint,
+            db.node_identity().expect("signed test node identity"),
+        )
+        .await
+        .unwrap();
+        let error = HttpGraphqlExecutor::new(access)
+            .verified_signer_did(&cid)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "tamper case expected {expected:?}, got {error:#}"
+        );
+    }
 }
 
 async fn set_tool_call_trace_fields(
@@ -387,8 +592,14 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     .await;
 
     let graphql = spawn_embedded_graphql(db.node.clone()).await;
+    let access = gents::AuthenticatedGraphql::new(
+        graphql,
+        db.node_identity().expect("signed test node identity"),
+    )
+    .await
+    .expect("authenticated GraphQL access");
     let outcome = fork_via_http(
-        &graphql,
+        access,
         ForkParams {
             source_session_id: parent_session,
             fork_at_user_turn: 1,

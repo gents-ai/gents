@@ -3,6 +3,19 @@ use super::lean_vocab_test::{
     LeanApplyReconcileCase, LeanApplySelectedDoc,
 };
 use super::*;
+
+async fn authenticated_test_access(graphql: &str) -> ConfigAccess {
+    let key_dir = tempfile::tempdir().expect("identity tempdir");
+    let identity = std::sync::Arc::new(
+        gents::KeyIdentity::load_or_create(key_dir.path().join("identity.key"), None)
+            .expect("test identity"),
+    );
+    ConfigAccess::Graphql(
+        gents::AuthenticatedGraphql::new(graphql.to_string(), identity)
+            .await
+            .expect("authenticated test GraphQL"),
+    )
+}
 use axum::{extract::State, routing::post, Json, Router};
 use gents::BackendProviderKind;
 use regex::Regex;
@@ -111,7 +124,7 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
         assert_selected_documents_match_lean(case, desired_bundle.as_bundle(), &planned);
 
         let (graphql, recorder) = start_recording_graphql().await;
-        let access = ConfigAccess::Graphql(graphql);
+        let access = authenticated_test_access(&graphql).await;
         let txn = access.begin_apply_txn().await.expect("begin apply tx");
         let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
             Ok(counts) => {
@@ -164,7 +177,7 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
                 .collect::<Vec<_>>();
             let (graphql, recorder) =
                 start_recording_graphql_with_committed_state(initial_external_state).await;
-            let access = ConfigAccess::Graphql(graphql);
+            let access = authenticated_test_access(&graphql).await;
 
             let txn = access
                 .begin_apply_txn()
@@ -1243,7 +1256,7 @@ fn doc_key_from_desired(doc: &LeanApplyDesiredDoc) -> (Collection, String) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_txn_round_trip_against_recorder() {
     let (graphql, recorder) = start_recording_graphql().await;
-    let access = ConfigAccess::Graphql(graphql);
+    let access = authenticated_test_access(&graphql).await;
     let txn = access.begin_apply_txn().await.expect("begin");
 
     let _ = txn
@@ -1265,7 +1278,7 @@ async fn config_apply_txn_round_trip_against_recorder() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_txn_discard_leaves_committed_empty() {
     let (graphql, recorder) = start_recording_graphql().await;
-    let access = ConfigAccess::Graphql(graphql);
+    let access = authenticated_test_access(&graphql).await;
     let txn = access.begin_apply_txn().await.expect("begin");
 
     let _ = txn

@@ -95,6 +95,8 @@ struct ResponseOutcomeRow {
     #[serde(default)]
     final_message_composite_commit_cid: Option<String>,
     #[serde(default)]
+    final_message_collection_version_id: Option<String>,
+    #[serde(default)]
     final_message_signer_did: Option<String>,
     #[serde(default)]
     final_message_sequence: Option<u32>,
@@ -150,6 +152,10 @@ fn graphql_optional_string(value: Option<&str>) -> String {
         .unwrap_or_else(|| "null".to_string())
 }
 
+fn normalized_reason_code(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
 fn graphql_optional_u32(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
@@ -161,7 +167,8 @@ fn row_fields() -> &'static str {
        request_source_composite_commit_cid request_source_signer_did
        request_claim_composite_commit_cid request_claim_signer_did
        outcome_kind reason_code final_message_doc_id
-       final_message_composite_commit_cid final_message_signer_did
+       final_message_composite_commit_cid final_message_collection_version_id
+       final_message_signer_did
        final_message_sequence terminalized_at"#
 }
 
@@ -254,10 +261,13 @@ fn row_matches(row: &ResponseOutcomeRow, desired: &ResponseOutcomeInput<'_>) -> 
             == desired.provenance.claim.version.composite_commit_cid
         && row.request_claim_signer_did == desired.provenance.claim.signer_did
         && row.outcome_kind == desired.kind.as_str()
-        && row.reason_code.as_deref() == desired.reason_code
+        && normalized_reason_code(row.reason_code.as_deref())
+            == normalized_reason_code(desired.reason_code)
         && row.final_message_doc_id.as_deref() == final_message.map(|fact| fact.doc_id.as_str())
         && row.final_message_composite_commit_cid.as_deref()
             == final_message.map(|fact| fact.composite_commit_cid.as_str())
+        && row.final_message_collection_version_id.as_deref()
+            == final_message.map(|fact| fact.collection_version_id.as_str())
         && row.final_message_signer_did.as_deref()
             == final_message.map(|fact| fact.signer_did.as_str())
         && row.final_message_sequence == final_message.map(|fact| fact.sequence)
@@ -343,6 +353,20 @@ async fn verify_final_message(
             fact.doc_id
         );
     }
+    let collection_version_id =
+        crate::document_version::verified_collection_version_id_with_identity(
+            node,
+            "AgentMessage",
+            &verified,
+            Some(identity.clone()),
+        )
+        .await?;
+    if collection_version_id != fact.collection_version_id {
+        anyhow::bail!(
+            "final AgentMessage {} collection schema changed",
+            fact.doc_id
+        );
+    }
     Ok(row.content.clone())
 }
 
@@ -378,19 +402,130 @@ fn validate_input(input: &ResponseOutcomeInput<'_>) -> Result<()> {
     {
         anyhow::bail!("AgentResponseOutcome requires complete logical lineage and timestamp");
     }
+    chrono::DateTime::parse_from_rfc3339(input.terminalized_at)
+        .context("AgentResponseOutcome terminalized_at must be RFC3339")?;
+    if input.final_message.is_some_and(|fact| {
+        fact.doc_id.trim().is_empty()
+            || fact.composite_commit_cid.trim().is_empty()
+            || fact.collection_version_id.trim().is_empty()
+            || fact.signer_did.trim().is_empty()
+    }) {
+        anyhow::bail!("AgentResponseOutcome final message requires complete exact provenance");
+    }
+    let reason_code = normalized_reason_code(input.reason_code);
     match input.kind {
         ResponseOutcomeKind::Complete => {
-            if input.final_message.is_none() || input.reason_code.is_some() {
+            if input.final_message.is_none() || reason_code.is_some() {
                 anyhow::bail!("complete AgentResponseOutcome requires one message and no reason");
             }
         }
         ResponseOutcomeKind::Error | ResponseOutcomeKind::Interrupted => {
-            if input.reason_code.is_none() {
+            if reason_code.is_none() {
                 anyhow::bail!("non-complete AgentResponseOutcome requires a typed reason");
             }
         }
     }
     Ok(())
+}
+
+/// Validate the structural shape of a protocol row before a timeline treats
+/// any of its exact-looking edges as evidence. Cryptographic and lineage
+/// verification remains the caller's responsibility.
+fn required_timeline_field<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("AgentResponseOutcome {field} is missing"))
+}
+
+pub(crate) fn validate_timeline_response_outcome_row(
+    row: &gents_protocol::row::AgentResponseOutcomeRow,
+) -> Result<ResponseOutcomeKind> {
+    if row.request_doc_id.trim().is_empty() {
+        anyhow::bail!("AgentResponseOutcome request_doc_id is missing");
+    }
+    let request_id = required_timeline_field(row.request_id.as_deref(), "request_id")?;
+    let session_id = required_timeline_field(row.session_id.as_deref(), "session_id")?;
+    let agent_did = required_timeline_field(row.agent_did.as_deref(), "agent_did")?;
+    let behavior_id = required_timeline_field(row.behavior_id.as_deref(), "behavior_id")?;
+    let source_cid = required_timeline_field(
+        row.request_source_composite_commit_cid.as_deref(),
+        "request_source_composite_commit_cid",
+    )?;
+    let source_signer = required_timeline_field(
+        row.request_source_signer_did.as_deref(),
+        "request_source_signer_did",
+    )?;
+    let claim_cid = required_timeline_field(
+        row.request_claim_composite_commit_cid.as_deref(),
+        "request_claim_composite_commit_cid",
+    )?;
+    let claim_signer = required_timeline_field(
+        row.request_claim_signer_did.as_deref(),
+        "request_claim_signer_did",
+    )?;
+    let terminalized_at =
+        required_timeline_field(row.terminalized_at.as_deref(), "terminalized_at")?;
+    let kind = ResponseOutcomeKind::from_str(required_timeline_field(
+        row.outcome_kind.as_deref(),
+        "outcome_kind",
+    )?)?;
+
+    let final_message = match (
+        row.final_message_doc_id.as_deref(),
+        row.final_message_composite_commit_cid.as_deref(),
+        row.final_message_collection_version_id.as_deref(),
+        row.final_message_signer_did.as_deref(),
+        row.final_message_sequence,
+    ) {
+        (None, None, None, None, None) => None,
+        (
+            Some(doc_id),
+            Some(cid),
+            Some(collection_version_id),
+            Some(signer_did),
+            Some(sequence),
+        ) if !doc_id.trim().is_empty()
+            && !cid.trim().is_empty()
+            && !collection_version_id.trim().is_empty()
+            && !signer_did.trim().is_empty() =>
+        {
+            Some(MessageFactRef {
+                sequence: u32::try_from(sequence)
+                    .context("AgentResponseOutcome final_message_sequence must be non-negative")?,
+                doc_id: doc_id.to_string(),
+                composite_commit_cid: cid.to_string(),
+                collection_version_id: collection_version_id.to_string(),
+                signer_did: signer_did.to_string(),
+            })
+        }
+        _ => anyhow::bail!("AgentResponseOutcome has a partial final-message reference"),
+    };
+    let provenance = RequestExecutionProvenance::new(
+        SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new(&row.request_doc_id, source_cid),
+            source_signer,
+        ),
+        SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new(&row.request_doc_id, claim_cid),
+            claim_signer,
+        ),
+    );
+    validate_input(&ResponseOutcomeInput {
+        request_id,
+        session_id,
+        agent_did,
+        requester_did: row
+            .requester_did
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+        behavior_id,
+        provenance: &provenance,
+        kind,
+        reason_code: normalized_reason_code(row.reason_code.as_deref()),
+        final_message: final_message.as_ref(),
+        terminalized_at,
+    })?;
+    Ok(kind)
 }
 
 /// Publish or verify the one accepted immutable outcome for an exact request.
@@ -443,6 +578,7 @@ pub(crate) async fn publish_response_outcome(
                 reason_code: {reason_code}
                 final_message_doc_id: {message_doc_id}
                 final_message_composite_commit_cid: {message_cid}
+                final_message_collection_version_id: {message_collection_version_id}
                 final_message_signer_did: {message_signer}
                 final_message_sequence: {message_sequence}
                 terminalized_at: "{terminalized_at}"
@@ -459,10 +595,12 @@ pub(crate) async fn publish_response_outcome(
         claim_cid = escape_graphql_string(&input.provenance.claim.version.composite_commit_cid),
         claim_signer = escape_graphql_string(&input.provenance.claim.signer_did),
         outcome_kind = input.kind.as_str(),
-        reason_code = graphql_optional_string(input.reason_code),
+        reason_code = graphql_optional_string(normalized_reason_code(input.reason_code)),
         message_doc_id = graphql_optional_string(final_message.map(|fact| fact.doc_id.as_str())),
         message_cid =
             graphql_optional_string(final_message.map(|fact| fact.composite_commit_cid.as_str())),
+        message_collection_version_id =
+            graphql_optional_string(final_message.map(|fact| fact.collection_version_id.as_str())),
         message_signer =
             graphql_optional_string(final_message.map(|fact| fact.signer_did.as_str())),
         message_sequence = graphql_optional_u32(final_message.map(|fact| fact.sequence)),
@@ -617,15 +755,23 @@ pub(crate) async fn load_accepted_response_outcome(
     let message_fields = (
         row.final_message_doc_id.as_deref(),
         row.final_message_composite_commit_cid.as_deref(),
+        row.final_message_collection_version_id.as_deref(),
         row.final_message_signer_did.as_deref(),
         row.final_message_sequence,
     );
     let final_message = match message_fields {
-        (None, None, None, None) => None,
-        (Some(doc_id), Some(cid), Some(signer_did), Some(sequence)) => Some(MessageFactRef {
+        (None, None, None, None, None) => None,
+        (
+            Some(doc_id),
+            Some(cid),
+            Some(collection_version_id),
+            Some(signer_did),
+            Some(sequence),
+        ) => Some(MessageFactRef {
             sequence,
             doc_id: doc_id.to_string(),
             composite_commit_cid: cid.to_string(),
+            collection_version_id: collection_version_id.to_string(),
             signer_did: signer_did.to_string(),
         }),
         _ => anyhow::bail!("AgentResponseOutcome has a partial final-message reference"),
@@ -642,7 +788,7 @@ pub(crate) async fn load_accepted_response_outcome(
         behavior_id: &row.behavior_id,
         provenance: &provenance,
         kind,
-        reason_code: row.reason_code.as_deref(),
+        reason_code: normalized_reason_code(row.reason_code.as_deref()),
         final_message: final_message.as_ref(),
         terminalized_at: &row.terminalized_at,
     };
@@ -661,7 +807,7 @@ pub(crate) async fn load_accepted_response_outcome(
         provenance,
         outcome_signer_did: outcome_version.signer_did.clone(),
         kind,
-        reason_code: row.reason_code.clone(),
+        reason_code: normalized_reason_code(row.reason_code.as_deref()).map(str::to_owned),
         final_message,
         final_message_content,
         terminalized_at: row.terminalized_at.clone(),
@@ -712,6 +858,144 @@ mod tests {
             "2026-08-08T00:00:00+00:00",
             "2026-08-08T00:00:00Z"
         ));
+    }
+
+    fn timeline_outcome_row() -> gents_protocol::row::AgentResponseOutcomeRow {
+        gents_protocol::row::AgentResponseOutcomeRow {
+            doc_id: Some("outcome-doc".to_string()),
+            request_doc_id: "request-doc".to_string(),
+            request_id: Some("request-id".to_string()),
+            session_id: Some("session-id".to_string()),
+            agent_did: Some("did:key:agent".to_string()),
+            requester_did: Some("did:key:requester".to_string()),
+            behavior_id: Some("general".to_string()),
+            request_source_composite_commit_cid: Some("source-cid".to_string()),
+            request_source_signer_did: Some("did:key:requester".to_string()),
+            request_claim_composite_commit_cid: Some("claim-cid".to_string()),
+            request_claim_signer_did: Some("did:key:agent".to_string()),
+            outcome_kind: Some("complete".to_string()),
+            reason_code: None,
+            final_message_doc_id: Some("message-doc".to_string()),
+            final_message_composite_commit_cid: Some("message-cid".to_string()),
+            final_message_collection_version_id: Some("message-schema".to_string()),
+            final_message_signer_did: Some("did:key:agent".to_string()),
+            final_message_sequence: Some(3),
+            terminalized_at: Some("2026-08-08T00:00:00Z".to_string()),
+        }
+    }
+
+    fn outcome_provenance() -> RequestExecutionProvenance {
+        RequestExecutionProvenance::new(
+            SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new("request-doc", "source-cid"),
+                "did:key:requester",
+            ),
+            SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new("request-doc", "claim-cid"),
+                "did:key:agent",
+            ),
+        )
+    }
+
+    fn error_outcome_row(reason_code: Option<&str>) -> ResponseOutcomeRow {
+        ResponseOutcomeRow {
+            doc_id: "outcome-doc".to_string(),
+            request_doc_id: "request-doc".to_string(),
+            request_id: "request-id".to_string(),
+            session_id: "session-id".to_string(),
+            agent_did: "did:key:agent".to_string(),
+            requester_did: None,
+            behavior_id: "general".to_string(),
+            request_source_composite_commit_cid: "source-cid".to_string(),
+            request_source_signer_did: "did:key:requester".to_string(),
+            request_claim_composite_commit_cid: "claim-cid".to_string(),
+            request_claim_signer_did: "did:key:agent".to_string(),
+            outcome_kind: "error".to_string(),
+            reason_code: reason_code.map(str::to_owned),
+            final_message_doc_id: None,
+            final_message_composite_commit_cid: None,
+            final_message_collection_version_id: None,
+            final_message_signer_did: None,
+            final_message_sequence: None,
+            terminalized_at: "2026-08-08T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn reason_code_normalization_is_shared_by_admission_publication_and_matching() {
+        let provenance = outcome_provenance();
+        let input = |reason_code| ResponseOutcomeInput {
+            request_id: "request-id",
+            session_id: "session-id",
+            agent_did: "did:key:agent",
+            requester_did: None,
+            behavior_id: "general",
+            provenance: &provenance,
+            kind: ResponseOutcomeKind::Error,
+            reason_code,
+            final_message: None,
+            terminalized_at: "2026-08-08T00:00:00Z",
+        };
+
+        assert!(validate_input(&input(None)).is_err());
+        assert!(validate_input(&input(Some(""))).is_err());
+        assert!(validate_input(&input(Some("   "))).is_err());
+
+        let padded = input(Some("  provider_error  "));
+        validate_input(&padded).unwrap();
+        assert_eq!(
+            graphql_optional_string(normalized_reason_code(padded.reason_code)),
+            "\"provider_error\""
+        );
+        assert!(row_matches(
+            &error_outcome_row(Some("provider_error")),
+            &padded
+        ));
+    }
+
+    #[test]
+    fn timeline_non_complete_outcomes_require_a_nonempty_reason_code() {
+        let mut row = timeline_outcome_row();
+        row.outcome_kind = Some("interrupted".to_string());
+        row.final_message_doc_id = None;
+        row.final_message_composite_commit_cid = None;
+        row.final_message_collection_version_id = None;
+        row.final_message_signer_did = None;
+        row.final_message_sequence = None;
+
+        row.reason_code = Some("  ".to_string());
+        assert!(validate_timeline_response_outcome_row(&row).is_err());
+
+        row.reason_code = Some("  operator_interrupt  ".to_string());
+        assert_eq!(
+            validate_timeline_response_outcome_row(&row).unwrap(),
+            ResponseOutcomeKind::Interrupted
+        );
+    }
+
+    #[test]
+    fn timeline_outcome_structure_fails_closed() {
+        validate_timeline_response_outcome_row(&timeline_outcome_row()).unwrap();
+
+        let mut unknown = timeline_outcome_row();
+        unknown.outcome_kind = Some("finished-ish".to_string());
+        assert!(validate_timeline_response_outcome_row(&unknown).is_err());
+
+        let mut negative_sequence = timeline_outcome_row();
+        negative_sequence.final_message_sequence = Some(-1);
+        assert!(validate_timeline_response_outcome_row(&negative_sequence).is_err());
+
+        let mut partial_message = timeline_outcome_row();
+        partial_message.final_message_signer_did = None;
+        assert!(validate_timeline_response_outcome_row(&partial_message).is_err());
+
+        let mut missing_schema = timeline_outcome_row();
+        missing_schema.final_message_collection_version_id = None;
+        assert!(validate_timeline_response_outcome_row(&missing_schema).is_err());
+
+        let mut bad_timestamp = timeline_outcome_row();
+        bad_timestamp.terminalized_at = Some("eventually".to_string());
+        assert!(validate_timeline_response_outcome_row(&bad_timestamp).is_err());
     }
 
     #[tokio::test]

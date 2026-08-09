@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/gents/adapter-projection/langgraph_state_history/v1-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/langgraph_state_history/v2-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -7,7 +7,7 @@
       "const": "langgraph_state_history"
     },
     "projection_version": {
-      "const": "v1"
+      "const": "v2"
     },
     "record_id": {
       "type": "string"
@@ -29,6 +29,253 @@
         "full",
         "training_safe",
         "public"
+      ]
+    },
+    "source_manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_gaps": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "open_logical_extent",
+                  "open_session_extent",
+                  "non_atomic_observation",
+                  "remote_signature_unverified"
+                ]
+              },
+              "scope_id": {
+                "type": "string"
+              },
+              "source_class": {
+                "enum": [
+                  "request",
+                  "session_projection",
+                  "conversation_projection",
+                  "message",
+                  "tool_call",
+                  "tool_result",
+                  "tool_approval",
+                  "response_live",
+                  "response_outcome",
+                  "inference_call",
+                  "rendered_request",
+                  "resolved_config",
+                  "compaction"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "source_class",
+              "collection",
+              "scope_id"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "manifest_version": {
+          "const": 2
+        },
+        "omissions": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "not_produced",
+                  "not_applicable",
+                  "projection_excluded",
+                  "redacted",
+                  "legacy_unavailable",
+                  "denied",
+                  "erased",
+                  "unsupported_manifest",
+                  "heuristic_logical_join",
+                  "remote_signature_unverified"
+                ]
+              },
+              "slot": {
+                "additionalProperties": false,
+                "properties": {
+                  "ordinal": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "source_class": {
+                    "enum": [
+                      "request",
+                      "session_projection",
+                      "conversation_projection",
+                      "message",
+                      "tool_call",
+                      "tool_result",
+                      "tool_approval",
+                      "response_live",
+                      "response_outcome",
+                      "inference_call",
+                      "rendered_request",
+                      "resolved_config",
+                      "compaction"
+                    ]
+                  }
+                },
+                "required": [
+                  "source_class",
+                  "ordinal"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "slot",
+              "collection",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "root": {
+          "additionalProperties": false,
+          "properties": {
+            "signer_did": {
+              "type": "string"
+            },
+            "version": {
+              "additionalProperties": false,
+              "properties": {
+                "composite_commit_cid": {
+                  "type": "string"
+                },
+                "doc_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "doc_id",
+                "composite_commit_cid"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "version",
+            "signer_did"
+          ],
+          "type": "object"
+        },
+        "sources": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "type": "string"
+              },
+              "collection_version_id": {
+                "type": "string"
+              },
+              "exact": {
+                "additionalProperties": false,
+                "properties": {
+                  "signer_did": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "composite_commit_cid": {
+                        "type": "string"
+                      },
+                      "doc_id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "doc_id",
+                      "composite_commit_cid"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "version",
+                  "signer_did"
+                ],
+                "type": "object"
+              },
+              "slot": {
+                "additionalProperties": false,
+                "properties": {
+                  "ordinal": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "source_class": {
+                    "enum": [
+                      "request",
+                      "session_projection",
+                      "conversation_projection",
+                      "message",
+                      "tool_call",
+                      "tool_result",
+                      "tool_approval",
+                      "response_live",
+                      "response_outcome",
+                      "inference_call",
+                      "rendered_request",
+                      "resolved_config",
+                      "compaction"
+                    ]
+                  }
+                },
+                "required": [
+                  "source_class",
+                  "ordinal"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "slot",
+              "collection",
+              "collection_version_id",
+              "exact"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "verified_exact",
+            "partial_exact"
+          ]
+        }
+      },
+      "required": [
+        "manifest_version",
+        "status",
+        "root",
+        "sources",
+        "coverage_gaps"
+      ],
+      "type": "object"
+    },
+    "source_manifest_status": {
+      "enum": [
+        "verified_exact",
+        "partial_exact",
+        "unavailable"
       ]
     },
     "source_request_id": {
@@ -53,6 +300,7 @@
     "projection_version",
     "source_request_id",
     "redaction_mode",
+    "source_manifest_status",
     "record_kind",
     "record_index",
     "record_id",

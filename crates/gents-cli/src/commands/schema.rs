@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents::AuthenticatedGraphql;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -70,7 +71,7 @@ pub(crate) async fn schema_apply(args: SchemaApplyArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let graphql = match &access {
-        ConfigAccess::Graphql(endpoint) => Some(endpoint.clone()),
+        ConfigAccess::Graphql(endpoint) => Some(endpoint.endpoint().to_string()),
         ConfigAccess::Local(_) => None,
     };
 
@@ -296,10 +297,9 @@ async fn collection_exists(access: &ConfigAccess, collection: &str) -> Result<bo
     match access {
         ConfigAccess::Local(node) => Ok(node.get_collection(collection)?.is_some()),
         ConfigAccess::Graphql(endpoint) => {
-            let api_base = graphql_api_base(endpoint)?;
-            let client = schema_http_client()?;
+            let api_base = graphql_api_base(endpoint.endpoint())?;
             let response: Value = http_get_json(
-                &client,
+                endpoint,
                 &format!("{api_base}/collections/{collection}/exists"),
             )
             .await?;
@@ -446,47 +446,41 @@ fn filter_existing_field_adds(
     Ok((Value::Array(filtered), applied_fields, skipped_fields))
 }
 
-async fn post_schema_http(endpoint: &str, sdl: &str) -> Result<()> {
-    let api_base = graphql_api_base(endpoint)?;
-    let client = schema_http_client()?;
+async fn post_schema_http(endpoint: &AuthenticatedGraphql, sdl: &str) -> Result<()> {
+    let api_base = graphql_api_base(endpoint.endpoint())?;
     let url = format!("{api_base}/schema");
-    let response = client
-        .post(&url)
-        .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(sdl.to_string())
-        .send()
+    let response = endpoint
+        .post_text(&url, sdl.to_string())
         .await
         .with_context(|| format!("posting schema SDL to {url}"))?;
     ensure_success(response, "schema SDL", &url).await
 }
 
-async fn patch_collection_http(endpoint: &str, patch: &Value) -> Result<()> {
-    let api_base = graphql_api_base(endpoint)?;
-    let client = schema_http_client()?;
+async fn patch_collection_http(endpoint: &AuthenticatedGraphql, patch: &Value) -> Result<()> {
+    let api_base = graphql_api_base(endpoint.endpoint())?;
     let url = format!("{api_base}/collections");
-    let response = client
-        .patch(&url)
-        .json(&json!({ "Patch": patch }))
-        .send()
+    let response = endpoint
+        .patch_json(&url, &json!({ "Patch": patch }))
         .await
         .with_context(|| format!("patching collection schema via {url}"))?;
     ensure_success(response, "schema patch", &url).await
 }
 
-async fn describe_collection_http(endpoint: &str, collection: &str) -> Result<Value> {
-    let api_base = graphql_api_base(endpoint)?;
-    let client = schema_http_client()?;
+async fn describe_collection_http(
+    endpoint: &AuthenticatedGraphql,
+    collection: &str,
+) -> Result<Value> {
+    let api_base = graphql_api_base(endpoint.endpoint())?;
     http_get_json(
-        &client,
+        endpoint,
         &format!("{api_base}/collections/{collection}/describe"),
     )
     .await
 }
 
-async fn http_get_json(client: &reqwest::Client, url: &str) -> Result<Value> {
+async fn http_get_json(client: &AuthenticatedGraphql, url: &str) -> Result<Value> {
     let response = client
         .get(url)
-        .send()
         .await
         .with_context(|| format!("sending GET request to {url}"))?;
     let status = response.status();
@@ -516,13 +510,6 @@ async fn ensure_success(response: reqwest::Response, operation: &str, url: &str)
         );
     }
     Ok(())
-}
-
-fn schema_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("building schema HTTP client")
 }
 
 #[cfg(test)]

@@ -67,7 +67,7 @@ pub(crate) fn render_healthz_payload(
                     },
                     "graphql": {
                         "status": "ok",
-                        "endpoint": state.graphql,
+                        "endpoint": state.graphql.endpoint(),
                     },
                     "runtime": {
                         "status": runtime_status,
@@ -119,7 +119,7 @@ pub(crate) fn render_healthz_payload(
                 },
                 "graphql": {
                     "status": "unhealthy",
-                    "endpoint": state.graphql,
+                    "endpoint": state.graphql.endpoint(),
                     "error": error.unwrap_or_else(|| "runtime GraphQL status unavailable".to_string()),
                 },
                 "runtime": {
@@ -148,7 +148,9 @@ mod tests {
 
     fn state() -> RuntimeHttpState {
         RuntimeHttpState {
-            graphql: "http://localhost:9181/api/v0/graphql".to_string(),
+            graphql: crate::graphql_access::authenticated_test_graphql_sync(
+                "http://localhost:9181/api/v0/graphql",
+            ),
             agent_name: "test-agent".to_string(),
             agent_did: "did:test:test".to_string(),
             started_at: "2026-05-13T12:00:00Z".to_string(),

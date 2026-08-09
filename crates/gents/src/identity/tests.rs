@@ -82,6 +82,37 @@ async fn registered_identity_delegates_to_defradb_remote_signer() {
     assert!(identity.verify(&did, payload, &signature).await.unwrap());
 }
 
+#[tokio::test]
+async fn registered_identity_mints_a_verifiable_bearer_with_remote_signer() {
+    use identity::Identity as _;
+
+    let raw_identity = RawIdentity::from_secp256r1(crypto::generate_secp256r1().unwrap()).unwrap();
+    let did = raw_identity.did().unwrap().to_string();
+    let public_key_bytes = raw_identity.public_key_bytes();
+    let private_key_bytes = raw_identity.private_key_bytes();
+    defra_core::signing::store_identity(
+        &did,
+        SigningConfig {
+            key_type: SigningKeyType::Secp256r1,
+            private_key_bytes: Vec::new(),
+            public_key_bytes,
+            public_key_hex: String::new(),
+            remote_signer: Some(Arc::new(TestRemoteSigner { private_key_bytes })),
+            signing_authorization: None,
+        },
+    );
+
+    let identity = RegisteredIdentity::from_registered_did(&did, None).unwrap();
+    let token = identity
+        .defradb_bearer_token("127.0.0.1:9191", Duration::from_secs(60))
+        .await
+        .unwrap();
+    let token_identity = identity::from_token(token.as_bytes()).unwrap();
+
+    identity::verify_auth_token(&token_identity, "127.0.0.1:9191").unwrap();
+    assert_eq!(token_identity.did().unwrap().to_string(), did);
+}
+
 struct TestRemoteSigner {
     private_key_bytes: Vec<u8>,
 }

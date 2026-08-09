@@ -641,6 +641,7 @@ impl DefraRenderedRequestSink {
             );
             let admitted_request = crate::lifecycle::verify_persisted_execution_provenance(
                 &self.node,
+                &self.identity,
                 &provenance,
                 &rendered.request_doc_id,
                 &rendered.agent_did,

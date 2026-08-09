@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use axum::{
     extract::State,
     http::StatusCode,
@@ -77,24 +75,22 @@ async fn decide_identity_access(
         ));
     }
 
-    let api_base = crate::graphql_access::graphql_api_base(&state.graphql)
+    let api_base = crate::graphql_access::graphql_api_base(state.graphql.endpoint())
         .map_err(|error| IdentityDecideError::Internal(error.to_string()))?;
     let url = format!("{}/acp/document/decide", api_base.trim_end_matches('/'));
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|error| IdentityDecideError::Internal(error.to_string()))?;
-    let response = client
-        .post(url)
-        .json(&json!({
+    let response = state
+        .graphql
+        .post_json(
+            url,
+            &json!({
             "actor": body.actor,
             "permission": permission,
             "policyID": resource.policy_id,
             "resourceName": resource.resource_name,
             "docID": resource.doc_id,
-        }))
-        .send()
+            }),
+        )
         .await
         .map_err(|error| IdentityDecideError::Backend(error.to_string()))?;
 
@@ -307,6 +303,7 @@ mod tests {
     async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
+        let graphql = crate::graphql_access::authenticated_test_graphql(graphql).await;
         let router = crate::http::runtime_contract_router(
             graphql,
             "identity-test-agent".to_string(),

@@ -250,7 +250,19 @@ pub async fn desktop_list_subagent_tree(
         };
         accesses.push(SubagentTreeAccess {
             label: Some(record.label.clone()),
-            access: TreeQueryAccess::Graphql(graphql.to_string()),
+            access: TreeQueryAccess::Graphql(
+                gents::AuthenticatedGraphql::new(
+                    graphql.to_string(),
+                    Arc::new(core.principal().clone()),
+                )
+                .await
+                .map_err(|error| {
+                    BridgeError::from_legacy_message(format!(
+                        "cannot authenticate peer GraphQL {}: {error:#}",
+                        record.label
+                    ))
+                })?,
+            ),
         });
     }
 

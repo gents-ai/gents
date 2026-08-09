@@ -34,13 +34,13 @@ struct McpQueryArgs {
 
 #[derive(Clone)]
 pub(crate) struct DefraQueryMcp {
-    graphql: String,
+    graphql: gents::AuthenticatedGraphql,
     scope: CollectionScope,
     tool_router: ToolRouter<Self>,
 }
 
 impl DefraQueryMcp {
-    fn new(graphql: String, scope: CollectionScope) -> Self {
+    fn new(graphql: gents::AuthenticatedGraphql, scope: CollectionScope) -> Self {
         Self {
             graphql,
             scope,
@@ -89,7 +89,7 @@ impl ServerHandler for DefraQueryMcp {
 }
 
 pub(crate) fn defra_query_mcp_service(
-    graphql: String,
+    graphql: gents::AuthenticatedGraphql,
     scope: CollectionScope,
 ) -> StreamableHttpService<DefraQueryMcp, LocalSessionManager> {
     StreamableHttpService::new(

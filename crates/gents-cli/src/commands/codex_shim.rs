@@ -54,7 +54,7 @@ struct ShimState {
     fs_root: Option<PathBuf>,
     node: Arc<EmbeddedNode>,
     background_execution_registry: gents::BackgroundExecutionRegistry,
-    graphql: Arc<str>,
+    graphql: gents::AuthenticatedGraphql,
     agent_did: Arc<str>,
     behavior_id: Arc<str>,
     id_counter: Arc<AtomicU64>,
@@ -215,6 +215,9 @@ pub(crate) async fn bind_codex_shim(
     let trace_path = codex_log_dir.join("codex-shim-events.jsonl");
     let agent_did = args.agent_did.clone();
     let auth_required = args.auth_token.is_some();
+    let graphql = crate::authenticated_graphql_client(&args.home, &args.graphql)
+        .await
+        .map_err(CodexShimBindError::DependencyMissing)?;
 
     let bound_behavior_id = bound_behavior::resolve_bound_behavior_id(
         args.node.as_ref(),
@@ -236,7 +239,7 @@ pub(crate) async fn bind_codex_shim(
         fs_root: args.fs_root,
         node: args.node,
         background_execution_registry: args.background_execution_registry,
-        graphql: Arc::from(args.graphql.clone()),
+        graphql,
         agent_did: Arc::from(args.agent_did.clone()),
         behavior_id: Arc::from(bound_behavior_id.clone()),
         id_counter: Arc::new(AtomicU64::new(1)),

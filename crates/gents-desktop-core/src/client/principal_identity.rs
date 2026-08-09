@@ -129,6 +129,20 @@ impl AgentIdentity for PrincipalIdentity {
             .with_context(|| format!("verifying payload for {did}"))
     }
 
+    async fn defradb_bearer_token(
+        &self,
+        audience: &str,
+        duration: std::time::Duration,
+    ) -> Result<String> {
+        let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("loading principal identity for {}", self.did))?;
+        let token = identity::new_token(&identity, duration, Some(audience.to_string()), None)
+            .map_err(anyhow::Error::from)
+            .context("minting desktop DefraDB HTTP bearer")?;
+        String::from_utf8(token).context("desktop DefraDB HTTP bearer was not UTF-8")
+    }
+
     fn service_account(&self) -> Option<&ServiceAccount> {
         None
     }

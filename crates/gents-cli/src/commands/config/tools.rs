@@ -3,7 +3,7 @@ use gents::{CommandExecutionMode, CommandNetworkMode, ToolSelectionDocument};
 use serde_json::json;
 
 use crate::cli::*;
-use crate::config_writes::{write_tool_selection_document_with_clear_fields, ConfigAccess};
+use crate::config_writes::write_tool_selection_document_with_clear_fields;
 use crate::normalize_optional_string;
 use crate::print_json;
 
@@ -20,7 +20,7 @@ pub(super) fn subagent_target_entry_command(args: SubagentTargetEntryArgs) -> Re
 
 pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
     let plan = tool_selection_command_plan(&args)?;
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let doc_id = write_tool_selection_document_with_clear_fields(
         &access,
         &plan.selection,

@@ -348,44 +348,49 @@ impl Default for GraphqlRequestOptions {
     }
 }
 
-pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOptions) -> bool {
-    let client = match reqwest::Client::builder().timeout(options.timeout).build() {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
-    match client
-        .post(graphql)
-        .json(&serde_json::json!({ "query": "{ __typename }" }))
-        .send()
-        .await
-    {
-        Ok(response) => response.status().is_success(),
-        Err(_) => false,
-    }
-}
-
-pub async fn execute_graphql_async(
+/// Execute GraphQL with a DefraDB identity bearer attached to every retry.
+///
+/// The caller is responsible for minting a token whose audience matches the
+/// endpoint's HTTP Host. Keeping the token explicit here prevents retries from
+/// silently dropping the authenticated ACP actor.
+pub async fn execute_graphql_async_authenticated(
     graphql: &str,
     query: &str,
     options: GraphqlRequestOptions,
+    bearer_token: &str,
 ) -> Result<serde_json::Value> {
-    execute_graphql_async_with_tx(graphql, query, options, None).await
+    execute_graphql_async_authenticated_with_tx(graphql, query, options, bearer_token, None).await
 }
 
-pub async fn execute_graphql_async_with_tx(
+/// Execute authenticated GraphQL inside an HTTP transaction, preserving both
+/// the bearer and transaction headers across retries.
+pub async fn execute_graphql_async_authenticated_with_tx(
     graphql: &str,
     query: &str,
     options: GraphqlRequestOptions,
+    bearer_token: &str,
+    txn_id: Option<&str>,
+) -> Result<serde_json::Value> {
+    execute_graphql_async_authenticated_inner(graphql, query, options, bearer_token, txn_id).await
+}
+
+async fn execute_graphql_async_authenticated_inner(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+    bearer_token: &str,
     txn_id: Option<&str>,
 ) -> Result<serde_json::Value> {
     let client = reqwest::Client::builder()
         .timeout(options.timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let mut last_error = None;
 
     for attempt in 0..options.max_attempts.max(1) {
         let mut request = client
             .post(graphql)
+            .bearer_auth(bearer_token)
             .json(&serde_json::json!({ "query": query }));
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
@@ -478,119 +483,6 @@ pub async fn execute_graphql_async_with_tx(
                     "graphql returned retryable errors from {graphql}: {error_message}"
                 ));
                 tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
-                continue;
-            }
-        }
-
-        return finish_graphql_response(graphql, value);
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
-}
-
-pub fn execute_graphql_blocking(
-    graphql: &str,
-    query: &str,
-    options: GraphqlRequestOptions,
-) -> Result<serde_json::Value> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(options.timeout)
-        .pool_max_idle_per_host(0)
-        .build()?;
-    let mut last_error = None;
-
-    for attempt in 0..options.max_attempts.max(1) {
-        let response = client
-            .post(graphql)
-            .json(&serde_json::json!({ "query": query }))
-            .send();
-        let response = match response {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after transport error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
-                );
-            }
-        };
-
-        let response = match response.error_for_status() {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after response status error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("reading GraphQL response from {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("reading GraphQL response from {graphql}")));
-            }
-        };
-
-        let value = match response.json() {
-            Ok(value) => value,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after decode error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("decoding GraphQL response body from {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("decoding GraphQL response body from {graphql}")));
-            }
-        };
-
-        if let Some(error_message) = retryable_graphql_error_message(&value) {
-            if attempt + 1 < options.max_attempts {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error_message,
-                    "retrying blocking GraphQL request after retryable GraphQL error"
-                );
-                last_error = Some(anyhow!(
-                    "graphql returned retryable errors from {graphql}: {error_message}"
-                ));
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
                 continue;
             }
         }
@@ -1254,13 +1146,22 @@ mod tests {
 #[cfg(test)]
 mod tx_tests {
     use super::*;
-    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
-    use std::sync::{Arc, Mutex};
+    use axum::{
+        extract::State,
+        http::{header, HeaderMap, StatusCode},
+        routing::post,
+        Json, Router,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
     use tokio::net::TcpListener;
 
     #[derive(Clone, Default)]
     struct HeaderRecorder {
         last_tx_header: Arc<Mutex<Option<String>>>,
+        last_authorization: Arc<Mutex<Option<String>>>,
     }
 
     #[derive(Clone)]
@@ -1287,6 +1188,10 @@ mod tx_tests {
             .get("x-defradb-tx")
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
+        *state.last_authorization.lock().unwrap() = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         Json(serde_json::json!({ "data": {} }))
     }
 
@@ -1307,7 +1212,7 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_with_tx_sets_header_when_id_provided() {
+    async fn authenticated_executor_sets_tx_header_when_id_provided() {
         let state = HeaderRecorder::default();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1324,18 +1229,113 @@ mod tx_tests {
             retry_backoff: std::time::Duration::from_millis(50),
         };
 
-        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options, Some("42"))
-            .await
-            .unwrap();
+        execute_graphql_async_authenticated_with_tx(
+            &endpoint,
+            "{ __typename }",
+            options,
+            "signed-token",
+            Some("42"),
+        )
+        .await
+        .unwrap();
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), Some("42"));
 
-        execute_graphql_async_with_tx(&endpoint, "{ __typename }", options, None)
-            .await
-            .unwrap();
+        execute_graphql_async_authenticated_with_tx(
+            &endpoint,
+            "{ __typename }",
+            options,
+            "signed-token",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);
     }
 
-    async fn assert_execute_graphql_async_retries_error(first_error_message: &str) {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn authenticated_executor_preserves_bearer_and_tx_on_request() {
+        let state = HeaderRecorder::default();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(capture_handler))
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let endpoint = format!("http://{addr}/");
+        let options = GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(2),
+            max_attempts: 1,
+            retry_backoff: std::time::Duration::from_millis(50),
+        };
+
+        execute_graphql_async_authenticated_with_tx(
+            &endpoint,
+            "{ __typename }",
+            options,
+            "signed-token",
+            Some("7"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), Some("7"));
+        assert_eq!(
+            state.last_authorization.lock().unwrap().as_deref(),
+            Some("Bearer signed-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_executor_never_follows_redirects() {
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let target_requests = Arc::new(AtomicUsize::new(0));
+        let target_requests_for_handler = target_requests.clone();
+        let target = Router::new().fallback(move || {
+            let target_requests = target_requests_for_handler.clone();
+            async move {
+                target_requests.fetch_add(1, Ordering::SeqCst);
+                Json(serde_json::json!({ "data": {} }))
+            }
+        });
+        tokio::spawn(async move { axum::serve(target_listener, target).await.unwrap() });
+
+        let source_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_addr = source_listener.local_addr().unwrap();
+        let location = format!("http://{target_addr}/capture");
+        let source = Router::new().route(
+            "/graphql",
+            post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(source_listener, source).await.unwrap() });
+
+        let result = execute_graphql_async_authenticated(
+            &format!("http://{source_addr}/graphql"),
+            "{ __typename }",
+            GraphqlRequestOptions {
+                timeout: Duration::from_secs(2),
+                max_attempts: 1,
+                retry_backoff: Duration::ZERO,
+            },
+            "must-not-cross-origin",
+        )
+        .await;
+
+        assert!(result.is_err());
+        tokio::task::yield_now().await;
+        assert_eq!(target_requests.load(Ordering::SeqCst), 0);
+    }
+
+    async fn assert_authenticated_executor_retries_error(first_error_message: &str) {
         let state = RetryRecorder::new(first_error_message);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1352,9 +1352,14 @@ mod tx_tests {
             retry_backoff: std::time::Duration::from_millis(1),
         };
 
-        let response = execute_graphql_async(&endpoint, "{ __typename }", options)
-            .await
-            .unwrap();
+        let response = execute_graphql_async_authenticated(
+            &endpoint,
+            "{ __typename }",
+            options,
+            "signed-token",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response
@@ -1366,16 +1371,16 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_transaction_conflict_errors() {
-        assert_execute_graphql_async_retries_error(
+    async fn authenticated_executor_retries_transaction_conflict_errors() {
+        assert_authenticated_executor_retries_error(
             "commit error: datastore error: storage error: transaction conflict. Please retry",
         )
         .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_database_locked_errors() {
-        assert_execute_graphql_async_retries_error("database is locked").await;
+    async fn authenticated_executor_retries_database_locked_errors() {
+        assert_authenticated_executor_retries_error("database is locked").await;
     }
 
     #[test]

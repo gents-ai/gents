@@ -37,6 +37,8 @@ pub(super) struct PersistedResponseState {
     #[serde(default)]
     pub final_message_composite_commit_cid: Option<String>,
     #[serde(default)]
+    pub final_message_collection_version_id: Option<String>,
+    #[serde(default)]
     pub final_message_signer_did: Option<String>,
     #[serde(default)]
     pub final_message_sequence: Option<u32>,
@@ -101,6 +103,7 @@ pub(super) async fn load_response_state(
                 interrupted_at
                 final_message_doc_id
                 final_message_composite_commit_cid
+                final_message_collection_version_id
                 final_message_signer_did
                 final_message_sequence
                 outcome_terminalized_at
@@ -157,6 +160,7 @@ pub(super) async fn load_response_state_by_key(
                 interrupted_at
                 final_message_doc_id
                 final_message_composite_commit_cid
+                final_message_collection_version_id
                 final_message_signer_did
                 final_message_sequence
                 outcome_terminalized_at

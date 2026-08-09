@@ -597,6 +597,7 @@ async fn composite_commits(node: &EmbeddedNode, doc_id: &str) -> Result<Vec<Comp
 /// boundary (for example, before a rendered provider request is captured).
 pub(crate) async fn verify_persisted_execution_provenance(
     node: &EmbeddedNode,
+    identity: &identity::Did,
     provenance: &crate::RequestExecutionProvenance,
     request_doc_id: &str,
     target_agent_did: &str,
@@ -605,21 +606,30 @@ pub(crate) async fn verify_persisted_execution_provenance(
 
     let source_cid = &provenance.source.version.composite_commit_cid;
     let claim_cid = &provenance.claim.version.composite_commit_cid;
-    let source_snapshot =
-        crate::watcher::load_agent_request_at_cid(node, source_cid, request_doc_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "source commit {source_cid} does not reconstruct AgentRequest {request_doc_id}"
-                )
-            })?;
-    let claim_snapshot = crate::watcher::load_agent_request_at_cid(node, claim_cid, request_doc_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "claim commit {claim_cid} does not reconstruct AgentRequest {request_doc_id}"
-            )
-        })?;
+    let source_snapshot = crate::watcher::load_agent_request_at_cid_with_identity(
+        node,
+        source_cid,
+        request_doc_id,
+        identity,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "source commit {source_cid} does not reconstruct AgentRequest {request_doc_id}"
+        )
+    })?;
+    let claim_snapshot = crate::watcher::load_agent_request_at_cid_with_identity(
+        node,
+        claim_cid,
+        request_doc_id,
+        identity,
+    )
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "claim commit {claim_cid} does not reconstruct AgentRequest {request_doc_id}"
+        )
+    })?;
 
     if source_snapshot.status != "pending"
         || source_snapshot.lifecycle_state.as_deref() != Some("pending")
@@ -646,7 +656,12 @@ pub(crate) async fn verify_persisted_execution_provenance(
             }}
         }}"#
     );
-    let response = node.execute(&evidence_query).await;
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(evidence_query).with_identity(Some(identity.clone())),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
     if response.has_errors() {
         anyhow::bail!(
             "querying persisted execution provenance for AgentRequest {request_doc_id} failed: {:?}",

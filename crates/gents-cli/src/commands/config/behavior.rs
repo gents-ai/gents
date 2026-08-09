@@ -12,8 +12,8 @@ use crate::cli::*;
 use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
 use crate::request_helpers::resolve_dual_id;
 use crate::{
-    graphql_rows, print_json, resolve_config_access, EXPORT_AGENT_BEHAVIOR_FIELDS,
-    EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
+    authenticated_default_graphql_access, graphql_rows, print_json, resolve_config_access,
+    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
 };
 
 pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
@@ -28,7 +28,7 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         ),
         None => None,
     };
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = authenticated_default_graphql_access(&args.graphql).await?;
     let behavior = AgentBehavior {
         behavior_id: behavior_id.clone(),
         agent_did: args.agent_did.clone(),
@@ -237,7 +237,7 @@ pub(super) async fn behavior_create(args: BehaviorCreateArgs) -> Result<()> {
         args.backend_id.as_deref(),
         args.model_name.as_deref(),
     )?;
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = authenticated_default_graphql_access(&args.graphql).await?;
     let request_key = format!("cli-{}", uuid::Uuid::new_v4());
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = create_persona_request_mutation(
@@ -301,7 +301,7 @@ async fn load_source_behavior(
 }
 
 pub(super) async fn behavior_clone(args: BehaviorCloneArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = authenticated_default_graphql_access(&args.graphql).await?;
     let source = load_source_behavior(&access, &args.source_behavior_id)
         .await?
         .ok_or_else(|| {
@@ -356,7 +356,7 @@ pub(super) async fn behavior_clone(args: BehaviorCloneArgs) -> Result<()> {
 }
 
 pub(super) async fn behavior_disable(args: BehaviorDisableArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = authenticated_default_graphql_access(&args.graphql).await?;
     let source = load_source_behavior(&access, &args.behavior_id)
         .await?
         .ok_or_else(|| {

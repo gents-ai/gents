@@ -29,7 +29,7 @@ pub(super) async fn run_shell(fleet: &mut Fleet, reader: &mut StdinLines) -> Res
         match line.trim() {
             "" => continue,
             "help" | "?" => print_help(),
-            "chat" => chat_loop(&fleet.graphql_a, &fleet.did_a, reader).await?,
+            "chat" => chat_loop(&fleet.graphql_access_a, &fleet.did_a, reader).await?,
             "status" => print_status(fleet),
             "skill" | "skills" => {
                 println!("  skills: summarize, fleet-guide (ask the agent to use one in `chat`)")
@@ -87,7 +87,11 @@ fn print_help() {
     println!("  down         stop and exit (state is saved; `--reset` to wipe)");
 }
 
-async fn chat_loop(graphql: &str, agent_did: &str, reader: &mut StdinLines) -> Result<()> {
+async fn chat_loop(
+    graphql: &gents::AuthenticatedGraphql,
+    agent_did: &str,
+    reader: &mut StdinLines,
+) -> Result<()> {
     let session_id = uuid::Uuid::new_v4().to_string();
     println!("  (chatting — type `/back` to return to the demo shell)");
     loop {
@@ -146,7 +150,9 @@ async fn reconfigure(fleet: &mut Fleet, reader: &mut StdinLines) -> Result<()> {
         &mut server,
     )
     .await?;
-    wait_runtime_ready(&fleet.graphql_a, &did, &mut server).await?;
+    fleet.graphql_access_a =
+        crate::authenticated_graphql_client(&fleet.home_a, &fleet.graphql_a).await?;
+    wait_runtime_ready(&fleet.graphql_access_a, &did, &mut server).await?;
     seed_demo_skills(&fleet.bin, &fleet.graphql_a, &did).await;
 
     fleet.server_a = server;

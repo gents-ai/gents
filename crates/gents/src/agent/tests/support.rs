@@ -9,11 +9,10 @@ use super::super::*;
 use crate::graphql::escape_graphql_string;
 use crate::identity::KeyIdentity;
 
-pub(super) async fn test_node() -> Arc<EmbeddedNode> {
-    let node_identity = test_identity("agent-document-runtime-node");
+pub(super) async fn test_node_for_identity(identity: &dyn AgentIdentity) -> Arc<EmbeddedNode> {
     Arc::new(
         EmbeddedNode::builder()
-            .with_node_identity_did(node_identity.did())
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .unwrap(),

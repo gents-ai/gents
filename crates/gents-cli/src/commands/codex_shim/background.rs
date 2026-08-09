@@ -358,7 +358,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: Arc::from("http://127.0.0.1/graphql"),
+            graphql: crate::graphql_access::authenticated_test_graphql_sync(
+                "http://127.0.0.1/graphql",
+            ),
             agent_did: Arc::from("did:test:background-disconnect-test"),
             behavior_id: Arc::from("did:test:background-disconnect-test:default"),
             id_counter: Arc::new(AtomicU64::new(1)),

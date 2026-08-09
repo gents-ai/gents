@@ -865,13 +865,14 @@ pub struct RenderedCompletionRequest {
     pub provenance_json: Value,
 }
 
-fn validate_transcript_snapshot(snapshot: &[crate::MessageFactRef]) -> Result<()> {
+pub(crate) fn validate_transcript_snapshot(snapshot: &[crate::MessageFactRef]) -> Result<()> {
     let mut previous_sequence = None;
     let mut doc_ids = BTreeSet::new();
     let mut composite_cids = BTreeSet::new();
     for fact_ref in snapshot {
         if fact_ref.doc_id.trim().is_empty()
             || fact_ref.composite_commit_cid.trim().is_empty()
+            || fact_ref.collection_version_id.trim().is_empty()
             || fact_ref.signer_did.trim().is_empty()
         {
             anyhow::bail!(
@@ -902,7 +903,7 @@ fn validate_transcript_snapshot(snapshot: &[crate::MessageFactRef]) -> Result<()
     Ok(())
 }
 
-fn validate_config_provenance(
+pub(crate) fn validate_config_provenance(
     scope: ConfigProvenanceScope,
     provenance: Option<&crate::ResolvedBehaviorConfigProvenance>,
     behavior_id: &str,
@@ -919,7 +920,7 @@ fn validate_config_provenance(
     Ok(())
 }
 
-fn validate_inference_call_provenance(
+pub(crate) fn validate_inference_call_provenance(
     scope: InferenceCallProvenanceScope,
     provenance: Option<&crate::SignedDocumentVersionRef>,
 ) -> Result<()> {
@@ -1334,12 +1335,14 @@ mod tests {
                 sequence: 1,
                 doc_id: "message-doc-1".to_string(),
                 composite_commit_cid: "bafy-message-1".to_string(),
+                collection_version_id: "bafy-schema-agent-message".to_string(),
                 signer_did: "did:key:test".to_string(),
             },
             crate::MessageFactRef {
                 sequence: 2,
                 doc_id: "message-doc-2".to_string(),
                 composite_commit_cid: "bafy-message-2".to_string(),
+                collection_version_id: "bafy-schema-agent-message".to_string(),
                 signer_did: "did:key:test".to_string(),
             },
         ]
@@ -1354,6 +1357,7 @@ mod tests {
         crate::ConfigFactRef::new(
             collection,
             logical_id,
+            format!("bafy-schema-{collection}"),
             crate::SignedDocumentVersionRef::new(
                 crate::DocumentVersionRef::new(doc_id, cid),
                 "did:key:config-author",

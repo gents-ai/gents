@@ -7,7 +7,7 @@ pub(crate) fn generated_cases_pin_exact_immutable_compaction_sources() {
         .iter()
         .map(|case| (case.name.as_str(), case))
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 18);
 
     let fresh = cases["fresh_exact_manifest_applied"];
     assert_eq!(fresh.disposition, "applied");
@@ -22,15 +22,32 @@ pub(crate) fn generated_cases_pin_exact_immutable_compaction_sources() {
     for name in [
         "malformed_empty_transcript_rejected",
         "unsigned_source_rejected",
+        "field_commit_source_rejected",
+        "missing_schema_version_rejected",
+        "wrong_session_transcript_rejected",
+        "wrong_agent_transcript_rejected",
+        "broken_request_lineage_rejected",
+        "invalid_prior_source_graph_rejected",
+        "wrong_prior_compacted_count_rejected",
         "conflicting_final_fact_rejected",
         "logical_twins_rejected",
         "mutated_transcript_rejected",
+        "mutated_transcript_schema_version_rejected",
         "mutated_config_rejected",
+        "mutated_config_schema_version_rejected",
+        "mutated_prior_schema_version_rejected",
     ] {
         assert_eq!(cases[name].disposition, "rejected", "case {name}");
     }
     assert!(!cases["malformed_empty_transcript_rejected"].manifest_valid);
     assert!(!cases["unsigned_source_rejected"].manifest_valid);
+    assert!(!cases["field_commit_source_rejected"].manifest_valid);
+    assert!(!cases["missing_schema_version_rejected"].manifest_valid);
+    assert!(!cases["wrong_session_transcript_rejected"].manifest_valid);
+    assert!(!cases["wrong_agent_transcript_rejected"].manifest_valid);
+    assert!(!cases["broken_request_lineage_rejected"].manifest_valid);
+    assert!(!cases["invalid_prior_source_graph_rejected"].manifest_valid);
+    assert!(!cases["wrong_prior_compacted_count_rejected"].manifest_valid);
     assert_eq!(cases["logical_twins_rejected"].visible_logical_twins, 2);
     assert!(!cases["mutated_transcript_rejected"].sources_current);
     assert!(!cases["mutated_config_rejected"].sources_current);

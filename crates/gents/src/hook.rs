@@ -513,7 +513,34 @@ impl DefraSessionHook {
         agent_did: &str,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
-        session::ensure_session(&node, session_id, agent_name, agent_did).await?;
+        Self::resume_with_identity_policy_and_requester_did(
+            node,
+            session_id,
+            agent_name,
+            agent_did,
+            None,
+            failure_policy,
+        )
+        .await
+    }
+
+    pub async fn resume_with_identity_policy_and_requester_did(
+        node: Arc<EmbeddedNode>,
+        session_id: &str,
+        agent_name: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+        failure_policy: FailurePolicy,
+    ) -> anyhow::Result<Self> {
+        session::ensure_session_with_behavior_id_and_requester_did(
+            &node,
+            session_id,
+            agent_name,
+            agent_did,
+            agent_name,
+            requester_did,
+        )
+        .await?;
         let max_seq = session::max_sequence(&node, session_id).await?;
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
@@ -530,7 +557,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
                 current_request_id: None,
-                current_requester_did: None,
+                current_requester_did: requester_did.map(str::to_owned),
                 request_deadline_at: None,
                 approval_required_tools: Vec::new(),
                 agent_name: agent_name.to_string(),
@@ -604,6 +631,25 @@ impl DefraSessionHook {
     ) -> anyhow::Result<Self> {
         Self::resume_with_identity_policy(node, session_id, agent_name, agent_did, failure_policy)
             .await
+    }
+
+    pub async fn resume_or_create_with_identity_policy_and_requester_did(
+        node: Arc<EmbeddedNode>,
+        session_id: &str,
+        agent_name: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+        failure_policy: FailurePolicy,
+    ) -> anyhow::Result<Self> {
+        Self::resume_with_identity_policy_and_requester_did(
+            node,
+            session_id,
+            agent_name,
+            agent_did,
+            requester_did,
+            failure_policy,
+        )
+        .await
     }
 
     pub async fn session_id(&self) -> Option<String> {

@@ -6,6 +6,7 @@ import Proofs.Conformance.ContractCases.ToolFact
 import Proofs.Conformance.ContractCases.ForkProvenance
 import Proofs.Conformance.ContractCases.CompactionSourceManifest
 import Proofs.Conformance.ContractCases.ResponseOutcome
+import Proofs.Conformance.ContractCases.RunTimelineManifest
 import Proofs.Conformance.ContractCases.SessionRecovery
 import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.ContractCases.LifecycleTransitions

@@ -45,20 +45,26 @@ async fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| data_dir.join("keys").join(format!("{agent_name}.key")));
 
+    // Establish the principal before opening DefraDB.  Schema seeding below is
+    // document access too, so the node must already carry the same identity
+    // that the runtime will use; attaching it only when constructing `Gents`
+    // would leave the bootstrap writes anonymous.
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
+
     let http_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), http_port);
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
+            .with_node_identity_did(identity.did())
             .with_http(HttpConfig::with_addr(http_addr))
             .build()
             .await
             .context("building embedded DefraDB node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
     seed_demo_documents(
         node.as_ref(),
         identity.did(),

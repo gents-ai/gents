@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunTimelineRows {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_manifest: Option<crate::run_timeline_manifest::RunTimelineSourceManifest>,
     pub request: TimelineRequestRow,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<TimelineSessionRow>,
@@ -19,6 +21,12 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
     #[serde(default)]
+    pub rendered_requests: Vec<TimelineRenderedRequestRow>,
+    #[serde(default)]
+    pub response_outcomes: Vec<TimelineResponseOutcomeRow>,
+    #[serde(default)]
+    pub compaction_entries: Vec<TimelineCompactionEntryRow>,
+    #[serde(default)]
     pub responses: Vec<TimelineResponseRow>,
 }
 
@@ -32,6 +40,8 @@ pub struct RunTimeline {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behavior_id: Option<String>,
     pub request: TimelineRequestRow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_manifest: Option<crate::run_timeline_manifest::RunTimelineSourceManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<TimelineSessionRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,6 +112,10 @@ pub struct TimelineMessageRow {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub sequence: i64,
     #[serde(default)]
@@ -278,6 +292,61 @@ pub struct TimelineToolApprovalFact {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TimelineRenderedRequestRow {
+    #[serde(flatten)]
+    pub row: gents_protocol::row::RenderedRequestRow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_json_field_cid: Option<String>,
+}
+
+impl Serialize for TimelineRenderedRequestRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut value = serde_json::to_value(&self.row).map_err(serde::ser::Error::custom)?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            serde::ser::Error::custom("RenderedRequest metadata did not serialize as an object")
+        })?;
+        // Provider request bodies are deliberately outside ordinary timeline
+        // and projection DTOs even if a future loader accidentally populates
+        // the protocol row's privileged field.
+        object.remove("request_json");
+        if let Some(exact) = &self.exact {
+            object.insert(
+                "exact".to_string(),
+                serde_json::to_value(exact).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        if let Some(field_cid) = &self.request_json_field_cid {
+            object.insert(
+                "request_json_field_cid".to_string(),
+                serde_json::Value::String(field_cid.clone()),
+            );
+        }
+        value.serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimelineResponseOutcomeRow {
+    #[serde(flatten)]
+    pub row: gents_protocol::row::AgentResponseOutcomeRow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TimelineCompactionEntryRow {
+    #[serde(flatten)]
+    pub row: gents_protocol::row::CompactionEntryRow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSessionRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -331,9 +400,12 @@ pub struct TimelineConversationRow {
 pub enum RunTimelineEvent {
     Request(TimelineRequestEvent),
     InferenceCall(TimelineInferenceCallEvent),
+    RenderedRequest(TimelineRenderedRequestEvent),
+    Compaction(TimelineCompactionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
     Response(TimelineResponseEvent),
+    ResponseOutcome(TimelineResponseOutcomeEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +453,74 @@ pub struct TimelineInferenceCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+}
+
+/// Metadata-safe provider input fact. The canonical `request_json` body is
+/// deliberately absent; callers need a separate explicit sensitive-body read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineRenderedRequestEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_json_field_cid: Option<String>,
+    pub capture_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inference_call_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inference_call_composite_commit_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_scope_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_scope_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance_manifest_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCompactionEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+    pub compaction_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_manifest_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_manifest_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,7 +610,33 @@ pub struct TimelineResponseEvent {
     pub timestamp: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineResponseOutcomeEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact: Option<crate::SignedDocumentVersionRef>,
+    pub request_doc_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_message_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_message_composite_commit_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_message_sequence: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
 pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
+    let source_manifest = rows.source_manifest.take();
     let root_request_id = rows.request.request_id.clone();
     let session_id = rows.request.session_id.clone();
     let mut included_request_ids = BTreeSet::from([root_request_id.clone()]);
@@ -517,6 +683,70 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 ended_at: call.ended_at.clone(),
             },
         ));
+    }
+
+    for rendered in &rows.rendered_requests {
+        let row = &rendered.row;
+        if should_include_event(
+            nonempty(row.request_id.as_deref()),
+            nonempty(row.session_id.as_deref()),
+            &included_request_ids,
+            session_id.as_deref(),
+        ) {
+            let scope = row.parsed_capture_scope();
+            let (manifest_version, provenance_status) = rendered_provenance_metadata(row);
+            events.push(RunTimelineEvent::RenderedRequest(
+                TimelineRenderedRequestEvent {
+                    doc_id: row.doc_id.clone(),
+                    exact: rendered.exact.clone(),
+                    request_json_field_cid: rendered.request_json_field_cid.clone(),
+                    capture_key: row.capture_key.clone(),
+                    request_id: row.request_id.clone(),
+                    request_doc_id: row.request_doc_id.clone(),
+                    inference_call_doc_id: row.inference_call_doc_id.clone(),
+                    inference_call_composite_commit_cid: row
+                        .inference_call_composite_commit_cid
+                        .clone(),
+                    capture_scope: row.capture_scope.clone(),
+                    capture_scope_kind: scope
+                        .as_ref()
+                        .map(|scope| scope.kind().as_str().to_string()),
+                    capture_scope_sequence: scope.as_ref().and_then(|scope| scope.sequence()),
+                    turn_index: row.turn_index,
+                    attempt: row.attempt,
+                    capture_version: row.capture_version,
+                    provenance_manifest_version: manifest_version,
+                    provenance_status,
+                    model_name: row.model_name.clone(),
+                    source: row.source.clone(),
+                    prompt_hash: row.prompt_hash.clone(),
+                    tools_hash: row.tools_hash.clone(),
+                    timestamp: row.created_at.clone(),
+                },
+            ));
+        }
+    }
+
+    for compaction in &rows.compaction_entries {
+        let row = &compaction.row;
+        if should_include_event(
+            None,
+            nonempty(row.session_id.as_deref()),
+            &included_request_ids,
+            session_id.as_deref(),
+        ) {
+            events.push(RunTimelineEvent::Compaction(TimelineCompactionEvent {
+                doc_id: row.doc_id.clone(),
+                exact: compaction.exact.clone(),
+                compaction_key: row.compaction_key.clone(),
+                session_id: row.session_id.clone(),
+                sequence: row.sequence,
+                source_manifest_version: row.source_manifest_version,
+                source_manifest_json: row.source_manifest_json.clone(),
+                summary: row.summary.clone(),
+                timestamp: row.created_at.clone(),
+            }));
+        }
     }
 
     for message in &rows.messages {
@@ -605,6 +835,34 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         }
     }
 
+    for outcome in &rows.response_outcomes {
+        let row = &outcome.row;
+        if row
+            .request_id
+            .as_deref()
+            .is_some_and(|request_id| included_request_ids.contains(request_id))
+            || rows.request.doc_id.as_deref() == Some(row.request_doc_id.as_str())
+        {
+            events.push(RunTimelineEvent::ResponseOutcome(
+                TimelineResponseOutcomeEvent {
+                    doc_id: row.doc_id.clone(),
+                    exact: outcome.exact.clone(),
+                    request_doc_id: row.request_doc_id.clone(),
+                    request_id: row.request_id.clone(),
+                    session_id: row.session_id.clone(),
+                    outcome_kind: row.outcome_kind.clone(),
+                    reason_code: row.reason_code.clone(),
+                    final_message_doc_id: row.final_message_doc_id.clone(),
+                    final_message_composite_commit_cid: row
+                        .final_message_composite_commit_cid
+                        .clone(),
+                    final_message_sequence: row.final_message_sequence,
+                    timestamp: row.terminalized_at.clone(),
+                },
+            ));
+        }
+    }
+
     events.sort_by_key(event_sort_key);
     let child_request_ids = child_request_ids(&included_request_ids, &root_request_id);
 
@@ -627,6 +885,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 .and_then(|session| session.behavior_id.as_deref()),
         ]),
         request: rows.request,
+        source_manifest,
         session: rows.session,
         conversation: rows.conversation,
         child_request_ids,
@@ -834,13 +1093,33 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             event.call_seq,
             event.call_id.clone(),
         ),
-        RunTimelineEvent::Message(event) => (
+        RunTimelineEvent::RenderedRequest(event) => (
             event
                 .timestamp
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
             2,
+            event.turn_index.unwrap_or(i64::MAX),
+            event.capture_key.clone(),
+        ),
+        RunTimelineEvent::Compaction(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            3,
+            event.sequence.unwrap_or(i64::MAX),
+            event.compaction_key.clone(),
+        ),
+        RunTimelineEvent::Message(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            4,
             event.sequence,
             format!("{}:{}", event.session_id, event.sequence),
         ),
@@ -850,7 +1129,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            3,
+            5,
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
         ),
@@ -860,11 +1139,41 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
                 .as_deref()
                 .and_then(timestamp_millis)
                 .unwrap_or(i64::MIN),
-            4,
+            6,
             event.materialized_message_sequence.unwrap_or(i64::MAX),
             event.request_id.clone(),
         ),
+        RunTimelineEvent::ResponseOutcome(event) => (
+            event
+                .timestamp
+                .as_deref()
+                .and_then(timestamp_millis)
+                .unwrap_or(i64::MIN),
+            7,
+            event.final_message_sequence.unwrap_or(i64::MAX),
+            event.request_doc_id.clone(),
+        ),
     }
+}
+
+fn rendered_provenance_metadata(
+    row: &gents_protocol::row::RenderedRequestRow,
+) -> (Option<u64>, Option<String>) {
+    let Some(raw) = nonempty(row.provenance_json.as_deref()) else {
+        return (None, None);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, Some("unsupported_manifest".to_string()));
+    };
+    (
+        value
+            .get("manifest_version")
+            .and_then(serde_json::Value::as_u64),
+        value
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    )
 }
 
 fn child_request_ids(
@@ -943,6 +1252,8 @@ mod tests {
                 doc_id: None,
                 session_id: "session-1".to_string(),
                 request_id: Some("req-1".to_string()),
+                request_doc_id: Some("request-doc-1".to_string()),
+                agent_did: Some("did:test:amy".to_string()),
                 sequence: 2,
                 role: "assistant".to_string(),
                 content: "calling tool".to_string(),
@@ -1059,6 +1370,46 @@ mod tests {
                 recovered: false,
             }
         );
+    }
+
+    #[test]
+    fn rendered_request_metadata_serialization_never_exposes_provider_body() {
+        let row = TimelineRenderedRequestRow {
+            row: gents_protocol::row::RenderedRequestRow {
+                doc_id: Some("render-doc".to_string()),
+                capture_key: "request:turn:0".to_string(),
+                request_doc_id: Some("request-doc".to_string()),
+                request_source_commit_cid: None,
+                request_source_signer_did: None,
+                request_claim_commit_cid: None,
+                request_claim_signer_did: None,
+                inference_call_doc_id: None,
+                inference_call_composite_commit_cid: None,
+                inference_call_signer_did: None,
+                request_id: Some("request-id".to_string()),
+                session_id: Some("session-id".to_string()),
+                agent_did: Some("did:key:agent".to_string()),
+                requester_did: None,
+                behavior_id: Some("general".to_string()),
+                capture_scope: Some("request".to_string()),
+                turn_index: Some(0),
+                attempt: Some(1),
+                capture_version: Some(1),
+                model_name: Some("model".to_string()),
+                source: Some("completion_loop".to_string()),
+                request_json: Some("{\"secret\":\"provider-body\"}".to_string()),
+                prompt_hash: Some("prompt-hash".to_string()),
+                tools_hash: Some("tools-hash".to_string()),
+                provenance_json: None,
+                created_at: Some("2026-08-08T00:00:00Z".to_string()),
+            },
+            exact: None,
+            request_json_field_cid: Some("field-cid".to_string()),
+        };
+        let encoded = serde_json::to_string(&row).unwrap();
+        assert!(!encoded.contains("\"request_json\":"));
+        assert!(!encoded.contains("provider-body"));
+        assert!(encoded.contains("request_json_field_cid"));
     }
 
     fn inference_call(

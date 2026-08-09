@@ -27,6 +27,7 @@ pub struct MessageFactRef {
     pub sequence: u32,
     pub doc_id: String,
     pub composite_commit_cid: String,
+    pub collection_version_id: String,
     pub signer_did: String,
 }
 
@@ -515,10 +516,23 @@ async fn verify_finalized_message_fact(
             current.cid
         );
     }
+    let source = crate::SignedDocumentVersionRef::new(
+        crate::DocumentVersionRef::new(&expected.doc_id, &current.cid),
+        &signer_did,
+    );
+    let collection_version_id =
+        crate::document_version::verified_collection_version_id_with_identity(
+            node,
+            "AgentMessage",
+            &source,
+            None,
+        )
+        .await?;
     Ok(MessageFactRef {
         sequence: expected.sequence,
         doc_id: expected.doc_id.clone(),
         composite_commit_cid: current.cid.clone(),
+        collection_version_id,
         signer_did,
     })
 }
@@ -693,13 +707,22 @@ pub(crate) async fn message_fact_ref_for_sequence(
         node,
         "AgentMessage",
         &row.doc_id,
-        Some(identity),
+        Some(identity.clone()),
     )
     .await?;
+    let collection_version_id =
+        crate::document_version::verified_collection_version_id_with_identity(
+            node,
+            "AgentMessage",
+            &version,
+            Some(identity),
+        )
+        .await?;
     Ok(MessageFactRef {
         sequence,
         doc_id: row.doc_id.clone(),
         composite_commit_cid: version.version.composite_commit_cid,
+        collection_version_id,
         signer_did: version.signer_did,
     })
 }
@@ -1070,7 +1093,7 @@ fn create_message_mutation(desired: DesiredMessageFact<'_>, collection: &str) ->
                 session_id: "{session_id}",
                 agent_did: "{agent_did}",
                 {requester_did_field}
-                request_id: "{request_id}",
+                request_id: {request_id},
                 request_doc_id: {request_doc_id},
                 sequence: {sequence},
                 role: "{role}",
@@ -1082,7 +1105,11 @@ fn create_message_mutation(desired: DesiredMessageFact<'_>, collection: &str) ->
         message_key = escape_graphql_string(desired.message_key),
         session_id = escape_graphql_string(desired.session_id),
         agent_did = escape_graphql_string(desired.agent_did),
-        request_id = escape_graphql_string(desired.request_id.unwrap_or("")),
+        request_id = desired
+            .request_id
+            .filter(|request_id| !request_id.trim().is_empty())
+            .map(|request_id| format!("\"{}\"", escape_graphql_string(request_id)))
+            .unwrap_or_else(|| "null".to_string()),
         request_doc_id = desired
             .request_doc_id
             .map(|doc_id| format!("\"{}\"", escape_graphql_string(doc_id)))

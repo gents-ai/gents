@@ -4,15 +4,16 @@ use gents::defra_query::{
     parse_collection_schema, unknown_collection_message, CollectionSchema, CollectionScope,
     DefraQueryParams,
 };
+use gents::AuthenticatedGraphql;
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
-use crate::{post_graphql, print_json, resolve_graphql_endpoint};
+use crate::{authenticated_graphql_access, post_graphql, print_json, resolve_graphql_endpoint};
 
 /// Introspect a collection's field set over GraphQL-over-HTTP. `Ok(None)`
 /// means the collection (GraphQL type) does not exist on the node.
 async fn fetch_collection_schema(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     collection: &str,
 ) -> Result<Option<CollectionSchema>> {
     let query = introspection_query(collection)?;
@@ -28,7 +29,7 @@ async fn fetch_collection_schema(
 }
 
 async fn enriched_query_failure(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     params: &DefraQueryParams,
     raw: String,
 ) -> anyhow::Error {
@@ -43,7 +44,7 @@ async fn enriched_query_failure(
 }
 
 pub(crate) async fn run_defra_query(
-    graphql: &str,
+    graphql: &AuthenticatedGraphql,
     params: &DefraQueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
@@ -117,6 +118,11 @@ pub(crate) fn params_from_args(args: &QueryArgs) -> Result<(DefraQueryParams, Co
 
 pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let home = crate::resolve_home_dir(args.home.as_deref());
+    let access = authenticated_graphql_access(&home, &graphql).await?;
+    let crate::config_writes::ConfigAccess::Graphql(graphql) = access else {
+        unreachable!("explicit GraphQL access resolves to the HTTP variant")
+    };
     let (params, scope) = params_from_args(&args)?;
     let output = run_defra_query(&graphql, &params, &scope).await?;
     print_json(&output)?;

@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use gents::defra_node::{EmbeddedNode, NodeBuilder, StorageBackend};
 use gents::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity, KeyIdentity,
+    load_macos_keychain_identity, load_macos_secure_enclave_identity, AgentIdentity,
+    AuthenticatedGraphql, KeyIdentity,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -565,23 +566,29 @@ pub(crate) async fn resolve_config_access(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok((ConfigAccess::Graphql(graphql.to_string()), home_dir));
+        return Ok((
+            authenticated_graphql_access(&home_dir, graphql).await?,
+            home_dir,
+        ));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            return Ok((ConfigAccess::Graphql(runtime_state.graphql), home_dir));
+            return Ok((
+                authenticated_graphql_access(&home_dir, &runtime_state.graphql).await?,
+                home_dir,
+            ));
         }
     }
 
     let data_dir = default_data_dir(&home_dir);
-    let node_identity_did = load_offline_config_node_identity(&home_dir)?;
+    let identity = load_config_identity(&home_dir)?;
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let node = {
         use std::sync::Arc;
         let node_arc = Arc::new(
             persistent_node_builder(&data_dir)
-                .with_node_identity_did(node_identity_did)
+                .with_node_identity_did(identity.did())
                 .build()
                 .await
                 .with_context(|| {
@@ -596,7 +603,33 @@ pub(crate) async fn resolve_config_access(
     Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
 }
 
-fn load_offline_config_node_identity(home_dir: &Path) -> Result<String> {
+pub(crate) async fn authenticated_graphql_access(
+    home_dir: &Path,
+    graphql: &str,
+) -> Result<ConfigAccess> {
+    Ok(ConfigAccess::Graphql(
+        authenticated_graphql_client(home_dir, graphql).await?,
+    ))
+}
+
+pub(crate) async fn authenticated_graphql_client(
+    home_dir: &Path,
+    graphql: &str,
+) -> Result<AuthenticatedGraphql> {
+    let identity = load_config_identity(home_dir).with_context(|| {
+        format!(
+            "remote GraphQL access requires an initialized local identity in {}; semantic DID fields do not authenticate DefraDB",
+            home_dir.display()
+        )
+    })?;
+    AuthenticatedGraphql::new(graphql.to_string(), identity).await
+}
+
+pub(crate) async fn authenticated_default_graphql_access(graphql: &str) -> Result<ConfigAccess> {
+    authenticated_graphql_access(&resolve_home_dir(None), graphql).await
+}
+
+pub(crate) fn load_config_identity(home_dir: &Path) -> Result<std::sync::Arc<dyn AgentIdentity>> {
     let config = read_init_config(home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
             "offline configuration access requires an initialized signing identity in {}; run `gents init --home {}` first or use --graphql with a running signed node",
@@ -684,7 +717,7 @@ fn load_offline_config_node_identity(home_dir: &Path) -> Result<String> {
             identity.did()
         );
     }
-    Ok(identity.did().to_string())
+    Ok(identity)
 }
 
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> NodeBuilder {
@@ -783,7 +816,10 @@ mod tests {
     #[test]
     fn offline_config_access_refuses_missing_initialized_signer() {
         let temp = tempfile::tempdir().unwrap();
-        let error = load_offline_config_node_identity(temp.path()).unwrap_err();
+        let error = match load_config_identity(temp.path()) {
+            Ok(_) => panic!("missing initialized signer unexpectedly loaded"),
+            Err(error) => error,
+        };
         assert!(error
             .to_string()
             .contains("requires an initialized signing identity"));

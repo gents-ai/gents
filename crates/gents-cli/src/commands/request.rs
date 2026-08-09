@@ -15,9 +15,10 @@ use crate::request_helpers::{
     fetch_request_view, is_terminal_lifecycle_state, parse_duration_suffix, parse_valid_until_flag,
 };
 use crate::{
-    create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
-    resolve_request_content, resolve_request_id, response_query, wait_for_terminal_response,
-    write_json_output_file, RequestSubmitOptions,
+    authenticated_graphql_client, create_agent_request, post_graphql, print_json,
+    resolve_agent_did, resolve_graphql_endpoint, resolve_home_dir, resolve_request_content,
+    resolve_request_id, response_query, wait_for_terminal_response, write_json_output_file,
+    RequestSubmitOptions,
 };
 
 pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
@@ -31,6 +32,8 @@ pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql =
+        authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
@@ -94,6 +97,8 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
 
 pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql =
+        authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let snapshot = load_request_show_snapshot(&graphql, &request_id).await?;
@@ -234,7 +239,7 @@ struct ChildRequestView {
 }
 
 async fn load_request_show_snapshot(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     request_id: &str,
 ) -> Result<RequestShowSnapshot> {
     let schema = load_request_show_schema(graphql).await;
@@ -354,14 +359,17 @@ async fn load_request_show_snapshot(
     })
 }
 
-async fn load_request_show_schema(graphql: &str) -> RequestShowSchema {
+async fn load_request_show_schema(graphql: &gents::AuthenticatedGraphql) -> RequestShowSchema {
     RequestShowSchema {
         agent_request: load_graphql_type_fields(graphql, "AgentRequest").await,
         agent_tool_call: load_graphql_type_fields(graphql, "AgentToolCall").await,
     }
 }
 
-async fn load_graphql_type_fields(graphql: &str, type_name: &str) -> BTreeSet<String> {
+async fn load_graphql_type_fields(
+    graphql: &gents::AuthenticatedGraphql,
+    type_name: &str,
+) -> BTreeSet<String> {
     let query = format!(
         r#"{{
             __type(name: "{type_name}") {{
@@ -1081,6 +1089,8 @@ fn display_i64(value: Option<i64>) -> String {
 
 async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql =
+        authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let cancel_cause: CancelCause = args.cause.into();
@@ -1133,7 +1143,10 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<Value> {
+async fn fetch_interrupt_request_row(
+    graphql: &gents::AuthenticatedGraphql,
+    request_id: &str,
+) -> Result<Value> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1169,7 +1182,7 @@ async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<
 }
 
 async fn wait_for_terminal_request_state(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     request_id: &str,
     timeout: Duration,
     mut last_row: Value,
@@ -1292,6 +1305,8 @@ fn print_interrupt_text(summary: &Value) -> Result<()> {
 
 async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql =
+        authenticated_graphql_client(&resolve_home_dir(args.home.as_deref()), &graphql).await?;
     let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let stale = fetch_request_view(&graphql, &stale_id).await?;
     if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {

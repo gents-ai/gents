@@ -7,6 +7,7 @@ import Proofs.Conformance.Contracts.Json.ToolFact
 import Proofs.Conformance.Contracts.Json.ForkProvenance
 import Proofs.Conformance.Contracts.Json.CompactionSourceManifest
 import Proofs.Conformance.Contracts.Json.ResponseOutcome
+import Proofs.Conformance.Contracts.Json.RunTimelineManifest
 import Proofs.Conformance.Contracts.Json.ToolExecution
 import Proofs.Conformance.Contracts.Json.CommandPolicy
 import Proofs.Conformance.Contracts.Json.ToolPolicy
@@ -96,6 +97,8 @@ def snapshotJson : String :=
       ++ compactionSourceManifestCasesJson ++ ","
     ++ "\"response_outcome_cases\":"
       ++ responseOutcomeCasesJson ++ ","
+    ++ "\"run_timeline_manifest_cases\":"
+      ++ runTimelineManifestCasesJson ++ ","
     ++ "\"response_persistence_cut_cases\":"
       ++ responsePersistenceCutCasesJson ++ ","
     ++ "\"response_recovery_cut_cases\":"

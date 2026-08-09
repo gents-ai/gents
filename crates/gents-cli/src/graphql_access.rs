@@ -1,7 +1,6 @@
 use anyhow::Result;
 use gents_protocol::graphql::{
-    execute_graphql_async, extract_mutation_doc_id as shared_extract_mutation_doc_id,
-    graphql_endpoint_available as shared_graphql_endpoint_available,
+    extract_mutation_doc_id as shared_extract_mutation_doc_id,
     graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
     graphql_string_list_literal as shared_graphql_string_list_literal,
     optional_bool_field as shared_optional_bool_field,
@@ -25,15 +24,25 @@ pub(crate) fn graphql_api_base(graphql: &str) -> Result<String> {
 }
 
 pub(crate) async fn graphql_endpoint_available(graphql: &str) -> bool {
-    shared_graphql_endpoint_available(
-        graphql,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(2),
-            max_attempts: 1,
-            retry_backoff: std::time::Duration::from_millis(50),
-        },
-    )
-    .await
+    // Availability must not issue an anonymous GraphQL query: doing so would
+    // create a real data-layer read without an ACP actor. The node identity
+    // utility endpoint is non-document health metadata and is intentionally
+    // readable before authentication so callers can distinguish a live node
+    // from an offline one before minting a Host-bound bearer.
+    let Ok(api_base) = graphql_api_base(graphql) else {
+        return false;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(format!("{api_base}/node/identity"))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
 }
 
 pub(crate) async fn graphql_rows(
@@ -71,18 +80,23 @@ pub(crate) fn graphql_input_literal(value: &Value) -> Result<String> {
     shared_graphql_input_literal(value)
 }
 
-pub(crate) async fn post_graphql(graphql: &str, query: &str) -> Result<serde_json::Value> {
-    execute_graphql_async(
-        graphql,
-        query,
-        GraphqlRequestOptions {
-            timeout: std::time::Duration::from_secs(30),
-            max_attempts: 5,
-            retry_backoff: std::time::Duration::from_millis(100),
-        },
-    )
-    .await
-    .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql)))
+pub(crate) async fn post_graphql(
+    graphql: &gents::AuthenticatedGraphql,
+    query: &str,
+) -> Result<serde_json::Value> {
+    graphql
+        .execute(
+            query,
+            GraphqlRequestOptions {
+                timeout: std::time::Duration::from_secs(30),
+                max_attempts: 5,
+                retry_backoff: std::time::Duration::from_millis(100),
+            },
+        )
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql.endpoint()))
+        })
 }
 
 pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
@@ -122,4 +136,35 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
             "Next:\n  1. Verify the GraphQL endpoint {graphql}\n  2. Retry with `--graphql {graphql}` or point the command at the correct runtime"
         )
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn authenticated_test_graphql(
+    graphql: impl Into<String>,
+) -> gents::AuthenticatedGraphql {
+    let graphql = graphql.into();
+    let key_dir = tempfile::tempdir().expect("create authenticated GraphQL test key directory");
+    let identity = std::sync::Arc::new(
+        gents::KeyIdentity::load_or_create(key_dir.path().join("identity.key"), None)
+            .expect("create authenticated GraphQL test identity"),
+    );
+    gents::AuthenticatedGraphql::new(graphql, identity)
+        .await
+        .expect("construct authenticated GraphQL test client")
+}
+
+#[cfg(test)]
+pub(crate) fn authenticated_test_graphql_sync(
+    graphql: impl Into<String>,
+) -> gents::AuthenticatedGraphql {
+    let graphql = graphql.into();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build authenticated GraphQL test runtime")
+            .block_on(authenticated_test_graphql(graphql))
+    })
+    .join()
+    .expect("authenticated GraphQL test client thread")
 }

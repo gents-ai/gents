@@ -187,12 +187,15 @@ at API boundaries and in exports for correlation; they do not choose a row.
   fetched rows (`crates/gents-cli/src/commands/trace.rs:440-559`). It is not
   base-collection read/write ACP and does not cover tool-output spills,
   approvals, compactions, goals, or memory.
-- `load_run_timeline_rows` fetches requests, messages, tool calls, responses,
-  inference calls, session, and conversation and now attaches exact
-  `AgentToolResult` and `AgentToolApproval` versions to tool calls
-  (`crates/gents/src/run_timeline_fetch.rs:23-73`, `:461-579`). It still omits
-  compactions, goals, and memory, and its request/session roots remain logical
-  `limit: 1` selections.
+- `load_run_timeline_rows` now resolves an exact signed request root (or rejects
+  logical twins), includes compaction entries, and attaches exact
+  `AgentToolResult` and `AgentToolApproval` versions to tool calls. Every
+  returned row is exact-reloaded and signature-verified. The manifest remains
+  `PartialExact` because child-request, request/session-scoped transcript,
+  response, inference, rendered-request, and compaction extents are discovered
+  by non-atomic logical/session scans; those open domains are recorded as
+  explicit coverage gaps (`crates/gents/src/run_timeline_fetch.rs:1918-2006`).
+  Goals and memory remain outside the run-timeline projection.
 - No operational retention, legal-hold, coordinated purge, or full-fidelity
   enterprise archive implementation was found for these collections.
 - In pinned DefraDB, `sync_branchable_collection` rejects a non-branchable
@@ -278,7 +281,7 @@ production ownership seams and hot or correctness-sensitive reads.
 
 | Collection | Canonical writers | Hot/correctness-sensitive reads | Ambiguity observed |
 | --- | --- | --- | --- |
-| `AgentSession` | session ensure/close (`session/sessions.rs:5-218`); fork (`session/fork.rs:801-850`); desktop transactional submit (`gents-desktop-core/.../chat/conversation.rs`) | completion binding (`session/query.rs:6-55`); desktop session snapshot; run timeline | `load_session_document_optional` filters `session_id`, `limit: 1` |
+| `AgentSession` | session ensure/close (`session/sessions.rs`); fork (`session/fork.rs`); desktop transactional submit (`gents-desktop-core/.../chat/conversation.rs`) | completion binding (`session/query.rs`); desktop session snapshot; run timeline | core/session CLI reads enumerate the complete logical set and fail with typed `_docID` conflicts; the target lease/ownership model is still open |
 | `AgentConversation` | request projection/title/status (`session/conversation.rs:76-359`); recovery sweep (`lifecycle/recovery.rs:555-780`); desktop submit; fork | ranked canonical loader (`session/query.rs:133-207`); recent-title query; run timeline | duplicates are real; deterministic rank exists, but a later update can change the winner |
 | `AgentRequest` | lifecycle materialize/claim/transition/recovery/queue; desktop submit/retry; trigger and subagent materializers | watcher pending scan and CID reload; lifecycle `_docID` reads; timeline/session/client queries | `request_id` is not unique; timeline and multiple APIs order/limit by logical ID |
 | `AgentMessage` | owned-loop hook through `session/history.rs`; fork copy; desktop projection fixtures | provider history; compaction; timeline/session projections | finalized facts are immutable and conflicts are enumerated, but max+1 allocation is not fleet-fenced |
@@ -287,7 +290,7 @@ production ownership seams and hot or correctness-sensitive reads.
 | `AgentToolApproval` | CLI/desktop approval client (`config_client/approval.rs`); fork copy | exact held-call watcher and timeline attachment (`hook/persistence/approval.rs`) | immutable exact call-version and signer checks landed; ACP authority and concurrent/quorum policy remain |
 | `CompactionEntry` | compaction reducer (`session/compaction_entries.rs`); fork copy | prompt assembly, context-budget tools, session UI | create-only exact source manifest landed; ordinal allocation and full fork-prefix authority remain |
 | `Goal` | goal API/CLI and trigger controller (`goal.rs:546-888`, `trigger_engine/goal_source.rs`) | canonical goal load, active-goal trigger scan, usage aggregation | canonical earliest twin is chosen, but twins can diverge and only the selected doc is CAS-updated |
-| `AgentMemory` | agent memory tool (`toolset/memory.rs:233-285`) | same tool by `memory_id`, `limit: 1` (`memory.rs:189-230`) | unique local key masks replicated twins; no conflict enumeration |
+| `AgentMemory` | agent memory tool (`toolset/memory.rs`) | same tool by complete `memory_id` match set | reads/writes now reject twins, validate the immutable owner/key tuple, mutate exact `_docID`, and post-verify; head/revision and fleet-writer contracts remain open |
 
 ## Detailed collection decisions
 
@@ -298,11 +301,14 @@ described as optional.
 ### `AgentSession`
 
 **Evidence.** The schema is a mutable branchable envelope keyed by globally
-unique `session_id`; only `agent_did` and `requester_did` are immutable. Ensure
-uses an upsert by `session_id` and rewrites name, behavior, start, and status
-(`session/sessions.rs:43-105`). Close reloads by logical ID and then updates one
-`_docID` (`sessions.rs:190-218`). Fork creates a fresh row and does not copy
-`requester_did` (`session/fork.rs:801-850`).
+unique `session_id`; only `agent_did` and `requester_did` are immutable. The
+runtime now enumerates every physical `session_id` match and fails closed with
+a typed, deterministically ordered `_docID` conflict. Ensure validates the
+existing principal, requester, and behavior binding, updates the exact
+`_docID` (or creates only from an empty set), then re-enumerates and verifies
+the result. Close likewise targets and verifies the exact document. This is
+reader/writer hardening; it does not yet provide the deployment lease or
+single-writer transition authority recommended below.
 
 **Recommended contract.** Primary archetype: single-writer lifecycle envelope;
 canonical, with a separate conversation projection. Meaning: one durable
@@ -687,11 +693,13 @@ selection; do not silently delete. Status: **provisional; P1**.
 ### `AgentMemory`
 
 **Evidence.** The agent tool builds an injective length-prefixed logical
-`memory_id` from `(agent_did, key)`, reads it with `limit: 1`, and upserts value
-and update time (`toolset/memory.rs:185-285`). `agent_did` and `key` are mutable
-in the schema. The collection is branchable but has no standard replication
-route or ACP. There is no consumption/version reference when memory affects a
-decision, beyond any resulting transcript/provider capture.
+`memory_id` from `(agent_did, key)`. It now enumerates every match, rejects
+logical twins, validates `memory_id`, `agent_did`, and `key`, creates only from
+an empty set or updates the exact `_docID`, and re-reads the complete set to
+verify the write. `agent_did` and `key` remain mutable in the schema, however,
+and the collection is branchable without the target revision/head or writer
+lease model. There is still no consumption/version reference when memory
+affects a decision beyond any resulting transcript/provider capture.
 
 **Recommended contract.** Model a mutable `MemoryHead` projection over
 immutable `MemoryRevision` facts. Meaning: principal-owned cross-session

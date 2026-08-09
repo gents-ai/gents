@@ -12,6 +12,109 @@ use std::fmt;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// The completion loop named by a [`RenderedRequestRow::capture_scope`].
+///
+/// Unknown kinds are retained verbatim so an older reader can order and
+/// forward rows written by a newer runtime without silently reclassifying
+/// them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CaptureScopeKind {
+    Inference,
+    Compaction,
+    CompactionFallback,
+    Title,
+    OneShot,
+    Unknown(String),
+}
+
+impl CaptureScopeKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Inference => "inference",
+            Self::Compaction => "compaction",
+            Self::CompactionFallback => "compaction_fallback",
+            Self::Title => "title",
+            Self::OneShot => "oneshot",
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+/// Parsed, forward-compatible capture-scope label such as `inference.1`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CaptureScope(String);
+
+impl CaptureScope {
+    pub fn parse(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn kind(&self) -> CaptureScopeKind {
+        let kind = self
+            .0
+            .rsplit_once('.')
+            .filter(|(_, sequence)| sequence.parse::<u64>().is_ok())
+            .map_or(self.0.as_str(), |(kind, _)| kind);
+        match kind {
+            "inference" => CaptureScopeKind::Inference,
+            "compaction" => CaptureScopeKind::Compaction,
+            "compaction_fallback" => CaptureScopeKind::CompactionFallback,
+            "title" => CaptureScopeKind::Title,
+            "oneshot" => CaptureScopeKind::OneShot,
+            unknown => CaptureScopeKind::Unknown(unknown.to_string()),
+        }
+    }
+
+    pub fn sequence(&self) -> Option<u64> {
+        self.0
+            .rsplit_once('.')
+            .and_then(|(_, sequence)| sequence.parse().ok())
+    }
+
+    pub fn order_key(&self) -> CaptureScopeOrderKey {
+        CaptureScopeOrderKey {
+            kind: self.kind(),
+            sequence: self.sequence(),
+            raw: self.0.clone(),
+        }
+    }
+}
+
+impl fmt::Display for CaptureScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for CaptureScope {
+    fn from(value: &str) -> Self {
+        Self::parse(value)
+    }
+}
+
+/// Numeric ordering for capture scopes. This deliberately avoids lexical
+/// ordering, where `inference.10` would sort before `inference.2`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaptureScopeOrderKey {
+    pub kind: CaptureScopeKind,
+    pub sequence: Option<u64>,
+    pub raw: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderedRequestOrderingKey {
+    pub capture_scope: CaptureScopeOrderKey,
+    pub turn_index: Option<i64>,
+    pub attempt: Option<i64>,
+    pub doc_id: Option<String>,
+    pub capture_key: String,
+}
+
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
@@ -492,11 +595,132 @@ pub struct AgentToolResultRow {
     pub discarded_because_interrupted: Option<bool>,
 }
 
+/// Immutable capture of the exact provider request body at the transport seam.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RenderedRequestRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    pub capture_key: String,
+    #[serde(default)]
+    pub request_doc_id: Option<String>,
+    #[serde(default)]
+    pub request_source_commit_cid: Option<String>,
+    #[serde(default)]
+    pub request_source_signer_did: Option<String>,
+    #[serde(default)]
+    pub request_claim_commit_cid: Option<String>,
+    #[serde(default)]
+    pub request_claim_signer_did: Option<String>,
+    #[serde(default)]
+    pub inference_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub inference_call_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub inference_call_signer_did: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub capture_scope: Option<String>,
+    #[serde(default)]
+    pub turn_index: Option<i64>,
+    #[serde(default)]
+    pub attempt: Option<i64>,
+    #[serde(default)]
+    pub capture_version: Option<i64>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub request_json: Option<String>,
+    #[serde(default)]
+    pub prompt_hash: Option<String>,
+    #[serde(default)]
+    pub tools_hash: Option<String>,
+    #[serde(default)]
+    pub provenance_json: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+impl RenderedRequestRow {
+    pub fn parsed_capture_scope(&self) -> Option<CaptureScope> {
+        self.capture_scope.as_deref().map(CaptureScope::from)
+    }
+
+    pub fn ordering_key(&self) -> RenderedRequestOrderingKey {
+        RenderedRequestOrderingKey {
+            capture_scope: self
+                .parsed_capture_scope()
+                .unwrap_or_else(|| CaptureScope::parse(""))
+                .order_key(),
+            turn_index: self.turn_index,
+            attempt: self.attempt,
+            doc_id: self.doc_id.clone(),
+            capture_key: self.capture_key.clone(),
+        }
+    }
+}
+
+/// Immutable terminal truth for one exact AgentRequest execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentResponseOutcomeRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    pub request_doc_id: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    #[serde(default)]
+    pub request_source_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub request_source_signer_did: Option<String>,
+    #[serde(default)]
+    pub request_claim_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub request_claim_signer_did: Option<String>,
+    #[serde(default)]
+    pub outcome_kind: Option<String>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+    #[serde(default)]
+    pub final_message_doc_id: Option<String>,
+    #[serde(default)]
+    pub final_message_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub final_message_collection_version_id: Option<String>,
+    #[serde(default)]
+    pub final_message_signer_did: Option<String>,
+    #[serde(default)]
+    pub final_message_sequence: Option<i64>,
+    #[serde(default)]
+    pub terminalized_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompactionEntryRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
     pub compaction_key: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
@@ -514,7 +738,17 @@ pub struct CompactionEntryRow {
     #[serde(default)]
     pub compacted_tokens: Option<i64>,
     #[serde(default)]
+    pub source_manifest_version: Option<i64>,
+    #[serde(default)]
+    pub source_manifest_json: Option<String>,
+    #[serde(default)]
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub fork_source_doc_id: Option<String>,
+    #[serde(default)]
+    pub fork_source_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub fork_source_signer_did: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -921,6 +1155,173 @@ mod tests {
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
         assert_eq!(row, round);
+    }
+
+    #[test]
+    fn rendered_request_row_covers_exact_provenance_fields() {
+        let json = r#"{
+            "_docID": "render-doc-1",
+            "capture_key": "capture-1",
+            "request_doc_id": "request-doc-1",
+            "request_source_commit_cid": "bafy-source",
+            "request_source_signer_did": "did:test:requester",
+            "request_claim_commit_cid": "bafy-claim",
+            "request_claim_signer_did": "did:test:agent",
+            "inference_call_doc_id": "call-doc-1",
+            "inference_call_composite_commit_cid": "bafy-call",
+            "inference_call_signer_did": "did:test:agent",
+            "request_id": "req-1",
+            "session_id": "session-1",
+            "agent_did": "did:test:agent",
+            "requester_did": "did:test:requester",
+            "behavior_id": "behavior-1",
+            "capture_scope": "inference.2",
+            "turn_index": 3,
+            "attempt": 1,
+            "capture_version": 7,
+            "model_name": "model-1",
+            "source": "openai_responses",
+            "request_json": "{\"input\":[]}",
+            "prompt_hash": "prompt-hash",
+            "tools_hash": "tools-hash",
+            "provenance_json": "{\"manifest_version\":7}",
+            "created_at": "2026-08-08T12:00:00Z"
+        }"#;
+        let row: RenderedRequestRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.doc_id.as_deref(), Some("render-doc-1"));
+        assert_eq!(
+            row.parsed_capture_scope().map(|scope| scope.kind()),
+            Some(CaptureScopeKind::Inference)
+        );
+        assert_eq!(row.capture_version, Some(7));
+        assert_eq!(row.request_json.as_deref(), Some(r#"{"input":[]}"#));
+        let round: RenderedRequestRow =
+            serde_json::from_str(&serde_json::to_string(&row).expect("serialize"))
+                .expect("reparse");
+        assert_eq!(row, round);
+    }
+
+    #[test]
+    fn capture_scope_preserves_unknown_kinds_and_orders_sequences_numerically() {
+        let future = CaptureScope::parse("embedding.4");
+        assert_eq!(
+            future.kind(),
+            CaptureScopeKind::Unknown("embedding".to_string())
+        );
+        assert_eq!(future.sequence(), Some(4));
+        assert_eq!(future.to_string(), "embedding.4");
+        assert!(
+            CaptureScope::parse("inference.2").order_key()
+                < CaptureScope::parse("inference.10").order_key()
+        );
+    }
+
+    #[test]
+    fn rendered_request_ordering_key_fences_turn_attempt_and_document() {
+        let row = |scope: &str, turn_index, attempt, doc_id: &str| RenderedRequestRow {
+            doc_id: Some(doc_id.to_string()),
+            capture_key: format!("key-{doc_id}"),
+            request_doc_id: None,
+            request_source_commit_cid: None,
+            request_source_signer_did: None,
+            request_claim_commit_cid: None,
+            request_claim_signer_did: None,
+            inference_call_doc_id: None,
+            inference_call_composite_commit_cid: None,
+            inference_call_signer_did: None,
+            request_id: None,
+            session_id: None,
+            agent_did: None,
+            requester_did: None,
+            behavior_id: None,
+            capture_scope: Some(scope.to_string()),
+            turn_index: Some(turn_index),
+            attempt: Some(attempt),
+            capture_version: None,
+            model_name: None,
+            source: None,
+            request_json: None,
+            prompt_hash: None,
+            tools_hash: None,
+            provenance_json: None,
+            created_at: None,
+        };
+        assert!(
+            row("inference.2", 0, 0, "b").ordering_key()
+                < row("inference.10", 0, 0, "a").ordering_key()
+        );
+        assert!(
+            row("inference.2", 0, 0, "a").ordering_key()
+                < row("inference.2", 0, 1, "a").ordering_key()
+        );
+        assert!(
+            row("inference.2", 0, 0, "a").ordering_key()
+                < row("inference.2", 0, 0, "b").ordering_key()
+        );
+    }
+
+    #[test]
+    fn response_outcome_and_current_compaction_rows_roundtrip() {
+        let outcome: AgentResponseOutcomeRow = serde_json::from_str(
+            r#"{
+                "_docID":"outcome-doc-1",
+                "request_doc_id":"request-doc-1",
+                "request_id":"req-1",
+                "session_id":"session-1",
+                "agent_did":"did:test:agent",
+                "requester_did":"did:test:requester",
+                "behavior_id":"behavior-1",
+                "request_source_composite_commit_cid":"bafy-source",
+                "request_source_signer_did":"did:test:requester",
+                "request_claim_composite_commit_cid":"bafy-claim",
+                "request_claim_signer_did":"did:test:agent",
+                "outcome_kind":"complete",
+                "reason_code":"",
+                "final_message_doc_id":"message-doc-1",
+                "final_message_composite_commit_cid":"bafy-message",
+                "final_message_collection_version_id":"bafy-schema-agent-message",
+                "final_message_signer_did":"did:test:agent",
+                "final_message_sequence":4,
+                "terminalized_at":"2026-08-08T12:01:00Z"
+            }"#,
+        )
+        .expect("parse outcome");
+        assert_eq!(outcome.outcome_kind.as_deref(), Some("complete"));
+        assert_eq!(outcome.final_message_sequence, Some(4));
+
+        let compaction: CompactionEntryRow = serde_json::from_str(
+            r#"{
+                "_docID":"compaction-doc-1",
+                "compaction_key":"compaction-1",
+                "session_id":"session-1",
+                "agent_did":"did:test:agent",
+                "requester_did":"did:test:requester",
+                "sequence":7,
+                "summary":"summary",
+                "files_read":"[]",
+                "files_modified":"[]",
+                "messages_compacted":6,
+                "original_tokens":900,
+                "compacted_tokens":120,
+                "source_manifest_version":1,
+                "source_manifest_json":"{\"version\":1}",
+                "created_at":"2026-08-08T12:02:00Z",
+                "fork_source_doc_id":"prior-doc-1",
+                "fork_source_composite_commit_cid":"bafy-prior",
+                "fork_source_signer_did":"did:test:agent"
+            }"#,
+        )
+        .expect("parse compaction");
+        assert_eq!(compaction.source_manifest_version, Some(1));
+        assert_eq!(
+            compaction.fork_source_composite_commit_cid.as_deref(),
+            Some("bafy-prior")
+        );
+
+        let legacy: CompactionEntryRow = serde_json::from_str(r#"{"compaction_key":"legacy"}"#)
+            .expect("parse legacy compaction");
+        assert_eq!(legacy.doc_id, None);
+        assert_eq!(legacy.source_manifest_version, None);
     }
 
     #[test]

@@ -565,7 +565,7 @@ async fn apply_model_to_bound_behavior(
     let mut behavior = load_bound_behavior(state).await?;
     behavior.backend_id = Some(selection.backend_id.clone());
     behavior.model_name = Some(selection.model_name.clone());
-    let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
+    let access = ConfigAccess::Local(state.node.clone());
     write_agent_behavior_document(&access, &behavior)
         .await
         .context("writing AgentBehavior with selected backend model")?;

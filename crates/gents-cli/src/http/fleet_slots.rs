@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::AuthenticatedGraphql;
 use gents::{HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -172,7 +173,9 @@ struct SlotCounts {
     expired_processing: i64,
 }
 
-pub(crate) async fn load_fleet_slot_snapshot(graphql: &str) -> Result<FleetSlotSnapshot> {
+pub(crate) async fn load_fleet_slot_snapshot(
+    graphql: &AuthenticatedGraphql,
+) -> Result<FleetSlotSnapshot> {
     let generated_at = Utc::now();
     let response = post_graphql(graphql, fleet_slot_snapshot_query()).await?;
     let envelope = decode_fleet_slot_query_response(response)?;

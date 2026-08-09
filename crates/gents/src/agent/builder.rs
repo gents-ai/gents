@@ -7,7 +7,8 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
 use super::{
-    assemble_principal_and_behaviors, runtime, BehaviorBuildError, Gents, ProcessLifecycleObserver,
+    assemble_principal_and_behaviors, require_runtime_identity_binding, runtime,
+    BehaviorBuildError, Gents, ProcessLifecycleObserver,
 };
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
@@ -141,6 +142,7 @@ impl GentsBuilder {
         let identity = self
             .identity
             .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
+        require_runtime_identity_binding(node.as_ref(), identity.as_ref())?;
         if self.behaviors.is_empty() {
             anyhow::bail!("Gents builder requires at least one behavior");
         }

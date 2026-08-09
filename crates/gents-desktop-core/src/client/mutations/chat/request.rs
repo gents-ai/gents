@@ -19,6 +19,45 @@ use super::conversation::{build_upsert_conversation_field, build_upsert_session_
 const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 const RETRY_TRANSACTION_ATTEMPTS: usize = 5;
 
+fn resolve_exact_query_row(
+    data: Option<&Value>,
+    collection: &'static str,
+    logical_field: &'static str,
+    logical_value: &str,
+) -> Result<Option<Value>> {
+    let rows = data
+        .and_then(|data| data.get(collection))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(gents::session::resolve_exact_logical_match(
+        collection,
+        logical_field,
+        logical_value,
+        rows,
+        |row| row.get("_docID").and_then(Value::as_str).unwrap_or(""),
+    )?)
+}
+
+fn ensure_row_binding(
+    row: &Value,
+    collection: &'static str,
+    field: &'static str,
+    expected: &str,
+) -> Result<()> {
+    let doc_id = row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("resolved logical document has no _docID")?;
+    let actual = row.get(field).and_then(Value::as_str).unwrap_or("");
+    if actual != expected {
+        bail!(
+            "{collection} binding mismatch for _docID={doc_id}: expected {field}={expected}, got {actual}"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmittedRequest {
     pub request_id: String,
@@ -273,7 +312,9 @@ async fn retry_request_in_txn(
     candidate_request_id: &str,
 ) -> Result<SubmittedRequest> {
     let retry_key = retry_successor_key(agent_did, requester_did, parent_request_id);
-    if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
+    if let Some(existing) =
+        load_retry_successor_in_txn(txn, &retry_key, agent_did, requester_did).await?
+    {
         return Ok(existing);
     }
 
@@ -305,14 +346,14 @@ async fn retry_request_in_txn(
         .unwrap_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
     ensure_retry_parent_eligible(&parent, retry_count - 1, max_retries, execution_origin)?;
 
-    let raw_latest_request_id =
+    let conversation =
         retry_conversation_latest_in_txn(txn, parent_session_id, agent_did, requester_did).await?;
     let effective_latest_request_id = effective_retry_latest_in_txn(
         txn,
         parent_session_id,
         agent_did,
         requester_did,
-        &raw_latest_request_id,
+        &conversation.latest_request_id,
     )
     .await?;
     if effective_latest_request_id != parent_request_id {
@@ -359,10 +400,8 @@ async fn retry_request_in_txn(
         &retry_extra_fields,
     );
     let conversation_field = build_retry_conversation_update_field(
-        parent_session_id,
-        agent_did,
-        requester_did,
-        &raw_latest_request_id,
+        &conversation.doc_id,
+        &conversation.latest_request_id,
         candidate_request_id,
         content,
         &created_at,
@@ -409,30 +448,34 @@ fn retry_transaction_error_is_retryable(error: &anyhow::Error) -> bool {
 async fn load_retry_successor_in_txn(
     txn: &ConfigApplyTxn<'_>,
     retry_key: &str,
+    agent_did: &str,
+    requester_did: &str,
 ) -> Result<Option<SubmittedRequest>> {
-    let retry_key = escape_graphql_string(retry_key);
+    let escaped_retry_key = escape_graphql_string(retry_key);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ retry_key: {{ _eq: "{retry_key}" }} }},
-                limit: 1
+                filter: {{ retry_key: {{ _eq: "{escaped_retry_key}" }} }}
             ) {{
+                _docID
+                retry_key
                 request_id
                 session_id
                 agent_did
+                requester_did
                 behavior_id
             }}
         }}"#
     );
     let response = txn.execute(&query).await?;
-    let Some(row) = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
+    let Some(row) =
+        resolve_exact_query_row(response.get("data"), "AgentRequest", "retry_key", retry_key)?
     else {
         return Ok(None);
     };
+    ensure_row_binding(&row, "AgentRequest", "retry_key", retry_key)?;
+    ensure_row_binding(&row, "AgentRequest", "agent_did", agent_did)?;
+    ensure_row_binding(&row, "AgentRequest", "requester_did", requester_did)?;
     Ok(Some(SubmittedRequest {
         request_id: row
             .get("request_id")
@@ -463,19 +506,13 @@ async fn load_retry_parent_in_txn(
     agent_did: &str,
     requester_did: &str,
 ) -> Result<AgentRequestRow> {
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let escaped_parent_request_id = escape_graphql_string(parent_request_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{parent_request_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{escaped_parent_request_id}" }} }}
             ) {{
+                _docID
                 request_id
                 agent_did
                 requester_did
@@ -511,19 +548,27 @@ async fn load_retry_parent_in_txn(
         }}"#
     );
     let response = txn.execute(&query).await?;
-    let row = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .with_context(|| {
-            format!(
-                "retry parent request not found: request_id={}",
-                parent_request_id
-            )
-        })?;
+    let row = resolve_exact_query_row(
+        response.get("data"),
+        "AgentRequest",
+        "request_id",
+        parent_request_id,
+    )?
+    .with_context(|| {
+        format!(
+            "retry parent request not found: request_id={}",
+            parent_request_id
+        )
+    })?;
+    ensure_row_binding(&row, "AgentRequest", "request_id", parent_request_id)?;
+    ensure_row_binding(&row, "AgentRequest", "agent_did", agent_did)?;
+    ensure_row_binding(&row, "AgentRequest", "requester_did", requester_did)?;
     serde_json::from_value(row).context("decoding retry parent request")
+}
+
+struct RetryConversationDocument {
+    doc_id: String,
+    latest_request_id: String,
 }
 
 async fn retry_conversation_latest_in_txn(
@@ -531,33 +576,49 @@ async fn retry_conversation_latest_in_txn(
     session_id: &str,
     agent_did: &str,
     requester_did: &str,
-) -> Result<String> {
-    let session_id = escape_graphql_string(session_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
+) -> Result<RetryConversationDocument> {
+    let escaped_session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentConversation(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
-            ) {{ latest_request_id }}
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+            ) {{
+                _docID
+                session_id
+                agent_did
+                requester_did
+                latest_request_id
+            }}
         }}"#
     );
     let response = txn.execute(&query).await?;
-    response
-        .get("data")
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("latest_request_id"))
+    let row = resolve_exact_query_row(
+        response.get("data"),
+        "AgentConversation",
+        "session_id",
+        session_id,
+    )?
+    .with_context(|| format!("retry parent conversation not found for session {session_id}"))?;
+    ensure_row_binding(&row, "AgentConversation", "session_id", session_id)?;
+    ensure_row_binding(&row, "AgentConversation", "agent_did", agent_did)?;
+    ensure_row_binding(&row, "AgentConversation", "requester_did", requester_did)?;
+    let doc_id = row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("retry parent conversation has no _docID")?
+        .to_string();
+    let latest_request_id = row
+        .get("latest_request_id")
         .and_then(Value::as_str)
         .and_then(|value| normalize_optional_string(Some(value)))
         .map(str::to_string)
-        .with_context(|| format!("retry parent conversation not found for session {session_id}"))
+        .with_context(|| {
+            format!("retry parent conversation has no latest request for session {session_id}")
+        })?;
+    Ok(RetryConversationDocument {
+        doc_id,
+        latest_request_id,
+    })
 }
 
 async fn effective_retry_latest_in_txn(
@@ -573,26 +634,35 @@ async fn effective_retry_latest_in_txn(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{latest_id}" }},
-                    agent_did: {{ _eq: "{agent}" }}
-                }},
-                limit: 1
-            ) {{ execution_origin metadata }}
+                filter: {{ request_id: {{ _eq: "{latest_id}" }} }}
+            ) {{
+                _docID
+                request_id
+                agent_did
+                requester_did
+                execution_origin
+                metadata
+            }}
         }}"#
     );
     let response = txn.execute(&query).await?;
-    let latest_is_legacy = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .is_some_and(|row| {
-            gents::lifecycle::is_deprecated_background_completion_request(
-                row.get("execution_origin").and_then(Value::as_str),
-                row.get("metadata").and_then(Value::as_str),
-            )
-        });
+    let latest = resolve_exact_query_row(
+        response.get("data"),
+        "AgentRequest",
+        "request_id",
+        raw_latest_request_id,
+    )?;
+    if let Some(row) = latest.as_ref() {
+        ensure_row_binding(row, "AgentRequest", "request_id", raw_latest_request_id)?;
+        ensure_row_binding(row, "AgentRequest", "agent_did", agent_did)?;
+        ensure_row_binding(row, "AgentRequest", "requester_did", requester_did)?;
+    }
+    let latest_is_legacy = latest.as_ref().is_some_and(|row| {
+        gents::lifecycle::is_deprecated_background_completion_request(
+            row.get("execution_origin").and_then(Value::as_str),
+            row.get("metadata").and_then(Value::as_str),
+        )
+    });
     if !latest_is_legacy {
         return Ok(raw_latest_request_id.to_string());
     }
@@ -631,46 +701,42 @@ async fn effective_retry_latest_in_txn(
 
 async fn ensure_retry_candidate_is_fresh_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    session_id: &str,
+    _session_id: &str,
     candidate_request_id: &str,
 ) -> Result<()> {
-    let session_id = escape_graphql_string(session_id);
-    let candidate_request_id = escape_graphql_string(candidate_request_id);
+    let escaped_candidate_request_id = escape_graphql_string(candidate_request_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    request_id: {{ _eq: "{candidate_request_id}" }}
-                }},
-                limit: 1
-            ) {{ _docID }}
+                filter: {{ request_id: {{ _eq: "{escaped_candidate_request_id}" }} }}
+            ) {{
+                _docID
+                request_id
+            }}
         }}"#
     );
     let response = txn.execute(&query).await?;
-    let exists = response
-        .get("data")
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(Value::as_array)
-        .is_some_and(|rows| !rows.is_empty());
-    if exists {
+    if resolve_exact_query_row(
+        response.get("data"),
+        "AgentRequest",
+        "request_id",
+        candidate_request_id,
+    )?
+    .is_some()
+    {
         bail!("retry new request id already exists: request_id={candidate_request_id}");
     }
     Ok(())
 }
 
 fn build_retry_conversation_update_field(
-    session_id: &str,
-    agent_did: &str,
-    requester_did: &str,
+    conversation_doc_id: &str,
     expected_latest_request_id: &str,
     new_request_id: &str,
     content: &str,
     updated_at: &str,
 ) -> String {
-    let session_id = escape_graphql_string(session_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let conversation_doc_id = escape_graphql_string(conversation_doc_id);
     let expected_latest_request_id = escape_graphql_string(expected_latest_request_id);
     let new_request_id = escape_graphql_string(new_request_id);
     let content = escape_graphql_string(content);
@@ -678,9 +744,7 @@ fn build_retry_conversation_update_field(
     format!(
         r#"conversation: update_AgentConversation(
             filter: {{
-                session_id: {{ _eq: "{session_id}" }},
-                agent_did: {{ _eq: "{agent_did}" }},
-                requester_did: {{ _eq: "{requester_did}" }},
+                _docID: {{ _eq: "{conversation_doc_id}" }},
                 latest_request_id: {{ _eq: "{expected_latest_request_id}" }}
             }},
             input: {{
@@ -924,20 +988,16 @@ async fn fetch_request_view(
     agent_did: &str,
     requester_did: &str,
 ) -> Result<StaleRequestView> {
-    let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"query {{
             AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}
             ) {{
+                _docID
+                request_id
                 agent_did
+                requester_did
                 behavior_id
                 content
                 lifecycle_state
@@ -954,13 +1014,12 @@ async fn fetch_request_view(
     if resp.has_errors() {
         anyhow::bail!("fetch_request({request_id}) failed: {:?}", resp.errors);
     }
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+    let row =
+        resolve_exact_query_row(resp.data.as_ref(), "AgentRequest", "request_id", request_id)?
+            .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+    ensure_row_binding(&row, "AgentRequest", "request_id", request_id)?;
+    ensure_row_binding(&row, "AgentRequest", "agent_did", agent_did)?;
+    ensure_row_binding(&row, "AgentRequest", "requester_did", requester_did)?;
     Ok(StaleRequestView {
         agent_did: row
             .get("agent_did")
@@ -1005,19 +1064,16 @@ async fn fetch_retry_root(
     agent_did: &str,
     requester_did: &str,
 ) -> Result<Option<String>> {
-    let escaped = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let requester_did = escape_graphql_string(requester_did);
+    let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"query {{
             AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{escaped}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    requester_did: {{ _eq: "{requester_did}" }}
-                }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}
             ) {{
+                _docID
+                request_id
+                agent_did
+                requester_did
                 retry_root_request
             }}
         }}"#
@@ -1026,13 +1082,16 @@ async fn fetch_retry_root(
     if resp.has_errors() {
         anyhow::bail!("fetch_retry_root({request_id}) failed: {:?}", resp.errors);
     }
-    Ok(resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|row| row.get("retry_root_request"))
+    let Some(row) =
+        resolve_exact_query_row(resp.data.as_ref(), "AgentRequest", "request_id", request_id)?
+    else {
+        return Ok(None);
+    };
+    ensure_row_binding(&row, "AgentRequest", "request_id", request_id)?;
+    ensure_row_binding(&row, "AgentRequest", "agent_did", agent_did)?;
+    ensure_row_binding(&row, "AgentRequest", "requester_did", requester_did)?;
+    Ok(row
+        .get("retry_root_request")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from))
@@ -1056,6 +1115,44 @@ mod tests {
 
     const RECOVERY_AGENT_DID: &str = "did:test:amy";
     const RECOVERY_BEHAVIOR_ID: &str = "amy-code";
+
+    #[test]
+    fn request_reader_rejects_logical_twins_deterministically() {
+        let data = serde_json::json!({
+            "AgentRequest": [
+                {"_docID": "doc-z", "request_id": "request-1"},
+                {"_docID": "doc-a", "request_id": "request-1"}
+            ]
+        });
+
+        let error = resolve_exact_query_row(Some(&data), "AgentRequest", "request_id", "request-1")
+            .unwrap_err();
+        let conflict = error
+            .downcast_ref::<gents::session::LogicalDocumentResolutionError>()
+            .expect("logical twins must produce the typed resolver error");
+        assert!(matches!(
+            conflict,
+            gents::session::LogicalDocumentResolutionError::Conflict(conflict)
+                if conflict.document_ids == ["doc-a", "doc-z"]
+        ));
+    }
+
+    #[test]
+    fn retry_conversation_update_targets_resolved_physical_document() {
+        let field = build_retry_conversation_update_field(
+            "conversation-doc-1",
+            "request-old",
+            "request-new",
+            "retry prompt",
+            "2026-08-08T00:00:00Z",
+        );
+
+        assert!(field.contains("_docID: { _eq: \"conversation-doc-1\" }"));
+        assert!(field.contains("latest_request_id: { _eq: \"request-old\" }"));
+        assert!(!field.contains("session_id:"));
+        assert!(!field.contains("agent_did:"));
+        assert!(!field.contains("requester_did:"));
+    }
 
     #[test]
     fn request_mutation_keeps_signer_authorship_separate_from_target() {
@@ -1956,7 +2053,8 @@ mod tests {
                         agent_did
                         requester_did
                     }}
-                    AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
+                    AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                        _docID
                         agent_did
                         requester_did
                     }}
@@ -1975,11 +2073,16 @@ mod tests {
         }
         let data = response.data.context("requester route query data")?;
         for collection in ["AgentRequest", "AgentSession", "AgentConversation"] {
-            let row = data
+            let rows = data
                 .get(collection)
                 .and_then(serde_json::Value::as_array)
-                .and_then(|rows| rows.first())
-                .with_context(|| format!("missing {collection} row"))?;
+                .with_context(|| format!("missing {collection} rows"))?;
+            assert_eq!(
+                rows.len(),
+                1,
+                "{collection} seed lookup must expose a complete singleton set"
+            );
+            let row = &rows[0];
             assert_eq!(
                 row.get("agent_did").and_then(serde_json::Value::as_str),
                 Some(agent_did),

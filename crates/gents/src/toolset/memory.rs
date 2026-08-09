@@ -31,6 +31,8 @@ pub struct MemoryParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct MemoryRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     memory_id: String,
     #[serde(default)]
     agent_did: Option<String>,
@@ -187,30 +189,8 @@ fn memory_id(agent_did: &str, key: &str) -> String {
 }
 
 async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<MemoryOutput> {
-    let memory_id = escape_graphql_string(&memory_id(agent_did, key));
-    let query = format!(
-        r#"{{
-            AgentMemory(filter: {{ memory_id: {{ _eq: "{memory_id}" }} }}, limit: 1) {{
-                memory_id
-                agent_did
-                key
-                value
-                updated_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        bail!("reading agent memory failed: {:?}", resp.errors);
-    }
+    let row = load_memory_document_exact(node, agent_did, key).await?;
     tracing::debug!(agent_did, key, "agent memory read");
-
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMemory"))
-        .and_then(|value| serde_json::from_value::<Vec<MemoryRow>>(value.clone()).ok())
-        .and_then(|mut rows| rows.pop());
 
     Ok(match row {
         Some(row) => MemoryOutput {
@@ -230,6 +210,67 @@ async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<
     })
 }
 
+async fn load_memory_document_exact(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    key: &str,
+) -> Result<Option<MemoryRow>> {
+    let expected_memory_id = memory_id(agent_did, key);
+    let escaped_memory_id = escape_graphql_string(&expected_memory_id);
+    let query = format!(
+        r#"{{
+            AgentMemory(filter: {{ memory_id: {{ _eq: "{escaped_memory_id}" }} }}) {{
+                _docID
+                memory_id
+                agent_did
+                key
+                value
+                updated_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!("reading agent memory failed: {:?}", resp.errors);
+    }
+    let rows: Vec<MemoryRow> = match resp.data.as_ref().and_then(|data| data.get("AgentMemory")) {
+        Some(value) => serde_json::from_value(value.clone())
+            .context("decoding complete AgentMemory logical match set")?,
+        None => Vec::new(),
+    };
+    let row = crate::session::resolve_exact_logical_match(
+        "AgentMemory",
+        "memory_id",
+        &expected_memory_id,
+        rows,
+        |row| row.doc_id.as_str(),
+    )?;
+    if let Some(row) = row.as_ref() {
+        if row.memory_id != expected_memory_id {
+            bail!(
+                "AgentMemory logical key mismatch: queried memory_id={expected_memory_id} but _docID={} returned memory_id={}",
+                row.doc_id,
+                row.memory_id
+            );
+        }
+        if row.agent_did.as_deref().map(str::trim) != Some(agent_did) {
+            bail!(
+                "AgentMemory immutable owner mismatch for memory_id={expected_memory_id}: _docID={} existing agent_did={:?} expected={agent_did}",
+                row.doc_id,
+                row.agent_did
+            );
+        }
+        if row.key.as_deref() != Some(key) {
+            bail!(
+                "AgentMemory immutable key mismatch for memory_id={expected_memory_id}: _docID={} existing key={:?} expected={key}",
+                row.doc_id,
+                row.key
+            );
+        }
+    }
+    Ok(row)
+}
+
 async fn write_memory(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -245,27 +286,67 @@ async fn write_memory(
     let escaped_key = escape_graphql_string(key);
     let escaped_value = escape_graphql_string(value);
     let escaped_updated_at = escape_graphql_string(&updated_at);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentMemory(
-                filter: {{ memory_id: {{ _eq: "{escaped_memory_id}" }} }},
-                add: {{
+    let existing = load_memory_document_exact(node, agent_did, key).await?;
+    let (mutation_field, expected_doc_id, mutation) = if let Some(existing) = existing.as_ref() {
+        let escaped_doc_id = escape_graphql_string(&existing.doc_id);
+        (
+            "update_AgentMemory",
+            Some(existing.doc_id.as_str()),
+            format!(
+                r#"mutation {{
+                update_AgentMemory(
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                    input: {{
+                        value: "{escaped_value}",
+                        updated_at: "{escaped_updated_at}"
+                    }}
+                ) {{ _docID }}
+            }}"#
+            ),
+        )
+    } else {
+        (
+            "create_AgentMemory",
+            None,
+            format!(
+                r#"mutation {{
+                create_AgentMemory(input: {{
                     memory_id: "{escaped_memory_id}",
                     agent_did: "{escaped_agent_did}",
                     key: "{escaped_key}",
                     value: "{escaped_value}",
                     updated_at: "{escaped_updated_at}"
-                }},
-                update: {{
-                    value: "{escaped_value}",
-                    updated_at: "{escaped_updated_at}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+                }}) {{ _docID }}
+            }}"#
+            ),
+        )
+    };
     let resp = node.execute(&mutation).await;
     if resp.has_errors() {
         bail!("writing agent memory failed: {:?}", resp.errors);
+    }
+    let returned_doc_id = exact_memory_mutation_doc_id(resp.data.as_ref(), mutation_field)?;
+    if let Some(expected_doc_id) = expected_doc_id {
+        if returned_doc_id != expected_doc_id {
+            bail!(
+                "AgentMemory exact update returned _docID={returned_doc_id}, expected {expected_doc_id}"
+            );
+        }
+    }
+    let verified = load_memory_document_exact(node, agent_did, key)
+        .await?
+        .context("AgentMemory disappeared after write")?;
+    if verified.doc_id != returned_doc_id
+        || verified.value.as_deref() != Some(value)
+        || verified.updated_at.as_deref() != Some(updated_at.as_str())
+    {
+        bail!(
+            "AgentMemory write verification failed for memory_id={}: mutation _docID={returned_doc_id}, observed _docID={} value_match={} timestamp_match={}",
+            memory_id(agent_did, key),
+            verified.doc_id,
+            verified.value.as_deref() == Some(value),
+            verified.updated_at.as_deref() == Some(updated_at.as_str())
+        );
     }
     tracing::debug!(
         agent_did,
@@ -281,6 +362,34 @@ async fn write_memory(
         value: Some(output_value),
         updated_at: Some(output_updated_at),
     })
+}
+
+fn exact_memory_mutation_doc_id(data: Option<&serde_json::Value>, field: &str) -> Result<String> {
+    let add_field = field
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"));
+    let Some(value) = data.and_then(|data| {
+        data.get(field)
+            .or_else(|| add_field.as_deref().and_then(|field| data.get(field)))
+    }) else {
+        bail!("{field} returned no result");
+    };
+    let document_ids = if let Some(doc_id) = value.get("_docID").and_then(serde_json::Value::as_str)
+    {
+        vec![doc_id.to_string()]
+    } else {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("_docID").and_then(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    match document_ids.as_slice() {
+        [doc_id] if !doc_id.trim().is_empty() => Ok(doc_id.clone()),
+        _ => bail!("{field} returned non-exact _docIDs={document_ids:?}"),
+    }
 }
 
 #[cfg(test)]
@@ -475,5 +584,201 @@ mod tests {
         // upsert overwrites rather than duplicating: the re-written value wins.
         assert_eq!(parsed["found"], true);
         assert_eq!(parsed["value"], "second");
+    }
+
+    #[tokio::test]
+    async fn duplicate_memory_logical_id_fails_closed_without_read_or_update() {
+        // Deliberately omit the current unique index to reproduce an older or
+        // replicated collection containing logical twins.
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema(
+            r#"
+            type AgentMemory {
+                memory_id: String
+                agent_did: String
+                key: String
+                value: String
+                updated_at: String
+            }
+            "#,
+        )
+        .await
+        .unwrap();
+        let agent_did = "did:key:z-memory-owner";
+        let key = "durability";
+        let logical_id = memory_id(agent_did, key);
+        for (owner, stored_key, value) in [
+            (agent_did, key, "first"),
+            ("did:key:z-conflicting-owner", "conflicting-key", "second"),
+        ] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_AgentMemory(input: {{
+                            memory_id: "{}"
+                            agent_did: "{}"
+                            key: "{}"
+                            value: "{}"
+                            updated_at: "2026-08-08T00:00:00Z"
+                        }}) {{ _docID }}
+                    }}"#,
+                    escape_graphql_string(&logical_id),
+                    escape_graphql_string(owner),
+                    escape_graphql_string(stored_key),
+                    escape_graphql_string(value),
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+
+        for error in [
+            read_memory(&node, agent_did, key)
+                .await
+                .expect_err("read must reject logical twins"),
+            write_memory(&node, agent_did, key, "replacement")
+                .await
+                .expect_err("write must reject logical twins"),
+        ] {
+            assert!(
+                error
+                    .downcast_ref::<crate::session::LogicalDocumentResolutionError>()
+                    .is_some_and(|error| matches!(
+                        error,
+                        crate::session::LogicalDocumentResolutionError::Conflict(_)
+                    )),
+                "expected typed AgentMemory conflict, got {error:#}"
+            );
+        }
+
+        let response = node
+            .execute(&format!(
+                r#"{{
+                    AgentMemory(filter: {{ memory_id: {{ _eq: "{}" }} }}) {{ value updated_at }}
+                }}"#,
+                escape_graphql_string(&logical_id)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let mut values = response.data.unwrap()["AgentMemory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["value"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        values.sort();
+        assert_eq!(values, ["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn memory_singleton_rejects_immutable_owner_mismatch() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema(
+            r#"
+            type AgentMemory {
+                memory_id: String
+                agent_did: String
+                key: String
+                value: String
+                updated_at: String
+            }
+            "#,
+        )
+        .await
+        .unwrap();
+        let agent_did = "did:key:z-memory-owner";
+        let key = "durability";
+        let logical_id = memory_id(agent_did, key);
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentMemory(input: {{
+                        memory_id: "{}"
+                        agent_did: "did:key:z-foreign"
+                        key: "wrong-key"
+                        value: "original"
+                        updated_at: "2026-08-08T00:00:00Z"
+                    }}) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&logical_id)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let error = write_memory(&node, agent_did, key, "replacement")
+            .await
+            .expect_err("a logical key must not authorize a different owner/key tuple");
+        assert!(
+            error.to_string().contains("immutable owner mismatch"),
+            "{error:#}"
+        );
+        let response = node
+            .execute(&format!(
+                r#"{{
+                    AgentMemory(filter: {{ memory_id: {{ _eq: "{}" }} }}) {{ value }}
+                }}"#,
+                escape_graphql_string(&logical_id)
+            ))
+            .await;
+        assert_eq!(
+            response.data.unwrap()["AgentMemory"][0]["value"],
+            "original"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_singleton_rejects_immutable_key_mismatch() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema(
+            r#"
+            type AgentMemory {
+                memory_id: String
+                agent_did: String
+                key: String
+                value: String
+                updated_at: String
+            }
+            "#,
+        )
+        .await
+        .unwrap();
+        let agent_did = "did:key:z-memory-owner";
+        let key = "durability";
+        let logical_id = memory_id(agent_did, key);
+        let response = node
+            .execute(&format!(
+                r#"mutation {{
+                    create_AgentMemory(input: {{
+                        memory_id: "{}"
+                        agent_did: "{}"
+                        key: "wrong-key"
+                        value: "original"
+                        updated_at: "2026-08-08T00:00:00Z"
+                    }}) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&logical_id),
+                escape_graphql_string(agent_did)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let error = write_memory(&node, agent_did, key, "replacement")
+            .await
+            .expect_err("a logical key must not authorize a different stored key");
+        assert!(
+            error.to_string().contains("immutable key mismatch"),
+            "{error:#}"
+        );
+        let response = node
+            .execute(&format!(
+                r#"{{
+                    AgentMemory(filter: {{ memory_id: {{ _eq: "{}" }} }}) {{ value }}
+                }}"#,
+                escape_graphql_string(&logical_id)
+            ))
+            .await;
+        assert_eq!(
+            response.data.unwrap()["AgentMemory"][0]["value"],
+            "original"
+        );
     }
 }

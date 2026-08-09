@@ -121,6 +121,8 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 doc_id: None,
                 session_id: "session-root".to_string(),
                 request_id: Some("req-root".to_string()),
+                request_doc_id: Some("request-root-doc".to_string()),
+                agent_did: Some("did:test:root".to_string()),
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "root private assistant note".to_string(),
@@ -130,6 +132,8 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 doc_id: None,
                 session_id: "session-review".to_string(),
                 request_id: Some("req-review".to_string()),
+                request_doc_id: Some("request-review-doc".to_string()),
+                agent_did: Some("did:test:reviewer".to_string()),
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "child private assistant note".to_string(),
@@ -199,6 +203,7 @@ fn build_all_adapter_projections(
     let context = ProjectionContext {
         actor_did: Some("did:test:projection-reader".to_string()),
         redaction_mode,
+        ..ProjectionContext::default()
     };
     [
         AdapterProjectionKind::OpenAiCodexRunTrace,
@@ -575,6 +580,147 @@ fn atif_projection_emits_a_schema_valid_native_harbor_document() {
 }
 
 #[test]
+fn projection_v2_carries_the_same_exact_manifest_in_envelope_and_records() {
+    let exact = crate::SignedDocumentVersionRef {
+        version: crate::DocumentVersionRef {
+            doc_id: "request-doc-1".to_string(),
+            composite_commit_cid: "bafy-request-1".to_string(),
+        },
+        signer_did: "did:key:requester".to_string(),
+    };
+    let manifest = crate::run_timeline_manifest::root_only_timeline_manifest(
+        exact,
+        "bafy-schema-agent-request",
+    )
+    .expect("root-only manifest");
+    let timeline = build_run_timeline(RunTimelineRows {
+        source_manifest: Some(manifest.clone()),
+        request: TimelineRequestRow {
+            doc_id: Some("request-doc-1".to_string()),
+            request_id: "request-1".to_string(),
+            ..TimelineRequestRow::default()
+        },
+        ..RunTimelineRows::default()
+    });
+    let envelope = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+
+    assert_eq!(envelope.projection_version, "v2");
+    assert_eq!(
+        envelope.provenance.runtime_version,
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(
+        envelope.provenance.redaction_algorithm_version,
+        PROJECTION_REDACTION_ALGORITHM_VERSION
+    );
+    assert!(chrono::DateTime::parse_from_rfc3339(&envelope.provenance.built_at).is_ok());
+    assert_eq!(
+        envelope.provenance.source_manifest_status,
+        ProjectionSourceManifestStatus::VerifiedExact
+    );
+    assert_eq!(
+        envelope.provenance.source_manifest.as_ref(),
+        Some(&manifest)
+    );
+    validate_adapter_projection_contract(&envelope).expect("valid v2 envelope");
+    for record in adapter_projection_jsonl_records(&envelope) {
+        assert_eq!(
+            record.source_manifest_status,
+            ProjectionSourceManifestStatus::VerifiedExact
+        );
+        assert_eq!(record.source_manifest.as_ref(), Some(&manifest));
+    }
+    for record in adapter_projection_eval_jsonl_records(&envelope) {
+        assert_eq!(
+            record.source_manifest_status,
+            ProjectionSourceManifestStatus::VerifiedExact
+        );
+        assert_eq!(record.source_manifest.as_ref(), Some(&manifest));
+    }
+
+    let mut malformed = envelope;
+    malformed
+        .provenance
+        .source_manifest
+        .as_mut()
+        .expect("manifest")
+        .root
+        .signer_did
+        .clear();
+    let error = validate_adapter_projection_contract(&malformed).unwrap_err();
+    assert!(error.violations.iter().any(|violation| {
+        violation.starts_with("provenance.source_manifest is not a valid exact manifest")
+    }));
+
+    malformed.provenance.built_at = "not-a-time".to_string();
+    let error = validate_adapter_projection_contract(&malformed).unwrap_err();
+    assert!(error
+        .violations
+        .iter()
+        .any(|violation| violation == "provenance.built_at must be RFC3339"));
+}
+
+#[test]
+fn projection_v2_reports_exact_membership_with_open_coverage_as_partial() {
+    let exact = crate::SignedDocumentVersionRef {
+        version: crate::DocumentVersionRef {
+            doc_id: "request-doc-partial".to_string(),
+            composite_commit_cid: "bafy-request-partial".to_string(),
+        },
+        signer_did: "did:key:requester".to_string(),
+    };
+    let mut manifest = crate::run_timeline_manifest::root_only_timeline_manifest(
+        exact,
+        "bafy-schema-agent-request",
+    )
+    .expect("root-only manifest");
+    manifest.status = crate::run_timeline_manifest::TimelineManifestStatus::PartialExact;
+    manifest.coverage_gaps = vec![crate::run_timeline_manifest::TimelineCoverageGap {
+        kind: crate::run_timeline_manifest::TimelineCoverageGapKind::NonAtomicObservation,
+        source_class: crate::run_timeline_manifest::TimelineSourceClass::Request,
+        collection: "AgentRequest".to_string(),
+        scope_id: "request-doc-partial".to_string(),
+    }];
+    manifest.validate().expect("canonical partial manifest");
+
+    let timeline = build_run_timeline(RunTimelineRows {
+        source_manifest: Some(manifest.clone()),
+        request: TimelineRequestRow {
+            doc_id: Some("request-doc-partial".to_string()),
+            request_id: "request-partial".to_string(),
+            ..TimelineRequestRow::default()
+        },
+        ..RunTimelineRows::default()
+    });
+    let envelope = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+    assert_eq!(
+        envelope.provenance.source_manifest_status,
+        ProjectionSourceManifestStatus::PartialExact
+    );
+    assert_eq!(
+        envelope.provenance.source_manifest.as_ref(),
+        Some(&manifest)
+    );
+    validate_adapter_projection_contract(&envelope).expect("valid partial projection");
+
+    let mut mislabeled = envelope;
+    mislabeled.provenance.source_manifest_status = ProjectionSourceManifestStatus::VerifiedExact;
+    let error = validate_adapter_projection_contract(&mislabeled).unwrap_err();
+    assert!(error
+        .violations
+        .iter()
+        .any(|violation| violation.contains("disagrees with manifest status")));
+}
+
+#[test]
 fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
@@ -604,6 +750,8 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             doc_id: None,
             session_id: "session-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("request-doc-1".to_string()),
+            agent_did: Some("did:test:root".to_string()),
             sequence: 1,
             role: "assistant".to_string(),
             content: "sensitive assistant text".to_string(),
@@ -636,6 +784,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
     let context = ProjectionContext {
         actor_did: Some("did:test:viewer".to_string()),
         redaction_mode: ProjectionRedactionMode::Public,
+        ..ProjectionContext::default()
     };
 
     let codex = build_adapter_projection(

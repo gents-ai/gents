@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
-use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
@@ -60,7 +59,7 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
     let enabled = !args.disabled;
     let updated_at = chrono::Utc::now().to_rfc3339();
 
-    let access = ConfigAccess::Graphql(args.graphql.clone());
+    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
     let root_path_escaped = escape_graphql_string(&root_path);
     let display_name = match args.display_name.as_deref() {
         Some(value) => format!(r#""{}""#, escape_graphql_string(value)),

@@ -25,9 +25,9 @@ async fn update_agent_principal_enabled(
 
 #[tokio::test(start_paused = true)]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),
@@ -105,9 +105,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
 
 #[tokio::test(start_paused = true)]
 async fn control_watcher_periodic_rescan_recovers_without_an_update_subscription() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-periodic-rescan"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),
@@ -183,9 +183,9 @@ async fn control_watcher_periodic_rescan_recovers_without_an_update_subscription
 /// a successful probe flips the veto back.
 #[tokio::test(start_paused = true)]
 async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-health"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),
@@ -297,9 +297,9 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
 
 #[tokio::test(start_paused = true)]
 async fn control_watcher_recovers_after_resolve_error() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-recover"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),
@@ -377,9 +377,9 @@ async fn control_watcher_recovers_after_resolve_error() {
 
 #[tokio::test(start_paused = true)]
 async fn control_watcher_resolves_tool_selection_into_reconciled_tool_surface() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-tools"));
+    let node = test_node_with_identity(identity.as_ref()).await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     bind_default_behavior_backend(
         node.as_ref(),
         identity.did(),

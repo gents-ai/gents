@@ -51,9 +51,12 @@ The checkpoint dependency chain is:
    remains `CapturedOnly` until its other evidence dimensions are complete.
 
 #1065 implements this signed-ingest milestone end to end, with the embedded
-DefraDB signing/runtime support carried by DefraDB #1352. Request producers
-declare the actual node signer separately from requester attribution and target
-agent identity; atomic claim verifies the exact source and claim commits; and
+DefraDB signing/runtime support carried by DefraDB #1352 and the default
+embedded query-identity boundary carried by stacked DefraDB #1353. Gents
+construction rejects an unsigned node or a node signer that differs from the
+runtime principal before any database access. Request producers declare the
+actual node signer separately from requester attribution and target agent
+identity; atomic claim verifies the exact source and claim commits; and
 provider capture re-verifies the durable chain.
 
 The following bounded checkpoints are layered onto that foundation at
@@ -92,10 +95,10 @@ provider receipt; crash recovery must not upgrade it into such a claim.
 This is bounded direct evidence, not the immutable published
 `ResolvedAgentGeneration` described in Slice 6. The manifest remains
 `CapturedOnly`: it does not yet prove completeness of the skill candidate set,
-MCP availability, the host tool ceiling, or placement/lease authority, and a
-compaction capture does not yet bind its rendered manifest directly to every
-compaction source version. ACP authorization and encryption also remain outside
-this checkpoint.
+MCP availability, the host tool ceiling, or placement/lease authority.
+Rendered-request provenance now recursively verifies canonical compaction v2
+manifests and their schema-bound transcript, config, and prior-compaction
+sources. ACP authorization and encryption remain outside this checkpoint.
 
 ### Checkpoint acceptance
 
@@ -115,6 +118,29 @@ this checkpoint.
 
 Attaching identity to every query and mutation is still required for the later
 policy workstream, but it does not identify the versions a query consumed.
+Signed embedded nodes now default otherwise identity-less requests and
+transaction statements to the node DID; an explicit embedded query actor still
+takes precedence inside the trusted application boundary. Gents additionally
+requires the embedded node signer to equal the runtime principal, and offline
+session operations reopen the node with that stored signer rather than using
+an anonymous node. Remote document access now goes through one
+`AuthenticatedGraphql` boundary: it mints an exact-Host DefraDB bearer from the
+initialized principal, verifies the token's signature, lifetime, audience, and
+issuer before use, shares a refresh cache across long-lived clones, preserves
+the bearer on retries and transaction operations, and refuses cross-origin
+targets and redirects. The CLI, runtime HTTP surfaces, and desktop peer reads
+carry that typed client instead of an endpoint string. Unauthenticated protocol
+entry points were removed and a workspace source gate rejects a future raw
+document-GraphQL bypass. Non-document bootstrap/liveness probes remain
+separate and cannot be used to read or mutate collections.
+
+Remote fork provenance no longer trusts the signer text projected by
+`_commits`: it requires exactly one matching commit row, invokes DefraDB's
+authenticated block-signature verifier for the CID and advertised key/type,
+then derives the signer DID from the verified public key. A failed, missing,
+rebound, or unsupported signature blocks the fork. The HTTP endpoint remains
+the database trust boundary; P2P ingestion independently verifies signed
+blocks before they enter a local store.
 The transcript checkpoint now records every consumed message
 `(_docID, composite CID, verified signer DID)`, and the bounded config
 checkpoint records the selected core config facts in the same form. Full config
@@ -136,9 +162,13 @@ requires the deployment assignment and lease epoch in Slice 7.
 - Encryption, key custody, credential migration, archive encryption, and
   cryptographic erasure are later work. This milestone assumes their eventual
   presence and makes no confidentiality claim.
-- Commit signer versus claimed principal is tracked by Gents #1064. Its narrow
-  request-ingress phase is part of the implemented checkpoint; broader signer
-  wiring remains follow-up work.
+- Commit signer versus claimed principal is tracked by Gents #1064. Signed
+  ingress and Gents construction fail closed on absent or mismatched node
+  signers. Embedded, offline, remote HTTP, transaction, CLI, runtime-router,
+  and desktop document access now carry cryptographic identity; remote fork
+  commit evidence is checked by DefraDB's authenticated signature-verification
+  endpoint. This proves an attached actor and a verified commit signer, not
+  that future ACP policy will authorize that actor.
 - `RenderedRequest` consumer work is tracked by Gents #1066. The audit tightens
   its proposed inference join from an ordinal/logical value to an exact
   `InferenceCall` document-version edge.
@@ -199,12 +229,21 @@ class instead of scattering `_docID` plumbing across the runtime:
    The two-node conformance fixture now verifies a remote signed bridge and
    exactly-once child materialization. DefraDB #1352 also moves signed query
    execution onto a stable runtime so spawned replication work survives query
-   completion and caller-runtime cancellation.
+   completion and caller-runtime cancellation. Stacked DefraDB #1353 supplies
+   the configured node DID as the default embedded document-ACP actor without
+   conflating that actor with the node signer.
 4. **Session and transcript identity:** replace `limit: 1` selection with an
    explicit duplicate policy and carry physical identities through forks and
-   message deduplication.
+   message deduplication. The bounded `AgentSession` implementation now
+   enumerates the complete `session_id` set, returns a typed conflict with all
+   `_docID`s, validates immutable principal/requester/behavior binding, updates
+   and closes by exact `_docID`, and verifies the post-write document. Message
+   allocation and several fork/config lookups remain open below.
 5. **Memory identity:** validate the immutable owner/key tuple and update the
-   selected `_docID`, failing closed on ambiguous writers.
+   selected `_docID`, failing closed on ambiguous writers. The current
+   `AgentMemory` tool now does this for reads and writes, including post-write
+   verification; the proposed head/revision schema and fleet writer fence are
+   still future work.
 6. **Timeline root and traversal:** accept an exact root `_docID`, traverse the
    physical edges established above, and label legacy logical joins as
    heuristic rather than provenance.
@@ -312,6 +351,17 @@ Start root discovery from `_docID`, time-travel every included source by CID,
 include explicit denied/redacted/erased/missing omission receipts, version the
 projection and redaction algorithms, and make sensitive output excluded by
 default. Integrate the central `RenderedRequest` reader from #1066.
+
+The current PR implements the exact-membership foundation and the honest
+coverage boundary. A local manifest pins every discovered source by collection,
+DefraDB `collectionVersionId`, `_docID`, `_C` composite CID, and verified signer;
+it recursively verifies supported render, tool, outcome, and compaction edges.
+Manifest v2 records canonical coverage gaps, and adapter v2 reports
+`partial_exact` whenever logical/session extents, the independent multi-query
+observation, or explicit omissions remain open. `verified_exact` is reserved
+for a closed-domain manifest with no gaps or omissions; remote reads without local signature verification remain
+`unavailable`. Closing those gaps with durable domain heads/cardinality facts,
+ACP omission receipts, and archive replay remains part of this slice.
 
 ### Slice 9: exact approval facts
 

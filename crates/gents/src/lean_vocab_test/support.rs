@@ -62,6 +62,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) fork_provenance_cases: Vec<LeanForkProvenanceCase>,
     pub(crate) compaction_source_manifest_cases: Vec<LeanCompactionSourceManifestCase>,
     pub(crate) response_outcome_cases: Vec<LeanResponseOutcomeCase>,
+    pub(crate) run_timeline_manifest_cases: Vec<LeanRunTimelineManifestCase>,
     pub(crate) response_persistence_cut_cases: Vec<LeanResponsePersistenceCutCase>,
     pub(crate) response_recovery_cut_cases: Vec<LeanResponseRecoveryCutCase>,
     pub(crate) fleet_slot_accounting_cases: Vec<LeanFleetSlotAccountingCase>,
@@ -402,6 +403,8 @@ mod rendered_capture;
 mod request_ingest;
 #[path = "response_outcome.rs"]
 mod response_outcome;
+#[path = "run_timeline_manifest.rs"]
+mod run_timeline_manifest;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
@@ -428,6 +431,7 @@ pub(crate) use prompt_assembly::*;
 pub(crate) use rendered_capture::*;
 pub(crate) use request_ingest::*;
 pub(crate) use response_outcome::*;
+pub(crate) use run_timeline_manifest::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use subagent_bridge_admission::*;
@@ -599,6 +603,10 @@ pub(crate) fn lean_compaction_source_manifest_cases() -> &'static [LeanCompactio
 
 pub(crate) fn lean_response_outcome_cases() -> &'static [LeanResponseOutcomeCase] {
     &lean_contract_snapshot().response_outcome_cases
+}
+
+pub(crate) fn lean_run_timeline_manifest_cases() -> &'static [LeanRunTimelineManifestCase] {
+    &lean_contract_snapshot().run_timeline_manifest_cases
 }
 
 pub(crate) fn lean_response_persistence_cut_cases() -> &'static [LeanResponsePersistenceCutCase] {

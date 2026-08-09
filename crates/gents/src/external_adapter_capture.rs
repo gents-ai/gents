@@ -444,6 +444,7 @@ fn import_langgraph_capture(
         source_system: capture.source.system.clone(),
         scenario_id,
         rows: RunTimelineRows {
+            source_manifest: None,
             request: root,
             session: Some(TimelineSessionRow {
                 session_id: session_id.clone(),
@@ -480,6 +481,9 @@ fn import_langgraph_capture(
             messages,
             tool_calls,
             inference_calls: Vec::new(),
+            rendered_requests: Vec::new(),
+            response_outcomes: Vec::new(),
+            compaction_entries: Vec::new(),
             responses,
         },
     })
@@ -1031,6 +1035,7 @@ fn import_multi_agent_capture(
         source_system: capture.source.system.clone(),
         scenario_id,
         rows: RunTimelineRows {
+            source_manifest: None,
             request: root,
             session: Some(TimelineSessionRow {
                 session_id: session_id.clone(),
@@ -1064,6 +1069,9 @@ fn import_multi_agent_capture(
             messages,
             tool_calls,
             inference_calls: Vec::new(),
+            rendered_requests: Vec::new(),
+            response_outcomes: Vec::new(),
+            compaction_entries: Vec::new(),
             responses,
         },
     })

@@ -133,6 +133,8 @@ impl Gents {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
+        require_runtime_identity_binding(node.as_ref(), identity.as_ref())?;
+
         // Run the AgentBehavior migration before any behavior read so that
         // desktops, embedders, and CLI serve paths all see description/summary
         // even when the DB was created before branch #377. This is idempotent
@@ -263,6 +265,32 @@ impl Gents {
     pub async fn run(self, shutdown: watch::Receiver<bool>) -> anyhow::Result<()> {
         runtime::run_agent(self, shutdown).await
     }
+}
+
+/// Require the database control plane and the runtime principal to share one
+/// cryptographic identity.
+///
+/// DefraDB signs commits with the embedded node identity, while gents stamps
+/// the principal DID into its domain documents. Allowing those identities to
+/// differ would make the semantic author disagree with the durable commit
+/// signer. Keep this check at every public construction boundary and run it
+/// before any database read or write.
+pub(crate) fn require_runtime_identity_binding(
+    node: &EmbeddedNode,
+    identity: &dyn AgentIdentity,
+) -> anyhow::Result<()> {
+    let principal_did = identity.did();
+    let node_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Gents runtime requires a DefraDB node signing identity matching principal DID {principal_did}; the node is unsigned"
+        )
+    })?;
+    if node_did != principal_did {
+        anyhow::bail!(
+            "Gents runtime identity mismatch: DefraDB node signer DID {node_did} does not match principal DID {principal_did}"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot(

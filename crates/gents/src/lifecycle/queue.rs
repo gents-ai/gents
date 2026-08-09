@@ -515,6 +515,61 @@ fn queue_row_to_enqueued_request(row: &PendingQueueRow) -> Option<EnqueuedAgentR
     })
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ConversationBehaviorRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    behavior_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RequestDocIdRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+}
+
+fn resolve_request_doc_id(request_id: &str, rows: Vec<RequestDocIdRow>) -> Result<Option<String>> {
+    Ok(crate::session::resolve_exact_logical_match(
+        "AgentRequest",
+        "request_id",
+        request_id,
+        rows,
+        |row| row.doc_id.as_str(),
+    )?
+    .map(|row| row.doc_id))
+}
+
+fn resolve_parent_conversation_behavior(
+    parent: &AgentRequest,
+    rows: Vec<ConversationBehaviorRow>,
+) -> Result<String> {
+    let row = crate::session::resolve_exact_logical_match(
+        "AgentConversation",
+        "session_id",
+        &parent.session_id,
+        rows,
+        |row| row.doc_id.as_str(),
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot enqueue same-session request: parent request {} has no behavior_id",
+            parent.request_id
+        )
+    })?;
+
+    row.behavior_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot enqueue same-session request: parent request {} has no behavior_id",
+                parent.request_id
+            )
+        })
+}
+
 async fn parent_behavior_id(node: &EmbeddedNode, parent: &AgentRequest) -> Result<String> {
     if let Some(behavior_id) = parent
         .behavior_id
@@ -529,9 +584,9 @@ async fn parent_behavior_id(node: &EmbeddedNode, parent: &AgentRequest) -> Resul
     let query = format!(
         r#"{{
             AgentConversation(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                limit: 1
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
             ) {{
+                _docID
                 behavior_id
             }}
         }}"#
@@ -544,23 +599,15 @@ async fn parent_behavior_id(node: &EmbeddedNode, parent: &AgentRequest) -> Resul
         );
     }
 
-    response
+    let rows: Vec<ConversationBehaviorRow> = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentConversation"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("behavior_id"))
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "cannot enqueue same-session request: parent request {} has no behavior_id",
-                parent.request_id
-            )
-        })
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("decoding complete AgentConversation behavior match set")?
+        .unwrap_or_default();
+    resolve_parent_conversation_behavior(parent, rows)
 }
 
 fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
@@ -591,27 +638,11 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
 }
 
 async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<String> {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "lookup queued AgentRequest doc id failed for request_id={request_id}: {:?}",
-            response.errors
-        );
-    }
-    extract_single_doc_id(&response, "AgentRequest").ok_or_else(|| {
-        anyhow::anyhow!("queued AgentRequest request_id={request_id} not found after create")
-    })
+    lookup_request_doc_id_optional(node, request_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("queued AgentRequest request_id={request_id} not found after create")
+        })
 }
 
 async fn lookup_request_doc_id_optional(
@@ -622,20 +653,28 @@ async fn lookup_request_doc_id_optional(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                order: {{ created_at: ASC }},
-                limit: 1
-            ) {{ _docID }}
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}
+            ) {{
+                _docID
+            }}
         }}"#
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
         anyhow::bail!(
-            "lookup optional AgentRequest doc id failed for request_id={request_id}: {:?}",
+            "lookup AgentRequest doc id failed for request_id={request_id}: {:?}",
             response.errors
         );
     }
-    Ok(extract_single_doc_id(&response, "AgentRequest"))
+    let rows: Vec<RequestDocIdRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("decoding complete AgentRequest document-id match set")?
+        .unwrap_or_default();
+    resolve_request_doc_id(request_id, rows)
 }
 
 pub async fn drain_automated_wakeups(
@@ -818,6 +857,68 @@ mod tests {
             caused_by_parent_request_id: Some("root-parent-request".to_string()),
             caused_by_parent_tool_call_id: Some("root-parent-tool-call".to_string()),
         }
+    }
+
+    #[test]
+    fn parent_conversation_behavior_rejects_logical_twins_deterministically() {
+        let mut parent = parent_request("session-same");
+        parent.behavior_id = None;
+        let error = resolve_parent_conversation_behavior(
+            &parent,
+            vec![
+                ConversationBehaviorRow {
+                    doc_id: "doc-z".to_string(),
+                    behavior_id: Some("behavior-z".to_string()),
+                },
+                ConversationBehaviorRow {
+                    doc_id: "doc-a".to_string(),
+                    behavior_id: Some("behavior-a".to_string()),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "AgentConversation logical identity conflict for session_id=session-same: _docIDs=[\"doc-a\", \"doc-z\"]"
+        );
+    }
+
+    #[test]
+    fn parent_conversation_behavior_accepts_one_physical_document() {
+        let mut parent = parent_request("session-one");
+        parent.behavior_id = None;
+        let behavior = resolve_parent_conversation_behavior(
+            &parent,
+            vec![ConversationBehaviorRow {
+                doc_id: "doc-one".to_string(),
+                behavior_id: Some("  general  ".to_string()),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(behavior, "general");
+    }
+
+    #[test]
+    fn queued_request_doc_id_rejects_logical_twins_deterministically() {
+        let error = resolve_request_doc_id(
+            "request-same",
+            vec![
+                RequestDocIdRow {
+                    doc_id: "doc-z".to_string(),
+                },
+                RequestDocIdRow {
+                    doc_id: "doc-a".to_string(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "AgentRequest logical identity conflict for request_id=request-same: _docIDs=[\"doc-a\", \"doc-z\"]"
+        );
     }
 
     async fn test_db(name: &str) -> TestDb {

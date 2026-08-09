@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::adapter_projection::{
@@ -21,11 +20,23 @@ use gents::run_timeline::{
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineResponseRow,
     TimelineSessionRow, TimelineToolCallRow,
 };
-use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::run_timeline_fetch::{
+    load_run_timeline, load_run_timeline_exact, load_run_timeline_rows,
+    load_run_timeline_rows_exact,
+};
+#[cfg(test)]
+use gents::run_timeline_manifest::{
+    freeze_timeline_manifest, RunTimelineSourceManifest, TimelineExpectedSlot,
+    TimelineManifestStatus, TimelineObservedSource, TimelineOmissionReason, TimelineRootCandidate,
+    TimelineRootSelector, TimelineSlotRequirement, TimelineSourceClass, TimelineSourceDecision,
+    TimelineSourceSlot,
+};
 use gents::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
     raw_message_json, AmyToolCallTraceRecord,
 };
+#[cfg(test)]
+use gents::{DocumentVersionRef, SignedDocumentVersionRef};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -50,9 +61,20 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
 }
 
 async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
+    let selector = trace_request_selector(
+        args.request_id.as_deref(),
+        args.request_doc_id.as_deref(),
+        args.request_composite_cid.as_deref(),
+    )?;
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let timeline = load_run_timeline(&access, &args.request_id).await?;
+    let timeline = match selector {
+        TraceRequestSelector::Logical(request_id) => load_run_timeline(&access, request_id).await?,
+        TraceRequestSelector::Exact {
+            request_doc_id,
+            request_composite_cid,
+        } => load_run_timeline_exact(&access, request_doc_id, request_composite_cid).await?,
+    };
     let value = serde_json::to_value(&timeline)?;
     if let Some(path) = args.output_file.as_deref() {
         write_json_output_file(path, &value)?;
@@ -63,6 +85,11 @@ async fn trace_timeline(args: TraceTimelineArgs) -> Result<()> {
 }
 
 async fn trace_project(args: TraceProjectArgs) -> Result<()> {
+    let selector = trace_request_selector(
+        args.request_id.as_deref(),
+        args.request_doc_id.as_deref(),
+        args.request_composite_cid.as_deref(),
+    )?;
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let actor_did = args.actor_did;
@@ -72,7 +99,15 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
         behavior_id: optional_scope_arg("scope-behavior-id", args.scope_behavior_id)?,
         session_id: optional_scope_arg("scope-session-id", args.scope_session_id)?,
     };
-    let rows = load_run_timeline_rows(&access, &args.request_id).await?;
+    let rows = match selector {
+        TraceRequestSelector::Logical(request_id) => {
+            load_run_timeline_rows(&access, request_id).await?
+        }
+        TraceRequestSelector::Exact {
+            request_doc_id,
+            request_composite_cid,
+        } => load_run_timeline_rows_exact(&access, request_doc_id, request_composite_cid).await?,
+    };
     let acp_scope = projection_acp_read_scope(
         &access,
         args.acp_policy_id.as_deref(),
@@ -89,6 +124,7 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     let context = ProjectionContext {
         actor_did,
         redaction_mode: projection_redaction_mode(args.redaction),
+        built_at: chrono::Utc::now().to_rfc3339(),
     };
     let projection = build_adapter_projection(projection_kind, &timeline, &context);
     validate_adapter_projection_contract(&projection)?;
@@ -121,6 +157,57 @@ async fn trace_project(args: TraceProjectArgs) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraceRequestSelector<'a> {
+    Logical(&'a str),
+    Exact {
+        request_doc_id: &'a str,
+        request_composite_cid: &'a str,
+    },
+}
+
+fn trace_request_selector<'a>(
+    request_id: Option<&'a str>,
+    request_doc_id: Option<&'a str>,
+    request_composite_cid: Option<&'a str>,
+) -> Result<TraceRequestSelector<'a>> {
+    let request_id = nonempty_selector_arg("--request-id", request_id)?;
+    let request_doc_id = nonempty_selector_arg("--request-doc-id", request_doc_id)?;
+    let request_composite_cid =
+        nonempty_selector_arg("--request-composite-cid", request_composite_cid)?;
+
+    match (request_id, request_doc_id, request_composite_cid) {
+        (Some(request_id), None, None) => Ok(TraceRequestSelector::Logical(request_id)),
+        (None, Some(request_doc_id), Some(request_composite_cid)) => {
+            Ok(TraceRequestSelector::Exact {
+                request_doc_id,
+                request_composite_cid,
+            })
+        }
+        (None, None, None) => anyhow::bail!(
+            "provide exactly one request selector: --request-id, or both --request-doc-id and --request-composite-cid"
+        ),
+        (None, Some(_), None) | (None, None, Some(_)) => anyhow::bail!(
+            "the exact request selector requires both --request-doc-id and --request-composite-cid"
+        ),
+        (Some(_), _, _) => anyhow::bail!(
+            "--request-id is mutually exclusive with --request-doc-id and --request-composite-cid"
+        ),
+    }
+}
+
+fn nonempty_selector_arg<'a>(name: &str, value: Option<&'a str>) -> Result<Option<&'a str>> {
+    value
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                anyhow::bail!("{name} must not be empty");
+            }
+            Ok(value)
+        })
+        .transpose()
+}
+
 fn trace_project_schema(args: TraceProjectSchemaArgs) -> Result<()> {
     let kind = adapter_projection_kind(args.projection);
     let schema = match args.format {
@@ -142,6 +229,7 @@ struct ProjectionAcpReadScope {
     actor_did: String,
     policy_id: String,
     api_base: String,
+    graphql: gents::AuthenticatedGraphql,
     resource_names: BTreeMap<String, String>,
 }
 
@@ -188,7 +276,10 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentResponse",
+    "AgentResponseOutcome",
     "InferenceCall",
+    "RenderedRequest",
+    "CompactionEntry",
     "AgentSession",
     "AgentConversation",
 ];
@@ -227,7 +318,8 @@ async fn projection_acp_read_scope(
     Ok(Some(ProjectionAcpReadScope {
         actor_did: actor_did.to_string(),
         policy_id,
-        api_base: crate::graphql_access::graphql_api_base(graphql)?,
+        api_base: crate::graphql_access::graphql_api_base(graphql.endpoint())?,
+        graphql: graphql.clone(),
         resource_names,
     }))
 }
@@ -442,6 +534,8 @@ async fn apply_projection_acp_read_filter(
     scope: &ProjectionAcpReadScope,
 ) -> Result<RunTimelineRows> {
     let mut decider = ProjectionAcpReadDecider::new(scope)?;
+    let source_manifest = rows.source_manifest;
+    let mut denied_manifest_sources = BTreeSet::new();
     let request_doc_id = required_doc_id(
         "AgentRequest",
         rows.request.request_id.as_str(),
@@ -465,6 +559,8 @@ async fn apply_projection_acp_read_filter(
             .await?
         {
             filtered_requests.push(request);
+        } else {
+            denied_manifest_sources.insert(("AgentRequest".to_string(), doc_id.to_string()));
         }
     }
 
@@ -477,6 +573,8 @@ async fn apply_projection_acp_read_filter(
             .await?
         {
             filtered_messages.push(message);
+        } else {
+            denied_manifest_sources.insert(("AgentMessage".to_string(), doc_id.to_string()));
         }
     }
 
@@ -492,6 +590,8 @@ async fn apply_projection_acp_read_filter(
             .await?
         {
             filtered_tool_calls.push(tool_call);
+        } else {
+            denied_manifest_sources.insert(("AgentToolCall".to_string(), doc_id.to_string()));
         }
     }
 
@@ -507,6 +607,8 @@ async fn apply_projection_acp_read_filter(
             .await?
         {
             filtered_responses.push(response);
+        } else {
+            denied_manifest_sources.insert(("AgentResponse".to_string(), doc_id.to_string()));
         }
     }
 
@@ -519,6 +621,60 @@ async fn apply_projection_acp_read_filter(
             .await?
         {
             filtered_inference_calls.push(call);
+        } else {
+            denied_manifest_sources.insert(("InferenceCall".to_string(), doc_id.to_string()));
+        }
+    }
+
+    let mut filtered_rendered_requests = Vec::new();
+    for rendered in rows.rendered_requests {
+        let doc_id = required_doc_id(
+            "RenderedRequest",
+            rendered.row.capture_key.as_str(),
+            &rendered.row.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
+            .await?
+        {
+            filtered_rendered_requests.push(rendered);
+        } else {
+            denied_manifest_sources.insert(("RenderedRequest".to_string(), doc_id.to_string()));
+        }
+    }
+
+    let mut filtered_response_outcomes = Vec::new();
+    for outcome in rows.response_outcomes {
+        let doc_id = required_doc_id(
+            "AgentResponseOutcome",
+            outcome.row.request_doc_id.as_str(),
+            &outcome.row.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("AgentResponseOutcome"), doc_id)
+            .await?
+        {
+            filtered_response_outcomes.push(outcome);
+        } else {
+            denied_manifest_sources
+                .insert(("AgentResponseOutcome".to_string(), doc_id.to_string()));
+        }
+    }
+
+    let mut filtered_compaction_entries = Vec::new();
+    for compaction in rows.compaction_entries {
+        let doc_id = required_doc_id(
+            "CompactionEntry",
+            compaction.row.compaction_key.as_str(),
+            &compaction.row.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("CompactionEntry"), doc_id)
+            .await?
+        {
+            filtered_compaction_entries.push(compaction);
+        } else {
+            denied_manifest_sources.insert(("CompactionEntry".to_string(), doc_id.to_string()));
         }
     }
 
@@ -532,6 +688,7 @@ async fn apply_projection_acp_read_filter(
             {
                 Some(session)
             } else {
+                denied_manifest_sources.insert(("AgentSession".to_string(), doc_id.to_string()));
                 None
             }
         }
@@ -550,13 +707,25 @@ async fn apply_projection_acp_read_filter(
             {
                 Some(conversation)
             } else {
+                denied_manifest_sources
+                    .insert(("AgentConversation".to_string(), doc_id.to_string()));
                 None
             }
         }
         None => None,
     };
 
+    // Preserve exact evidence for every permitted row while replacing each
+    // denied source slot with an explicit `Denied` omission. If a denied row
+    // cannot be located in the frozen source manifest, fail closed rather than
+    // publishing either an overclaiming or source-less projection.
+    let source_manifest = source_manifest
+        .map(|manifest| manifest.with_denied_sources(&denied_manifest_sources))
+        .transpose()
+        .context("redacting denied sources from the frozen run-timeline manifest")?;
+
     Ok(RunTimelineRows {
+        source_manifest,
         request: rows.request,
         session,
         conversation,
@@ -564,13 +733,15 @@ async fn apply_projection_acp_read_filter(
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
         inference_calls: filtered_inference_calls,
+        rendered_requests: filtered_rendered_requests,
+        response_outcomes: filtered_response_outcomes,
+        compaction_entries: filtered_compaction_entries,
         responses: filtered_responses,
     })
 }
 
 struct ProjectionAcpReadDecider<'a> {
     scope: &'a ProjectionAcpReadScope,
-    client: reqwest::Client,
     cache: BTreeMap<(String, String), bool>,
 }
 
@@ -578,10 +749,6 @@ impl<'a> ProjectionAcpReadDecider<'a> {
     fn new(scope: &'a ProjectionAcpReadScope) -> Result<Self> {
         Ok(Self {
             scope,
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
-                .build()
-                .context("building ACP decision client")?,
             cache: BTreeMap::new(),
         })
     }
@@ -596,16 +763,18 @@ impl<'a> ProjectionAcpReadDecider<'a> {
             self.scope.api_base.trim_end_matches('/')
         );
         let response = self
-            .client
-            .post(url)
-            .json(&json!({
-                "actor": self.scope.actor_did,
-                "permission": "read",
-                "policyID": self.scope.policy_id,
-                "resourceName": resource_name,
-                "docID": doc_id,
-            }))
-            .send()
+            .scope
+            .graphql
+            .post_json(
+                &url,
+                &json!({
+                    "actor": self.scope.actor_did,
+                    "permission": "read",
+                    "policyID": self.scope.policy_id,
+                    "resourceName": resource_name,
+                    "docID": doc_id,
+                }),
+            )
             .await
             .with_context(|| {
                 format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
@@ -763,6 +932,18 @@ fn should_keep_scoped_timeline_event(
                     })
         }
         RunTimelineEvent::InferenceCall(call) => allowed_request_ids.contains(&call.request_id),
+        RunTimelineEvent::RenderedRequest(rendered) => scoped_request_id_allowed(
+            rendered.request_id.as_deref(),
+            None,
+            allowed_request_ids,
+            scope,
+        ),
+        RunTimelineEvent::Compaction(compaction) => scoped_request_id_allowed(
+            None,
+            compaction.session_id.as_deref(),
+            allowed_request_ids,
+            scope,
+        ),
         RunTimelineEvent::Message(message) => scoped_request_id_allowed(
             message.request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -773,6 +954,12 @@ fn should_keep_scoped_timeline_event(
             scoped_tool_call_allowed(tool_call, allowed_request_ids, scope)
         }
         RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
+        RunTimelineEvent::ResponseOutcome(outcome) => scoped_request_id_allowed(
+            outcome.request_id.as_deref(),
+            outcome.session_id.as_deref(),
+            allowed_request_ids,
+            scope,
+        ),
     }
 }
 
@@ -1177,17 +1364,30 @@ async fn load_sessions(
             AgentSession(
                 filter: {{ session_id: {{ _in: {} }} }}
             ) {{
+                _docID
                 session_id
                 behavior_id
             }}
         }}"#,
         graphql_string_list_literal(session_ids)
     );
-    Ok(load_rows::<SessionRow>(access, "AgentSession", &query)
-        .await?
-        .into_iter()
-        .map(|row| (row.session_id.clone(), row))
-        .collect())
+    let mut grouped = BTreeMap::<String, Vec<SessionRow>>::new();
+    for row in load_rows::<SessionRow>(access, "AgentSession", &query).await? {
+        grouped.entry(row.session_id.clone()).or_default().push(row);
+    }
+    let mut resolved = HashMap::new();
+    for (session_id, rows) in grouped {
+        if let Some(row) = gents::session::resolve_exact_logical_match(
+            "AgentSession",
+            "session_id",
+            &session_id,
+            rows,
+            |row| row.doc_id.as_str(),
+        )? {
+            resolved.insert(session_id, row);
+        }
+    }
+    Ok(resolved)
 }
 
 async fn load_conversations(
@@ -1587,6 +1787,8 @@ struct MessageRow {
 
 #[derive(Debug, Clone, Deserialize)]
 struct SessionRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     #[serde(default)]
     session_id: String,
     #[serde(default)]
@@ -1624,6 +1826,50 @@ mod tests {
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 
     use super::*;
+
+    #[tokio::test]
+    async fn trace_export_session_lookup_rejects_logical_twins() {
+        let node = gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .unwrap();
+        node.add_schema(
+            r#"
+            type AgentSession {
+                session_id: String
+                behavior_id: String
+            }
+            "#,
+        )
+        .await
+        .unwrap();
+        for behavior_id in ["behavior-a", "behavior-b"] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{
+                        create_AgentSession(input: {{
+                            session_id: "duplicate-session"
+                            behavior_id: "{behavior_id}"
+                        }}) {{ _docID }}
+                    }}"#
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let access = ConfigAccess::Local(Arc::new(node));
+        let error = load_sessions(&access, &["duplicate-session".to_string()])
+            .await
+            .expect_err("trace export must not choose a session twin");
+        assert!(
+            error
+                .downcast_ref::<gents::session::LogicalDocumentResolutionError>()
+                .is_some_and(|error| matches!(
+                    error,
+                    gents::session::LogicalDocumentResolutionError::Conflict(_)
+                )),
+            "expected typed AgentSession conflict, got {error:#}"
+        );
+    }
 
     #[derive(Debug, Deserialize)]
     struct MockAcpDecisionRequest {
@@ -1672,8 +1918,53 @@ mod tests {
             actor_did: "did:test:projection-reader".to_string(),
             policy_id: "projection-policy".to_string(),
             api_base: format!("http://{addr}/api/v0"),
+            graphql: {
+                let key_dir = tempfile::tempdir()?;
+                let identity = std::sync::Arc::new(gents::KeyIdentity::load_or_create(
+                    key_dir.path().join("projection-reader.key"),
+                    None,
+                )?);
+                gents::AuthenticatedGraphql::new(format!("http://{addr}/api/v0/graphql"), identity)
+                    .await?
+            },
             resource_names: BTreeMap::new(),
         })
+    }
+
+    #[test]
+    fn trace_request_selector_accepts_logical_or_exact_mode() -> Result<()> {
+        assert_eq!(
+            trace_request_selector(Some(" req-1 "), None, None)?,
+            TraceRequestSelector::Logical("req-1")
+        );
+        assert_eq!(
+            trace_request_selector(None, Some(" request-doc-1 "), Some(" bafy-request "))?,
+            TraceRequestSelector::Exact {
+                request_doc_id: "request-doc-1",
+                request_composite_cid: "bafy-request",
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trace_request_selector_rejects_missing_mixed_and_partial_modes() {
+        let missing = trace_request_selector(None, None, None).expect_err("missing selector");
+        assert!(missing
+            .to_string()
+            .contains("provide exactly one request selector"));
+
+        let mixed =
+            trace_request_selector(Some("req-1"), Some("request-doc-1"), Some("bafy-request"))
+                .expect_err("mixed selectors");
+        assert!(mixed.to_string().contains("mutually exclusive"));
+
+        let partial = trace_request_selector(None, Some("request-doc-1"), None)
+            .expect_err("partial exact selector");
+        assert!(partial.to_string().contains("requires both"));
+
+        let empty = trace_request_selector(Some("  "), None, None).expect_err("empty selector");
+        assert!(empty.to_string().contains("--request-id must not be empty"));
     }
 
     #[test]
@@ -1981,6 +2272,17 @@ mod tests {
             filtered.conversation.is_some(),
             "conversation row should remain when ACP allows it"
         );
+        let manifest = filtered
+            .source_manifest
+            .as_ref()
+            .expect("permitted exact sources remain available");
+        assert_eq!(manifest.status, TimelineManifestStatus::PartialExact);
+        assert_eq!(manifest.sources.len(), 1);
+        assert_eq!(manifest.sources[0].slot, TimelineSourceSlot::root());
+        assert!(manifest.omissions.iter().any(|omission| {
+            omission.collection == "AgentSession"
+                && omission.reason == TimelineOmissionReason::Denied
+        }));
         Ok(())
     }
 
@@ -2079,6 +2381,8 @@ mod tests {
                     doc_id: Some("doc-message-allowed".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-root".to_string()),
+                    request_doc_id: None,
+                    agent_did: None,
                     sequence: 1,
                     role: "user".to_string(),
                     content: "allowed".to_string(),
@@ -2088,6 +2392,8 @@ mod tests {
                     doc_id: Some("doc-message-denied".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-child".to_string()),
+                    request_doc_id: None,
+                    agent_did: None,
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: "denied".to_string(),
@@ -2153,7 +2459,70 @@ mod tests {
                     ..TimelineInferenceCallRow::default()
                 },
             ],
+            source_manifest: Some(acp_fixture_manifest()),
+            ..RunTimelineRows::default()
         }
+    }
+
+    fn acp_fixture_manifest() -> RunTimelineSourceManifest {
+        let exact = |doc_id: &str, cid: &str| SignedDocumentVersionRef {
+            version: DocumentVersionRef {
+                doc_id: doc_id.to_string(),
+                composite_commit_cid: cid.to_string(),
+            },
+            signer_did: "did:key:projection-fixture".to_string(),
+        };
+        let root = exact("doc-request-root", "cid-request-root");
+        let session = exact("doc-session", "cid-session");
+        let session_slot = TimelineSourceSlot::new(TimelineSourceClass::SessionProjection, 0);
+        freeze_timeline_manifest(
+            &TimelineRootSelector::Exact(root.clone()),
+            &[TimelineRootCandidate {
+                request_id: "req-root".to_string(),
+                exact: root.clone(),
+                current_head_count: 1,
+            }],
+            &[
+                TimelineExpectedSlot {
+                    slot: TimelineSourceSlot::root(),
+                    requirement: TimelineSlotRequirement::Required,
+                },
+                TimelineExpectedSlot {
+                    slot: session_slot.clone(),
+                    requirement: TimelineSlotRequirement::Required,
+                },
+            ],
+            &[
+                TimelineObservedSource {
+                    slot: TimelineSourceSlot::root(),
+                    collection: "AgentRequest".to_string(),
+                    collection_version_id: "request-schema".to_string(),
+                    exact: root.clone(),
+                },
+                TimelineObservedSource {
+                    slot: session_slot.clone(),
+                    collection: "AgentSession".to_string(),
+                    collection_version_id: "session-schema".to_string(),
+                    exact: session.clone(),
+                },
+            ],
+            &[
+                TimelineSourceDecision::Include {
+                    slot: TimelineSourceSlot::root(),
+                    collection: "AgentRequest".to_string(),
+                    collection_version_id: "request-schema".to_string(),
+                    exact: root,
+                },
+                TimelineSourceDecision::Include {
+                    slot: session_slot,
+                    collection: "AgentSession".to_string(),
+                    collection_version_id: "session-schema".to_string(),
+                    exact: session,
+                },
+            ],
+            &[],
+        )
+        .expect("valid ACP fixture source manifest")
     }
 
     fn projection_binding(

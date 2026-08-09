@@ -15,8 +15,9 @@ pub use atif::{
     AtifToolCall, AtifTrajectory, ATIF_SCHEMA_VERSION,
 };
 
-pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
+pub const ADAPTER_PROJECTION_VERSION: &str = "v2";
 pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
+pub const PROJECTION_REDACTION_ALGORITHM_VERSION: &str = "gents-redaction-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +62,9 @@ pub enum ProjectionRedactionMode {
 pub struct ProjectionContext {
     pub actor_did: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
+    /// RFC3339 build time supplied by the caller so projection generation is
+    /// pure and replayable for the same explicit inputs.
+    pub built_at: String,
 }
 
 impl Default for ProjectionContext {
@@ -68,6 +72,7 @@ impl Default for ProjectionContext {
         Self {
             actor_did: None,
             redaction_mode: ProjectionRedactionMode::Full,
+            built_at: "1970-01-01T00:00:00Z".to_string(),
         }
     }
 }
@@ -91,10 +96,24 @@ pub struct AdapterProjectionEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectionProvenance {
     pub runtime: String,
+    pub runtime_version: String,
     pub source_projection_id: String,
     pub source_projection_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
+    pub built_at: String,
+    pub redaction_algorithm_version: String,
+    pub source_manifest_status: ProjectionSourceManifestStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_manifest: Option<crate::run_timeline_manifest::RunTimelineSourceManifest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionSourceManifestStatus {
+    VerifiedExact,
+    PartialExact,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +146,9 @@ pub struct AdapterProjectionJsonlRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
+    pub source_manifest_status: ProjectionSourceManifestStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_manifest: Option<crate::run_timeline_manifest::RunTimelineSourceManifest>,
     pub record_kind: String,
     pub record_index: usize,
     pub record_id: String,
@@ -141,6 +163,9 @@ pub struct AdapterProjectionEvalJsonlRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
+    pub source_manifest_status: ProjectionSourceManifestStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_manifest: Option<crate::run_timeline_manifest::RunTimelineSourceManifest>,
     pub record_index: usize,
     pub record_id: String,
     pub sample_kind: String,
@@ -378,9 +403,25 @@ pub fn build_adapter_projection(
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "gents".to_string(),
+            runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             source_projection_id: RUN_TIMELINE_PROJECTION_ID.to_string(),
             source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
             actor_did: context.actor_did.clone(),
+            built_at: context.built_at.clone(),
+            redaction_algorithm_version: PROJECTION_REDACTION_ALGORITHM_VERSION.to_string(),
+            source_manifest_status: timeline
+                .source_manifest
+                .as_ref()
+                .map(|manifest| match manifest.status {
+                    crate::run_timeline_manifest::TimelineManifestStatus::VerifiedExact => {
+                        ProjectionSourceManifestStatus::VerifiedExact
+                    }
+                    crate::run_timeline_manifest::TimelineManifestStatus::PartialExact => {
+                        ProjectionSourceManifestStatus::PartialExact
+                    }
+                })
+                .unwrap_or(ProjectionSourceManifestStatus::Unavailable),
+            source_manifest: timeline.source_manifest.clone(),
         },
         output: match kind {
             AdapterProjectionKind::AtifTrajectory => {
@@ -427,6 +468,21 @@ pub fn validate_adapter_projection_contract(
     );
     require_eq(
         &mut violations,
+        "provenance.runtime_version",
+        envelope.provenance.runtime_version.as_str(),
+        env!("CARGO_PKG_VERSION"),
+    );
+    if chrono::DateTime::parse_from_rfc3339(&envelope.provenance.built_at).is_err() {
+        violations.push("provenance.built_at must be RFC3339".to_string());
+    }
+    require_eq(
+        &mut violations,
+        "provenance.redaction_algorithm_version",
+        envelope.provenance.redaction_algorithm_version.as_str(),
+        PROJECTION_REDACTION_ALGORITHM_VERSION,
+    );
+    require_eq(
+        &mut violations,
         "provenance.source_projection_id",
         envelope.provenance.source_projection_id.as_str(),
         RUN_TIMELINE_PROJECTION_ID,
@@ -443,6 +499,48 @@ pub fn validate_adapter_projection_contract(
         envelope.projection_version.as_str(),
         ADAPTER_PROJECTION_VERSION,
     );
+    require_eq(
+        &mut violations,
+        "provenance.source_projection_version",
+        envelope.provenance.source_projection_version.as_str(),
+        ADAPTER_PROJECTION_VERSION,
+    );
+    match (
+        envelope.provenance.source_manifest_status,
+        envelope.provenance.source_manifest.as_ref(),
+    ) {
+        (ProjectionSourceManifestStatus::VerifiedExact, None)
+        | (ProjectionSourceManifestStatus::PartialExact, None) => violations.push(format!(
+            "provenance.source_manifest_status is {:?} but source_manifest is absent",
+            envelope.provenance.source_manifest_status
+        )),
+        (ProjectionSourceManifestStatus::Unavailable, Some(_)) => violations.push(
+            "provenance.source_manifest_status is unavailable but source_manifest is present"
+                .to_string(),
+        ),
+        (status, Some(manifest)) => {
+            if let Err(error) = manifest.validate() {
+                violations.push(format!(
+                    "provenance.source_manifest is not a valid exact manifest: {error}"
+                ));
+            }
+            let expected = match manifest.status {
+                crate::run_timeline_manifest::TimelineManifestStatus::VerifiedExact => {
+                    ProjectionSourceManifestStatus::VerifiedExact
+                }
+                crate::run_timeline_manifest::TimelineManifestStatus::PartialExact => {
+                    ProjectionSourceManifestStatus::PartialExact
+                }
+            };
+            if status != expected {
+                violations.push(format!(
+                    "provenance.source_manifest_status {status:?} disagrees with manifest status {:?}",
+                    manifest.status
+                ));
+            }
+        }
+        (ProjectionSourceManifestStatus::Unavailable, None) => {}
+    }
 
     match &envelope.output {
         AdapterProjection::AtifTrajectory(projection) => {
@@ -1036,6 +1134,7 @@ pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Va
             "projection_version",
             "source_request_id",
             "redaction_mode",
+            "source_manifest_status",
             "record_kind",
             "record_index",
             "record_id",
@@ -1047,6 +1146,8 @@ pub fn adapter_projection_jsonl_record_schema(kind: AdapterProjectionKind) -> Va
             "source_request_id": string_schema(),
             "source_session_id": optional_string_schema(),
             "redaction_mode": redaction_mode_schema(),
+            "source_manifest_status": source_manifest_status_schema(),
+            "source_manifest": run_timeline_source_manifest_schema(),
             "record_kind": jsonl_record_kind_schema(kind),
             "record_index": { "type": "integer", "minimum": 0 },
             "record_id": string_schema(),
@@ -1067,6 +1168,7 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
             "projection_version",
             "source_request_id",
             "redaction_mode",
+            "source_manifest_status",
             "record_index",
             "record_id",
             "sample_kind",
@@ -1079,6 +1181,8 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
             "source_request_id": string_schema(),
             "source_session_id": optional_string_schema(),
             "redaction_mode": redaction_mode_schema(),
+            "source_manifest_status": source_manifest_status_schema(),
+            "source_manifest": run_timeline_source_manifest_schema(),
             "record_index": { "type": "integer", "minimum": 0 },
             "record_id": string_schema(),
             "sample_kind": training_sample_kind_schema(kind),
@@ -1392,12 +1496,147 @@ fn provenance_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["runtime", "source_projection_id", "source_projection_version"],
+        "required": ["runtime", "runtime_version", "source_projection_id", "source_projection_version", "built_at", "redaction_algorithm_version", "source_manifest_status"],
         "properties": {
             "runtime": { "const": "gents" },
+            "runtime_version": { "const": env!("CARGO_PKG_VERSION") },
             "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
             "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
-            "actor_did": optional_string_schema()
+            "actor_did": optional_string_schema(),
+            "built_at": { "type": "string", "format": "date-time" },
+            "redaction_algorithm_version": { "const": PROJECTION_REDACTION_ALGORITHM_VERSION },
+            "source_manifest_status": source_manifest_status_schema(),
+            "source_manifest": run_timeline_source_manifest_schema()
+        }
+    })
+}
+
+fn source_manifest_status_schema() -> Value {
+    json!({ "enum": ["verified_exact", "partial_exact", "unavailable"] })
+}
+
+fn signed_document_version_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "signer_did"],
+        "properties": {
+            "version": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["doc_id", "composite_commit_cid"],
+                "properties": {
+                    "doc_id": string_schema(),
+                    "composite_commit_cid": string_schema()
+                }
+            },
+            "signer_did": string_schema()
+        }
+    })
+}
+
+fn timeline_source_slot_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_class", "ordinal"],
+        "properties": {
+            "source_class": timeline_source_class_schema(),
+            "ordinal": { "type": "integer", "minimum": 0 }
+        }
+    })
+}
+
+fn timeline_source_class_schema() -> Value {
+    json!({
+        "enum": [
+            "request",
+            "session_projection",
+            "conversation_projection",
+            "message",
+            "tool_call",
+            "tool_result",
+            "tool_approval",
+            "response_live",
+            "response_outcome",
+            "inference_call",
+            "rendered_request",
+            "resolved_config",
+            "compaction"
+        ]
+    })
+}
+
+fn run_timeline_source_manifest_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["manifest_version", "status", "root", "sources", "coverage_gaps"],
+        "properties": {
+            "manifest_version": { "const": crate::run_timeline_manifest::RUN_TIMELINE_MANIFEST_VERSION },
+            "status": { "enum": ["verified_exact", "partial_exact"] },
+            "root": signed_document_version_schema(),
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["slot", "collection", "collection_version_id", "exact"],
+                    "properties": {
+                        "slot": timeline_source_slot_schema(),
+                        "collection": string_schema(),
+                        "collection_version_id": string_schema(),
+                        "exact": signed_document_version_schema()
+                    }
+                }
+            },
+            "omissions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["slot", "collection", "reason"],
+                    "properties": {
+                        "slot": timeline_source_slot_schema(),
+                        "collection": string_schema(),
+                        "reason": {
+                            "enum": [
+                                "not_produced",
+                                "not_applicable",
+                                "projection_excluded",
+                                "redacted",
+                                "legacy_unavailable",
+                                "denied",
+                                "erased",
+                                "unsupported_manifest",
+                                "heuristic_logical_join",
+                                "remote_signature_unverified"
+                            ]
+                        }
+                    }
+                }
+            },
+            "coverage_gaps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "source_class", "collection", "scope_id"],
+                    "properties": {
+                        "kind": {
+                            "enum": [
+                                "open_logical_extent",
+                                "open_session_extent",
+                                "non_atomic_observation",
+                                "remote_signature_unverified"
+                            ]
+                        },
+                        "source_class": timeline_source_class_schema(),
+                        "collection": string_schema(),
+                        "scope_id": string_schema()
+                    }
+                }
+            }
         }
     })
 }
@@ -1479,6 +1718,8 @@ fn eval_record(
         source_request_id: envelope.source_request_id.clone(),
         source_session_id: envelope.source_session_id.clone(),
         redaction_mode: envelope.redaction_mode,
+        source_manifest_status: envelope.provenance.source_manifest_status,
+        source_manifest: envelope.provenance.source_manifest.clone(),
         record_index,
         record_id: format!("{adapter_record_kind}:{adapter_record_id}:{record_index}"),
         sample_kind: sample_kind.to_string(),
@@ -1518,6 +1759,8 @@ fn jsonl_record(
         source_request_id: envelope.source_request_id.clone(),
         source_session_id: envelope.source_session_id.clone(),
         redaction_mode: envelope.redaction_mode,
+        source_manifest_status: envelope.provenance.source_manifest_status,
+        source_manifest: envelope.provenance.source_manifest.clone(),
         record_kind: record_kind.to_string(),
         record_index,
         record_id,
@@ -1707,7 +1950,10 @@ fn build_openai_codex_run_trace(
                     timestamp: event.timestamp.clone(),
                 });
             }
-            RunTimelineEvent::InferenceCall(_) => {}
+            RunTimelineEvent::InferenceCall(_)
+            | RunTimelineEvent::RenderedRequest(_)
+            | RunTimelineEvent::Compaction(_)
+            | RunTimelineEvent::ResponseOutcome(_) => {}
             RunTimelineEvent::Message(event) => {
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
@@ -1812,6 +2058,26 @@ fn build_langgraph_state_history(
                 None,
                 Some(event.call_state.clone()),
             ),
+            RunTimelineEvent::RenderedRequest(event) => (
+                format!("rendered_request:{}", event.capture_key),
+                "rendered_request".to_string(),
+                event.request_id.clone(),
+                None,
+                None,
+                None,
+                None,
+                event.provenance_status.clone(),
+            ),
+            RunTimelineEvent::Compaction(event) => (
+                format!("compaction:{}", event.compaction_key),
+                "compaction".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
             RunTimelineEvent::Message(event) => (
                 format!("message:{}:{}", event.session_id, event.sequence),
                 "message".to_string(),
@@ -1841,6 +2107,22 @@ fn build_langgraph_state_history(
                 None,
                 None,
                 event.status.clone(),
+            ),
+            RunTimelineEvent::ResponseOutcome(event) => (
+                format!(
+                    "response_outcome:{}",
+                    event.doc_id.as_deref().unwrap_or(&event.request_doc_id)
+                ),
+                "response_outcome".to_string(),
+                event.request_id.clone(),
+                None,
+                None,
+                None,
+                None,
+                event
+                    .outcome_kind
+                    .clone()
+                    .or_else(|| event.reason_code.clone()),
             ),
         };
 
@@ -1983,7 +2265,10 @@ fn build_multi_agent_task(
                     });
                 }
             }
-            RunTimelineEvent::InferenceCall(_) => {}
+            RunTimelineEvent::InferenceCall(_)
+            | RunTimelineEvent::RenderedRequest(_)
+            | RunTimelineEvent::Compaction(_)
+            | RunTimelineEvent::ResponseOutcome(_) => {}
             RunTimelineEvent::Message(message) => {
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),

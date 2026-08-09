@@ -66,6 +66,7 @@ impl CompactionSourceManifest {
                 &fact.signer_did,
                 "AgentMessage",
             )?;
+            require_collection_version_id(&fact.collection_version_id, "AgentMessage")?;
             if previous_sequence.is_some_and(|previous| fact.sequence <= previous) {
                 anyhow::bail!(
                     "CompactionEntry transcript inputs are not in canonical sequence order"
@@ -92,6 +93,7 @@ impl CompactionSourceManifest {
                 &fact.source.signer_did,
                 "CompactionEntry",
             )?;
+            require_collection_version_id(&fact.collection_version_id, "prior CompactionEntry")?;
             if previous_sequence.is_some_and(|previous| fact.sequence <= previous) {
                 anyhow::bail!("prior CompactionEntry refs are not in canonical sequence order");
             }
@@ -122,6 +124,13 @@ impl CompactionSourceManifest {
 fn require_complete_ref(doc_id: &str, cid: &str, signer_did: &str, label: &str) -> Result<()> {
     if doc_id.trim().is_empty() || cid.trim().is_empty() || signer_did.trim().is_empty() {
         anyhow::bail!("{label} exact source reference is incomplete");
+    }
+    Ok(())
+}
+
+fn require_collection_version_id(collection_version_id: &str, label: &str) -> Result<()> {
+    if collection_version_id.trim().is_empty() {
+        anyhow::bail!("{label} exact source reference has no collection version id");
     }
     Ok(())
 }
@@ -225,6 +234,77 @@ mod signed_snapshot_tests {
             &changed_summary
         ));
     }
+
+    #[test]
+    fn timeline_compaction_requires_a_signed_summary() {
+        let row: gents_protocol::row::CompactionEntryRow =
+            serde_json::from_value(serde_json::json!({
+                "_docID": "doc-1",
+                "compaction_key": "session-1:1",
+                "session_id": "session-1",
+                "agent_did": "did:key:zAgent",
+                "sequence": 1
+            }))
+            .unwrap();
+
+        let error = strict_timeline_compaction_row(&row)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("omitted summary"), "{error}");
+    }
+
+    #[test]
+    fn compaction_query_envelope_requires_the_collection_field() {
+        assert!(decode_compaction_rows(None).is_err());
+        assert!(decode_compaction_rows(Some(&serde_json::json!({}))).is_err());
+
+        let rows = decode_compaction_rows(Some(&serde_json::json!({
+            "CompactionEntry": []
+        })))
+        .unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn fork_derivation_rejects_payload_rebinding() {
+        let source = row("2026-08-08T16:00:00Z");
+        let mut child = source.clone();
+        child.doc_id = "doc-child".to_string();
+        child.compaction_key = "session-child:1".to_string();
+        child.session_id = "session-child".to_string();
+        assert!(compaction_payload_preserved(&source, &child));
+
+        child.summary = "rebound summary".to_string();
+        assert!(!compaction_payload_preserved(&source, &child));
+    }
+
+    #[test]
+    fn transcript_lineage_rejects_wrong_session_agent_and_partial_request() {
+        let mut row = CompactionMessageSourceRow {
+            doc_id: "message-1".to_string(),
+            message_key: "session-1:1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            requester_did: None,
+            request_id: Some("request-1".to_string()),
+            request_doc_id: Some("request-doc-1".to_string()),
+            sequence: 1,
+            role: "user".to_string(),
+            content: "content".to_string(),
+            reasoning: None,
+            timestamp: "2026-08-08T16:00:00Z".to_string(),
+            fork_source_doc_id: None,
+            fork_source_composite_commit_cid: None,
+            fork_source_signer_did: None,
+        };
+        validate_message_lineage(&row, "session-1", "did:key:zAgent", 1).unwrap();
+
+        row.session_id = "session-other".to_string();
+        assert!(validate_message_lineage(&row, "session-1", "did:key:zAgent", 1).is_err());
+        row.session_id = "session-1".to_string();
+        row.request_doc_id = None;
+        assert!(validate_message_lineage(&row, "session-1", "did:key:zAgent", 1).is_err());
+    }
 }
 
 fn fork_source_ref(row: &CompactionEntryRow) -> Result<Option<crate::SignedDocumentVersionRef>> {
@@ -273,15 +353,15 @@ async fn load_rows(
             response.errors
         );
     }
-    response
-        .data
-        .as_ref()
+    decode_compaction_rows(response.data.as_ref())
+}
+
+fn decode_compaction_rows(data: Option<&Value>) -> Result<Vec<CompactionEntryRow>> {
+    let rows = data
         .and_then(|data| data.get("CompactionEntry"))
         .cloned()
-        .map(serde_json::from_value)
-        .transpose()
-        .map(|rows| rows.unwrap_or_default())
-        .map_err(Into::into)
+        .ok_or_else(|| anyhow::anyhow!("CompactionEntry query returned no collection field"))?;
+    serde_json::from_value(rows).context("decoding CompactionEntry candidates")
 }
 
 fn reject_logical_twins(rows: &[CompactionEntryRow], session_id: &str) -> Result<()> {
@@ -325,35 +405,199 @@ fn config_sources(
     sources
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct CompactionMessageSourceRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    message_key: String,
+    session_id: String,
+    agent_did: String,
+    #[serde(default)]
+    requester_did: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
+    sequence: u32,
+    role: String,
+    content: String,
+    #[serde(default)]
+    reasoning: Option<String>,
+    timestamp: String,
+    #[serde(default)]
+    fork_source_doc_id: Option<String>,
+    #[serde(default)]
+    fork_source_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    fork_source_signer_did: Option<String>,
+}
+
+fn exact_ref_from_parts(
+    doc_id: Option<&str>,
+    composite_commit_cid: Option<&str>,
+    signer_did: Option<&str>,
+    label: &str,
+) -> Result<Option<crate::SignedDocumentVersionRef>> {
+    match (doc_id, composite_commit_cid, signer_did) {
+        (None, None, None) => Ok(None),
+        (Some(doc_id), Some(cid), Some(signer_did))
+            if !doc_id.trim().is_empty()
+                && !cid.trim().is_empty()
+                && !signer_did.trim().is_empty() =>
+        {
+            Ok(Some(crate::SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new(doc_id, cid),
+                signer_did,
+            )))
+        }
+        _ => anyhow::bail!("{label} has a partial or empty exact source reference"),
+    }
+}
+
+fn message_fork_source_ref(
+    row: &CompactionMessageSourceRow,
+) -> Result<Option<crate::SignedDocumentVersionRef>> {
+    exact_ref_from_parts(
+        row.fork_source_doc_id.as_deref(),
+        row.fork_source_composite_commit_cid.as_deref(),
+        row.fork_source_signer_did.as_deref(),
+        &format!("AgentMessage {} fork source", row.doc_id),
+    )
+}
+
+fn validate_message_lineage(
+    row: &CompactionMessageSourceRow,
+    expected_session_id: &str,
+    expected_agent_did: &str,
+    expected_sequence: u32,
+) -> Result<()> {
+    if row.session_id != expected_session_id
+        || row.agent_did != expected_agent_did
+        || row.sequence != expected_sequence
+        || row.message_key != format!("{expected_session_id}:{expected_sequence}")
+    {
+        anyhow::bail!(
+            "AgentMessage {} does not bind compaction transcript sequence {} to session {} and agent {}",
+            row.doc_id,
+            expected_sequence,
+            expected_session_id,
+            expected_agent_did
+        );
+    }
+    match (row.request_id.as_deref(), row.request_doc_id.as_deref()) {
+        (None, None) => {}
+        (Some(request_id), Some(request_doc_id))
+            if !request_id.trim().is_empty() && !request_doc_id.trim().is_empty() => {}
+        _ => anyhow::bail!(
+            "AgentMessage {} has partial or empty request lineage",
+            row.doc_id
+        ),
+    }
+    Ok(())
+}
+
+fn decode_canonical_manifest(row: &CompactionEntryRow) -> Result<CompactionSourceManifest> {
+    let manifest: CompactionSourceManifest = serde_json::from_str(&row.source_manifest_json)
+        .with_context(|| format!("decoding CompactionEntry {} source manifest", row.doc_id))?;
+    if manifest.manifest_version != row.source_manifest_version {
+        anyhow::bail!(
+            "CompactionEntry {} source manifest version column {} disagrees with JSON version {}",
+            row.doc_id,
+            row.source_manifest_version,
+            manifest.manifest_version
+        );
+    }
+    let canonical =
+        crate::rendered_request::canonical_json_string(&serde_json::to_value(&manifest)?)?;
+    if canonical != row.source_manifest_json {
+        anyhow::bail!(
+            "CompactionEntry {} source manifest is not canonical",
+            row.doc_id
+        );
+    }
+    Ok(manifest)
+}
+
+fn validate_compaction_row_shape(
+    row: &CompactionEntryRow,
+    source: &crate::SignedDocumentVersionRef,
+) -> Result<CompactionSourceManifest> {
+    if row.doc_id != source.version.doc_id
+        || row.session_id.trim().is_empty()
+        || row.agent_did.trim().is_empty()
+        || row.sequence == 0
+        || row.compaction_key != format!("{}:{}", row.session_id, row.sequence)
+    {
+        anyhow::bail!(
+            "CompactionEntry {} has invalid physical/logical lineage",
+            row.doc_id
+        );
+    }
+    let manifest = decode_canonical_manifest(row)?;
+    manifest.validate(&row.session_id, &row.agent_did)?;
+    if row.messages_compacted as usize > manifest.compactor_input_message_count {
+        anyhow::bail!(
+            "CompactionEntry {} compacted count exceeds its exact compactor input",
+            row.doc_id
+        );
+    }
+    serde_json::from_str::<Vec<String>>(&row.files_read)
+        .with_context(|| format!("decoding CompactionEntry {} files_read", row.doc_id))?;
+    serde_json::from_str::<Vec<String>>(&row.files_modified)
+        .with_context(|| format!("decoding CompactionEntry {} files_modified", row.doc_id))?;
+    chrono::DateTime::parse_from_rfc3339(&row.created_at)
+        .with_context(|| format!("parsing CompactionEntry {} created_at", row.doc_id))?;
+    Ok(manifest)
+}
+
 async fn verify_exact_ref(
     node: &EmbeddedNode,
     collection: &str,
     logical_field: Option<(&str, Value)>,
+    selection: &str,
     source: &crate::SignedDocumentVersionRef,
+    expected_collection_version_id: Option<&str>,
     identity: Option<Did>,
     require_current: bool,
-) -> Result<()> {
+) -> Result<Value> {
     require_complete_ref(
         &source.version.doc_id,
         &source.version.composite_commit_cid,
         &source.signer_did,
         collection,
     )?;
-    let signer = node
-        .verified_block_signer_did(&source.version.composite_commit_cid)
-        .await
-        .with_context(|| {
-            format!(
-                "cryptographically verifying {collection} {} exact source {}",
-                source.version.doc_id, source.version.composite_commit_cid
-            )
-        })?;
-    if signer != source.signer_did {
+    let snapshot = crate::document_version::verified_exact_document_snapshot_with_identity(
+        node,
+        collection,
+        &source.version,
+        selection,
+        identity.clone(),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "loading composite-verified {collection} {} exact source {}",
+            source.version.doc_id, source.version.composite_commit_cid
+        )
+    })?;
+    if &snapshot.source != source {
         anyhow::bail!(
-            "{collection} {} exact source signer {signer} disagrees with pinned signer {}",
+            "{collection} {} exact source signer {} disagrees with pinned signer {}",
             source.version.doc_id,
+            snapshot.source.signer_did,
             source.signer_did
         );
+    }
+    if let Some(expected_collection_version_id) = expected_collection_version_id {
+        require_collection_version_id(expected_collection_version_id, collection)?;
+        if snapshot.collection_version_id != expected_collection_version_id {
+            anyhow::bail!(
+                "{collection} {} exact source schema {} disagrees with pinned schema {}",
+                source.version.doc_id,
+                snapshot.collection_version_id,
+                expected_collection_version_id
+            );
+        }
     }
     if require_current {
         let current =
@@ -372,52 +616,15 @@ async fn verify_exact_ref(
         }
     }
 
-    let escaped_cid = escape_graphql_string(&source.version.composite_commit_cid);
-    let logical_selection = logical_field
-        .as_ref()
-        .map(|(field, _)| format!(" {field}"))
-        .unwrap_or_default();
-    let response = execute(
-        node,
-        format!(r#"{{ {collection}(cid: ["{escaped_cid}"]) {{ _docID{logical_selection} }} }}"#),
-        identity,
-    )
-    .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading {collection} exact source {}: {:?}",
-            source.version.composite_commit_cid,
-            response.errors
-        );
-    }
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("loading {collection} exact source returned no rows"))?;
-    let row = match rows.as_slice() {
-        [row]
-            if row.get("_docID").and_then(Value::as_str)
-                == Some(source.version.doc_id.as_str()) =>
-        {
-            row
-        }
-        rows => anyhow::bail!(
-            "{collection} exact source {} reconstructed {} documents or a different _docID",
-            source.version.composite_commit_cid,
-            rows.len()
-        ),
-    };
     if let Some((field, expected)) = logical_field {
-        if row.get(field) != Some(&expected) {
+        if snapshot.document.get(field) != Some(&expected) {
             anyhow::bail!(
                 "{collection} exact source {} does not bind logical field {field} to {expected}",
                 source.version.composite_commit_cid
             );
         }
     }
-    Ok(())
+    Ok(snapshot.document)
 }
 
 fn config_logical_field(collection: &str) -> Result<&'static str> {
@@ -541,6 +748,14 @@ async fn load_current_transcript_snapshot(
                 identity.clone(),
             )
             .await?;
+        let collection_version_id =
+            crate::document_version::verified_collection_version_id_with_identity(
+                node,
+                "AgentMessage",
+                &source,
+                identity.clone(),
+            )
+            .await?;
         if source.signer_did != agent_did {
             anyhow::bail!(
                 "AgentMessage {doc_id} signer {} does not match row agent {agent_did}",
@@ -551,10 +766,239 @@ async fn load_current_transcript_snapshot(
             sequence,
             doc_id: doc_id.to_owned(),
             composite_commit_cid: source.version.composite_commit_cid,
+            collection_version_id,
             signer_did: source.signer_did,
         });
     }
     Ok(snapshot)
+}
+
+const COMPACTION_MESSAGE_SOURCE_FIELDS: &str = r#"
+    message_key session_id agent_did requester_did request_id request_doc_id
+    sequence role content reasoning timestamp fork_source_doc_id
+    fork_source_composite_commit_cid fork_source_signer_did
+"#;
+
+async fn load_exact_message_source(
+    node: &EmbeddedNode,
+    source: &crate::SignedDocumentVersionRef,
+    collection_version_id: &str,
+    identity: Option<Did>,
+    require_current: bool,
+) -> Result<CompactionMessageSourceRow> {
+    let document = verify_exact_ref(
+        node,
+        "AgentMessage",
+        None,
+        COMPACTION_MESSAGE_SOURCE_FIELDS,
+        source,
+        Some(collection_version_id),
+        identity,
+        require_current,
+    )
+    .await?;
+    serde_json::from_value(document).context("decoding exact AgentMessage compaction source")
+}
+
+fn message_payload_preserved(
+    source: &CompactionMessageSourceRow,
+    child: &CompactionMessageSourceRow,
+) -> bool {
+    source.request_id == child.request_id
+        && source.request_doc_id == child.request_doc_id
+        && source.sequence == child.sequence
+        && source.role == child.role
+        && source.content == child.content
+        && source.reasoning == child.reasoning
+        && source.timestamp == child.timestamp
+}
+
+fn compaction_payload_preserved(source: &CompactionEntryRow, child: &CompactionEntryRow) -> bool {
+    source.sequence == child.sequence
+        && source.summary == child.summary
+        && source.files_read == child.files_read
+        && source.files_modified == child.files_modified
+        && source.messages_compacted == child.messages_compacted
+        && source.original_tokens == child.original_tokens
+        && source.compacted_tokens == child.compacted_tokens
+        && source.source_manifest_version == child.source_manifest_version
+        && super::history::rfc3339_instants_equal(&source.created_at, &child.created_at)
+}
+
+struct VerifiedForkSource {
+    row: CompactionEntryRow,
+    manifest: CompactionSourceManifest,
+    source: crate::SignedDocumentVersionRef,
+}
+
+async fn verify_forked_compaction_derivation(
+    node: &EmbeddedNode,
+    child_row: &CompactionEntryRow,
+    child_source: &crate::SignedDocumentVersionRef,
+    child_manifest: &CompactionSourceManifest,
+    identity: Option<Did>,
+) -> Result<VerifiedForkSource> {
+    let fork_source = fork_source_ref(child_row)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "CompactionEntry {} has no complete fork source",
+            child_row.doc_id
+        )
+    })?;
+    if fork_source.version.doc_id == child_row.doc_id {
+        anyhow::bail!(
+            "CompactionEntry {} cannot derive from itself",
+            child_row.doc_id
+        );
+    }
+    let source_document = verify_exact_ref(
+        node,
+        "CompactionEntry",
+        None,
+        row_fields(),
+        &fork_source,
+        None,
+        identity.clone(),
+        false,
+    )
+    .await
+    .context("verifying exact fork source CompactionEntry")?;
+    let source_row: CompactionEntryRow = serde_json::from_value(source_document)
+        .context("decoding exact fork source CompactionEntry")?;
+    let source_manifest = validate_compaction_row_shape(&source_row, &fork_source)?;
+    if source_row.session_id == child_row.session_id
+        || source_row.agent_did != child_row.agent_did
+        || !compaction_payload_preserved(&source_row, child_row)
+    {
+        anyhow::bail!(
+            "CompactionEntry {} is not a payload-preserving cross-session derivation of {}",
+            child_row.doc_id,
+            source_row.doc_id
+        );
+    }
+    if source_manifest.behavior_id != child_manifest.behavior_id
+        || source_manifest.config_provenance != child_manifest.config_provenance
+        || source_manifest.provider_view_message_count != child_manifest.provider_view_message_count
+        || source_manifest.prior_compacted_message_count
+            != child_manifest.prior_compacted_message_count
+        || source_manifest.compactor_input_message_count
+            != child_manifest.compactor_input_message_count
+        || source_manifest.transcript_snapshot.len() != child_manifest.transcript_snapshot.len()
+        || source_manifest.prior_compactions.len() != child_manifest.prior_compactions.len()
+    {
+        anyhow::bail!(
+            "CompactionEntry {} fork manifest is not the deterministic source-manifest transform",
+            child_row.doc_id
+        );
+    }
+
+    for (source_fact, child_fact) in source_manifest
+        .transcript_snapshot
+        .iter()
+        .zip(&child_manifest.transcript_snapshot)
+    {
+        if source_fact.sequence != child_fact.sequence {
+            anyhow::bail!(
+                "CompactionEntry {} fork transcript changed sequence order",
+                child_row.doc_id
+            );
+        }
+        let child_message_source = crate::SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new(&child_fact.doc_id, &child_fact.composite_commit_cid),
+            &child_fact.signer_did,
+        );
+        let child_message = load_exact_message_source(
+            node,
+            &child_message_source,
+            &child_fact.collection_version_id,
+            identity.clone(),
+            false,
+        )
+        .await?;
+        validate_message_lineage(
+            &child_message,
+            &child_row.session_id,
+            &child_row.agent_did,
+            child_fact.sequence,
+        )?;
+        let expected_source = crate::SignedDocumentVersionRef::new(
+            crate::DocumentVersionRef::new(&source_fact.doc_id, &source_fact.composite_commit_cid),
+            &source_fact.signer_did,
+        );
+        if message_fork_source_ref(&child_message)?.as_ref() != Some(&expected_source) {
+            anyhow::bail!(
+                "CompactionEntry {} fork transcript does not pin the exact source message",
+                child_row.doc_id
+            );
+        }
+        let source_message = load_exact_message_source(
+            node,
+            &expected_source,
+            &source_fact.collection_version_id,
+            identity.clone(),
+            false,
+        )
+        .await?;
+        validate_message_lineage(
+            &source_message,
+            &source_row.session_id,
+            &source_row.agent_did,
+            source_fact.sequence,
+        )?;
+        if !message_payload_preserved(&source_message, &child_message) {
+            anyhow::bail!(
+                "CompactionEntry {} fork transcript rebound a source message payload",
+                child_row.doc_id
+            );
+        }
+    }
+
+    for (source_fact, child_fact) in source_manifest
+        .prior_compactions
+        .iter()
+        .zip(&child_manifest.prior_compactions)
+    {
+        if source_fact.sequence != child_fact.sequence {
+            anyhow::bail!(
+                "CompactionEntry {} fork changed prior-compaction order",
+                child_row.doc_id
+            );
+        }
+        let child_document = verify_exact_ref(
+            node,
+            "CompactionEntry",
+            None,
+            row_fields(),
+            &child_fact.source,
+            Some(&child_fact.collection_version_id),
+            identity.clone(),
+            false,
+        )
+        .await?;
+        let child_prior: CompactionEntryRow = serde_json::from_value(child_document)
+            .context("decoding forked prior CompactionEntry")?;
+        if fork_source_ref(&child_prior)?.as_ref() != Some(&source_fact.source) {
+            anyhow::bail!(
+                "CompactionEntry {} fork prior does not pin the exact source compaction",
+                child_row.doc_id
+            );
+        }
+    }
+
+    if child_source.signer_did.trim().is_empty() {
+        anyhow::bail!("forked CompactionEntry has no verified child signer");
+    }
+    Ok(VerifiedForkSource {
+        row: source_row,
+        manifest: source_manifest,
+        source: fork_source,
+    })
+}
+
+struct ManifestVerificationTask {
+    manifest: CompactionSourceManifest,
+    session_id: String,
+    agent_did: String,
+    ancestry: BTreeSet<(String, String)>,
 }
 
 async fn verify_manifest_sources(
@@ -563,53 +1007,249 @@ async fn verify_manifest_sources(
     identity: Option<Did>,
     require_current: bool,
 ) -> Result<()> {
-    for fact in &manifest.transcript_snapshot {
-        let source = crate::SignedDocumentVersionRef {
-            version: crate::DocumentVersionRef {
-                doc_id: fact.doc_id.clone(),
-                composite_commit_cid: fact.composite_commit_cid.clone(),
-            },
-            signer_did: fact.signer_did.clone(),
-        };
-        verify_exact_ref(
-            node,
-            "AgentMessage",
-            Some(("sequence", Value::from(fact.sequence))),
-            &source,
-            identity.clone(),
-            require_current,
-        )
-        .await?;
-    }
-    for fact in config_sources(&manifest.config_provenance) {
-        if require_current {
-            verify_sole_config_candidate(node, fact, identity.clone()).await?;
+    let expected_agent_did = manifest.config_provenance.principal.logical_id.clone();
+    let mut pending = vec![ManifestVerificationTask {
+        manifest: manifest.clone(),
+        session_id: manifest.session_id.clone(),
+        agent_did: expected_agent_did,
+        ancestry: BTreeSet::new(),
+    }];
+    let mut verified_nodes = 0usize;
+    while let Some(task) = pending.pop() {
+        verified_nodes += 1;
+        if verified_nodes > 1024 {
+            anyhow::bail!("CompactionEntry source graph exceeds 1024 recursive manifests");
         }
-        verify_exact_ref(
-            node,
-            &fact.collection,
-            Some((
-                config_logical_field(&fact.collection)?,
-                Value::String(fact.logical_id.clone()),
-            )),
-            &fact.source,
-            identity.clone(),
-            require_current,
-        )
-        .await?;
-    }
-    for fact in &manifest.prior_compactions {
-        verify_exact_ref(
-            node,
-            "CompactionEntry",
-            Some(("sequence", Value::from(fact.sequence))),
-            &fact.source,
-            identity.clone(),
-            require_current,
-        )
-        .await?;
+        task.manifest.validate(&task.session_id, &task.agent_did)?;
+        for fact in &task.manifest.transcript_snapshot {
+            let source = crate::SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new(&fact.doc_id, &fact.composite_commit_cid),
+                &fact.signer_did,
+            );
+            let message = load_exact_message_source(
+                node,
+                &source,
+                &fact.collection_version_id,
+                identity.clone(),
+                require_current,
+            )
+            .await?;
+            validate_message_lineage(&message, &task.session_id, &task.agent_did, fact.sequence)?;
+        }
+        for fact in config_sources(&task.manifest.config_provenance) {
+            if require_current {
+                verify_sole_config_candidate(node, fact, identity.clone()).await?;
+            }
+            let logical_field = config_logical_field(&fact.collection)?;
+            verify_exact_ref(
+                node,
+                &fact.collection,
+                Some((logical_field, Value::String(fact.logical_id.clone()))),
+                logical_field,
+                &fact.source,
+                Some(&fact.collection_version_id),
+                identity.clone(),
+                require_current,
+            )
+            .await?;
+        }
+
+        let mut prior_compacted_message_count = 0usize;
+        for fact in &task.manifest.prior_compactions {
+            let key = (
+                fact.source.version.doc_id.clone(),
+                fact.source.version.composite_commit_cid.clone(),
+            );
+            if task.ancestry.contains(&key) {
+                anyhow::bail!(
+                    "CompactionEntry source graph contains a cycle through {} at {}",
+                    key.0,
+                    key.1
+                );
+            }
+            let document = verify_exact_ref(
+                node,
+                "CompactionEntry",
+                Some(("sequence", Value::from(fact.sequence))),
+                row_fields(),
+                &fact.source,
+                Some(&fact.collection_version_id),
+                identity.clone(),
+                require_current,
+            )
+            .await?;
+            let prior_row: CompactionEntryRow =
+                serde_json::from_value(document).context("decoding exact prior CompactionEntry")?;
+            let prior_manifest = validate_compaction_row_shape(&prior_row, &fact.source)?;
+            if prior_row.session_id != task.session_id
+                || prior_row.agent_did != task.agent_did
+                || prior_row.sequence != fact.sequence
+            {
+                anyhow::bail!(
+                    "prior CompactionEntry {} does not bind sequence {} to session {} and agent {}",
+                    prior_row.doc_id,
+                    fact.sequence,
+                    task.session_id,
+                    task.agent_did
+                );
+            }
+            let mut ancestry = task.ancestry.clone();
+            ancestry.insert(key);
+            match fork_source_ref(&prior_row)? {
+                None if fact.source.signer_did != prior_row.agent_did => anyhow::bail!(
+                    "ordinary prior CompactionEntry {} signer {} does not match agent {}",
+                    prior_row.doc_id,
+                    fact.source.signer_did,
+                    prior_row.agent_did
+                ),
+                Some(_) => {
+                    let fork_source = verify_forked_compaction_derivation(
+                        node,
+                        &prior_row,
+                        &fact.source,
+                        &prior_manifest,
+                        identity.clone(),
+                    )
+                    .await?;
+                    let source_key = (
+                        fork_source.source.version.doc_id.clone(),
+                        fork_source.source.version.composite_commit_cid.clone(),
+                    );
+                    if ancestry.contains(&source_key) {
+                        anyhow::bail!(
+                            "CompactionEntry fork graph contains a cycle through {} at {}",
+                            source_key.0,
+                            source_key.1
+                        );
+                    }
+                    let mut source_ancestry = ancestry.clone();
+                    source_ancestry.insert(source_key);
+                    pending.push(ManifestVerificationTask {
+                        manifest: fork_source.manifest,
+                        session_id: fork_source.row.session_id,
+                        agent_did: fork_source.row.agent_did,
+                        ancestry: source_ancestry,
+                    });
+                }
+                None => {}
+            }
+            prior_compacted_message_count = prior_compacted_message_count
+                .checked_add(prior_row.messages_compacted as usize)
+                .context("prior compacted message count overflow")?;
+            pending.push(ManifestVerificationTask {
+                manifest: prior_manifest,
+                session_id: prior_row.session_id,
+                agent_did: prior_row.agent_did,
+                ancestry,
+            });
+        }
+        if prior_compacted_message_count != task.manifest.prior_compacted_message_count {
+            anyhow::bail!(
+                "CompactionEntry source manifest prior compacted count {} disagrees with exact prior facts {}",
+                task.manifest.prior_compacted_message_count,
+                prior_compacted_message_count
+            );
+        }
     }
     Ok(())
+}
+
+async fn verify_compaction_entry_graph(
+    node: &EmbeddedNode,
+    row: &CompactionEntryRow,
+    source: &crate::SignedDocumentVersionRef,
+    identity: Option<Did>,
+) -> Result<()> {
+    let manifest = validate_compaction_row_shape(row, source)?;
+    match fork_source_ref(row)? {
+        None if source.signer_did != row.agent_did => anyhow::bail!(
+            "ordinary CompactionEntry {} signer {} does not match agent {}",
+            row.doc_id,
+            source.signer_did,
+            row.agent_did
+        ),
+        Some(_) => {
+            let fork_source =
+                verify_forked_compaction_derivation(node, row, source, &manifest, identity.clone())
+                    .await?;
+            verify_manifest_sources(node, &fork_source.manifest, identity.clone(), false)
+                .await
+                .context("verifying fork-source CompactionEntry source graph")?;
+        }
+        None => {}
+    }
+    verify_manifest_sources(node, &manifest, identity, false).await
+}
+
+fn required_timeline_string(value: Option<&str>, field: &str) -> Result<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("timeline CompactionEntry omitted {field}"))
+}
+
+fn strict_timeline_compaction_row(
+    row: &gents_protocol::row::CompactionEntryRow,
+) -> Result<CompactionEntryRow> {
+    let nonnegative = |value: Option<i64>, field: &str| -> Result<usize> {
+        value
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("timeline CompactionEntry has invalid {field}"))
+    };
+    Ok(CompactionEntryRow {
+        doc_id: required_timeline_string(row.doc_id.as_deref(), "_docID")?,
+        compaction_key: row.compaction_key.clone(),
+        session_id: required_timeline_string(row.session_id.as_deref(), "session_id")?,
+        agent_did: required_timeline_string(row.agent_did.as_deref(), "agent_did")?,
+        requester_did: row.requester_did.clone(),
+        sequence: row
+            .sequence
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("timeline CompactionEntry has invalid sequence"))?,
+        summary: required_timeline_string(row.summary.as_deref(), "summary")?,
+        files_read: required_timeline_string(row.files_read.as_deref(), "files_read")?,
+        files_modified: required_timeline_string(row.files_modified.as_deref(), "files_modified")?,
+        messages_compacted: row
+            .messages_compacted
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("timeline CompactionEntry has invalid messages_compacted")
+            })?,
+        original_tokens: nonnegative(row.original_tokens, "original_tokens")?,
+        compacted_tokens: nonnegative(row.compacted_tokens, "compacted_tokens")?,
+        source_manifest_version: row
+            .source_manifest_version
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("timeline CompactionEntry has invalid source_manifest_version")
+            })?,
+        source_manifest_json: required_timeline_string(
+            row.source_manifest_json.as_deref(),
+            "source_manifest_json",
+        )?,
+        created_at: required_timeline_string(row.created_at.as_deref(), "created_at")?,
+        fork_source_doc_id: row.fork_source_doc_id.clone(),
+        fork_source_composite_commit_cid: row.fork_source_composite_commit_cid.clone(),
+        fork_source_signer_did: row.fork_source_signer_did.clone(),
+    })
+}
+
+/// Re-verify a finalized compaction row and its complete exact-source graph for
+/// a timeline/projection read. This deliberately validates the outer signed
+/// fact too: an embedded manifest is not self-authenticating, and a fork edge
+/// cannot by itself authorize payload rebinding.
+pub(crate) async fn verify_compaction_entry_for_timeline(
+    node: &EmbeddedNode,
+    row: &gents_protocol::row::CompactionEntryRow,
+    source: &crate::SignedDocumentVersionRef,
+) -> Result<()> {
+    let node_did = node.node_identity_did().ok_or_else(|| {
+        anyhow::anyhow!("timeline compaction verification requires a DefraDB node identity")
+    })?;
+    let identity = Did::new(node_did).context("parsing timeline compaction reader DID")?;
+    let row = strict_timeline_compaction_row(row)?;
+    verify_compaction_entry_graph(node, &row, source, Some(identity)).await
 }
 
 async fn verify_compaction_row(
@@ -624,32 +1264,14 @@ async fn verify_compaction_row(
         identity.clone(),
     )
     .await?;
-    match fork_source_ref(row)? {
-        None if source.signer_did != row.agent_did => {
-            anyhow::bail!(
-                "ordinary CompactionEntry {} signer {} does not match agent {}",
-                row.doc_id,
-                source.signer_did,
-                row.agent_did
-            );
-        }
-        Some(fork_source) => {
-            if fork_source.version.doc_id == row.doc_id {
-                anyhow::bail!("CompactionEntry {} cannot derive from itself", row.doc_id);
-            }
-            verify_exact_ref(
-                node,
-                "CompactionEntry",
-                Some(("sequence", Value::from(row.sequence))),
-                &fork_source,
-                identity.clone(),
-                false,
-            )
-            .await
-            .context("verifying exact fork source CompactionEntry")?;
-        }
-        None => {}
-    }
+    let collection_version_id =
+        crate::document_version::verified_collection_version_id_with_identity(
+            node,
+            "CompactionEntry",
+            &source,
+            identity.clone(),
+        )
+        .await?;
     let escaped_cid = escape_graphql_string(&source.version.composite_commit_cid);
     let response = execute(
         node,
@@ -688,22 +1310,10 @@ async fn verify_compaction_row(
             rows.len()
         ),
     }
-    let entry = CompactionEntry::try_from(row.clone())?;
-    entry
-        .source_manifest
-        .validate(&row.session_id, &row.agent_did)?;
-    let canonical = crate::rendered_request::canonical_json_string(&serde_json::to_value(
-        &entry.source_manifest,
-    )?)?;
-    if canonical != row.source_manifest_json {
-        anyhow::bail!(
-            "CompactionEntry {} source manifest is not canonical",
-            row.doc_id
-        );
-    }
-    verify_manifest_sources(node, &entry.source_manifest, identity, false).await?;
+    verify_compaction_entry_graph(node, row, &source, identity).await?;
     Ok(CompactionFactRef {
         sequence: row.sequence,
+        collection_version_id,
         source,
     })
 }
@@ -834,7 +1444,17 @@ pub(crate) async fn create_test_config_provenance(
             node, collection, &doc_id,
         )
         .await?;
-        facts.push(crate::ConfigFactRef::new(collection, logical_id, source));
+        let collection_version_id =
+            crate::document_version::verified_collection_version_id_with_identity(
+                node, collection, &source, None,
+            )
+            .await?;
+        facts.push(crate::ConfigFactRef::new(
+            collection,
+            logical_id,
+            collection_version_id,
+            source,
+        ));
     }
     Ok(crate::ResolvedBehaviorConfigProvenance {
         principal: facts.remove(0),

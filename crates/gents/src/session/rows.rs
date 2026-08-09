@@ -28,12 +28,26 @@ pub(super) struct CompactionEntryRow {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct SessionDocument {
+pub struct AgentSessionDocument {
     #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
-    pub(super) behavior_id: Option<String>,
-    pub(super) started: String,
+    pub doc_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
+    pub behavior_id: Option<String>,
+    pub started: String,
+    #[serde(default)]
+    pub ended: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
 }
+
+pub(super) type SessionDocument = AgentSessionDocument;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct ConversationDocument {

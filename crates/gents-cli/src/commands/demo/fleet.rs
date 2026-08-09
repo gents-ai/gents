@@ -19,6 +19,7 @@ pub(super) struct Fleet {
     pub(super) home_a: PathBuf,
     pub(super) work_a: PathBuf,
     pub(super) graphql_a: String,
+    pub(super) graphql_access_a: gents::AuthenticatedGraphql,
     pub(super) did_a: String,
     pub(super) base_port: u16,
     pub(super) backend: BackendChoice,
@@ -29,6 +30,7 @@ pub(super) struct Fleet {
 pub(super) struct NodeB {
     pub(super) home: PathBuf,
     pub(super) graphql: String,
+    pub(super) graphql_access: gents::AuthenticatedGraphql,
     pub(super) did: String,
     pub(super) server: Child,
 }
@@ -77,7 +79,7 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
 /// `ready` before driving CLI subcommands at this node (#990 — the pattern
 /// from #935/#926).
 pub(super) async fn wait_runtime_ready(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     agent_did: &str,
     server: &mut Child,
 ) -> Result<()> {
@@ -103,7 +105,10 @@ pub(super) async fn wait_runtime_ready(
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    bail!("timed out waiting for the demo runtime at {graphql} to become ready")
+    bail!(
+        "timed out waiting for the demo runtime at {} to become ready",
+        graphql.endpoint()
+    )
 }
 
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {
@@ -144,6 +149,7 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
 
     println!("  initializing node B (worker)…");
     let did_b = init_agent(&bin, &home_b, &work_b, &backend, "worker").await?;
+    let graphql_access_b;
     std::fs::create_dir_all(&work_b)?;
 
     println!("  starting node B…");
@@ -169,7 +175,8 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             Err(error) => return Err(error),
         }
     };
-    wait_runtime_ready(&graphql_b, &did_b, &mut server_b).await?;
+    graphql_access_b = crate::authenticated_graphql_client(&home_b, &graphql_b).await?;
+    wait_runtime_ready(&graphql_access_b, &did_b, &mut server_b).await?;
 
     let (peer_a, addr_a) = p2p_identity(&bin, &home_a, &graphql_a).await?;
     let (peer_b, addr_b) = p2p_identity(&bin, &home_b, &graphql_b).await?;
@@ -246,22 +253,23 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
 
     println!("  installing the conversation data plane…");
     upsert_data_plane(
-        &fleet.graphql_a,
+        &fleet.graphql_access_a,
         &peer_b,
         &fleet.did_a,
         &addr_b,
         "conversation",
     )
     .await?;
-    upsert_data_plane(&graphql_b, &peer_a, &did_b, &addr_a, "conversation").await?;
+    upsert_data_plane(&graphql_access_b, &peer_a, &did_b, &addr_a, "conversation").await?;
 
     println!("  waiting for conversation data-plane replicators…");
-    wait_conversation_replicator(&graphql_b, &peer_a, &fleet.did_a).await?;
-    wait_conversation_replicator(&fleet.graphql_a, &peer_b, &did_b).await?;
+    wait_conversation_replicator(&graphql_access_b, &peer_a, &fleet.did_a).await?;
+    wait_conversation_replicator(&fleet.graphql_access_a, &peer_b, &did_b).await?;
 
     fleet.node_b = Some(NodeB {
         home: home_b,
         graphql: graphql_b,
+        graphql_access: graphql_access_b,
         did: did_b,
         server: server_b,
     });
@@ -319,7 +327,7 @@ async fn p2p_identity(bin: &Path, home: &Path, graphql: &str) -> Result<(String,
 }
 
 async fn upsert_data_plane(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     peer_id: &str,
     local_did: &str,
     address: &str,
@@ -365,7 +373,7 @@ fn data_plane_collections_literal(template: &str) -> Result<String> {
 }
 
 async fn wait_conversation_replicator(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     peer_id: &str,
     peer_agent_did: &str,
 ) -> Result<()> {
@@ -423,7 +431,11 @@ fn filter_mentions_agent_request(filter: &str, peer_agent_did: &str) -> bool {
         == Some(peer_agent_did)
 }
 
-async fn wait_replicator_filter(graphql: &str, peer_id: &str, needles: &[String]) -> Result<()> {
+async fn wait_replicator_filter(
+    graphql: &gents::AuthenticatedGraphql,
+    peer_id: &str,
+    needles: &[String],
+) -> Result<()> {
     let query = format!(
         r#"{{ PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{}" }} }}, limit: 1) {{ replicator_addresses replicator_filter }} }}"#,
         escape_graphql_string(peer_id)
@@ -458,7 +470,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
 
     println!("  switching the data plane to subagent delegation templates…");
     upsert_data_plane(
-        &fleet.graphql_a,
+        &fleet.graphql_access_a,
         &peer_b,
         &fleet.did_a,
         &addr_b,
@@ -466,7 +478,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     )
     .await?;
     upsert_data_plane(
-        &worker.graphql,
+        &worker.graphql_access,
         &peer_a,
         &worker.did,
         &addr_a,
@@ -474,7 +486,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     )
     .await?;
     wait_replicator_filter(
-        &fleet.graphql_a,
+        &fleet.graphql_access_a,
         &peer_b,
         &[
             "AgentToolCall".to_string(),
@@ -484,13 +496,13 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     )
     .await?;
     wait_replicator_filter(
-        &worker.graphql,
+        &worker.graphql_access,
         &peer_a,
         &["AgentRequest".to_string(), fleet.did_a.clone()],
     )
     .await?;
 
-    let worker_gen = runtime_generation(&worker.graphql).await;
+    let worker_gen = runtime_generation(&worker.graphql_access).await;
     config_tools(
         &fleet.bin,
         &worker.graphql,
@@ -505,7 +517,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    wait_runtime_reconcile(&worker.graphql, worker_gen)
+    wait_runtime_reconcile(&worker.graphql_access, worker_gen)
         .await
         .context("worker runtime did not reconcile cross-node delegation tools")?;
 
@@ -513,7 +525,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         r#"{{"name":"worker","agent_did":"{}","behavior_id":"{}:default","description":"Remote worker subagent"}}"#,
         worker.did, worker.did
     );
-    let orch_gen = runtime_generation(&fleet.graphql_a).await;
+    let orch_gen = runtime_generation(&fleet.graphql_access_a).await;
     config_tools(
         &fleet.bin,
         &fleet.graphql_a,
@@ -534,7 +546,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
         ],
     )
     .await?;
-    wait_runtime_reconcile(&fleet.graphql_a, orch_gen)
+    wait_runtime_reconcile(&fleet.graphql_access_a, orch_gen)
         .await
         .context("coordinator runtime did not reconcile cross-node delegation tools")?;
 
@@ -564,7 +576,7 @@ async fn config_tools(bin: &Path, graphql: &str, did: &str, extra: &[&str]) -> R
     Ok(())
 }
 
-async fn runtime_generation(graphql: &str) -> i64 {
+async fn runtime_generation(graphql: &gents::AuthenticatedGraphql) -> i64 {
     post_graphql(graphql, "{ AgentRuntime { active_generation } }")
         .await
         .ok()
@@ -575,7 +587,10 @@ async fn runtime_generation(graphql: &str) -> i64 {
         .unwrap_or(0)
 }
 
-async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<()> {
+async fn wait_runtime_reconcile(
+    graphql: &gents::AuthenticatedGraphql,
+    prev_generation: i64,
+) -> Result<()> {
     let mut last = Value::Null;
     let mut last_error = None;
     for _ in 0..80 {
@@ -605,7 +620,8 @@ async fn wait_runtime_reconcile(graphql: &str, prev_generation: i64) -> Result<(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     bail!(
-        "timed out waiting for AgentRuntime generation to advance beyond {prev_generation} and return idle at {graphql}; last response={last}; last error={last_error:?}"
+        "timed out waiting for AgentRuntime generation to advance beyond {prev_generation} and return idle at {}; last response={last}; last error={last_error:?}",
+        graphql.endpoint()
     )
 }
 

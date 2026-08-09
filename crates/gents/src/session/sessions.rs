@@ -21,7 +21,7 @@ pub(crate) async fn create_session_with_id(
     create_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
 }
 
-pub(crate) async fn create_session_with_behavior_id(
+pub async fn create_session_with_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
@@ -57,6 +57,9 @@ async fn create_session_with_behavior_id_and_requester_did(
         let now = chrono::Utc::now().to_rfc3339();
         let existing = load_session_document_optional(node, session_id).await?;
         let created = existing.is_none();
+        if let Some(existing) = existing.as_ref() {
+            validate_session_binding(existing, agent_did, requester_did)?;
+        }
         let started = existing
             .as_ref()
             .map(|session| session.started.clone())
@@ -66,11 +69,33 @@ async fn create_session_with_behavior_id_and_requester_did(
         let escaped_started = escape_graphql_string(&started);
         let escaped_behavior_id = escape_graphql_string(&resolved_behavior_id);
 
-        let mutation = format!(
-            r#"mutation {{
-                upsert_AgentSession(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                    add: {{
+        let (mutation_field, expected_doc_id, mutation) = if let Some(existing) = existing.as_ref()
+        {
+            let escaped_doc_id = escape_graphql_string(&existing.doc_id);
+            (
+                "update_AgentSession",
+                Some(existing.doc_id.as_str()),
+                format!(
+                    r#"mutation {{
+                        update_AgentSession(
+                            filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                            input: {{
+                                agent_name: "{escaped_agent_name}",
+                                behavior_id: "{escaped_behavior_id}",
+                                started: "{escaped_started}",
+                                status: "active"
+                            }}
+                        ) {{ _docID }}
+                    }}"#
+                ),
+            )
+        } else {
+            (
+                "create_AgentSession",
+                None,
+                format!(
+                    r#"mutation {{
+                    create_AgentSession(input: {{
                         session_id: "{escaped_session_id}",
                         agent_name: "{escaped_agent_name}",
                         agent_did: "{escaped_agent_did}",
@@ -78,26 +103,41 @@ async fn create_session_with_behavior_id_and_requester_did(
                         behavior_id: "{escaped_behavior_id}",
                         started: "{escaped_started}",
                         status: "active"
-                    }},
-                    update: {{
-                        agent_name: "{escaped_agent_name}",
-                        behavior_id: "{escaped_behavior_id}",
-                        started: "{escaped_started}",
-                        status: "active"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
+                    }}) {{ _docID }}
+                }}"#
+                ),
+            )
+        };
 
         let started_at = std::time::Instant::now();
         let resp = node.execute(&mutation).await;
         log_mutation_timing("create_session", started_at.elapsed());
 
-        if !resp.has_errors() {
-            return Ok(created);
+        if resp.has_errors() {
+            anyhow::bail!("create_session mutation failed: {:?}", resp.errors);
         }
 
-        anyhow::bail!("create_session mutation failed: {:?}", resp.errors)
+        let returned_doc_id = exact_mutation_doc_id(resp.data.as_ref(), mutation_field)?;
+        if let Some(expected_doc_id) = expected_doc_id {
+            if returned_doc_id != expected_doc_id {
+                anyhow::bail!(
+                    "AgentSession exact update returned _docID={returned_doc_id}, expected {expected_doc_id}"
+                );
+            }
+        }
+
+        // Re-enumerate after the write.  A concurrent create in a legacy
+        // unindexed collection must surface as a logical conflict rather than
+        // allowing this successful mutation to establish an arbitrary winner.
+        let verified = load_session_document(node, session_id).await?;
+        validate_session_binding(&verified, agent_did, requester_did)?;
+        if verified.doc_id != returned_doc_id {
+            anyhow::bail!(
+                "AgentSession write verification selected _docID={}, mutation returned {returned_doc_id}",
+                verified.doc_id
+            );
+        }
+        Ok(created)
     })
     .await?;
 
@@ -116,16 +156,7 @@ async fn create_session_with_behavior_id_and_requester_did(
     Ok(())
 }
 
-pub(crate) async fn ensure_session(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_name: &str,
-    agent_did: &str,
-) -> Result<()> {
-    ensure_session_with_behavior_id(node, session_id, agent_name, agent_did, agent_name).await
-}
-
-pub(crate) async fn ensure_session_with_behavior_id(
+pub async fn ensure_session_with_behavior_id(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,
@@ -191,12 +222,13 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
     retry_operation("close_session", || async {
         let session = load_session_document(node, session_id).await?;
 
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let escaped_started = escape_graphql_string(&session.started);
+        let escaped_doc_id = escape_graphql_string(&session.doc_id);
         let mutation = format!(
             r#"mutation {{
                 update_AgentSession(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                     input: {{
                         started: "{escaped_started}",
                         status: "completed",
@@ -204,23 +236,92 @@ pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> 
                     }}
                 ) {{ _docID }}
             }}"#,
-            doc_id = session.doc_id,
         );
 
         let started_at = std::time::Instant::now();
         let resp = node.execute(&mutation).await;
         log_mutation_timing("close_session", started_at.elapsed());
 
-        if !resp.has_errors() {
-            return Ok(());
+        if resp.has_errors() {
+            anyhow::bail!("close_session mutation failed: {:?}", resp.errors);
         }
 
-        anyhow::bail!("close_session mutation failed: {:?}", resp.errors)
+        let returned_doc_id = exact_mutation_doc_id(resp.data.as_ref(), "update_AgentSession")?;
+        if returned_doc_id != session.doc_id {
+            anyhow::bail!(
+                "AgentSession exact close returned _docID={returned_doc_id}, expected {}",
+                session.doc_id
+            );
+        }
+        let verified = load_session_document(node, session_id).await?;
+        if verified.doc_id != session.doc_id || verified.status.as_deref() != Some("completed") {
+            anyhow::bail!(
+                "AgentSession close verification failed for session_id={session_id}: expected _docID={} status=completed, observed _docID={} status={:?}",
+                session.doc_id,
+                verified.doc_id,
+                verified.status
+            );
+        }
+        Ok(())
     })
     .await?;
 
     tracing::info!(session_id = %session_id, "session closed");
     Ok(())
+}
+
+fn validate_session_binding(
+    existing: &super::rows::SessionDocument,
+    expected_agent_did: &str,
+    expected_requester_did: Option<&str>,
+) -> Result<()> {
+    let existing_agent_did = normalize_optional_string(existing.agent_did.as_deref());
+    let expected_agent_did = normalize_optional_string(Some(expected_agent_did));
+    if existing_agent_did != expected_agent_did {
+        anyhow::bail!(
+            "AgentSession immutable owner mismatch for session_id={}: _docID={} existing agent_did={existing_agent_did:?} expected={expected_agent_did:?}",
+            existing.session_id,
+            existing.doc_id
+        );
+    }
+    let existing_requester_did = normalize_optional_string(existing.requester_did.as_deref());
+    let expected_requester_did = normalize_optional_string(expected_requester_did);
+    if existing_requester_did != expected_requester_did {
+        anyhow::bail!(
+            "AgentSession immutable requester mismatch for session_id={}: _docID={} existing requester_did={existing_requester_did:?} expected={expected_requester_did:?}",
+            existing.session_id,
+            existing.doc_id
+        );
+    }
+    Ok(())
+}
+
+fn exact_mutation_doc_id(data: Option<&serde_json::Value>, field: &str) -> Result<String> {
+    let add_field = field
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"));
+    let Some(value) = data.and_then(|data| {
+        data.get(field)
+            .or_else(|| add_field.as_deref().and_then(|field| data.get(field)))
+    }) else {
+        anyhow::bail!("{field} returned no result");
+    };
+    let document_ids = if let Some(doc_id) = value.get("_docID").and_then(serde_json::Value::as_str)
+    {
+        vec![doc_id.to_string()]
+    } else {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get("_docID").and_then(serde_json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    match document_ids.as_slice() {
+        [doc_id] if !doc_id.trim().is_empty() => Ok(doc_id.clone()),
+        _ => anyhow::bail!("{field} returned non-exact _docIDs={document_ids:?}"),
+    }
 }
 
 fn resolve_behavior_id(

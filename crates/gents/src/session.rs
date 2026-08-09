@@ -11,6 +11,7 @@ mod compaction_entries;
 mod conversation;
 mod fork;
 mod history;
+mod logical_document;
 mod query;
 mod retry;
 mod rows;
@@ -24,6 +25,7 @@ pub(crate) use compaction_entries::create_test_config_provenance;
 pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
 pub(crate) use compaction_entries::{
     load_compaction_entries_for_agent, save_compaction_entry_with_requester_did,
+    verify_compaction_entry_for_timeline,
 };
 #[cfg(test)]
 pub(crate) use conversation::upsert_conversation_from_request_with_identity;
@@ -48,17 +50,21 @@ pub(crate) use history::{
     save_message_with_requester_did_and_request_id,
 };
 pub use history::{load_history, load_history_with_refs, LoadedHistory, MessageFactRef};
+pub use logical_document::{
+    resolve_exact_logical_match, LogicalDocumentResolutionError, LogicalIdConflict,
+};
+pub use query::load_agent_session_exact;
 pub(crate) use query::{
     load_session_behavior_id, session_has_live_response, session_has_other_live_response,
 };
 pub use retry::count_active_sessions;
 pub(crate) use retry::execute_mutation_with_retry;
+pub use rows::AgentSessionDocument;
 pub use sessions::{close_session, create_session};
+pub use sessions::{create_session_with_behavior_id, ensure_session_with_behavior_id};
 #[allow(unused_imports)]
 pub(crate) use sessions::{
-    create_session_with_behavior_id, create_session_with_id, ensure_session,
-    ensure_session_with_behavior_id, ensure_session_with_behavior_id_and_requester_did,
-    max_sequence,
+    create_session_with_id, ensure_session_with_behavior_id_and_requester_did, max_sequence,
 };
 
 /// Render an immutable requester route key for a document create branch.
@@ -86,12 +92,13 @@ pub struct CompactionEntry {
     pub created_at: String,
 }
 
-pub const COMPACTION_SOURCE_MANIFEST_VERSION: u32 = 1;
+pub const COMPACTION_SOURCE_MANIFEST_VERSION: u32 = 2;
 
 /// One exact prior finalized compaction fact, ordered by compaction sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionFactRef {
     pub sequence: u32,
+    pub collection_version_id: String,
     pub source: crate::SignedDocumentVersionRef,
 }
 
