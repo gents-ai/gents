@@ -664,7 +664,7 @@ async fn copy_tool_results(
                     created_at: {{ _lt: "{escaped_cut_ts}" }}
                 }},
                 order: {{ created_at: ASC }}
-            ) {{ tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
+            ) {{ tool_call_doc_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at }}
         }}"#
     );
     let resp = executor.execute_graphql(&query).await?;
@@ -679,6 +679,7 @@ async fn copy_tool_results(
     let child_agent_did_escaped = escape_graphql_string(child_agent_did);
     let mut mutation_fields = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
+        let tool_call_doc_id = row.get("tool_call_doc_id").and_then(|v| v.as_str());
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
         let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
         let output_text = row
@@ -700,6 +701,7 @@ async fn copy_tool_results(
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         mutation_fields.push(format!(
             r#"tool_result_{index}: create_AgentToolResult(input: {{
+                    tool_call_doc_id: {tool_call_doc_id},
                     agent_did: "{child_agent_did_escaped}",
                     session_id: "{child_session_escaped}",
                     tool_name: "{tool_name_escaped}",
@@ -711,6 +713,7 @@ async fn copy_tool_results(
                     created_at: "{created_at_escaped}"
                 }}) {{ _docID }}
             "#,
+            tool_call_doc_id = nullable_string_literal(tool_call_doc_id),
             tool_name_escaped = escape_graphql_string(tool_name),
             tool_input_escaped = escape_graphql_string(tool_input),
             output_text_escaped = escape_graphql_string(output_text),

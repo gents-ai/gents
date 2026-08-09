@@ -482,6 +482,7 @@ fn import_langgraph_capture(
             inference_calls: Vec::new(),
             responses,
             rendered_requests: Vec::new(),
+            rendered_request_refs: Vec::new(),
         },
     })
 }
@@ -1067,6 +1068,7 @@ fn import_multi_agent_capture(
             inference_calls: Vec::new(),
             responses,
             rendered_requests: Vec::new(),
+            rendered_request_refs: Vec::new(),
         },
     })
 }

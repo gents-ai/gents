@@ -1279,17 +1279,6 @@ pub(crate) async fn append_steering_request(
     let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
         .await?
         .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
-    session::append_message_with_requester_did(
-        node,
-        &edge.child_session_id,
-        &child_request.agent_did,
-        child_request.requester_did.as_deref(),
-        "user",
-        message,
-        None,
-        None,
-    )
-    .await?;
     if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
         anyhow::bail!(
             "child AgentRequest {} no longer links to caller request {caller_request_id}",
@@ -1310,6 +1299,17 @@ pub(crate) async fn append_steering_request(
             queued_after_request_id: None,
             interrupted_request_id: interrupted_request_id.clone(),
         },
+    )
+    .await?;
+    session::append_message_with_requester_did(
+        node,
+        &edge.child_session_id,
+        &child_request.agent_did,
+        child_request.requester_did.as_deref(),
+        "user",
+        message,
+        None,
+        Some(&enqueued.request_id),
     )
     .await?;
 

@@ -13,8 +13,9 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunTimeline, RunTimelineRows, TimelineConversationRow,
-    TimelineInferenceCallRow, TimelineMessageRow, TimelineRenderedRequestRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineInferenceCallRow, TimelineMessageRow, TimelineRenderedRequestRef,
+    TimelineRenderedRequestRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
+    TimelineToolCallRow,
 };
 use gents_protocol::graphql::graphql_rows_from_response;
 
@@ -35,10 +36,16 @@ pub async fn load_run_timeline_rows(
         Some(session_id) => load_timeline_requests_for_session(access, session_id).await?,
         None => Vec::new(),
     };
-    merge_timeline_request(&mut requests, request.clone());
+    ensure_unique_timeline_request_ids(&requests)?;
+    merge_timeline_request(&mut requests, request.clone())?;
     for child in load_timeline_child_requests(access, &request.request_id).await? {
-        merge_timeline_request(&mut requests, child);
+        merge_timeline_request(&mut requests, child)?;
     }
+
+    let rendered_request_refs = match request.doc_id.as_deref() {
+        Some(request_doc_id) => load_timeline_rendered_request_refs(access, request_doc_id).await?,
+        None => Vec::new(),
+    };
 
     let session_ids = timeline_session_ids(&requests);
     let mut messages = Vec::new();
@@ -87,6 +94,7 @@ pub async fn load_run_timeline_rows(
         inference_calls,
         responses,
         rendered_requests,
+        rendered_request_refs,
     })
 }
 
@@ -222,6 +230,7 @@ async fn load_timeline_messages_for_session(
                 sequence
                 role
                 content
+                reasoning
                 timestamp
             }}
         }}"#,
@@ -241,6 +250,7 @@ async fn load_timeline_messages_for_session(
                         sequence
                         role
                         content
+                        reasoning
                         timestamp
                     }}
                 }}"#,
@@ -465,6 +475,26 @@ async fn load_timeline_rendered_requests_for_request(
     load_rows(access, "RenderedRequest", &query).await
 }
 
+async fn load_timeline_rendered_request_refs(
+    access: &ConfigAccess,
+    request_doc_id: &str,
+) -> Result<Vec<TimelineRenderedRequestRef>> {
+    let query = format!(
+        r#"{{
+            RenderedRequest(
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                _docID
+                request_doc_id
+                request_commit_cid
+            }}
+        }}"#,
+        escape_graphql_string(request_doc_id)
+    );
+    load_rows(access, "RenderedRequest", &query).await
+}
+
 async fn load_timeline_session(
     access: &ConfigAccess,
     session_id: &str,
@@ -529,10 +559,38 @@ async fn load_timeline_conversation(
     )
 }
 
-fn merge_timeline_request(rows: &mut Vec<TimelineRequestRow>, request: TimelineRequestRow) {
-    if !rows.iter().any(|row| row.request_id == request.request_id) {
+fn merge_timeline_request(
+    rows: &mut Vec<TimelineRequestRow>,
+    request: TimelineRequestRow,
+) -> Result<()> {
+    if let Some(existing) = rows.iter().find(|row| row.request_id == request.request_id) {
+        if existing.doc_id != request.doc_id {
+            anyhow::bail!(
+                "request_id {} is ambiguous across AgentRequest documents {:?} and {:?}",
+                request.request_id,
+                existing.doc_id,
+                request.doc_id
+            );
+        }
+    } else {
         rows.push(request);
     }
+    Ok(())
+}
+
+fn ensure_unique_timeline_request_ids(rows: &[TimelineRequestRow]) -> Result<()> {
+    let mut seen = std::collections::BTreeMap::<&str, &Option<String>>::new();
+    for request in rows {
+        if let Some(existing_doc_id) = seen.insert(&request.request_id, &request.doc_id) {
+            anyhow::bail!(
+                "request_id {} is ambiguous across AgentRequest documents {:?} and {:?}",
+                request.request_id,
+                existing_doc_id,
+                request.doc_id
+            );
+        }
+    }
+    Ok(())
 }
 
 fn timeline_session_ids(requests: &[TimelineRequestRow]) -> Vec<String> {

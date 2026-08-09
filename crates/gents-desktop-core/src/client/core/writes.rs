@@ -318,11 +318,17 @@ impl ClientCore {
         .await
         .map_err(|_| anyhow::anyhow!("timed out listing tool-call holds for {agent_did}"))?
         .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
-        let target = held
-            .iter()
-            .find(|call| call.tool_call_id == tool_call_id)
+        let mut targets = held.iter().filter(|call| call.tool_call_id == tool_call_id);
+        let target = targets
+            .next()
             .ok_or_else(|| anyhow::anyhow!("tool call {tool_call_id} is not awaiting approval"))?;
+        if targets.next().is_some() {
+            anyhow::bail!(
+                "tool call {tool_call_id} is ambiguous across multiple held AgentToolCall documents"
+            );
+        }
         let verdict = gents::config_client::ToolApprovalVerdict {
+            tool_call_doc_id: target.tool_call_doc_id.clone(),
             tool_call_id: tool_call_id.to_string(),
             agent_did: agent_did.to_string(),
             request_id: target.request_id.clone(),

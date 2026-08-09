@@ -753,6 +753,7 @@ async fn apply_projection_acp_read_filter(
         // here. (This per-row decider exists only for the actor-on-behalf
         // GraphQL path the seven families above already use.)
         rendered_requests: rows.rendered_requests,
+        rendered_request_refs: rows.rendered_request_refs,
     })
 }
 
@@ -2294,6 +2295,7 @@ mod tests {
                     sequence: 1,
                     role: "user".to_string(),
                     content: "allowed".to_string(),
+                    reasoning: None,
                     timestamp: None,
                 },
                 TimelineMessageRow {
@@ -2303,6 +2305,7 @@ mod tests {
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: "denied".to_string(),
+                    reasoning: None,
                     timestamp: None,
                 },
             ],
@@ -2366,6 +2369,7 @@ mod tests {
                 },
             ],
             rendered_requests: Vec::new(),
+            rendered_request_refs: Vec::new(),
         }
     }
 

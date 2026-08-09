@@ -34,6 +34,7 @@ struct RequestRow {
 struct MessageRow {
     role: String,
     content: String,
+    request_id: String,
 }
 
 async fn setup_db(
@@ -298,6 +299,7 @@ async fn latest_user_message(node: &EmbeddedNode, session_id: &str) -> MessageRo
             ) {{
                 role
                 content
+                request_id
             }}
         }}"#
     );
@@ -475,7 +477,7 @@ async fn steer_subagent_append_writes_user_message() {
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
 
-    let _ = steer_subagent(
+    let result = steer_subagent(
         &hook,
         "steer-message",
         json!({
@@ -488,6 +490,10 @@ async fn steer_subagent_append_writes_user_message() {
     let message = latest_user_message(db.node.as_ref(), child_session_id).await;
     assert_eq!(message.role, "user");
     assert!(message.content.contains("also check the staging config"));
+    assert_eq!(
+        message.request_id,
+        result["queued_request_id"].as_str().unwrap()
+    );
 }
 
 #[tokio::test]

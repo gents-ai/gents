@@ -64,7 +64,7 @@ pub trait Truncator: Send + Sync {
         output: &str,
         mode: TruncationMode,
         limits: &TruncationLimits,
-        conversation_doc_id: Option<&str>,
+        tool_call_doc_id: Option<&str>,
     ) -> impl std::future::Future<Output = Result<TruncationResult>> + Send;
 }
 

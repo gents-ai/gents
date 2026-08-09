@@ -757,7 +757,13 @@ fn projected_message(
     Some((
         source,
         presented.body_markdown,
-        presented.reasoning_markdown,
+        message
+            .reasoning
+            .as_deref()
+            .map(str::trim)
+            .filter(|reasoning| !reasoning.is_empty())
+            .map(ToOwned::to_owned)
+            .or(presented.reasoning_markdown),
     ))
 }
 

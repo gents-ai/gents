@@ -604,12 +604,15 @@ pub(crate) fn persistent_node_builder_with_stored_identity(
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
     let mut builder = persistent_node_builder(data_dir);
-    if let Some(config) = read_init_config(home_dir)? {
-        if !config.agent_did.trim().is_empty() {
-            let identity = load_initialized_home_identity(home_dir, &config)?;
-            builder = builder.with_node_identity_did(identity.did().to_string());
-        }
-    }
+    let config = read_init_config(home_dir)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "gents home {} is not initialized; run `gents init --home {}` first",
+            home_dir.display(),
+            home_dir.display()
+        )
+    })?;
+    let identity = load_initialized_home_identity(home_dir, &config)?;
+    builder = builder.with_node_identity_did(identity.did().to_string());
     Ok(builder)
 }
 
@@ -696,6 +699,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(node.node_identity_did(), Some(did.as_str()));
+    }
+
+    #[test]
+    fn uninitialized_offline_home_requires_init() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+
+        let error = match persistent_node_builder_with_stored_identity(&home, &data) {
+            Ok(_) => panic!("uninitialized home should not produce an unsigned node builder"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("run `gents init --home"));
     }
 
     #[test]

@@ -424,6 +424,19 @@ impl DefraSessionHook {
             // strip: the model-facing text is the only text there is.
             let result = outcome.model_facing_text();
 
+            let tool_call_doc_id = {
+                let lifecycles = self.in_flight_lifecycles.lock().await;
+                lifecycles
+                    .get(internal_call_id)
+                    .and_then(|lifecycle| lifecycle.doc_id())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "on_tool_result: persisted AgentToolCall _docID missing for tool_call_id={internal_call_id}"
+                        )
+                    })?
+            };
+
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
@@ -456,7 +469,7 @@ impl DefraSessionHook {
                     result_for_persistence,
                     truncation_mode_for(tool_name),
                     &self.truncation_limits,
-                    None,
+                    Some(&tool_call_doc_id),
                 )
                 .await?;
 

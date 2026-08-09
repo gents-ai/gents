@@ -40,14 +40,17 @@ enum ApprovalDecision {
 async fn first_approval_decision(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
+    tool_call_doc_id: &str,
     tool_call_id: &str,
 ) -> anyhow::Result<Option<ApprovalDecision>> {
+    let escaped_tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let escaped_tool_call_id = escape_graphql_string(tool_call_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
             AgentToolApproval(
                 filter: {{
+                    tool_call_doc_id: {{ _eq: "{escaped_tool_call_doc_id}" }},
                     tool_call_id: {{ _eq: "{escaped_tool_call_id}" }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }}
                 }},
@@ -113,10 +116,15 @@ impl DefraSessionHook {
         loop {
             let observed = {
                 let map = self.in_flight_lifecycles.lock().await;
-                map.get(internal_call_id)
-                    .map(|lifecycle| (lifecycle.state(), lifecycle.deadline_at()))
+                map.get(internal_call_id).map(|lifecycle| {
+                    (
+                        lifecycle.state(),
+                        lifecycle.deadline_at(),
+                        lifecycle.doc_id().map(str::to_string),
+                    )
+                })
             };
-            let (state, deadline_at) = match observed {
+            let (state, deadline_at, tool_call_doc_id) = match observed {
                 Some(entry) => entry,
                 None => {
                     return Ok(ToolCallHookAction::skip(format!(
@@ -124,6 +132,11 @@ impl DefraSessionHook {
                     )));
                 }
             };
+            let tool_call_doc_id = tool_call_doc_id.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "held tool call {internal_call_id} is missing its persisted AgentToolCall _docID"
+                )
+            })?;
             match state {
                 ToolCallState::AwaitingApproval => {}
                 ToolCallState::Cancelled => {
@@ -164,7 +177,14 @@ impl DefraSessionHook {
                 )));
             }
 
-            match first_approval_decision(&self.node, &self.agent_did, internal_call_id).await? {
+            match first_approval_decision(
+                &self.node,
+                &self.agent_did,
+                &tool_call_doc_id,
+                internal_call_id,
+            )
+            .await?
+            {
                 Some(ApprovalDecision::Approved) => {
                     let approved = {
                         let mut map = self.in_flight_lifecycles.lock().await;

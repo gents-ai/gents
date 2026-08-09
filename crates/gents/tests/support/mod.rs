@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, watcher::AgentRequest};
+use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -30,6 +30,7 @@ pub const DEADLINE_SECS: u64 = 300;
 pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
     pub process_generation: u64,
+    node_identity_did: String,
     tempdir: TempDir,
 }
 
@@ -71,6 +72,7 @@ impl TestDb {
 
         let reopened = EmbeddedNode::builder()
             .data_path(&data_path)
+            .with_node_identity_did(&self.node_identity_did)
             .build()
             .await
             .map_err(|e| {
@@ -95,9 +97,13 @@ pub async fn test_db(name: &str) -> TestDb {
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .build()
             .await
             .expect("embedded node"),
@@ -108,6 +114,7 @@ pub async fn test_db(name: &str) -> TestDb {
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }
@@ -146,9 +153,13 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .build()
             .await
             .expect("embedded node"),
@@ -169,6 +180,7 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }
@@ -300,9 +312,13 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .with_p2p(P2PConfig {
                 port: 0,
                 bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
@@ -328,6 +344,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }

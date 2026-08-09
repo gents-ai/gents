@@ -313,6 +313,10 @@ pub struct ToolCallLifecycle {
 }
 
 impl ToolCallLifecycle {
+    pub(crate) fn doc_id(&self) -> Option<&str> {
+        self.doc_id.as_deref()
+    }
+
     /// Construct a new lifecycle. Does NOT persist; the first transition
     /// method (`start_running`) creates the DefraDB row.
     #[allow(clippy::too_many_arguments)]

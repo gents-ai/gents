@@ -612,6 +612,7 @@ pub async fn list_tool_call_holds_for_core(
     Ok(held
         .into_iter()
         .map(|call| HeldToolCallView {
+            tool_call_doc_id: call.tool_call_doc_id,
             tool_call_id: call.tool_call_id,
             request_id: call.request_id,
             session_id: call.session_id,

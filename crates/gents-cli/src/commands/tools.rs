@@ -56,20 +56,26 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
     let held = gents::config_client::list_held_tool_calls(&access, scope_did.as_deref())
         .await
         .context("listing held tool calls")?;
-    let target = held
+    let mut targets = held
         .iter()
-        .find(|call| call.tool_call_id == args.tool_call_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "tool call {:?} is not awaiting approval ({} call(s) currently held{})",
-                args.tool_call_id,
-                held.len(),
-                scope_did
-                    .as_deref()
-                    .map(|did| format!(" for {did}"))
-                    .unwrap_or_default()
-            )
-        })?;
+        .filter(|call| call.tool_call_id == args.tool_call_id);
+    let target = targets.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "tool call {:?} is not awaiting approval ({} call(s) currently held{})",
+            args.tool_call_id,
+            held.len(),
+            scope_did
+                .as_deref()
+                .map(|did| format!(" for {did}"))
+                .unwrap_or_default()
+        )
+    })?;
+    if targets.next().is_some() {
+        anyhow::bail!(
+            "tool call {:?} is ambiguous across multiple held AgentToolCall documents",
+            args.tool_call_id
+        );
+    }
     let agent_did = target
         .agent_did
         .clone()
@@ -81,6 +87,7 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
             .context("no --approver-did given and no home agent identity to default to")?,
     };
     let verdict = gents::config_client::ToolApprovalVerdict {
+        tool_call_doc_id: target.tool_call_doc_id.clone(),
         tool_call_id: args.tool_call_id.clone(),
         agent_did: agent_did.clone(),
         request_id: target.request_id.clone(),

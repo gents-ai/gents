@@ -25,11 +25,15 @@ pub struct RunTimelineRows {
     pub responses: Vec<TimelineResponseRow>,
     #[serde(default)]
     pub rendered_requests: Vec<TimelineRenderedRequestRow>,
+    #[serde(default)]
+    pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunTimeline {
     pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_doc_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,7 +48,19 @@ pub struct RunTimeline {
     pub child_request_ids: Vec<String>,
     #[serde(default)]
     pub inference_calls: Vec<TimelineInferenceCallRow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
     pub events: Vec<RunTimelineEvent>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineRenderedRequestRef {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: String,
+    #[serde(default)]
+    pub request_doc_id: String,
+    #[serde(default)]
+    pub request_commit_cid: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +135,8 @@ pub struct TimelineMessageRow {
     pub role: String,
     #[serde(default)]
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
 }
@@ -375,6 +393,8 @@ pub struct TimelineRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_origin: Option<String>,
@@ -470,6 +490,8 @@ pub struct TimelineMessageEvent {
     pub sequence: i64,
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
 }
@@ -628,6 +650,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 sequence: message.sequence,
                 role: message.role.clone(),
                 content: message.content.clone(),
+                reasoning: message.reasoning.clone(),
                 timestamp: message.timestamp.clone(),
             }));
         }
@@ -698,6 +721,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
 
     RunTimeline {
         request_id: root_request_id,
+        request_doc_id: rows.request.doc_id.clone(),
         session_id,
         agent_did: first_owned([
             rows.request.agent_did.as_deref(),
@@ -719,6 +743,7 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         conversation: rows.conversation,
         child_request_ids,
         inference_calls,
+        rendered_request_refs: rows.rendered_request_refs,
         events,
     }
 }
@@ -803,6 +828,7 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         status: request.status.clone(),
         lifecycle_state: request.lifecycle_state.clone(),
         failure_reason: request.failure_reason.clone(),
+        content: request.content.clone(),
         metadata: request.metadata.clone(),
         execution_origin: request.execution_origin.clone(),
         caused_by_trigger_id: request.caused_by_trigger_id.clone(),
@@ -1136,6 +1162,7 @@ mod tests {
                 sequence: 2,
                 role: "assistant".to_string(),
                 content: "calling tool".to_string(),
+                reasoning: None,
                 timestamp: Some("2026-05-04T12:00:02Z".to_string()),
             }],
             tool_calls: vec![TimelineToolCallRow {

@@ -296,6 +296,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "root private assistant note".to_string(),
+                reasoning: None,
                 timestamp: Some("2026-06-05T00:00:01Z".to_string()),
             },
             TimelineMessageRow {
@@ -305,6 +306,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "child private assistant note".to_string(),
+                reasoning: None,
                 timestamp: Some("2026-06-05T00:00:03.100Z".to_string()),
             },
         ],
@@ -779,6 +781,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             sequence: 1,
             role: "assistant".to_string(),
             content: "sensitive assistant text".to_string(),
+            reasoning: None,
             timestamp: Some("2026-06-05T00:00:01Z".to_string()),
         }],
         tool_calls: vec![TimelineToolCallRow {

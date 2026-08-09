@@ -476,6 +476,7 @@ async fn fetch_tool_call_row(
                     }},
                     limit: 1
                 ) {{
+                    _docID
                     request_id
                     deadline_at
                     lifecycle_state
@@ -520,6 +521,7 @@ async fn fetch_tool_result_spill_row(
                     }},
                     limit: 1
                 ) {{
+                    tool_call_doc_id
                     output_text
                     truncated
                     truncation_metadata
@@ -1016,6 +1018,12 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     );
 
     let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;
+    assert_eq!(
+        spill
+            .get("tool_call_doc_id")
+            .and_then(|value| value.as_str()),
+        tool_call.get("_docID").and_then(|value| value.as_str())
+    );
     assert_eq!(
         spill.get("truncated").and_then(|value| value.as_bool()),
         Some(true)
@@ -2237,20 +2245,24 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
 
 async fn write_approval_document(
     node: &defra_node::EmbeddedNode,
+    tool_call_doc_id: &str,
     tool_call_id: &str,
     agent_did: &str,
     decision: &str,
     reason: &str,
 ) {
+    let escaped_tool_call_doc_id = crate::graphql::escape_graphql_string(tool_call_doc_id);
     let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
     let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
     let escaped_decision = crate::graphql::escape_graphql_string(decision);
     let escaped_reason = crate::graphql::escape_graphql_string(reason);
     let created_at = chrono::Utc::now().to_rfc3339();
+    let approval_id = uuid::Uuid::new_v4();
     let mutation = format!(
         r#"mutation {{
             create_AgentToolApproval(input: {{
-                approval_id: "approval-{escaped_tool_call_id}",
+                approval_id: "approval-{approval_id}",
+                tool_call_doc_id: "{escaped_tool_call_doc_id}",
                 tool_call_id: "{escaped_tool_call_id}",
                 request_id: "req-hold",
                 agent_did: "{escaped_agent_did}",
@@ -2274,7 +2286,7 @@ async fn wait_for_lifecycle_state(
     session_id: &str,
     tool_call_id: &str,
     expected: &str,
-) {
+) -> String {
     for _ in 0..200 {
         let session = crate::graphql::escape_graphql_string(session_id);
         let call = crate::graphql::escape_graphql_string(tool_call_id);
@@ -2287,7 +2299,7 @@ async fn wait_for_lifecycle_state(
                             tool_call_id: {{ _eq: "{call}" }}
                         }},
                         limit: 1
-                    ) {{ lifecycle_state }}
+                    ) {{ _docID lifecycle_state }}
                 }}"#
             ))
             .await;
@@ -2306,7 +2318,16 @@ async fn wait_for_lifecycle_state(
             .and_then(|value| value.as_str())
             .map(str::to_string);
         if state.as_deref() == Some(expected) {
-            return;
+            return resp
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("_docID"))
+                .and_then(|value| value.as_str())
+                .expect("held AgentToolCall _docID")
+                .to_string();
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
@@ -2356,7 +2377,7 @@ async fn held_tool_call_dispatches_after_operator_approval() {
     let approver_node = node.clone();
     let approver_session = session_id.clone();
     let approver = tokio::spawn(async move {
-        wait_for_lifecycle_state(
+        let tool_call_doc_id = wait_for_lifecycle_state(
             &approver_node,
             &approver_session,
             "internal-approve",
@@ -2365,6 +2386,26 @@ async fn held_tool_call_dispatches_after_operator_approval() {
         .await;
         write_approval_document(
             &approver_node,
+            "different-tool-call-doc",
+            "internal-approve",
+            "did:test:general",
+            "approved",
+            "",
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let still_held =
+            fetch_tool_call_row(&approver_node, &approver_session, "internal-approve").await;
+        assert_eq!(
+            still_held
+                .get("lifecycle_state")
+                .and_then(|value| value.as_str()),
+            Some("awaitingApproval"),
+            "approval for another AgentToolCall _docID must be ignored"
+        );
+        write_approval_document(
+            &approver_node,
+            &tool_call_doc_id,
             "internal-approve",
             "did:test:general",
             "approved",
@@ -2400,7 +2441,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
     let approver_node = node.clone();
     let approver_session = session_id.clone();
     let approver = tokio::spawn(async move {
-        wait_for_lifecycle_state(
+        let tool_call_doc_id = wait_for_lifecycle_state(
             &approver_node,
             &approver_session,
             "internal-deny",
@@ -2409,6 +2450,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
         .await;
         write_approval_document(
             &approver_node,
+            &tool_call_doc_id,
             "internal-deny",
             "did:test:general",
             "denied",

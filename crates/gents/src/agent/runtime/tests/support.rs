@@ -17,7 +17,14 @@ pub(super) use crate::watcher::AgentRequest;
 pub(super) use serde_json::Value;
 
 pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    let identity = test_identity("runtime-test-node");
+    Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    )
 }
 
 pub(super) fn test_identity(name: &str) -> KeyIdentity {

@@ -1,4 +1,6 @@
 type AgentToolResult @branchable {
+    # Exact AgentToolCall document whose oversized output was spilled here.
+    tool_call_doc_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     session_id: String @index

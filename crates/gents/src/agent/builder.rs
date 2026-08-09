@@ -141,6 +141,11 @@ impl GentsBuilder {
         let identity = self
             .identity
             .ok_or_else(|| anyhow!("Gents builder is missing identity"))?;
+        if node.node_identity_did().is_none() {
+            anyhow::bail!(
+                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
+            );
+        }
         if self.behaviors.is_empty() {
             anyhow::bail!("Gents builder requires at least one behavior");
         }

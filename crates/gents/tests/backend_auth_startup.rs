@@ -69,9 +69,14 @@ async fn run_agent_uses_backend_specific_api_key_env_var_for_startup_probe() -> 
     }
 
     let _env_guard = ENV_VAR_LOCK.lock().await;
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    ensure_runtime_schemas(node.as_ref()).await?;
     let identity = Arc::new(test_identity("startup-probe-backend-auth"));
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await?,
+    );
+    ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint =
         MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
     bind_default_behavior_backend(

@@ -79,6 +79,8 @@ pub struct AdapterProjectionEnvelope {
     pub projection_version: String,
     pub source_request_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_request_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_agent_did: Option<String>,
@@ -127,6 +129,15 @@ pub struct ProjectionProvenance {
     pub source_projection_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rendered_request_refs: Vec<RenderedRequestProvenanceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderedRequestProvenanceRef {
+    pub capture_doc_id: String,
+    pub request_doc_id: String,
+    pub request_commit_cid: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +265,8 @@ pub enum OpenAiCodexTraceItem {
         role: String,
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
     },
     ToolCall {
@@ -313,6 +326,10 @@ pub struct LangGraphNode {
     pub parent_tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,6 +379,8 @@ pub struct MultiAgentMessage {
     pub request_id: Option<String>,
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,6 +395,8 @@ pub struct MultiAgentDelegation {
     pub behavior_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,6 +425,7 @@ pub fn build_adapter_projection(
         projection_id: kind.id().to_string(),
         projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
         source_request_id: timeline.request_id.clone(),
+        source_request_doc_id: timeline.request_doc_id.clone(),
         source_session_id: timeline.session_id.clone(),
         source_agent_did: timeline.agent_did.clone(),
         source_behavior_id: timeline.behavior_id.clone(),
@@ -413,6 +435,15 @@ pub fn build_adapter_projection(
             source_projection_id: RUN_TIMELINE_PROJECTION_ID.to_string(),
             source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
             actor_did: context.actor_did.clone(),
+            rendered_request_refs: timeline
+                .rendered_request_refs
+                .iter()
+                .map(|reference| RenderedRequestProvenanceRef {
+                    capture_doc_id: reference.doc_id.clone(),
+                    request_doc_id: reference.request_doc_id.clone(),
+                    request_commit_cid: reference.request_commit_cid.clone(),
+                })
+                .collect(),
         },
         rendered_captures: rendered_capture_events(timeline),
         output: match kind {
@@ -464,6 +495,28 @@ pub fn validate_adapter_projection_contract(
         envelope.provenance.source_projection_id.as_str(),
         RUN_TIMELINE_PROJECTION_ID,
     );
+    for (index, reference) in envelope.provenance.rendered_request_refs.iter().enumerate() {
+        require_nonempty(
+            &mut violations,
+            &format!("provenance.rendered_request_refs[{index}].capture_doc_id"),
+            &reference.capture_doc_id,
+        );
+        require_nonempty(
+            &mut violations,
+            &format!("provenance.rendered_request_refs[{index}].request_doc_id"),
+            &reference.request_doc_id,
+        );
+        require_nonempty(
+            &mut violations,
+            &format!("provenance.rendered_request_refs[{index}].request_commit_cid"),
+            &reference.request_commit_cid,
+        );
+        if envelope.source_request_doc_id.as_deref() != Some(reference.request_doc_id.as_str()) {
+            violations.push(format!(
+                "provenance.rendered_request_refs[{index}].request_doc_id does not match source_request_doc_id"
+            ));
+        }
+    }
     require_eq(
         &mut violations,
         "projection_id",
@@ -1039,6 +1092,7 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
             "projection_id": { "const": kind.id() },
             "projection_version": { "const": ADAPTER_PROJECTION_VERSION },
             "source_request_id": string_schema(),
+            "source_request_doc_id": optional_string_schema(),
             "source_session_id": optional_string_schema(),
             "source_agent_did": optional_string_schema(),
             "source_behavior_id": optional_string_schema(),
@@ -1277,6 +1331,7 @@ fn openai_codex_projection_schema() -> Value {
                                 "request_id": optional_string_schema(),
                                 "role": string_schema(),
                                 "content": string_schema(),
+                                "reasoning": optional_string_schema(),
                                 "timestamp": optional_string_schema()
                             }
                         },
@@ -1346,7 +1401,9 @@ fn langgraph_projection_schema() -> Value {
                         "behavior_id": optional_string_schema(),
                         "parent_request_id": optional_string_schema(),
                         "parent_tool_call_id": optional_string_schema(),
-                        "status": optional_string_schema()
+                        "status": optional_string_schema(),
+                        "content": optional_string_schema(),
+                        "reasoning": optional_string_schema()
                     }
                 }
             },
@@ -1414,7 +1471,8 @@ fn multi_agent_projection_schema() -> Value {
                         "id": string_schema(),
                         "request_id": optional_string_schema(),
                         "role": string_schema(),
-                        "content": string_schema()
+                        "content": string_schema(),
+                        "reasoning": optional_string_schema()
                     }
                 }
             },
@@ -1430,7 +1488,8 @@ fn multi_agent_projection_schema() -> Value {
                         "parent_tool_call_id": optional_string_schema(),
                         "agent_did": optional_string_schema(),
                         "behavior_id": optional_string_schema(),
-                        "status": optional_string_schema()
+                        "status": optional_string_schema(),
+                        "input": optional_string_schema()
                     }
                 }
             },
@@ -1465,7 +1524,20 @@ fn provenance_schema() -> Value {
             "runtime": { "const": "gents" },
             "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
             "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
-            "actor_did": optional_string_schema()
+            "actor_did": optional_string_schema(),
+            "rendered_request_refs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["capture_doc_id", "request_doc_id", "request_commit_cid"],
+                    "properties": {
+                        "capture_doc_id": string_schema(),
+                        "request_doc_id": string_schema(),
+                        "request_commit_cid": string_schema()
+                    }
+                }
+            }
         }
     })
 }
@@ -1785,6 +1857,7 @@ fn build_openai_codex_run_trace(
                     request_id: event.request_id.clone(),
                     role: event.role.clone(),
                     content: redact_str(&event.content, context),
+                    reasoning: redact_option(event.reasoning.as_deref(), context),
                     timestamp: event.timestamp.clone(),
                 });
             }
@@ -1862,6 +1935,8 @@ fn build_langgraph_state_history(
             parent_request_id,
             parent_tool_call_id,
             status,
+            content,
+            reasoning,
         ) = match event {
             // Captures surface in `values.rendered_captures`, not as graph
             // nodes — a capture is a fact about an inference call, not a step.
@@ -1875,6 +1950,8 @@ fn build_langgraph_state_history(
                 event.parent_request_id.clone(),
                 event.parent_tool_call_id.clone(),
                 event.lifecycle_state.clone().or(event.status.clone()),
+                redact_option(event.content.as_deref(), context),
+                None,
             ),
             RunTimelineEvent::InferenceCall(event) => (
                 format!("inference_call:{}", event.call_id),
@@ -1885,6 +1962,8 @@ fn build_langgraph_state_history(
                 None,
                 None,
                 Some(event.call_state.clone()),
+                None,
+                None,
             ),
             RunTimelineEvent::Message(event) => (
                 format!("message:{}:{}", event.session_id, event.sequence),
@@ -1895,6 +1974,8 @@ fn build_langgraph_state_history(
                 None,
                 None,
                 Some(event.role.clone()),
+                Some(redact_str(&event.content, context)),
+                redact_option(event.reasoning.as_deref(), context),
             ),
             RunTimelineEvent::ToolCall(event) => (
                 format!("tool_call:{}", event.tool_call_id),
@@ -1905,6 +1986,8 @@ fn build_langgraph_state_history(
                 None,
                 None,
                 Some(event.status.clone()),
+                None,
+                None,
             ),
             RunTimelineEvent::Response(event) => (
                 format!("response:{}", event.request_id),
@@ -1915,6 +1998,8 @@ fn build_langgraph_state_history(
                 None,
                 None,
                 event.status.clone(),
+                redact_option(event.content.as_deref(), context),
+                redact_option(event.reasoning.as_deref(), context),
             ),
         };
 
@@ -1928,6 +2013,8 @@ fn build_langgraph_state_history(
                 parent_request_id,
                 parent_tool_call_id,
                 status,
+                content,
+                reasoning,
             });
         }
         if let Some(last) = last_node_id.replace(node_id.clone()) {
@@ -2057,6 +2144,7 @@ fn build_multi_agent_task(
                         agent_did: request.agent_did.clone(),
                         behavior_id: request.behavior_id.clone(),
                         status: request.lifecycle_state.clone().or(request.status.clone()),
+                        input: redact_option(request.content.as_deref(), context),
                     });
                 }
             }
@@ -2070,6 +2158,7 @@ fn build_multi_agent_task(
                     request_id: message.request_id.clone(),
                     role: message.role.clone(),
                     content: redact_str(&message.content, context),
+                    reasoning: redact_option(message.reasoning.as_deref(), context),
                 });
             }
             RunTimelineEvent::ToolCall(tool) => {
@@ -2215,11 +2304,11 @@ fn timeline_request_input(
     event: &TimelineRequestEvent,
     context: &ProjectionContext,
 ) -> Option<String> {
-    if event.request_id == timeline.request_id {
-        redact_option(timeline.request.content.as_deref(), context)
-    } else {
-        None
-    }
+    redact_option(event.content.as_deref(), context).or_else(|| {
+        (event.request_id == timeline.request_id)
+            .then(|| redact_option(timeline.request.content.as_deref(), context))
+            .flatten()
+    })
 }
 
 fn last_response(timeline: &RunTimeline) -> Option<&TimelineResponseEvent> {
