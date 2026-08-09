@@ -2355,6 +2355,7 @@ mod tests {
         .await?;
 
         let session_id = escape_graphql_string(&created.session_id);
+        let requester_did = escape_graphql_string(core.principal().did());
         let now = Utc::now().to_rfc3339();
         let metadata = escape_graphql_string(
             r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"child-1","queued_after_request_id":null}}"#,
@@ -2364,6 +2365,7 @@ mod tests {
                 wake: create_AgentRequest(input: {{
                     request_id: "legacy-wake",
                     agent_did: "did:test:amy",
+                    requester_did: "{requester_did}",
                     behavior_id: "amy-code",
                     session_id: "{session_id}",
                     content: "legacy wake",
