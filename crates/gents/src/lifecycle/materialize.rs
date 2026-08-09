@@ -140,7 +140,14 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
 
-    let response = node.execute(&mutation).await;
+    // A trigger fire is not replayable: `event_kind: created` is first-seen, so
+    // dropping this create on a transient conflict loses the stage for good.
+    let response = crate::retry::execute_graphql_with_conflict_retry(
+        node,
+        &mutation,
+        "materialize_pending_agent_request",
+    )
+    .await;
     if response.has_errors() {
         anyhow::bail!(
             "create pending AgentRequest with trigger lineage failed: {:?}",
@@ -319,7 +326,12 @@ impl RequestLifecycle {
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
 
-        let resp = node.execute(&mutation).await;
+        let resp = crate::retry::execute_graphql_with_conflict_retry(
+            node.as_ref(),
+            &mutation,
+            "materialize_claimed_agent_request",
+        )
+        .await;
         if resp.has_errors() {
             anyhow::bail!("creating claimed AgentRequest failed: {:?}", resp.errors);
         }
