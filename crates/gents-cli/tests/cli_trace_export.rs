@@ -5,9 +5,20 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
+use base64::Engine as _;
+use crypto::PrivateKey;
+use defra_core::block::{
+    Block, CrdtDelta, LwwDeltaPayload, Signature, SignatureHeader, SignatureType,
+};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
+use gents::tool_call_lifecycle::ToolCallLifecycle;
 use gents::{ensure_runtime_schemas, KeyIdentity};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -353,7 +364,7 @@ fn trace_project_schema_prints_adapter_contracts_without_runtime() -> Result<()>
     assert_eq!(
         atif_native_schema.get("$id").and_then(Value::as_str),
         Some(
-            "https://schemas.defra.ai/gents/adapter-projection/atif_trajectory/v2-native.schema.json"
+            "https://schemas.defra.ai/gents/adapter-projection/atif_trajectory/v3-native.schema.json"
         )
     );
 
@@ -808,6 +819,10 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
 #[tokio::test]
 async fn trace_project_graphql_enforces_acp_read_filter_with_real_cli() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    run_init_json(
+        tempdir.path(),
+        &["--identity-only", "--agent-name", "projection-reader"],
+    )?;
     let endpoint = spawn_projection_graphql_acp_mock().await?;
 
     let cwd = tempdir.path().to_path_buf();
@@ -1034,13 +1049,15 @@ async fn initialize_signed_trace_export_home(
     let _signing_identity = KeyIdentity::load_or_create(key_path, None)
         .with_context(|| format!("loading trace-export signing key {key_path}"))?;
 
-    let node = EmbeddedNode::builder()
-        .data_path(data_dir)
-        .with_storage_backend(StorageBackend::RocksDb)
-        .with_node_identity_did(&agent_did)
-        .build()
-        .await
-        .context("opening signed embedded node")?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(data_dir)
+            .with_storage_backend(StorageBackend::RocksDb)
+            .with_node_identity_did(&agent_did)
+            .build()
+            .await
+            .context("opening signed embedded node")?,
+    );
     ensure_runtime_schemas(&node).await?;
     seed_trace_export_rows(&node, &agent_did).await?;
     let request = node
@@ -1124,7 +1141,7 @@ async fn initialize_signed_trace_export_home(
     })
 }
 
-async fn seed_trace_export_rows(node: &EmbeddedNode, agent_did: &str) -> Result<()> {
+async fn seed_trace_export_rows(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<()> {
     exec(
         node,
         &r#"mutation {
@@ -1408,43 +1425,32 @@ async fn seed_trace_export_rows(node: &EmbeddedNode, agent_did: &str) -> Result<
         ),
     )
     .await?;
-    exec(
-        node,
-        r#"mutation {
-            create_AgentToolCall(input: {
-                tool_call_key: "session-1:call-success",
-                session_id: "session-1",
-                message_sequence: 2,
-                tool_name: "read",
-                tool_call_id: "call-success",
-                args: "{\"path\":\"README.md\"}",
-                result: "README contents",
-                status: "completed",
-                started_at: "2026-05-04T12:00:02Z",
-                completed_at: "2026-05-04T12:00:03Z"
-            }) { _docID }
-        }"#,
+    seed_completed_tool_call(
+        node.clone(),
+        "req-1",
+        "session-1",
+        agent_did,
+        "call-success",
+        2,
+        "read",
+        r#"{"path":"README.md"}"#,
+        "README contents",
+        "2026-05-04T12:00:02Z",
+        "2026-05-04T12:00:03Z",
     )
     .await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "session-1:call-fail",
-                session_id: "session-1",
-                message_sequence: 3,
-                tool_name: "bash",
-                tool_call_id: "call-fail",
-                args: "{{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}}",
-                result: "{}",
-                status: "completed",
-                started_at: "2026-05-04T12:00:03Z",
-                completed_at: "2026-05-04T12:00:04.500Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&failed_result)
-        ),
+    seed_completed_tool_call(
+        node.clone(),
+        "req-1",
+        "session-1",
+        agent_did,
+        "call-fail",
+        3,
+        "bash",
+        r#"{"command":"grep","args":["-P","amy","README.md"]}"#,
+        &failed_result,
+        "2026-05-04T12:00:03Z",
+        "2026-05-04T12:00:04.500Z",
     )
     .await?;
 
@@ -1460,25 +1466,18 @@ async fn seed_trace_export_rows(node: &EmbeddedNode, agent_did: &str) -> Result<
         "available_tools": ["search_posts"]
     })
     .to_string();
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "session-1:call-missing-tool",
-                    session_id: "session-1",
-                    message_sequence: 4,
-                    tool_name: "describe_tool",
-                    tool_call_id: "call-missing-tool",
-                    args: "{{\"service_id\":\"x-data\",\"tool_name\":\"search_post\"}}",
-                    result: "{}",
-                    status: "completed",
-                    started_at: "2026-05-04T12:00:04Z",
-                    completed_at: "2026-05-04T12:00:04.250Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&missing_tool_result)
-        ),
+    seed_completed_tool_call(
+        node.clone(),
+        "req-1",
+        "session-1",
+        agent_did,
+        "call-missing-tool",
+        4,
+        "describe_tool",
+        r#"{"service_id":"x-data","tool_name":"search_post"}"#,
+        &missing_tool_result,
+        "2026-05-04T12:00:04Z",
+        "2026-05-04T12:00:04.250Z",
     )
     .await?;
 
@@ -1579,22 +1578,67 @@ async fn seed_trace_export_rows(node: &EmbeddedNode, agent_did: &str) -> Result<
         ),
     )
     .await?;
+    seed_completed_tool_call(
+        node.clone(),
+        "req-deadline",
+        "session-2",
+        agent_did,
+        "call-deadline",
+        2,
+        "read",
+        r#"{"path":"README.md"}"#,
+        "README contents",
+        "2026-05-04T13:00:02Z",
+        "2026-05-04T13:00:03Z",
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_completed_tool_call(
+    node: Arc<EmbeddedNode>,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    tool_call_id: &str,
+    message_sequence: u32,
+    tool_name: &str,
+    args: &str,
+    output: &str,
+    started_at: &str,
+    completed_at: &str,
+) -> Result<()> {
+    let mut lifecycle = ToolCallLifecycle::new(
+        node.clone(),
+        request_id.to_string(),
+        session_id.to_string(),
+        agent_did.to_string(),
+        tool_call_id.to_string(),
+        message_sequence,
+        tool_name.to_string(),
+        args.to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    );
+    lifecycle.start_running().await?;
+    lifecycle.complete(output).await?;
+
     exec(
-        node,
-        r#"mutation {
-            create_AgentToolCall(input: {
-                tool_call_key: "session-2:call-deadline",
-                session_id: "session-2",
-                message_sequence: 2,
-                tool_name: "read",
-                tool_call_id: "call-deadline",
-                args: "{\"path\":\"README.md\"}",
-                result: "README contents",
-                status: "completed",
-                started_at: "2026-05-04T13:00:02Z",
-                completed_at: "2026-05-04T13:00:03Z"
-            }) { _docID }
-        }"#,
+        node.as_ref(),
+        &format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ tool_call_key: {{ _eq: "{}" }} }},
+                    input: {{
+                        started_at: "{}",
+                        completed_at: "{}"
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            escape_graphql_string(&format!("{session_id}:{tool_call_id}")),
+            escape_graphql_string(started_at),
+            escape_graphql_string(completed_at),
+        ),
     )
     .await?;
     Ok(())
@@ -1624,6 +1668,15 @@ struct ProjectionGraphqlAcpMock {
 #[derive(Clone)]
 struct ProjectionGraphqlAcpState {
     allowed: Arc<BTreeMap<(String, String), bool>>,
+    signed_block: Arc<ProjectionSignedBlock>,
+}
+
+#[derive(Clone)]
+struct ProjectionSignedBlock {
+    cid: String,
+    identity: String,
+    block: String,
+    signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1641,6 +1694,63 @@ struct ProjectionAcpDecisionRequest {
     resource_name: String,
     #[serde(rename = "docID")]
     doc_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectionSignedBlockQuery {
+    cid: String,
+}
+
+fn projection_signed_block() -> Result<ProjectionSignedBlock> {
+    let private_key = crypto::generate_ed25519().context("generating projection signing key")?;
+    let public_key = private_key.public_key();
+    let identity = public_key.to_hex_string();
+    let mut block = Block {
+        delta: CrdtDelta::Lww(LwwDeltaPayload {
+            field_name: "content".to_string(),
+            schema_version_id: "schema-agent-request-v1".to_string(),
+            priority: 1,
+            data: b"root visible request".to_vec(),
+        }),
+        heads: None,
+        links: None,
+        encryption: None,
+        signature: None,
+    };
+    let signature = Signature::new(
+        SignatureHeader::new(SignatureType::EdDSA, identity.as_bytes().to_vec()),
+        private_key
+            .sign(
+                &block
+                    .to_dag_cbor()
+                    .context("encoding unsigned projection block")?,
+            )
+            .context("signing projection block")?,
+    );
+    block.signature = Some(
+        signature
+            .generate_cid()
+            .context("hashing projection signature")?,
+    );
+    let cid = block
+        .generate_cid()
+        .context("hashing signed projection block")?
+        .to_string();
+    let encoder = base64::engine::general_purpose::STANDARD;
+    Ok(ProjectionSignedBlock {
+        cid,
+        identity,
+        block: encoder.encode(
+            block
+                .to_dag_cbor()
+                .context("encoding signed projection block")?,
+        ),
+        signature: encoder.encode(
+            signature
+                .to_dag_cbor()
+                .context("encoding projection signature")?,
+        ),
+    })
 }
 
 async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock> {
@@ -1661,10 +1771,12 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     let addr = listener.local_addr()?;
     let state = ProjectionGraphqlAcpState {
         allowed: Arc::new(allowed),
+        signed_block: Arc::new(projection_signed_block()?),
     };
     let router = Router::new()
         .route("/api/v0/graphql", post(projection_graphql_mock))
         .route("/api/v0/acp/document/decide", post(projection_acp_mock))
+        .route("/api/v0/block/signed", get(projection_signed_block_mock))
         .with_state(state);
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -1676,15 +1788,58 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
 }
 
 async fn projection_graphql_mock(
+    State(state): State<ProjectionGraphqlAcpState>,
     Json(body): Json<ProjectionGraphqlRequest>,
 ) -> (StatusCode, Json<Value>) {
     let query = body.query.as_str();
-    let response = if query.contains("AgentRequest(") {
+    let response = if query.contains("_commits(") && query.contains("signature { type identity }") {
+        json!({
+            "data": {
+                "_commits": [{
+                    "cid": state.signed_block.cid,
+                    "signature": {
+                        "type": "EdDSA",
+                        "identity": state.signed_block.identity
+                    }
+                }]
+            }
+        })
+    } else if query.contains("_commits(") && query.contains("collectionVersionId") {
+        json!({
+            "data": {
+                "_commits": [{
+                    "cid": state.signed_block.cid,
+                    "docID": "doc-request-root",
+                    "fieldName": "_C",
+                    "collectionVersionId": "schema-agent-request-v1"
+                }],
+                "AgentRequest": [projection_mock_root_request()]
+            }
+        })
+    } else if query.contains("_commits(") && query.contains("heads { cid fieldName }") {
+        json!({
+            "data": {
+                "_commits": [{
+                    "cid": state.signed_block.cid,
+                    "heads": [],
+                    "signature": {
+                        "identity": state.signed_block.identity
+                    }
+                }]
+            }
+        })
+    } else if query.contains("AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
     } else if query.contains("AgentMessage(") {
         json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
     } else if query.contains("AgentToolCall(") {
         json!({ "data": { "AgentToolCall": projection_mock_tool_calls() } })
+    } else if query.contains("AgentToolResult(") {
+        json!({ "data": { "AgentToolResult": [] } })
+    } else if query.contains("AgentToolOutputOmission(") {
+        json!({ "data": { "AgentToolOutputOmission": [] } })
+    } else if query.contains("AgentToolApproval(") {
+        json!({ "data": { "AgentToolApproval": [] } })
     } else if query.contains("AgentResponse(") {
         json!({ "data": { "AgentResponse": projection_mock_agent_responses() } })
     } else if query.contains("AgentSession(") {
@@ -1707,6 +1862,26 @@ async fn projection_graphql_mock(
         })
     };
     (StatusCode::OK, Json(response))
+}
+
+async fn projection_signed_block_mock(
+    State(state): State<ProjectionGraphqlAcpState>,
+    Query(query): Query<ProjectionSignedBlockQuery>,
+) -> (StatusCode, Json<Value>) {
+    if query.cid != state.signed_block.cid {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown signed block" })),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "cid": state.signed_block.cid,
+            "block": state.signed_block.block,
+            "signature": state.signed_block.signature,
+        })),
+    )
 }
 
 async fn projection_acp_mock(
@@ -1816,9 +1991,9 @@ fn projection_mock_tool_calls() -> Value {
             "tool_name": "spawn_subagent",
             "tool_call_id": "call-delegate",
             "args": "{\"task\":\"review visible request\"}",
-            "result": "spawned reviewer",
-            "status": "completed",
-            "lifecycle_state": "completed",
+            "result": "",
+            "status": "running",
+            "lifecycle_state": "running",
             "started_at": "2026-06-05T18:00:01Z",
             "deadline_at": null,
             "completed_at": "2026-06-05T18:00:02Z",

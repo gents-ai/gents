@@ -86,6 +86,42 @@ fn default_baseline_covers_every_protocol_collection_once() {
     );
 }
 
+#[test]
+fn tool_evidence_breaking_baseline_pins_exact_roots_without_migration_steps() {
+    let expected = [
+        (
+            gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
+            "bafyreihrwyey3uh53jaxgv6wlrbnbk2ohndxstqm6u37jl4ugw4drwkzxu",
+        ),
+        (
+            gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
+            "bafyreibxcb6tjjdtywyzgxw52xzwgq74k44wr3dsys6bfqkkkdglqyh2oa",
+        ),
+        (
+            gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,
+            "bafyreianyd3uqbs636ozwnktbxma6wg5aduwwpy2rsoclwhqxpr5mwqyaq",
+        ),
+        (
+            gents_protocol::schemas::AGENT_TOOL_OUTPUT_OMISSION_NAME,
+            "bafyreifeasvloks23l3sbzqurelntkez7bld2phnqlc5zubzpon23b4rju",
+        ),
+    ];
+
+    for (name, expected_version) in expected {
+        let entry = gents_migration::DEFAULT_BASELINE
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("missing breaking-baseline collection {name}"));
+        assert_eq!(entry.expected_version, Some(expected_version));
+        assert!(
+            !gents_migration::DEFAULT_STEPS
+                .iter()
+                .any(|step| step.collection() == Some(name)),
+            "breaking schema reset must not add a migration step for {name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     let node = fresh_node().await;

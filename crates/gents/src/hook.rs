@@ -248,6 +248,7 @@ enum TranscriptTurnState {
 struct ToolResultIdentity {
     result_id: Option<String>,
     call_id: Option<String>,
+    tool_name: Option<String>,
 }
 
 struct SessionState {
@@ -316,6 +317,35 @@ impl SessionState {
         if let Some(call_id) = non_empty(call_id) {
             identity.call_id = Some(call_id.to_string());
         }
+    }
+
+    fn register_tool_result_tool_name(&mut self, internal_call_id: &str, tool_name: &str) {
+        let tool_name = tool_name.trim();
+        if tool_name.is_empty() {
+            return;
+        }
+        let identity = self
+            .tool_result_identities
+            .entry(internal_call_id.to_string())
+            .or_default();
+        match identity.tool_name.as_deref() {
+            Some(existing) if existing != tool_name => {
+                tracing::warn!(
+                    internal_call_id,
+                    existing_tool_name = existing,
+                    observed_tool_name = tool_name,
+                    "tool-result identity observed conflicting tool names"
+                );
+            }
+            Some(_) => {}
+            None => identity.tool_name = Some(tool_name.to_string()),
+        }
+    }
+
+    fn tool_result_tool_name(&self, internal_call_id: &str) -> Option<String> {
+        self.tool_result_identities
+            .get(internal_call_id)
+            .and_then(|identity| identity.tool_name.clone())
     }
 
     fn tool_result_message_identity(

@@ -1,0 +1,21 @@
+type AgentToolOutputOmission @branchable {
+    # This groups immutable proposals by the exact accepted execution version;
+    # it is not a uniqueness boundary. The terminal AgentToolCall exact edge
+    # selects the one authoritative physical omission after first-terminal-wins.
+    omission_key: String @index @immutable
+    tool_call_key: String @index @immutable
+    tool_call_doc_id: String @index @immutable
+    tool_call_composite_commit_cid: String @immutable
+    tool_call_signer_did: String @immutable
+    agent_did: String @index @immutable
+    requester_did: String @index @immutable
+    session_id: String @index @immutable
+    source_phase: String @immutable
+    terminal_phase: String @index @immutable
+    reason: String @index @immutable
+    detail: String @immutable
+    created_at: DateTime @index @immutable
+    fork_source_doc_id: String @index @immutable
+    fork_source_composite_commit_cid: String @immutable
+    fork_source_signer_did: String @immutable
+}

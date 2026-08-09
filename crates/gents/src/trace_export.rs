@@ -80,6 +80,105 @@ pub struct NativeToolOutputTrace {
     pub default_ignored: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmyToolOutputOmission {
+    pub terminal_phase: AmyToolOutputOmissionTerminalPhase,
+    pub reason: AmyToolOutputOmissionReason,
+    pub detail: String,
+    pub evidence: crate::SignedDocumentVersionRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AmyToolOutputOmissionTerminalPhase {
+    Failed,
+    TimedOut,
+    Cancelled,
+}
+
+impl AmyToolOutputOmissionTerminalPhase {
+    pub fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "failed" => Some(Self::Failed),
+            "timedOut" => Some(Self::TimedOut),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::TimedOut => "timedOut",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AmyToolOutputOmissionReason {
+    PreDispatchFailure,
+    ApprovalDenied,
+    TimedOut,
+    Cancelled,
+    RecoveryFailure,
+    ExecutionLost,
+    ChildDead,
+    ChildSuperseded,
+}
+
+impl AmyToolOutputOmissionReason {
+    pub fn from_persisted(value: &str) -> Option<Self> {
+        match value {
+            "preDispatchFailure" => Some(Self::PreDispatchFailure),
+            "approvalDenied" => Some(Self::ApprovalDenied),
+            "timedOut" => Some(Self::TimedOut),
+            "cancelled" => Some(Self::Cancelled),
+            "recoveryFailure" => Some(Self::RecoveryFailure),
+            "executionLost" => Some(Self::ExecutionLost),
+            "childDead" => Some(Self::ChildDead),
+            "childSuperseded" => Some(Self::ChildSuperseded),
+            _ => None,
+        }
+    }
+
+    pub const fn allows_terminal(self, terminal: AmyToolOutputOmissionTerminalPhase) -> bool {
+        match self {
+            Self::TimedOut => matches!(terminal, AmyToolOutputOmissionTerminalPhase::TimedOut),
+            Self::Cancelled => matches!(terminal, AmyToolOutputOmissionTerminalPhase::Cancelled),
+            Self::PreDispatchFailure
+            | Self::ApprovalDenied
+            | Self::RecoveryFailure
+            | Self::ExecutionLost
+            | Self::ChildDead
+            | Self::ChildSuperseded => {
+                matches!(terminal, AmyToolOutputOmissionTerminalPhase::Failed)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmyToolTerminalEvidenceAvailability {
+    EvidenceUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmyToolTerminalEvidenceUnavailableReason {
+    MissingOnQueriedReplica,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmyToolTerminalEvidenceUnavailable {
+    pub availability: AmyToolTerminalEvidenceAvailability,
+    pub reason: AmyToolTerminalEvidenceUnavailableReason,
+    pub retryable: bool,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AmyToolCallTraceRecord {
     pub run_id: Option<String>,
@@ -110,7 +209,10 @@ pub struct AmyToolCallTraceRecord {
     pub validation_errors: Vec<TraceValidationError>,
     pub repair_attempt: Option<Value>,
     pub final_arguments_sent: Option<Value>,
-    pub tool_result: String,
+    pub tool_result: Option<String>,
+    pub tool_result_evidence: Option<crate::SignedDocumentVersionRef>,
+    pub tool_output_omission: Option<AmyToolOutputOmission>,
+    pub tool_terminal_evidence_unavailable: Option<AmyToolTerminalEvidenceUnavailable>,
     pub native_tool_output: Option<NativeToolOutputTrace>,
     pub tool_result_ok: bool,
     pub tool_call_completed: bool,

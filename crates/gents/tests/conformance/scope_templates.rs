@@ -29,6 +29,7 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         "AgentMessage",
         "AgentToolCall",
         "AgentToolResult",
+        "AgentToolOutputOmission",
         "AgentToolApproval",
         "AgentSession",
         "AgentConversation",
@@ -89,6 +90,7 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         "AgentMessage",
         "AgentToolCall",
         "AgentToolResult",
+        "AgentToolOutputOmission",
         "AgentToolApproval",
         "AgentSession",
         "AgentConversation",
@@ -184,6 +186,7 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
     }
     for local_collection in [
         "AgentToolResult",
+        "AgentToolOutputOmission",
         "AgentSession",
         "AgentConversation",
         "CompactionEntry",

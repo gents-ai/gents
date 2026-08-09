@@ -107,6 +107,7 @@ theorem conversation_filter_eq (peerDid localDid : Did) :
         , { collection := "AgentMessage",      field := "requester_did", value := peerDid }
         , { collection := "AgentToolCall",     field := "requester_did", value := peerDid }
         , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
+        , { collection := "AgentToolOutputOmission", field := "requester_did", value := peerDid }
         , { collection := "AgentToolApproval", field := "requester_did", value := peerDid }
         , { collection := "AgentSession",      field := "requester_did", value := peerDid }
         , { collection := "AgentConversation", field := "requester_did", value := peerDid }
@@ -232,6 +233,7 @@ theorem subagentHost_filters_declared_collections (peerDid localDid : Did) :
 
 theorem subagentHost_excludes_host_local_artifacts :
     "AgentToolResult" ∉ subagentHostTemplate.collections ∧
+    "AgentToolOutputOmission" ∉ subagentHostTemplate.collections ∧
     "AgentSession" ∉ subagentHostTemplate.collections ∧
     "AgentConversation" ∉ subagentHostTemplate.collections ∧
     "CompactionEntry" ∉ subagentHostTemplate.collections := by

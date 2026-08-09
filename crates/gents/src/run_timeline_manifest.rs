@@ -54,6 +54,7 @@ pub enum TimelineSourceClass {
     Message,
     ToolCall,
     ToolResult,
+    ToolOutputOmission,
     ToolApproval,
     ResponseLive,
     ResponseOutcome,

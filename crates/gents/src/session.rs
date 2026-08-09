@@ -58,7 +58,7 @@ pub(crate) use query::{
     load_session_behavior_id, session_has_live_response, session_has_other_live_response,
 };
 pub use retry::count_active_sessions;
-pub(crate) use retry::execute_mutation_with_retry;
+pub(crate) use retry::{execute_mutation_with_retry, retry_operation};
 pub use rows::AgentSessionDocument;
 pub use sessions::{close_session, create_session};
 pub use sessions::{create_session_with_behavior_id, ensure_session_with_behavior_id};

@@ -285,14 +285,76 @@ impl DefraSessionHook {
         tool_result: &ToolResult,
         internal_call_id: &str,
     ) -> anyhow::Result<()> {
-        let session_id = self
-            .state
-            .lock()
-            .await
-            .session_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+        let (session_id, registered_tool_name) = {
+            let state = self.state.lock().await;
+            let session_id = state
+                .session_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
+            (session_id, state.tool_result_tool_name(internal_call_id))
+        };
 
+        let raw_stream_result = render_tool_result_text(tool_result);
+        let durable =
+            load_durable_tool_call_identity(&self.node, &session_id, internal_call_id).await?;
+        let (tool_name, stored_result) = match durable {
+            Some(durable) => {
+                if registered_tool_name
+                    .as_deref()
+                    .is_some_and(|registered| registered != durable.tool_name)
+                {
+                    anyhow::bail!(
+                        "streamed tool-result identity for {internal_call_id} disagrees with durable tool name {}",
+                        durable.tool_name
+                    );
+                }
+                if durable.tool_name == SPAWN_SUBAGENT_TOOL_NAME {
+                    let tool_name =
+                        crate::tool_call_lifecycle::query::verify_exact_subagent_receipt_authority(
+                            &self.node,
+                            &session_id,
+                            internal_call_id,
+                            &raw_stream_result,
+                        )
+                        .await?;
+                    let (text, _, _) = truncate_text(
+                        &raw_stream_result,
+                        TruncationMode::Head,
+                        &self.truncation_limits,
+                    );
+                    (tool_name, text)
+                } else {
+                    let stored =
+                        load_stored_tool_call_result(&self.node, &session_id, internal_call_id)
+                            .await?;
+                    (stored.tool_name, stored.result)
+                }
+            }
+            None => {
+                // Control/meta tools execute entirely inside the hook and do
+                // not claim a durable AgentToolCall for their own provider
+                // call id. Their bounded streamed result is authoritative,
+                // but only when the hook observed and registered that exact
+                // tool identity earlier in this turn.
+                let tool_name = registered_tool_name.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "hook-owned tool result {internal_call_id} has no registered tool identity"
+                    )
+                })?;
+                let (text, _, _) = truncate_text(
+                    &raw_stream_result,
+                    truncation_mode_for(&tool_name),
+                    &self.truncation_limits,
+                );
+                (tool_name, text)
+            }
+        };
+        let model_observation = model_observation_for_tool_result(&tool_name, &stored_result);
+
+        // Authenticate terminal evidence before consuming the in-memory
+        // dedupe slot. A corrupt or incomplete exact edge must remain
+        // retryable after repair and must never be converted into a transcript
+        // fact from the streamed bytes.
         let should_persist = {
             let mut state = self.state.lock().await;
             state.mark_stream_tool_result_seen(
@@ -304,45 +366,6 @@ impl DefraSessionHook {
         if !should_persist {
             return Ok(());
         }
-
-        let raw_stream_result = render_tool_result_text(tool_result);
-        let prefer_stream_payload = is_subagent_tool_result_payload(&raw_stream_result);
-        let (tool_name, stored_result) =
-            match load_stored_tool_call_result(&self.node, &session_id, internal_call_id).await {
-                Ok(stored) if !stored.result.is_empty() && !prefer_stream_payload => {
-                    (stored.tool_name, stored.result)
-                }
-                Ok(stored) => {
-                    let (text, _, _) = truncate_text(
-                        &raw_stream_result,
-                        TruncationMode::Head,
-                        &self.truncation_limits,
-                    );
-                    (stored.tool_name, text)
-                }
-                Err(e) => {
-                    if is_missing_tool_call_result(&e) {
-                        tracing::debug!(
-                            error = %e,
-                            tool_call_id = %internal_call_id,
-                            "stored tool result not found, falling back to stream payload"
-                        );
-                    } else {
-                        tracing::warn!(
-                            error = %e,
-                            tool_call_id = %internal_call_id,
-                            "failed to load stored tool result, falling back to stream payload"
-                        );
-                    }
-                    let (text, _, _) = truncate_text(
-                        &raw_stream_result,
-                        TruncationMode::Head,
-                        &self.truncation_limits,
-                    );
-                    ("unknown".to_string(), text)
-                }
-            };
-        let model_observation = model_observation_for_tool_result(&tool_name, &stored_result);
 
         let persisted_result = ToolResult {
             id: tool_result.id.clone(),
@@ -363,7 +386,7 @@ impl DefraSessionHook {
     /// the persisted transcript stays pair-closed on the abort path (#442).
     ///
     /// The owned loop runs each tool inline: `on_tool_result` marks the
-    /// `AgentToolCall` row `.completed` (recording its result) before the
+    /// `AgentToolCall` row `.completed` (binding its exact output fact) before the
     /// result MESSAGE is yielded, which `StreamProcessor` persists only when it
     /// observes the streamed `ToolResult`. On a provider stall that streamed
     /// item never arrives, so a liveness/interrupt abort persists the assistant
@@ -371,7 +394,7 @@ impl DefraSessionHook {
     /// `completed` tool call with no paired result, violating
     /// `Transcript.CompletedToolCallsPaired`. This replays the existing streamed
     /// result-message persistence for each completed tool call (which loads the
-    /// recorded result from the row and dedupes), restoring pairing. It is the
+    /// exact bound output and dedupes), restoring pairing. It is the
     /// `complete_tool_with_result` transition applied late.
     ///
     /// Must run after the assistant turn is persisted (so the message-sequence
@@ -402,7 +425,7 @@ impl DefraSessionHook {
                         lifecycle_state: {{ _eq: "completed" }}
                     }},
                     order: {{ message_sequence: ASC }}
-                ) {{ tool_call_id result }}
+                ) {{ tool_call_id }}
             }}"#
         );
         let response = self.node.execute(&query).await;
@@ -428,11 +451,7 @@ impl DefraSessionHook {
                 .get("tool_call_id")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            let result = row
-                .get("result")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            if internal_call_id.is_empty() || result.is_empty() {
+            if internal_call_id.is_empty() {
                 continue;
             }
 
@@ -442,9 +461,9 @@ impl DefraSessionHook {
                 state.tool_result_message_identity(internal_call_id, None)
             };
 
-            // Replay the streamed result-message persistence: it loads the
-            // recorded result from the row (so the empty content here is
-            // replaced) and dedupes, so an already-paired call is a no-op.
+            // Replay streamed result-message persistence. That path resolves
+            // the exact bound output-or-omission evidence and rejects an
+            // omission or corrupt edge instead of trusting AgentToolCall.result.
             let tool_result = ToolResult {
                 id: result_id,
                 call_id,
@@ -887,8 +906,4 @@ fn persisted_tool_result_message_aliases(message: &Message) -> Vec<String> {
         }
     }
     aliases
-}
-
-fn is_missing_tool_call_result(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains("no AgentToolCall")
 }

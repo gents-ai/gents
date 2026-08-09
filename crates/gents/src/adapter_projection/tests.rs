@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 
 use crate::run_timeline::{
     build_run_timeline, RunTimelineRows, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineToolCallRow,
+    TimelineResponseRow, TimelineToolCallRow, TimelineToolOutputOmissionFact,
+    TimelineToolResultFact,
 };
 
 fn workspace_root() -> std::path::PathBuf {
@@ -149,6 +150,15 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 tool_call_id: "call-delegate".to_string(),
                 args: r#"{"prompt":"delegate private args"}"#.to_string(),
                 result: r#"{"summary":"delegate private result"}"#.to_string(),
+                result_fact: Some(TimelineToolResultFact {
+                    doc_id: "result-delegate-doc".to_string(),
+                    composite_commit_cid: "bafy-result-delegate".to_string(),
+                    signer_did: "did:test:coordinator".to_string(),
+                    tool_call_doc_id: "call-delegate-doc".to_string(),
+                    tool_call_composite_commit_cid: "bafy-call-delegate".to_string(),
+                    tool_call_signer_did: "did:test:coordinator".to_string(),
+                    output_text: r#"{"summary":"delegate private result"}"#.to_string(),
+                }),
                 status: "completed".to_string(),
                 child_request_id: Some("req-review".to_string()),
                 started_at: Some("2026-06-05T00:00:02Z".to_string()),
@@ -163,6 +173,15 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 tool_call_id: "call-review-check".to_string(),
                 args: r#"{"cmd":"child private args"}"#.to_string(),
                 result: "child private result".to_string(),
+                result_fact: Some(TimelineToolResultFact {
+                    doc_id: "result-review-doc".to_string(),
+                    composite_commit_cid: "bafy-result-review".to_string(),
+                    signer_did: "did:test:reviewer".to_string(),
+                    tool_call_doc_id: "call-review-doc".to_string(),
+                    tool_call_composite_commit_cid: "bafy-call-review".to_string(),
+                    tool_call_signer_did: "did:test:reviewer".to_string(),
+                    output_text: "child private result".to_string(),
+                }),
                 status: "denied".to_string(),
                 denial_reason: Some("child private denial reason".to_string()),
                 selected_service_id: Some("native-shell".to_string()),
@@ -213,6 +232,145 @@ fn build_all_adapter_projections(
     .into_iter()
     .map(|kind| build_adapter_projection(kind, timeline, &context))
     .collect()
+}
+
+#[test]
+fn tool_output_omission_survives_every_projection_without_fabricated_output() {
+    let omission = TimelineToolOutputOmissionFact {
+        doc_id: "omission-doc".to_string(),
+        composite_commit_cid: "bafy-omission-commit".to_string(),
+        signer_did: "did:key:omission-signer".to_string(),
+        tool_call_doc_id: "tool-call-doc".to_string(),
+        tool_call_composite_commit_cid: "bafy-tool-call-commit".to_string(),
+        tool_call_signer_did: "did:key:tool-call-signer".to_string(),
+        source_phase: "awaiting_approval".to_string(),
+        terminal_phase: "denied".to_string(),
+        reason: "policy_denied".to_string(),
+        detail: "sensitive policy detail".to_string(),
+        created_at: Some("2026-08-08T12:00:00Z".to_string()),
+    };
+    let timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            request_id: "req-omission".to_string(),
+            agent_did: Some("did:key:agent".to_string()),
+            session_id: Some("session-omission".to_string()),
+            content: Some("exercise omission projection".to_string()),
+            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
+            ..TimelineRequestRow::default()
+        },
+        tool_calls: vec![TimelineToolCallRow {
+            request_id: Some("req-omission".to_string()),
+            session_id: "session-omission".to_string(),
+            tool_name: "shell".to_string(),
+            tool_call_id: "call-omission".to_string(),
+            args: r#"{"cmd":"denied"}"#.to_string(),
+            result: "must not be projected".to_string(),
+            omission_fact: Some(omission.clone()),
+            status: "denied".to_string(),
+            lifecycle_state: Some("denied".to_string()),
+            ..TimelineToolCallRow::default()
+        }],
+        ..RunTimelineRows::default()
+    });
+    let context = ProjectionContext {
+        redaction_mode: ProjectionRedactionMode::Full,
+        ..ProjectionContext::default()
+    };
+
+    let envelopes = [
+        AdapterProjectionKind::AtifTrajectory,
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        AdapterProjectionKind::LangGraphStateHistory,
+        AdapterProjectionKind::MultiAgentTask,
+    ]
+    .map(|kind| build_adapter_projection(kind, &timeline, &context));
+
+    for envelope in &envelopes {
+        validate_adapter_projection_contract(envelope).unwrap();
+        assert_adapter_projection_matches_json_schema(envelope);
+    }
+
+    let projected_omissions = envelopes
+        .iter()
+        .map(|envelope| match &envelope.output {
+            AdapterProjection::AtifTrajectory(projection) => {
+                let result = projection
+                    .steps
+                    .iter()
+                    .find_map(|step| step.observation.as_ref())
+                    .and_then(|observation| observation.results.first())
+                    .expect("ATIF observation result");
+                assert_eq!(result.content, None);
+                result.output_omission.clone().expect("ATIF omission")
+            }
+            AdapterProjection::OpenAiCodexRunTrace(projection) => projection
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    OpenAiCodexTraceItem::ToolCall {
+                        output,
+                        output_omission,
+                        ..
+                    } => {
+                        assert_eq!(output, &None);
+                        output_omission.clone()
+                    }
+                    _ => None,
+                })
+                .expect("OpenAI omission"),
+            AdapterProjection::LangGraphStateHistory(projection) => {
+                let task = projection.tasks.first().expect("LangGraph task");
+                assert_eq!(task.output, None);
+                task.output_omission.clone().expect("LangGraph omission")
+            }
+            AdapterProjection::MultiAgentTask(projection) => {
+                let event = projection
+                    .tool_events
+                    .first()
+                    .expect("multi-agent tool event");
+                assert_eq!(event.output, None);
+                event.output_omission.clone().expect("multi-agent omission")
+            }
+        })
+        .collect::<Vec<_>>();
+
+    for projected in projected_omissions {
+        assert_eq!(projected.reason, omission.reason);
+        assert_eq!(projected.detail, omission.detail);
+        assert_eq!(projected.source_phase, omission.source_phase);
+        assert_eq!(projected.terminal_phase, omission.terminal_phase);
+        assert_eq!(projected.evidence.version.doc_id, omission.doc_id);
+        assert_eq!(
+            projected.evidence.version.composite_commit_cid,
+            omission.composite_commit_cid
+        );
+        assert_eq!(projected.evidence.signer_did, omission.signer_did);
+        assert_eq!(
+            projected.tool_call.version.doc_id,
+            omission.tool_call_doc_id
+        );
+        assert_eq!(
+            projected.tool_call.version.composite_commit_cid,
+            omission.tool_call_composite_commit_cid
+        );
+        assert_eq!(
+            projected.tool_call.signer_did,
+            omission.tool_call_signer_did
+        );
+    }
+
+    for envelope in &envelopes {
+        let record = adapter_projection_eval_jsonl_records(envelope)
+            .into_iter()
+            .find(|record| record.output_omission.is_some())
+            .expect("eval record carrying tool-output omission");
+        assert_eq!(record.output, None);
+        assert_eq!(
+            record.output_omission.as_ref().map(|value| &value.reason),
+            Some(&omission.reason)
+        );
+    }
 }
 
 fn projection_participants(
@@ -580,7 +738,7 @@ fn atif_projection_emits_a_schema_valid_native_harbor_document() {
 }
 
 #[test]
-fn projection_v2_carries_the_same_exact_manifest_in_envelope_and_records() {
+fn projection_v3_carries_the_same_exact_manifest_in_envelope_and_records() {
     let exact = crate::SignedDocumentVersionRef {
         version: crate::DocumentVersionRef {
             doc_id: "request-doc-1".to_string(),
@@ -608,7 +766,7 @@ fn projection_v2_carries_the_same_exact_manifest_in_envelope_and_records() {
         &ProjectionContext::default(),
     );
 
-    assert_eq!(envelope.projection_version, "v2");
+    assert_eq!(envelope.projection_version, "v3");
     assert_eq!(
         envelope.provenance.runtime_version,
         env!("CARGO_PKG_VERSION")
@@ -626,7 +784,7 @@ fn projection_v2_carries_the_same_exact_manifest_in_envelope_and_records() {
         envelope.provenance.source_manifest.as_ref(),
         Some(&manifest)
     );
-    validate_adapter_projection_contract(&envelope).expect("valid v2 envelope");
+    validate_adapter_projection_contract(&envelope).expect("valid v3 envelope");
     for record in adapter_projection_jsonl_records(&envelope) {
         assert_eq!(
             record.source_manifest_status,
@@ -665,7 +823,7 @@ fn projection_v2_carries_the_same_exact_manifest_in_envelope_and_records() {
 }
 
 #[test]
-fn projection_v2_reports_exact_membership_with_open_coverage_as_partial() {
+fn projection_v3_reports_exact_membership_with_open_coverage_as_partial() {
     let exact = crate::SignedDocumentVersionRef {
         version: crate::DocumentVersionRef {
             doc_id: "request-doc-partial".to_string(),

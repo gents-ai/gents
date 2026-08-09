@@ -264,7 +264,9 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
+pub(crate) mod evidence;
 pub(crate) mod query;
+pub use query::{load_durable_tool_call_terminal_evidence, DurableToolCallTerminalEvidence};
 mod recovery;
 pub(crate) mod runtime;
 pub mod subagent_request;

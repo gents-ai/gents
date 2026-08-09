@@ -1009,6 +1009,45 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         "result message must be absent before backfill (the #442 orphan)"
     );
 
+    // The mutable projection is not terminal authority. Clear it to prove the
+    // backfill enumerates completed calls by identity and reconstructs output
+    // only through the exact AgentToolResult edge.
+    let call_row = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}:{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id),
+            crate::graphql::escape_graphql_string(call_id),
+        ))
+        .await;
+    assert!(
+        !call_row.has_errors(),
+        "loading backfill tool call failed: {:?}",
+        call_row.errors
+    );
+    let call_doc_id = call_row
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("backfill tool call doc id");
+    let cleared = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ result: "" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(call_doc_id),
+        ))
+        .await;
+    assert!(
+        !cleared.has_errors(),
+        "clearing mutable result projection failed: {:?}",
+        cleared.errors
+    );
+
     // Backfill reconciles the completed tool call's result message.
     let reconciled = hook.backfill_completed_tool_results().await.unwrap();
     assert_eq!(

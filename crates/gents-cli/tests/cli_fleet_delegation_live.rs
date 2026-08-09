@@ -109,6 +109,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentSession",
     "AgentConversation",
     "CompactionEntry",

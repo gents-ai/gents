@@ -13,6 +13,7 @@ instance (call : ToolCallContext) : Decidable (isDetachedBridgeCall call) := by
   infer_instance
 
 inductive ToolRecoveryCause where
+  | preDispatchFailure
   | deadlineExceeded
   | parentInterrupted
   | parentTerminal
@@ -28,6 +29,7 @@ inductive ToolRecoveryCause where
 namespace ToolRecoveryCause
 
 def toContract : ToolRecoveryCause → String
+  | .preDispatchFailure => "preDispatchFailure"
   | .deadlineExceeded => "deadlineExceeded"
   | .parentInterrupted => "parentInterrupted"
   | .parentTerminal => "parentTerminal"
@@ -40,6 +42,7 @@ def toContract : ToolRecoveryCause → String
   | .unclaimedCrossDeploymentSpawn => "unclaimedCrossDeploymentSpawn"
 
 def terminalState : ToolRecoveryCause → ToolCallState
+  | .preDispatchFailure => .failed
   | .deadlineExceeded => .timedOut
   | .parentInterrupted => .cancelled
   | .parentTerminal => .failed
@@ -69,13 +72,40 @@ instance (row : ToolCallContext) (parent : RequestContext) :
   unfold isBackgroundedRunningWithLiveParent
   infer_instance
 
+/-- The parent observation used only while deciding whether a durable pending
+    tool execution is abandoned. `missingOrForeign` deliberately combines a
+    missing row with a row outside the tool's immutable owner DID: neither is
+    authority to terminate before the tool's explicit deadline. -/
+inductive PendingParentObservation where
+  | missingOrForeign
+  | live
+  | interrupted
+  | otherTerminal
+  deriving DecidableEq, Repr
+
 structure ToolCallRecoveryRow where
   call : ToolCallContext
   cause : ToolRecoveryCause
+  pendingParent : PendingParentObservation
   deriving Repr
 
+/-- Pending recovery is selected from durable facts, never merely from seeing
+    a pending row at startup. Deadline expiry has precedence. Before expiry,
+    only a same-owner terminal parent proves that dispatch can no longer be
+    live on another deployment. -/
+def pendingToolRecoveryCause
+    (row : ToolCallRecoveryRow) : Option ToolRecoveryCause :=
+  if row.call.deadlineExceeded then
+    some .preDispatchFailure
+  else
+    match row.pendingParent with
+    | .interrupted => some .parentInterrupted
+    | .otherTerminal => some .preDispatchFailure
+    | .missingOrForeign | .live => none
+
 def toolCallRecoveryStale (row : ToolCallRecoveryRow) : Prop :=
-  row.call.state = .running ∧ ¬ isDetachedBridgeCall row.call
+  (row.call.state = .pending ∧ pendingToolRecoveryCause row = some row.cause) ∨
+  (row.call.state = .running ∧ ¬ isDetachedBridgeCall row.call)
 
 instance (row : ToolCallRecoveryRow) : Decidable (toolCallRecoveryStale row) := by
   unfold toolCallRecoveryStale
@@ -104,7 +134,7 @@ theorem toolCallRecovery_stale_positive :
 theorem toolCallRecover_terminal :
     ∀ row, toolCallRecoveryStale row → isTerminal (toolCallRecover row).call.state := by
   intro row _h_stale
-  rcases row with ⟨call, cause⟩
+  rcases row with ⟨call, cause, pendingParent⟩
   cases cause <;>
     simp [toolCallRecover, ToolRecoveryCause.terminalState,
       HasTerminal.isTerminal, ToolCallState.instHasTerminal]
@@ -112,19 +142,103 @@ theorem toolCallRecover_terminal :
 theorem toolCallRecover_zero :
     ∀ row, toolCallRecoveryStale row → toolCallRecoveryMeasure (toolCallRecover row) = 0 := by
   intro row _h_stale
-  have h_terminal_not_running : row.cause.terminalState ≠ .running := by
-    cases row.cause <;> simp [ToolRecoveryCause.terminalState]
-  have h_not : ¬ toolCallRecoveryStale (toolCallRecover row) := by
-    intro h_stale
-    rcases h_stale with ⟨h_running, _h_not_detached⟩
-    simp [toolCallRecover] at h_running
-    exact h_terminal_not_running h_running
-  simp [toolCallRecoveryMeasure, h_not]
+  rcases row with ⟨call, cause⟩
+  cases cause <;>
+    simp [toolCallRecoveryMeasure, toolCallRecoveryStale, toolCallRecover,
+      ToolRecoveryCause.terminalState]
+
+private def pendingRecoveryFixture
+    (currentTime : Time)
+    (parent : PendingParentObservation)
+    (cause : ToolRecoveryCause) : ToolCallRecoveryRow :=
+  { call :=
+      { callId := 501
+      , requestId := 601
+      , state := .pending
+      , operation := .nativeCommand
+      , deadline := 100
+      , currentTime := currentTime
+      , persistence := .committed
+      }
+  , cause := cause
+  , pendingParent := parent
+  }
+
+/-- A live same-owner parent and an active deadline preserve pending dispatch:
+    another deployment may still legally advance it. -/
+theorem pending_live_parent_active_lease_not_stale :
+    ¬ toolCallRecoveryStale
+      (pendingRecoveryFixture 10 .live .preDispatchFailure) := by
+  native_decide
+
+/-- Missing/foreign parent observation is not proof of abandonment while the
+    explicit dispatch lease remains active. -/
+theorem pending_missing_parent_active_lease_not_stale :
+    ¬ toolCallRecoveryStale
+      (pendingRecoveryFixture 10 .missingOrForeign .preDispatchFailure) := by
+  native_decide
+
+/-- Once the explicit deadline expires, even a missing/foreign-parent row is
+    safely recoverable and deadline classification has precedence. -/
+theorem pending_orphan_expired_lease_stale :
+    toolCallRecoveryStale
+      (pendingRecoveryFixture 101 .missingOrForeign .preDispatchFailure) := by
+  native_decide
+
+/-- A same-owner interrupted parent proves that pending dispatch is abandoned
+    without waiting for the deadline. -/
+theorem pending_interrupted_parent_stale :
+    toolCallRecoveryStale
+      (pendingRecoveryFixture 10 .interrupted .parentInterrupted) := by
+  native_decide
+
+/-! ## Fork-copy staging lease
+
+Terminal fork copies are first created in a non-terminal `forkStaging` phase
+and then atomically bound to copied exact evidence. Recovery may cancel that
+staging row only from an explicit expired lease; missing or unreadable lease
+data is not evidence that a concurrent fork writer has stopped. -/
+
+structure ForkStagingRecoveryRow where
+  call : ToolCallContext
+  forkStaging : Bool
+  sourceBound : Bool
+  leaseExpired : Option Bool
+  deriving Repr
+
+def forkStagingRecoveryEligible (row : ForkStagingRecoveryRow) : Prop :=
+  ¬ isTerminal row.call.state ∧ row.forkStaging = true ∧
+    row.sourceBound = true ∧ row.leaseExpired = some true
+
+instance (row : ForkStagingRecoveryRow) :
+    Decidable (forkStagingRecoveryEligible row) := by
+  unfold forkStagingRecoveryEligible
+  infer_instance
+
+private def forkStagingFixture (leaseExpired : Option Bool) :
+    ForkStagingRecoveryRow :=
+  { call := (pendingRecoveryFixture 10 .missingOrForeign .preDispatchFailure).call
+  , forkStaging := true
+  , sourceBound := true
+  , leaseExpired := leaseExpired
+  }
+
+theorem fork_staging_expired_lease_recoverable :
+    forkStagingRecoveryEligible (forkStagingFixture (some true)) := by
+  native_decide
+
+theorem fork_staging_active_lease_not_recoverable :
+    ¬ forkStagingRecoveryEligible (forkStagingFixture (some false)) := by
+  native_decide
+
+theorem fork_staging_missing_lease_not_recoverable :
+    ¬ forkStagingRecoveryEligible (forkStagingFixture none) := by
+  native_decide
 
 def toolCallRecoverySweep : RecoverySweep :=
   { Row := ToolCallRecoveryRow
   , collection := .agentToolCall
-  , sweepId := "tool_call_lifecycle_recover_all_running_calls"
+  , sweepId := "tool_call_lifecycle_recover_all_incomplete_calls"
   , rustFunction := "ToolCallLifecycle::recover_all"
   , cadence := .startup
   , implementationStatus := .implemented

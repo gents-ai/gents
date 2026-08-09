@@ -135,12 +135,14 @@ document-GraphQL bypass. Non-document bootstrap/liveness probes remain
 separate and cannot be used to read or mutate collections.
 
 Remote fork provenance no longer trusts the signer text projected by
-`_commits`: it requires exactly one matching commit row, invokes DefraDB's
-authenticated block-signature verifier for the CID and advertised key/type,
-then derives the signer DID from the verified public key. A failed, missing,
-rebound, or unsupported signature blocks the fork. The HTTP endpoint remains
-the database trust boundary; P2P ingestion independently verifies signed
-blocks before they enter a local store.
+`_commits` or a server-side verification verdict. It requires exactly one
+matching commit row, fetches the ACP-authorized canonical commit and detached
+signature bytes from DefraDB, verifies both content-addressed CIDs and the
+signature locally, then derives the signer DID from the verified public key. A
+failed, missing, rebound, tampered, or unsupported signature blocks the fork.
+The HTTP endpoint remains the authorization boundary for releasing block
+material; it is not the authorship verifier. P2P ingestion independently
+verifies signed blocks before they enter a local store.
 The transcript checkpoint now records every consumed message
 `(_docID, composite CID, verified signer DID)`, and the bounded config
 checkpoint records the selected core config facts in the same form. Full config
@@ -166,9 +168,10 @@ requires the deployment assignment and lease epoch in Slice 7.
   ingress and Gents construction fail closed on absent or mismatched node
   signers. Embedded, offline, remote HTTP, transaction, CLI, runtime-router,
   and desktop document access now carry cryptographic identity; remote fork
-  commit evidence is checked by DefraDB's authenticated signature-verification
-  endpoint. This proves an attached actor and a verified commit signer, not
-  that future ACP policy will authorize that actor.
+  commit evidence is fetched through DefraDB's authenticated, document-ACP
+  authorized signed-block endpoint and verified locally by Gents. This proves
+  an attached actor and a verified commit signer, not that future ACP policy
+  will authorize that actor.
 - `RenderedRequest` consumer work is tracked by Gents #1066. The audit tightens
   its proposed inference join from an ordinal/logical value to an exact
   `InferenceCall` document-version edge.

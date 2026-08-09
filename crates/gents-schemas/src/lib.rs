@@ -38,6 +38,9 @@ pub const AGENT_TOOL_APPROVAL_NAME: &str = "AgentToolApproval";
 pub const AGENT_TOOL_APPROVAL: &str = include_str!("../schemas/agent/agent_tool_approval.graphql");
 pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
+pub const AGENT_TOOL_OUTPUT_OMISSION_NAME: &str = "AgentToolOutputOmission";
+pub const AGENT_TOOL_OUTPUT_OMISSION: &str =
+    include_str!("../schemas/agent/agent_tool_output_omission.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
 pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";
@@ -114,6 +117,7 @@ pub const ALL: &[&str] = &[
     AGENT_RESPONSE,
     AGENT_RESPONSE_OUTCOME,
     AGENT_TOOL_RESULT,
+    AGENT_TOOL_OUTPUT_OMISSION,
     AGENT_SESSION,
     GOAL,
     AGENT_MESSAGE_DRAFT,
@@ -158,6 +162,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_RESPONSE_NAME,
     AGENT_RESPONSE_OUTCOME_NAME,
     AGENT_TOOL_RESULT_NAME,
+    AGENT_TOOL_OUTPUT_OMISSION_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
     AGENT_MESSAGE_DRAFT_NAME,
@@ -202,6 +207,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_RESPONSE_NAME,
     AGENT_RESPONSE_OUTCOME_NAME,
     AGENT_TOOL_RESULT_NAME,
+    AGENT_TOOL_OUTPUT_OMISSION_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
     AGENT_MESSAGE_NAME,
@@ -263,5 +269,18 @@ mod tests {
         for name in ALL_COLLECTION_NAMES {
             assert!(seen.insert(*name), "duplicate collection name: {name}");
         }
+    }
+
+    #[test]
+    fn tool_output_omission_is_registered_and_branchable() {
+        let index = ALL_COLLECTION_NAMES
+            .iter()
+            .position(|name| *name == AGENT_TOOL_OUTPUT_OMISSION_NAME)
+            .expect("AgentToolOutputOmission collection name");
+        assert_eq!(ALL[index], AGENT_TOOL_OUTPUT_OMISSION);
+        assert!(
+            BRANCHABLE_COLLECTION_NAMES.contains(&AGENT_TOOL_OUTPUT_OMISSION_NAME),
+            "terminal omission evidence must gossip with the tool execution graph"
+        );
     }
 }

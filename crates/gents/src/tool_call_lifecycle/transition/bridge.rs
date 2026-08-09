@@ -1,5 +1,10 @@
 use super::*;
 
+enum BridgeTerminalEvidence {
+    Output(crate::SignedDocumentVersionRef),
+    Omission(crate::SignedDocumentVersionRef),
+}
+
 impl ToolCallLifecycle {
     /// Running → Completed for bridge (subagent) tools.
     ///
@@ -16,63 +21,99 @@ impl ToolCallLifecycle {
         if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
         }
+        let Some(mut output) = self
+            .retain_terminal_output_fact_or_adopt(
+                ToolCallState::Running,
+                "bridge_complete",
+                &child_result,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
 
-        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
-            anyhow!("bridge_complete called before start_running persisted a row")
-        })?;
-        let now = Utc::now();
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("bridge_complete called before start_running persisted a row"))?
+            .clone();
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("bridge_complete called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_result = escape_graphql_string(&child_result);
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update to
-        // avoid a type-mismatch error when re-validating the document.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-        let terminal_status = self.terminal_persistence_status(None);
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "{terminal_status}",
-                        lifecycle_state: "completed",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
-            .await
-            .context("bridge_complete mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
-            self.sync_after_lost_running_compare("bridge_complete")
-                .await?;
-            return Ok(false);
+        for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
+            let now = Utc::now();
+            let output_fields = exact_result_fields_fragment(&output);
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{ _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }} }},
+                        input: {{
+                            result: "{}",
+                            status: "{}",
+                            lifecycle_state: "completed",
+                            started_at: "{}",
+                            deadline_at: "{}",
+                            completed_at: "{}",
+                            {output_fields}
+                            latency_ms: {}
+                            {}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&doc_id),
+                escape_graphql_string(&child_result),
+                self.terminal_persistence_status(None),
+                started_at.to_rfc3339(),
+                self.deadline_at.to_rfc3339(),
+                now.to_rfc3339(),
+                (now - started_at).num_milliseconds(),
+                self.clear_unclaimed_deadline_fragment(),
+            );
+            match execute_transition_with_exact_evidence(
+                &self.node,
+                &doc_id,
+                ToolCallState::Running,
+                &[ExactToolEvidence {
+                    collection: "AgentToolResult",
+                    exact: &output,
+                    require_execution_owner: true,
+                }],
+                &mutation,
+                "update_AgentToolCall",
+                "bridge_complete_with_exact_output",
+            )
+            .await?
+            {
+                ExactEvidenceTransitionOutcome::Applied(_) => {
+                    self.state = ToolCallState::Completed;
+                    return Ok(true);
+                }
+                ExactEvidenceTransitionOutcome::Lost => {
+                    self.sync_after_lost_running_compare("bridge_complete")
+                        .await?;
+                    return Ok(false);
+                }
+                ExactEvidenceTransitionOutcome::Stale
+                    if stale_retry < crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES =>
+                {
+                    let Some(next_output) = self
+                        .retain_terminal_output_fact_or_adopt(
+                            ToolCallState::Running,
+                            "bridge_complete",
+                            &child_result,
+                        )
+                        .await?
+                    else {
+                        return Ok(false);
+                    };
+                    output = next_output;
+                }
+                ExactEvidenceTransitionOutcome::Stale => anyhow::bail!(
+                    "AgentToolCall {doc_id} kept changing while binding bridge output"
+                ),
+            }
         }
-
-        self.state = ToolCallState::Completed;
-        Ok(true)
+        unreachable!("bounded exact-output loop returns on every outcome")
     }
 
     /// Running → Failed (or Cancelled for ChildTerminal::Interrupted).
@@ -113,88 +154,190 @@ impl ToolCallLifecycle {
             } => (Some(*failure_class), Some(reason.clone())),
             _ => (None, None),
         };
-
         let doc_id = self
             .doc_id
             .as_ref()
-            .ok_or_else(|| anyhow!("bridge_failure called before start_running persisted a row"))?;
-        let now = Utc::now();
+            .ok_or_else(|| anyhow!("bridge_failure called before start_running persisted a row"))?
+            .clone();
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("bridge_failure called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let lifecycle_state_str = projected.as_str();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-        let terminal_status = self.terminal_persistence_status(Some(completion_reason));
-        // If an upstream cascade already cancelled this bridge with a more
-        // specific cause, this running-state compare fails and preserves that
-        // earlier write. A successful cancelled projection here only observes
-        // the child terminal .interrupted evidence.
-        let cancel_cause_field = (projected == ToolCallState::Cancelled)
-            .then(|| format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()))
-            .unwrap_or_default();
-
-        // Build conditional fields: tool_failure_class and result are only
-        // set when the child reached .failed (mirrors R1's fail() pattern).
-        let optional_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
-            (Some(fc), Some(reason)) => {
-                let escaped_reason = escape_graphql_string(reason);
-                let fc_str = fc.as_str();
-                format!(
-                    r#"result: "{escaped_reason}",
-                        tool_failure_class: "{fc_str}","#
-                )
+        let (omission_reason, evidence_detail) = match &child_terminal {
+            super::ChildTerminal::Failed { reason, .. } if !reason.trim().is_empty() => {
+                (None, reason.as_str())
             }
-            _ => String::new(),
+            super::ChildTerminal::Failed { .. } => (
+                Some(super::super::evidence::ToolOutputOmissionReason::RecoveryFailure),
+                "child request failed without a durable output",
+            ),
+            super::ChildTerminal::Dead => (
+                Some(super::super::evidence::ToolOutputOmissionReason::ChildDead),
+                "child request reached the dead terminal state",
+            ),
+            super::ChildTerminal::Interrupted => (
+                Some(super::super::evidence::ToolOutputOmissionReason::Cancelled),
+                "child request was interrupted",
+            ),
+            super::ChildTerminal::Superseded => (
+                Some(super::super::evidence::ToolOutputOmissionReason::ChildSuperseded),
+                "child request was superseded",
+            ),
+        };
+        let mut evidence = match omission_reason {
+            Some(reason) => {
+                let Some(omission) = self
+                    .retain_terminal_omission_fact_or_adopt(
+                        ToolCallState::Running,
+                        projected,
+                        reason,
+                        evidence_detail,
+                        "bridge_failure",
+                    )
+                    .await?
+                else {
+                    return Ok(false);
+                };
+                BridgeTerminalEvidence::Omission(omission)
+            }
+            None => {
+                let Some(output) = self
+                    .retain_terminal_output_fact_or_adopt(
+                        ToolCallState::Running,
+                        "bridge_failure",
+                        evidence_detail,
+                    )
+                    .await?
+                else {
+                    return Ok(false);
+                };
+                BridgeTerminalEvidence::Output(output)
+            }
         };
 
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        {optional_fields}
-                        {cancel_cause_field}
-                        status: "{terminal_status}",
-                        lifecycle_state: "{lifecycle_state_str}",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
-            .await
-            .context("bridge_failure mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
-            self.sync_after_lost_running_compare("bridge_failure")
-                .await?;
-            return Ok(false);
+        for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
+            let now = Utc::now();
+            let exact_fields = match &evidence {
+                BridgeTerminalEvidence::Output(output) => exact_result_fields_fragment(output),
+                BridgeTerminalEvidence::Omission(omission) => {
+                    exact_omission_fields_fragment(omission)
+                }
+            };
+            let result_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
+                (Some(failure), Some(reason)) if !reason.trim().is_empty() => format!(
+                    r#"result: "{}", tool_failure_class: "{}","#,
+                    escape_graphql_string(reason),
+                    failure.as_str(),
+                ),
+                (Some(failure), _) => {
+                    format!(r#"tool_failure_class: "{}","#, failure.as_str())
+                }
+                _ => String::new(),
+            };
+            let cancel_cause_field = (projected == ToolCallState::Cancelled)
+                .then(|| format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()))
+                .unwrap_or_default();
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{ _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }} }},
+                        input: {{
+                            {result_fields}
+                            {cancel_cause_field}
+                            {exact_fields}
+                            status: "{}",
+                            lifecycle_state: "{}",
+                            started_at: "{}",
+                            deadline_at: "{}",
+                            completed_at: "{}",
+                            latency_ms: {}
+                            {}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&doc_id),
+                self.terminal_persistence_status(Some(completion_reason)),
+                projected.as_str(),
+                started_at.to_rfc3339(),
+                self.deadline_at.to_rfc3339(),
+                now.to_rfc3339(),
+                (now - started_at).num_milliseconds(),
+                self.clear_unclaimed_deadline_fragment(),
+            );
+            let exact = match &evidence {
+                BridgeTerminalEvidence::Output(output) => ExactToolEvidence {
+                    collection: "AgentToolResult",
+                    exact: output,
+                    require_execution_owner: true,
+                },
+                BridgeTerminalEvidence::Omission(omission) => ExactToolEvidence {
+                    collection: "AgentToolOutputOmission",
+                    exact: omission,
+                    require_execution_owner: true,
+                },
+            };
+            match execute_transition_with_exact_evidence(
+                &self.node,
+                &doc_id,
+                ToolCallState::Running,
+                &[exact],
+                &mutation,
+                "update_AgentToolCall",
+                "bridge_failure_with_exact_evidence",
+            )
+            .await?
+            {
+                ExactEvidenceTransitionOutcome::Applied(_) => {
+                    self.state = projected;
+                    self.failure_class = failure_class_for_persist;
+                    self.cancel_cause =
+                        (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted);
+                    return Ok(true);
+                }
+                ExactEvidenceTransitionOutcome::Lost => {
+                    self.sync_after_lost_running_compare("bridge_failure")
+                        .await?;
+                    return Ok(false);
+                }
+                ExactEvidenceTransitionOutcome::Stale
+                    if stale_retry < crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES =>
+                {
+                    evidence = match omission_reason {
+                        Some(reason) => {
+                            let Some(omission) = self
+                                .retain_terminal_omission_fact_or_adopt(
+                                    ToolCallState::Running,
+                                    projected,
+                                    reason,
+                                    evidence_detail,
+                                    "bridge_failure",
+                                )
+                                .await?
+                            else {
+                                return Ok(false);
+                            };
+                            BridgeTerminalEvidence::Omission(omission)
+                        }
+                        None => {
+                            let Some(output) = self
+                                .retain_terminal_output_fact_or_adopt(
+                                    ToolCallState::Running,
+                                    "bridge_failure",
+                                    evidence_detail,
+                                )
+                                .await?
+                            else {
+                                return Ok(false);
+                            };
+                            BridgeTerminalEvidence::Output(output)
+                        }
+                    };
+                }
+                ExactEvidenceTransitionOutcome::Stale => anyhow::bail!(
+                    "AgentToolCall {doc_id} kept changing while binding bridge terminal evidence"
+                ),
+            }
         }
-
-        self.state = projected;
-        self.failure_class = failure_class_for_persist;
-        self.cancel_cause =
-            (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted);
-        Ok(true)
+        unreachable!("bounded exact-evidence loop returns on every outcome")
     }
 
     /// Lean parity: bridge_cancel_cascade. Pure — returns the action that should
@@ -347,81 +490,124 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
-        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
-            anyhow!("cancel_during_run called before start_running persisted a row")
-        })?;
-        let now = Utc::now();
+        let doc_id = self
+            .doc_id
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow!("cancel_during_run called before start_running persisted a row")
+            })?
+            .clone();
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("cancel_during_run called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let escaped_result = escape_graphql_string("tool call cancelled");
-        let now_str = now.to_rfc3339();
-        let cancel_cause = cause.as_str();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
         let completion_reason = completion_reason_override.unwrap_or(match cause {
             CancelCause::Deadline => "deadline_exceeded",
             CancelCause::Interrupted => "parent_interrupted",
             CancelCause::UserCancelled => "explicit_cancel",
         });
-        let terminal_status =
-            escape_graphql_string(&self.terminal_persistence_status(Some(completion_reason)));
-        let remote_cancel_intent_fragment = remote_cancel_intent_at
-            .map(|at| {
-                let at = escape_graphql_string(&at.to_rfc3339());
-                format!(
-                    r#",
-                        cancel_cascade_intent_at: "{at}",
-                        cancel_pending_remote_ack: true"#
-                )
-            })
-            .unwrap_or_default();
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "{terminal_status}",
-                        lifecycle_state: "cancelled",
-                        cancel_cause: "{cancel_cause}",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {remote_cancel_intent_fragment}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "cancel_during_run")
-            .await
-            .context("cancel_during_run mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
-            self.sync_after_lost_running_compare("cancel_during_run")
-                .await?;
+        let detail = "tool call cancelled";
+        let Some(mut omission) = self
+            .retain_terminal_omission_fact_or_adopt(
+                ToolCallState::Running,
+                ToolCallState::Cancelled,
+                super::super::evidence::ToolOutputOmissionReason::Cancelled,
+                detail,
+                "cancel_during_run",
+            )
+            .await?
+        else {
             return Ok(false);
+        };
+        for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
+            let now = Utc::now();
+            let remote_cancel_intent_fragment = remote_cancel_intent_at
+                .map(|at| {
+                    format!(
+                        r#",
+                            cancel_cascade_intent_at: "{}",
+                            cancel_pending_remote_ack: true"#,
+                        escape_graphql_string(&at.to_rfc3339())
+                    )
+                })
+                .unwrap_or_default();
+            let omission_fields = exact_omission_fields_fragment(&omission);
+            let mutation = format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{ _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }} }},
+                        input: {{
+                            result: "{}",
+                            status: "{}",
+                            lifecycle_state: "cancelled",
+                            cancel_cause: "{}",
+                            started_at: "{}",
+                            deadline_at: "{}",
+                            completed_at: "{}",
+                            {omission_fields}
+                            latency_ms: {}
+                            {remote_cancel_intent_fragment}
+                            {}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                escape_graphql_string(&doc_id),
+                escape_graphql_string(detail),
+                escape_graphql_string(&self.terminal_persistence_status(Some(completion_reason))),
+                cause.as_str(),
+                started_at.to_rfc3339(),
+                self.deadline_at.to_rfc3339(),
+                now.to_rfc3339(),
+                (now - started_at).num_milliseconds(),
+                self.clear_unclaimed_deadline_fragment(),
+            );
+            match execute_transition_with_exact_evidence(
+                &self.node,
+                &doc_id,
+                ToolCallState::Running,
+                &[ExactToolEvidence {
+                    collection: "AgentToolOutputOmission",
+                    exact: &omission,
+                    require_execution_owner: true,
+                }],
+                &mutation,
+                "update_AgentToolCall",
+                "cancel_during_run_with_exact_omission",
+            )
+            .await?
+            {
+                ExactEvidenceTransitionOutcome::Applied(_) => {
+                    self.state = ToolCallState::Cancelled;
+                    self.cancel_cause = Some(cause);
+                    return Ok(true);
+                }
+                ExactEvidenceTransitionOutcome::Lost => {
+                    self.sync_after_lost_running_compare("cancel_during_run")
+                        .await?;
+                    return Ok(false);
+                }
+                ExactEvidenceTransitionOutcome::Stale
+                    if stale_retry < crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES =>
+                {
+                    let Some(next_omission) = self
+                        .retain_terminal_omission_fact_or_adopt(
+                            ToolCallState::Running,
+                            ToolCallState::Cancelled,
+                            super::super::evidence::ToolOutputOmissionReason::Cancelled,
+                            detail,
+                            "cancel_during_run",
+                        )
+                        .await?
+                    else {
+                        return Ok(false);
+                    };
+                    omission = next_omission;
+                }
+                ExactEvidenceTransitionOutcome::Stale => anyhow::bail!(
+                    "AgentToolCall {doc_id} kept changing while binding cancellation omission"
+                ),
+            }
         }
-
-        self.state = ToolCallState::Cancelled;
-        self.cancel_cause = Some(cause);
-        Ok(true)
+        unreachable!("bounded exact-omission loop returns on every outcome")
     }
 }
 

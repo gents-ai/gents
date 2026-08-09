@@ -59,6 +59,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) inference_call_exact_target_trace_cases: Vec<LeanInferenceCallExactTargetTraceCase>,
     pub(crate) inference_rendered_capture_cases: Vec<LeanInferenceRenderedCaptureCase>,
     pub(crate) tool_fact_cases: Vec<LeanToolFactCase>,
+    pub(crate) tool_execution_split_cases: Vec<LeanToolExecutionSplitCase>,
+    pub(crate) tool_terminal_evidence_cases: Vec<LeanToolTerminalEvidenceCase>,
     pub(crate) fork_provenance_cases: Vec<LeanForkProvenanceCase>,
     pub(crate) compaction_source_manifest_cases: Vec<LeanCompactionSourceManifestCase>,
     pub(crate) response_outcome_cases: Vec<LeanResponseOutcomeCase>,
@@ -411,10 +413,14 @@ mod self_config;
 mod slot_persistence_health;
 #[path = "subagent_bridge_admission.rs"]
 mod subagent_bridge_admission;
+#[path = "tool_execution_split.rs"]
+mod tool_execution_split;
 #[path = "tool_fact.rs"]
 mod tool_fact;
 #[path = "tool_policy.rs"]
 mod tool_policy;
+#[path = "tool_terminal_evidence.rs"]
+mod tool_terminal_evidence;
 #[path = "triggers_runtime_apply.rs"]
 mod triggers_runtime_apply;
 
@@ -435,8 +441,10 @@ pub(crate) use run_timeline_manifest::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use subagent_bridge_admission::*;
+pub(crate) use tool_execution_split::*;
 pub(crate) use tool_fact::*;
 pub(crate) use tool_policy::*;
+pub(crate) use tool_terminal_evidence::*;
 pub(crate) use triggers_runtime_apply::*;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -590,6 +598,14 @@ pub(crate) fn lean_inference_rendered_capture_cases() -> &'static [LeanInference
 
 pub(crate) fn lean_tool_fact_cases() -> &'static [LeanToolFactCase] {
     &lean_contract_snapshot().tool_fact_cases
+}
+
+pub(crate) fn lean_tool_execution_split_cases() -> &'static [LeanToolExecutionSplitCase] {
+    &lean_contract_snapshot().tool_execution_split_cases
+}
+
+pub(crate) fn lean_tool_terminal_evidence_cases() -> &'static [LeanToolTerminalEvidenceCase] {
+    &lean_contract_snapshot().tool_terminal_evidence_cases
 }
 
 pub(crate) fn lean_fork_provenance_cases() -> &'static [LeanForkProvenanceCase] {

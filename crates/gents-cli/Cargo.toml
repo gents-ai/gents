@@ -63,6 +63,9 @@ url = "2"
 [dev-dependencies]
 acp.workspace = true
 async-trait = "0.1"
+base64.workspace = true
+crypto.workspace = true
+defra-core.workspace = true
 gents-lean-contract.workspace = true
 identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }

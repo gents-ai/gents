@@ -132,6 +132,56 @@ pub(crate) async fn verified_current_signed_document_version(
     verified_current_signed_document_version_with_identity(node, collection, doc_id, None).await
 }
 
+/// Transaction-scoped variant of
+/// [`verified_current_signed_document_version`].
+///
+/// Correctness-sensitive writers use this before a mutation in the same
+/// transaction. DefraDB's optimistic transaction validation then makes the
+/// exact version check and the write one atomic decision: a concurrent head
+/// change conflicts instead of allowing evidence for an older live version to
+/// authorize a newer one.
+pub(crate) async fn verified_current_signed_document_version_in_txn(
+    node: &EmbeddedNode,
+    transaction: &defra_node::TransactionHandle,
+    collection: &str,
+    doc_id: &str,
+) -> Result<SignedDocumentVersionRef> {
+    let query = current_composite_metadata_query(doc_id);
+    let response = node
+        .execute_request_in_txn(QueryRequest::new(query), transaction)
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying {collection} {doc_id} composite evidence in transaction failed: {:?}",
+            response.errors
+        );
+    }
+    let commits = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let current =
+        unverified_current_document_version_metadata_from_commits(&commits, collection, doc_id)?;
+    let signer_did = node
+        .verified_block_signer_did_in_txn(&current.version.composite_commit_cid, transaction)
+        .await
+        .map_err(|error| {
+            anyhow!(
+                "cryptographically verifying {collection} {doc_id} composite commit {} in transaction: {error}",
+                current.version.composite_commit_cid
+            )
+        })?;
+    if signer_did.trim().is_empty() {
+        anyhow::bail!(
+            "cryptographically verifying {collection} {doc_id} composite commit {} in transaction returned an empty signer DID",
+            current.version.composite_commit_cid
+        );
+    }
+    Ok(SignedDocumentVersionRef::new(current.version, signer_did))
+}
+
 /// Identity-aware variant used by correctness paths that will later be ACP
 /// protected. The query identity is authorization context only; signer
 /// verification below remains the authorship proof.
@@ -168,6 +218,49 @@ pub(crate) async fn verified_current_signed_document_version_with_identity(
         .map_err(|error| {
             anyhow!(
                 "cryptographically verifying {collection} {doc_id} composite commit {}: {error}",
+                current.version.composite_commit_cid
+            )
+        })?;
+    if signer_did.trim().is_empty() {
+        anyhow::bail!(
+            "cryptographically verifying {collection} {doc_id} composite commit {} returned an empty signer DID",
+            current.version.composite_commit_cid
+        );
+    }
+    Ok(SignedDocumentVersionRef::new(current.version, signer_did))
+}
+
+/// Backend-neutral current-version verifier used by correctness-sensitive
+/// readers that must work through both an embedded node and authenticated
+/// GraphQL. The executor is responsible for attaching query identity and for
+/// cryptographically verifying the returned commit signer.
+pub(crate) async fn verified_current_signed_document_version_with_executor(
+    executor: &(impl crate::GraphqlExecutor + ?Sized),
+    collection: &str,
+    doc_id: &str,
+) -> Result<SignedDocumentVersionRef> {
+    let query = current_composite_metadata_query(doc_id);
+    let response = executor.execute_graphql(&query).await?;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying {collection} {doc_id} composite evidence failed: {:?}",
+            response.errors
+        );
+    }
+    let commits = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let current =
+        unverified_current_document_version_metadata_from_commits(&commits, collection, doc_id)?;
+    let signer_did = executor
+        .verified_signer_did(&current.version.composite_commit_cid)
+        .await
+        .with_context(|| {
+            format!(
+                "cryptographically verifying {collection} {doc_id} composite commit {}",
                 current.version.composite_commit_cid
             )
         })?;
@@ -369,6 +462,59 @@ pub(crate) async fn verified_exact_document_snapshot_with_identity(
                 "cryptographically verifying exact {collection} snapshot {} at {}: {error}",
                 version.doc_id,
                 version.composite_commit_cid
+            )
+        })?;
+    if signer_did.trim().is_empty() {
+        anyhow::bail!(
+            "cryptographically verifying exact {collection} snapshot {} at {} returned an empty signer DID",
+            version.doc_id,
+            version.composite_commit_cid
+        );
+    }
+    Ok(VerifiedExactDocumentSnapshot {
+        source: SignedDocumentVersionRef::new(version.clone(), signer_did),
+        collection_version_id,
+        document,
+    })
+}
+
+/// Backend-neutral exact-snapshot verifier. Unlike plain remote GraphQL
+/// metadata, this only returns after the executor has cryptographically
+/// verified the exact composite commit's signer.
+pub(crate) async fn verified_exact_document_snapshot_with_executor(
+    executor: &(impl crate::GraphqlExecutor + ?Sized),
+    collection: &str,
+    version: &DocumentVersionRef,
+    selection_set: &str,
+) -> Result<VerifiedExactDocumentSnapshot> {
+    let query = exact_document_snapshot_query(collection, version, selection_set)?;
+    let response = executor.execute_graphql(&query).await?;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying exact {collection} snapshot {} at {} failed: {:?}",
+            version.doc_id,
+            version.composite_commit_cid,
+            response.errors
+        );
+    }
+    let data = response
+        .data
+        .as_ref()
+        .ok_or_else(|| anyhow!("querying exact {collection} snapshot returned no data"))?;
+    let commits = data
+        .get("_commits")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let collection_version_id =
+        validate_composite_document_version_from_commits(&commits, collection, version)?;
+    let document = unverified_exact_document_snapshot_from_data(data, collection, version)?;
+    let signer_did = executor
+        .verified_signer_did(&version.composite_commit_cid)
+        .await
+        .with_context(|| {
+            format!(
+                "cryptographically verifying exact {collection} snapshot {} at {}",
+                version.doc_id, version.composite_commit_cid
             )
         })?;
     if signer_did.trim().is_empty() {

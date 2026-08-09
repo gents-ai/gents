@@ -1,6 +1,6 @@
 type AgentToolApproval @branchable {
-    approval_id: String @index(unique: true) @immutable
-    approval_key: String @index(unique: true) @immutable
+    approval_id: String @index @immutable
+    approval_key: String @index @immutable
     tool_call_id: String @index @immutable
     tool_call_key: String @index @immutable
     tool_call_doc_id: String @index @immutable

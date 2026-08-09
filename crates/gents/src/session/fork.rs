@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine as _;
 use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
 use gents_protocol::graphql::GraphqlRequestOptions;
 use identity::Did;
@@ -57,6 +58,18 @@ impl GraphqlExecuteResponse {
 pub trait GraphqlExecutor: Send + Sync {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse>;
 
+    /// Execute a mutation only if the current composite head still equals the
+    /// exact signed version accepted by the caller. The head read, mutation,
+    /// and commit share one DefraDB transaction so a same-phase concurrent
+    /// write cannot authorize evidence for an older execution version.
+    async fn execute_graphql_exact_head_cas(
+        &self,
+        collection: &str,
+        accepted: &crate::SignedDocumentVersionRef,
+        mutation: &str,
+        operation: &'static str,
+    ) -> Result<GraphqlExecuteResponse>;
+
     async fn verified_signer_did(&self, cid: &str) -> Result<String>;
 
     fn node_identity_did(&self) -> Option<&str> {
@@ -84,6 +97,46 @@ impl GraphqlExecutor for EmbeddedNode {
         self.verified_block_signer_did(cid).await
     }
 
+    async fn execute_graphql_exact_head_cas(
+        &self,
+        collection: &str,
+        accepted: &crate::SignedDocumentVersionRef,
+        mutation: &str,
+        operation: &'static str,
+    ) -> Result<GraphqlExecuteResponse> {
+        let identity = EmbeddedNode::node_identity_did(self)
+            .map(Did::new)
+            .transpose()
+            .context("parsing fork transaction query identity")?;
+        for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
+            let txn =
+                crate::config_client::ConfigApplyTxn::begin_local(self, identity.clone()).await?;
+            match execute_fork_exact_head_cas_in_txn(
+                &txn, collection, accepted, mutation, operation,
+            )
+            .await
+            {
+                Ok(response) => match txn.commit().await {
+                    Ok(()) => return Ok(response),
+                    Err(error)
+                        if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES
+                            && is_defradb_transaction_conflict_text(&error.to_string()) =>
+                    {
+                        tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
+                    }
+                    Err(error) => return Err(error).context(operation),
+                },
+                Err(error) => {
+                    if let Err(discard_error) = txn.discard().await {
+                        tracing::warn!(%discard_error, operation, "discarding failed fork exact-head transaction failed");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded fork exact-head transaction loop returns")
+    }
+
     fn node_identity_did(&self) -> Option<&str> {
         EmbeddedNode::node_identity_did(self)
     }
@@ -108,6 +161,132 @@ impl HttpGraphqlExecutor {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct SignedBlockBundle {
+    cid: String,
+    block: String,
+    signature: String,
+}
+
+fn locally_verified_block_signer_did(
+    cid: &str,
+    block_bytes: &[u8],
+    signature_bytes: &[u8],
+) -> Result<String> {
+    let block = defra_core::block::Block::from_dag_cbor(block_bytes)
+        .with_context(|| format!("decoding DAG-CBOR block {cid}"))?;
+    if block.generate_cid()?.to_string() != cid {
+        anyhow::bail!("remote block bytes do not hash to requested commit {cid}");
+    }
+    let signature_cid = block
+        .signature
+        .ok_or_else(|| anyhow::anyhow!("remote commit {cid} has no signature link"))?;
+    let signature = defra_core::block::Signature::from_dag_cbor(signature_bytes)
+        .with_context(|| format!("decoding signature block for {cid}"))?;
+    if signature.generate_cid()? != signature_cid {
+        anyhow::bail!("remote signature bytes do not hash to {signature_cid}");
+    }
+    let public_key_hex = std::str::from_utf8(&signature.header.identity)
+        .with_context(|| format!("decoding signature identity for {cid}"))?;
+    let key_type = match signature.header.sig_type {
+        defra_core::block::SignatureType::EdDSA => crypto::KeyType::Ed25519,
+        defra_core::block::SignatureType::ES256K => crypto::KeyType::Secp256k1,
+        defra_core::block::SignatureType::ES256 => crypto::KeyType::Secp256r1,
+        defra_core::block::SignatureType::BLS => crypto::KeyType::Bls12381,
+    };
+    let public_key = crypto::public_key_from_string(key_type, public_key_hex)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("decoding signer key for remote commit {cid}"))?;
+    let mut unsigned = block;
+    unsigned.signature = None;
+    let signed_bytes = unsigned
+        .to_dag_cbor()
+        .with_context(|| format!("encoding unsigned block {cid} for verification"))?;
+    if !public_key
+        .verify(&signed_bytes, &signature.value)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("verifying remote commit {cid} signature locally"))?
+    {
+        anyhow::bail!("remote commit {cid} signature verification failed");
+    }
+    public_key
+        .did()
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("deriving locally verified signer DID for remote commit {cid}"))
+}
+
+#[cfg(test)]
+mod local_signature_tests {
+    use crypto::PrivateKey;
+    use defra_core::block::{
+        Block, CrdtDelta, LwwDeltaPayload, Signature, SignatureHeader, SignatureType,
+    };
+
+    use super::locally_verified_block_signer_did;
+
+    fn signed_bundle() -> (String, String, Vec<u8>, Vec<u8>) {
+        let private_key = crypto::generate_ed25519().expect("generate test signing key");
+        let public_key = private_key.public_key();
+        let signer_did = public_key.did().expect("derive signer DID");
+        let mut block = Block {
+            delta: CrdtDelta::Lww(LwwDeltaPayload {
+                field_name: "content".to_string(),
+                schema_version_id: "agent-request-v1".to_string(),
+                priority: 1,
+                data: b"signed request".to_vec(),
+            }),
+            heads: None,
+            links: None,
+            encryption: None,
+            signature: None,
+        };
+        let signature = Signature::new(
+            SignatureHeader::new(
+                SignatureType::EdDSA,
+                public_key.to_hex_string().into_bytes(),
+            ),
+            private_key
+                .sign(&block.to_dag_cbor().expect("encode unsigned block"))
+                .expect("sign block"),
+        );
+        block.signature = Some(signature.generate_cid().expect("hash signature"));
+        let cid = block.generate_cid().expect("hash signed block").to_string();
+        (
+            cid,
+            signer_did,
+            block.to_dag_cbor().expect("encode signed block"),
+            signature.to_dag_cbor().expect("encode signature"),
+        )
+    }
+
+    #[test]
+    fn remote_signed_material_is_verified_locally() {
+        let (cid, signer_did, block, signature) = signed_bundle();
+        assert_eq!(
+            locally_verified_block_signer_did(&cid, &block, &signature)
+                .expect("valid bundle should verify"),
+            signer_did
+        );
+    }
+
+    #[test]
+    fn remote_signed_material_rejects_cid_rebinding_and_signature_tampering() {
+        let (cid, _, block, mut signature) = signed_bundle();
+        let rebound = locally_verified_block_signer_did("bafy-rebound", &block, &signature)
+            .expect_err("rebound CID must fail");
+        assert!(rebound.to_string().contains("do not hash"), "{rebound:#}");
+
+        let last = signature.last_mut().expect("signature bytes are non-empty");
+        *last ^= 1;
+        let tampered = locally_verified_block_signer_did(&cid, &block, &signature)
+            .expect_err("tampered signature must fail");
+        assert!(
+            tampered.to_string().contains("signature") || tampered.to_string().contains("DAG-CBOR"),
+            "{tampered:#}"
+        );
+    }
+}
+
 #[async_trait]
 impl GraphqlExecutor for HttpGraphqlExecutor {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
@@ -116,78 +295,115 @@ impl GraphqlExecutor for HttpGraphqlExecutor {
     }
 
     async fn verified_signer_did(&self, cid: &str) -> Result<String> {
-        let query = format!(
-            r#"{{ _commits(cid: ["{}"]) {{ cid signature {{ type identity }} }} }}"#,
-            escape_graphql_string(cid)
-        );
-        let response = self.execute_graphql(&query).await?;
-        if response.has_errors() {
-            anyhow::bail!(
-                "loading remote commit {cid} signature evidence failed: {}",
-                render_graphql_errors(&response)
-            );
-        }
-        let rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("_commits"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} returned no signature rows"))?;
-        let [row] = rows.as_slice() else {
-            anyhow::bail!(
-                "remote commit {cid} returned {} signature rows, expected one",
-                rows.len()
-            );
-        };
-        if row.get("cid").and_then(Value::as_str) != Some(cid) {
-            anyhow::bail!("remote signature query rebound commit {cid}");
-        }
-        let signature = row
-            .get("signature")
-            .filter(|value| value.is_object())
-            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} has no signature"))?;
-        let public_key_hex = signature
-            .get("identity")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} omitted signature identity"))?;
-        let algorithm = signature
-            .get("type")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("remote commit {cid} omitted signature type"))?;
-        let (key_type_name, key_type) = match algorithm {
-            "EdDSA" => ("ed25519", crypto::KeyType::Ed25519),
-            "ES256K" => ("secp256k1", crypto::KeyType::Secp256k1),
-            "ES256" => ("secp256r1", crypto::KeyType::Secp256r1),
-            other => anyhow::bail!("remote commit {cid} uses unsupported signature type {other}"),
-        };
-
         let api_base = crate::config_client::graphql_api_base(self.access.endpoint())?;
-        let mut verify_url = reqwest::Url::parse(&format!("{api_base}/block/verify-signature"))?;
-        verify_url
-            .query_pairs_mut()
-            .append_pair("cid", cid)
-            .append_pair("public-key", public_key_hex)
-            .append_pair("type", key_type_name);
-        let response = self.access.get(verify_url).await?;
+        let mut signed_url = reqwest::Url::parse(&format!("{api_base}/block/signed"))?;
+        signed_url.query_pairs_mut().append_pair("cid", cid);
+        let response = self.access.get(signed_url).await?;
         let status = response.status();
         let body = response.bytes().await?;
         if !status.is_success() {
             anyhow::bail!(
-                "cryptographic verification failed for remote commit {cid} (HTTP {status}): {}",
+                "loading signed material for remote commit {cid} failed (HTTP {status}): {}",
                 String::from_utf8_lossy(&body)
             );
         }
-
-        let public_key = crypto::public_key_from_string(key_type, public_key_hex)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("decoding verified signer key for remote commit {cid}"))?;
-        public_key
-            .did()
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("deriving verified signer DID for remote commit {cid}"))
+        let bundle: SignedBlockBundle = serde_json::from_slice(&body)
+            .with_context(|| format!("decoding signed material for remote commit {cid}"))?;
+        if bundle.cid != cid {
+            anyhow::bail!("remote signed-material response rebound commit {cid}");
+        }
+        let decoder = base64::engine::general_purpose::STANDARD;
+        let block_bytes = decoder
+            .decode(bundle.block)
+            .with_context(|| format!("decoding remote block {cid}"))?;
+        let signature_bytes = decoder
+            .decode(bundle.signature)
+            .with_context(|| format!("decoding remote signature block for {cid}"))?;
+        locally_verified_block_signer_did(cid, &block_bytes, &signature_bytes)
     }
+
+    async fn execute_graphql_exact_head_cas(
+        &self,
+        collection: &str,
+        accepted: &crate::SignedDocumentVersionRef,
+        mutation: &str,
+        operation: &'static str,
+    ) -> Result<GraphqlExecuteResponse> {
+        let access = crate::config_client::ConfigAccess::Graphql(self.access.clone());
+        for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
+            let txn = access.begin_apply_txn().await?;
+            match execute_fork_exact_head_cas_in_txn(
+                &txn, collection, accepted, mutation, operation,
+            )
+            .await
+            {
+                Ok(response) => match txn.commit().await {
+                    Ok(()) => return Ok(response),
+                    Err(error)
+                        if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES
+                            && is_defradb_transaction_conflict_text(&error.to_string()) =>
+                    {
+                        tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
+                    }
+                    Err(error) => return Err(error).context(operation),
+                },
+                Err(error) => {
+                    if let Err(discard_error) = txn.discard().await {
+                        tracing::warn!(%discard_error, operation, "discarding failed remote fork exact-head transaction failed");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded remote fork exact-head transaction loop returns")
+    }
+}
+
+async fn execute_fork_exact_head_cas_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    collection: &str,
+    accepted: &crate::SignedDocumentVersionRef,
+    mutation: &str,
+    operation: &'static str,
+) -> Result<GraphqlExecuteResponse> {
+    let current_query =
+        crate::document_version::current_composite_metadata_query(&accepted.version.doc_id);
+    let current_value = txn.execute(&current_query).await?;
+    let current_response = GraphqlExecuteResponse::from_http_value(current_value);
+    if current_response.has_errors() {
+        anyhow::bail!(
+            "{operation} exact-head query failed: {}",
+            render_graphql_errors(&current_response)
+        );
+    }
+    let commits = current_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let current =
+        crate::document_version::unverified_current_document_version_metadata_from_commits(
+            &commits,
+            collection,
+            &accepted.version.doc_id,
+        )?;
+    if current.version != accepted.version {
+        anyhow::bail!(
+            "{operation} exact source changed from {} to {} before terminal evidence binding",
+            accepted.version.composite_commit_cid,
+            current.version.composite_commit_cid
+        );
+    }
+    let mutation_value = txn.execute(mutation).await?;
+    let response = GraphqlExecuteResponse::from_http_value(mutation_value);
+    if response.has_errors() {
+        anyhow::bail!(
+            "{operation} exact terminal mutation failed: {}",
+            render_graphql_errors(&response)
+        );
+    }
+    Ok(response)
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -804,6 +1020,21 @@ async fn fork_with_executor(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
+    // Approval-denied omissions and their verdict must bind the same exact
+    // held execution.  Copy approvals before terminal evidence so the fork
+    // planner can defer that one attachment until the terminal compare; all
+    // other approvals are attached while the child is still non-terminal.
+    let (copied_tool_approvals, deferred_tool_approvals) = copy_tool_approvals(
+        executor,
+        &child_session_id,
+        parent_agent_did,
+        parent.requester_did.as_deref(),
+        &node_did,
+        &copied_tool_calls,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
+
     let copied_tool_results = copy_tool_results(
         executor,
         &child_session_id,
@@ -812,17 +1043,7 @@ async fn fork_with_executor(
         &child_conversation_doc_id,
         &node_did,
         &copied_tool_calls,
-    )
-    .await
-    .map_err(ForkError::ForkCopyFailed)?;
-
-    let copied_tool_approvals = copy_tool_approvals(
-        executor,
-        &child_session_id,
-        parent_agent_did,
-        parent.requester_did.as_deref(),
-        &node_did,
-        &copied_tool_calls,
+        &deferred_tool_approvals,
     )
     .await
     .map_err(ForkError::ForkCopyFailed)?;
@@ -1088,6 +1309,317 @@ struct ForkedToolCall {
     source: crate::SignedDocumentVersionRef,
     child: crate::SignedDocumentVersionRef,
     source_row: Value,
+    evidence: ForkedToolEvidence,
+}
+
+#[derive(Debug, Clone)]
+enum ForkedToolEvidence {
+    NonTerminal,
+    Result {
+        source: crate::SignedDocumentVersionRef,
+        source_phase: crate::tool_call_lifecycle::ToolCallState,
+        terminal_phase: crate::tool_call_lifecycle::ToolCallState,
+    },
+    Omission {
+        source: crate::SignedDocumentVersionRef,
+        accepted: crate::SignedDocumentVersionRef,
+        source_phase: crate::tool_call_lifecycle::ToolCallState,
+        terminal_phase: crate::tool_call_lifecycle::ToolCallState,
+        reason: crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason,
+    },
+}
+
+impl ForkedToolEvidence {
+    fn source_phase(&self) -> Option<crate::tool_call_lifecycle::ToolCallState> {
+        match self {
+            Self::NonTerminal => None,
+            Self::Result { source_phase, .. } | Self::Omission { source_phase, .. } => {
+                Some(*source_phase)
+            }
+        }
+    }
+
+    fn terminal_phase(&self) -> Option<crate::tool_call_lifecycle::ToolCallState> {
+        match self {
+            Self::NonTerminal => None,
+            Self::Result { terminal_phase, .. } | Self::Omission { terminal_phase, .. } => {
+                Some(*terminal_phase)
+            }
+        }
+    }
+
+    fn defers_approval_binding(&self) -> bool {
+        matches!(
+            self,
+            Self::Omission {
+                reason:
+                    crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason::ApprovalDenied,
+                ..
+            }
+        )
+    }
+}
+
+fn required_tool_phase(
+    value: Option<&str>,
+    label: &str,
+) -> Result<crate::tool_call_lifecycle::ToolCallState> {
+    let value = value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{label} omitted lifecycle_state"))?;
+    crate::tool_call_lifecycle::ToolCallState::from_persisted(value)
+        .ok_or_else(|| anyhow::anyhow!("{label} has unknown lifecycle_state {value}"))
+}
+
+fn persisted_omission_reason(
+    value: &str,
+) -> Result<crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason> {
+    use crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason as Reason;
+    match value {
+        "preDispatchFailure" => Ok(Reason::PreDispatchFailure),
+        "approvalDenied" => Ok(Reason::ApprovalDenied),
+        "timedOut" => Ok(Reason::TimedOut),
+        "cancelled" => Ok(Reason::Cancelled),
+        "recoveryFailure" => Ok(Reason::RecoveryFailure),
+        "executionLost" => Ok(Reason::ExecutionLost),
+        "childDead" => Ok(Reason::ChildDead),
+        "childSuperseded" => Ok(Reason::ChildSuperseded),
+        _ => anyhow::bail!("fork source omission has unknown reason {value}"),
+    }
+}
+
+fn exact_ref_from_fields(
+    row: &Value,
+    doc_field: &str,
+    cid_field: &str,
+    signer_field: &str,
+    label: &str,
+) -> Result<crate::SignedDocumentVersionRef> {
+    optional_exact_ref(row, doc_field, cid_field, signer_field, label)?
+        .ok_or_else(|| anyhow::anyhow!("{label} omitted its exact parent"))
+}
+
+fn same_optional_string(left: &Value, right: &Value, field: &str) -> bool {
+    left.get(field).and_then(Value::as_str) == right.get(field).and_then(Value::as_str)
+}
+
+async fn validate_source_result_evidence(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    call: &crate::SignedDocumentVersionRef,
+    call_row: &Value,
+    result: crate::SignedDocumentVersionRef,
+    terminal_phase: crate::tool_call_lifecycle::ToolCallState,
+) -> Result<ForkedToolEvidence> {
+    use crate::tool_call_lifecycle::ToolCallState;
+    if !matches!(
+        terminal_phase,
+        ToolCallState::Completed | ToolCallState::Failed
+    ) {
+        anyhow::bail!(
+            "terminal AgentToolCall {} cannot bind AgentToolResult in phase {}",
+            call.version.doc_id,
+            terminal_phase.as_str()
+        );
+    }
+    let result_row = exact_snapshot(
+        executor,
+        "AgentToolResult",
+        &result,
+        "result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id tool_name tool_input",
+    )
+    .await?;
+    let accepted = exact_ref_from_fields(
+        &result_row,
+        "tool_call_doc_id",
+        "tool_call_composite_commit_cid",
+        "tool_call_signer_did",
+        "fork source AgentToolResult parent",
+    )?;
+    if accepted.version.doc_id != call.version.doc_id {
+        anyhow::bail!("source AgentToolResult points to a different physical tool call");
+    }
+    let accepted_row = exact_snapshot(
+        executor,
+        "AgentToolCall",
+        &accepted,
+        "tool_call_key agent_did requester_did session_id tool_name args lifecycle_state",
+    )
+    .await
+    .context("verifying exact accepted execution for source AgentToolResult")?;
+    let source_phase = required_tool_phase(
+        accepted_row.get("lifecycle_state").and_then(Value::as_str),
+        "source AgentToolResult parent",
+    )?;
+    if source_phase != ToolCallState::Running {
+        anyhow::bail!(
+            "source AgentToolResult parent is {}, expected running",
+            source_phase.as_str()
+        );
+    }
+    if result.signer_did != accepted.signer_did || call.signer_did != accepted.signer_did {
+        anyhow::bail!("source AgentToolResult, accepted execution, and terminal signer differ");
+    }
+    for field in [
+        "tool_call_key",
+        "agent_did",
+        "requester_did",
+        "session_id",
+        "tool_name",
+    ] {
+        if !same_optional_string(&result_row, &accepted_row, field)
+            || !same_optional_string(call_row, &accepted_row, field)
+        {
+            anyhow::bail!("source AgentToolResult closure disagrees on {field}");
+        }
+    }
+    if result_row.get("tool_input").and_then(Value::as_str)
+        != accepted_row.get("args").and_then(Value::as_str)
+    {
+        anyhow::bail!("source AgentToolResult input does not match exact accepted execution args");
+    }
+    let result_key = result_row
+        .get("result_key")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("source AgentToolResult omitted result_key"))?;
+    if result_key != accepted.version.composite_commit_cid {
+        anyhow::bail!("source AgentToolResult key does not pin its accepted execution CID");
+    }
+    Ok(ForkedToolEvidence::Result {
+        source: result,
+        source_phase,
+        terminal_phase,
+    })
+}
+
+async fn validate_source_omission_evidence(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    call: &crate::SignedDocumentVersionRef,
+    call_row: &Value,
+    omission: crate::SignedDocumentVersionRef,
+    terminal_phase: crate::tool_call_lifecycle::ToolCallState,
+) -> Result<ForkedToolEvidence> {
+    let omission_row = exact_snapshot(
+        executor,
+        "AgentToolOutputOmission",
+        &omission,
+        "omission_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id source_phase terminal_phase reason detail created_at",
+    )
+    .await?;
+    let accepted = exact_ref_from_fields(
+        &omission_row,
+        "tool_call_doc_id",
+        "tool_call_composite_commit_cid",
+        "tool_call_signer_did",
+        "fork source AgentToolOutputOmission parent",
+    )?;
+    if accepted.version.doc_id != call.version.doc_id {
+        anyhow::bail!("source AgentToolOutputOmission points to a different physical tool call");
+    }
+    let accepted_row = exact_snapshot(
+        executor,
+        "AgentToolCall",
+        &accepted,
+        "tool_call_key agent_did requester_did session_id lifecycle_state",
+    )
+    .await
+    .context("verifying exact accepted execution for source omission")?;
+    let source_phase = required_tool_phase(
+        omission_row.get("source_phase").and_then(Value::as_str),
+        "source AgentToolOutputOmission",
+    )?;
+    let accepted_phase = required_tool_phase(
+        accepted_row.get("lifecycle_state").and_then(Value::as_str),
+        "source AgentToolOutputOmission parent",
+    )?;
+    if accepted_phase != source_phase {
+        anyhow::bail!("source omission phase does not match its exact accepted execution");
+    }
+    let recorded_terminal = required_tool_phase(
+        omission_row.get("terminal_phase").and_then(Value::as_str),
+        "source AgentToolOutputOmission",
+    )?;
+    if recorded_terminal != terminal_phase {
+        anyhow::bail!("source omission terminal phase does not match terminal AgentToolCall");
+    }
+    let reason = persisted_omission_reason(
+        omission_row
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )?;
+    if !reason.allows(source_phase, terminal_phase) {
+        anyhow::bail!("source omission reason is illegal for its recorded phase pair");
+    }
+    if omission.signer_did != accepted.signer_did || call.signer_did != accepted.signer_did {
+        anyhow::bail!("source omission, accepted execution, and terminal signer differ");
+    }
+    for field in ["tool_call_key", "agent_did", "requester_did", "session_id"] {
+        if !same_optional_string(&omission_row, &accepted_row, field)
+            || !same_optional_string(call_row, &accepted_row, field)
+        {
+            anyhow::bail!("source AgentToolOutputOmission closure disagrees on {field}");
+        }
+    }
+    if omission_row.get("omission_key").and_then(Value::as_str)
+        != Some(accepted.version.composite_commit_cid.as_str())
+    {
+        anyhow::bail!("source omission key does not pin its exact accepted execution CID");
+    }
+    Ok(ForkedToolEvidence::Omission {
+        source: omission,
+        accepted,
+        source_phase,
+        terminal_phase,
+        reason,
+    })
+}
+
+async fn validate_source_tool_evidence(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    call: &crate::SignedDocumentVersionRef,
+    row: &Value,
+) -> Result<ForkedToolEvidence> {
+    let phase = required_tool_phase(
+        row.get("lifecycle_state").and_then(Value::as_str),
+        "source AgentToolCall",
+    )?;
+    let result = optional_exact_ref(
+        row,
+        "result_doc_id",
+        "result_composite_commit_cid",
+        "result_signer_did",
+        "fork source AgentToolResult",
+    )?;
+    let omission = optional_exact_ref(
+        row,
+        "omission_doc_id",
+        "omission_composite_commit_cid",
+        "omission_signer_did",
+        "fork source AgentToolOutputOmission",
+    )?;
+    if phase.is_terminal() {
+        match (result, omission) {
+            (Some(result), None) => {
+                validate_source_result_evidence(executor, call, row, result, phase).await
+            }
+            (None, Some(omission)) => {
+                validate_source_omission_evidence(executor, call, row, omission, phase).await
+            }
+            (None, None) => anyhow::bail!(
+                "terminal source AgentToolCall {} has no exact result or omission",
+                call.version.doc_id
+            ),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "terminal source AgentToolCall {} binds both result and omission",
+                call.version.doc_id
+            ),
+        }
+    } else if result.is_some() || omission.is_some() {
+        anyhow::bail!("non-terminal source AgentToolCall binds terminal evidence");
+    } else {
+        Ok(ForkedToolEvidence::NonTerminal)
+    }
 }
 
 async fn copy_tool_calls(
@@ -1131,7 +1663,7 @@ async fn copy_tool_calls(
             executor,
             "AgentToolCall",
             &source,
-            "tool_call_key request_id session_id agent_did requester_did message_sequence tool_name tool_call_id args result result_doc_id result_composite_commit_cid result_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did status lifecycle_state started_at deadline_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms await_mode cancel_policy cancel_cause child_request_id",
+            "tool_call_key request_id session_id agent_did requester_did message_sequence tool_name tool_call_id args result result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did status lifecycle_state started_at deadline_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms await_mode cancel_policy cancel_cause child_request_id",
         )
         .await?;
         if row.get("session_id").and_then(Value::as_str) != Some(source_session_id) {
@@ -1149,6 +1681,7 @@ async fn copy_tool_calls(
         let args = row.get("args").and_then(|v| v.as_str()).unwrap_or("");
         let result = row.get("result").and_then(|v| v.as_str()).unwrap_or("");
         let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let evidence = validate_source_tool_evidence(executor, &source, &row).await?;
         let lifecycle_state = row.get("lifecycle_state").and_then(|v| v.as_str());
         let started_at = row.get("started_at").and_then(|v| v.as_str()).unwrap_or("");
         let deadline_at = row.get("deadline_at").and_then(Value::as_str);
@@ -1170,6 +1703,48 @@ async fn copy_tool_calls(
         let cancel_policy = row.get("cancel_policy").and_then(Value::as_str);
         let child_request_id = row.get("child_request_id").and_then(Value::as_str);
         let request_id = row.get("request_id").and_then(Value::as_str);
+        let stage_phase = evidence.source_phase().map(|phase| phase.as_str());
+        let staged_terminal = stage_phase.is_some();
+        let create_result = if staged_terminal { "" } else { result };
+        let create_status = if staged_terminal {
+            "forkStaging"
+        } else {
+            status
+        };
+        let create_lifecycle_state = stage_phase.or(lifecycle_state);
+        let staging_deadline = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
+        let create_deadline_at = if staged_terminal {
+            Some(staging_deadline.as_str())
+        } else {
+            deadline_at
+        };
+        let create_started_at = if matches!(
+            evidence.source_phase(),
+            Some(
+                crate::tool_call_lifecycle::ToolCallState::Pending
+                    | crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
+            )
+        ) {
+            None
+        } else {
+            (!started_at.is_empty()).then_some(started_at)
+        };
+        let create_completed_at = (!staged_terminal).then_some(completed_at).flatten();
+        let create_tool_failure_class = (!staged_terminal).then_some(tool_failure_class).flatten();
+        let create_denial_reason = (!staged_terminal).then_some(denial_reason).flatten();
+        let create_denied_argv = (!staged_terminal)
+            .then_some(denied_argv.as_deref())
+            .flatten();
+        let create_denied_command = (!staged_terminal).then_some(denied_command).flatten();
+        let create_denied_argument = (!staged_terminal).then_some(denied_argument).flatten();
+        let create_denied_subcommand = (!staged_terminal).then_some(denied_subcommand).flatten();
+        let create_denied_prefix = (!staged_terminal)
+            .then_some(denied_prefix.as_deref())
+            .flatten();
+        let create_policy_mode = (!staged_terminal).then_some(policy_mode).flatten();
+        let create_policy_network = (!staged_terminal).then_some(policy_network).flatten();
+        let create_cancel_cause = (!staged_terminal).then_some(cancel_cause).flatten();
+        let create_latency_ms = (!staged_terminal).then_some(latency_ms).flatten();
         let tool_call_key = format!("{child_session_id}:{tool_call_id}");
         require_child_key_absent(executor, "AgentToolCall", "tool_call_key", &tool_call_key)
             .await?;
@@ -1217,25 +1792,25 @@ async fn copy_tool_calls(
             tool_name_escaped = escape_graphql_string(tool_name),
             tool_call_id_escaped = escape_graphql_string(tool_call_id),
             args_escaped = escape_graphql_string(args),
-            result_escaped = escape_graphql_string(result),
-            status_escaped = escape_graphql_string(status),
-            lifecycle_state = nullable_string_literal(lifecycle_state),
-            started_at = nullable_string_literal((!started_at.is_empty()).then_some(started_at)),
-            deadline_at = nullable_string_literal(deadline_at),
-            completed_at = nullable_string_literal(completed_at),
+            result_escaped = escape_graphql_string(create_result),
+            status_escaped = escape_graphql_string(create_status),
+            lifecycle_state = nullable_string_literal(create_lifecycle_state),
+            started_at = nullable_string_literal(create_started_at),
+            deadline_at = nullable_string_literal(create_deadline_at),
+            completed_at = nullable_string_literal(create_completed_at),
             selected_service_id = nullable_string_literal(selected_service_id),
             selected_tool_name = nullable_string_literal(selected_tool_name),
-            tool_failure_class = nullable_string_literal(tool_failure_class),
-            denial_reason = nullable_string_literal(denial_reason),
-            denied_argv = nullable_string_array_literal(denied_argv.as_deref()),
-            denied_command = nullable_string_literal(denied_command),
-            denied_argument = nullable_string_literal(denied_argument),
-            denied_subcommand = nullable_string_literal(denied_subcommand),
-            denied_prefix = nullable_string_array_literal(denied_prefix.as_deref()),
-            policy_mode = nullable_string_literal(policy_mode),
-            policy_network = nullable_string_literal(policy_network),
-            cancel_cause = nullable_string_literal(cancel_cause),
-            latency_ms = nullable_i64_literal(latency_ms),
+            tool_failure_class = nullable_string_literal(create_tool_failure_class),
+            denial_reason = nullable_string_literal(create_denial_reason),
+            denied_argv = nullable_string_array_literal(create_denied_argv),
+            denied_command = nullable_string_literal(create_denied_command),
+            denied_argument = nullable_string_literal(create_denied_argument),
+            denied_subcommand = nullable_string_literal(create_denied_subcommand),
+            denied_prefix = nullable_string_array_literal(create_denied_prefix),
+            policy_mode = nullable_string_literal(create_policy_mode),
+            policy_network = nullable_string_literal(create_policy_network),
+            cancel_cause = nullable_string_literal(create_cancel_cause),
+            latency_ms = nullable_i64_literal(create_latency_ms),
             await_mode = nullable_string_literal(await_mode),
             cancel_policy = nullable_string_literal(cancel_policy),
             child_request_id = nullable_string_literal(child_request_id),
@@ -1256,9 +1831,208 @@ async fn copy_tool_calls(
             source,
             child,
             source_row: row,
+            evidence,
         });
     }
     Ok(copied)
+}
+
+fn exact_fact_fields(kind: &str, fact: &crate::SignedDocumentVersionRef) -> Result<String> {
+    let (doc, cid, signer) = match kind {
+        "result" => (
+            "result_doc_id",
+            "result_composite_commit_cid",
+            "result_signer_did",
+        ),
+        "omission" => (
+            "omission_doc_id",
+            "omission_composite_commit_cid",
+            "omission_signer_did",
+        ),
+        "approval" => (
+            "approval_doc_id",
+            "approval_composite_commit_cid",
+            "approval_signer_did",
+        ),
+        _ => anyhow::bail!("unsupported fork tool fact kind {kind}"),
+    };
+    Ok(format!(
+        r#"{doc}: "{}", {cid}: "{}", {signer}: "{}","#,
+        escape_graphql_string(&fact.version.doc_id),
+        escape_graphql_string(&fact.version.composite_commit_cid),
+        escape_graphql_string(&fact.signer_did),
+    ))
+}
+
+async fn terminalize_forked_tool_call(
+    executor: &(impl GraphqlExecutor + ?Sized),
+    call: &ForkedToolCall,
+    accepted: &crate::SignedDocumentVersionRef,
+    kind: &str,
+    evidence: &crate::SignedDocumentVersionRef,
+    deferred_approval: Option<&crate::SignedDocumentVersionRef>,
+    node_did: &str,
+) -> Result<()> {
+    let source_phase = call
+        .evidence
+        .source_phase()
+        .ok_or_else(|| anyhow::anyhow!("non-terminal fork call cannot be terminalized"))?;
+    let terminal_phase = call
+        .evidence
+        .terminal_phase()
+        .ok_or_else(|| anyhow::anyhow!("fork terminal plan omitted terminal phase"))?;
+    let current = exact_current_ref(executor, "AgentToolCall", &call.child.version.doc_id).await?;
+    if &current != accepted {
+        anyhow::bail!("fork child execution changed before exact terminal evidence was bound");
+    }
+    if evidence.signer_did != accepted.signer_did || accepted.signer_did != node_did {
+        anyhow::bail!("fork child evidence, accepted execution, and node signer differ");
+    }
+
+    let row = &call.source_row;
+    let evidence_fields = exact_fact_fields(kind, evidence)?;
+    let approval_fields = deferred_approval
+        .map(|approval| exact_fact_fields("approval", approval))
+        .transpose()?
+        .unwrap_or_default();
+    let mutation = format!(
+        r#"mutation {{ update_AgentToolCall(
+            filter: {{
+                _docID: {{ _eq: "{doc_id}" }},
+                lifecycle_state: {{ _eq: "{source_phase}" }},
+                result_doc_id: {{ _eq: null }},
+                omission_doc_id: {{ _eq: null }}
+            }},
+            input: {{
+                result: "{result}",
+                status: "{status}",
+                lifecycle_state: "{terminal_phase}",
+                started_at: {started_at},
+                deadline_at: {deadline_at},
+                completed_at: {completed_at},
+                selected_service_id: {selected_service_id},
+                selected_tool_name: {selected_tool_name},
+                tool_failure_class: {tool_failure_class},
+                denial_reason: {denial_reason},
+                denied_argv: {denied_argv},
+                denied_command: {denied_command},
+                denied_argument: {denied_argument},
+                denied_subcommand: {denied_subcommand},
+                denied_prefix: {denied_prefix},
+                policy_mode: {policy_mode},
+                policy_network: {policy_network},
+                cancel_cause: {cancel_cause},
+                latency_ms: {latency_ms},
+                {evidence_fields}
+                {approval_fields}
+                partial_output_tail: null,
+                partial_output_seq: null
+            }}
+        ) {{ _docID }} }}"#,
+        doc_id = escape_graphql_string(&call.child.version.doc_id),
+        source_phase = source_phase.as_str(),
+        terminal_phase = terminal_phase.as_str(),
+        result = escape_graphql_string(
+            row.get("result")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        ),
+        status = escape_graphql_string(
+            row.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("completed")
+        ),
+        started_at = nullable_string_literal(row.get("started_at").and_then(Value::as_str)),
+        deadline_at = nullable_string_literal(row.get("deadline_at").and_then(Value::as_str)),
+        completed_at = nullable_string_literal(row.get("completed_at").and_then(Value::as_str)),
+        selected_service_id =
+            nullable_string_literal(row.get("selected_service_id").and_then(Value::as_str)),
+        selected_tool_name =
+            nullable_string_literal(row.get("selected_tool_name").and_then(Value::as_str)),
+        tool_failure_class =
+            nullable_string_literal(row.get("tool_failure_class").and_then(Value::as_str)),
+        denial_reason = nullable_string_literal(row.get("denial_reason").and_then(Value::as_str)),
+        denied_argv = nullable_string_array_literal(
+            row.get("denied_argv")
+                .and_then(json_string_array)
+                .as_deref()
+        ),
+        denied_command = nullable_string_literal(row.get("denied_command").and_then(Value::as_str)),
+        denied_argument =
+            nullable_string_literal(row.get("denied_argument").and_then(Value::as_str)),
+        denied_subcommand =
+            nullable_string_literal(row.get("denied_subcommand").and_then(Value::as_str)),
+        denied_prefix = nullable_string_array_literal(
+            row.get("denied_prefix")
+                .and_then(json_string_array)
+                .as_deref()
+        ),
+        policy_mode = nullable_string_literal(row.get("policy_mode").and_then(Value::as_str)),
+        policy_network = nullable_string_literal(row.get("policy_network").and_then(Value::as_str)),
+        cancel_cause = nullable_string_literal(row.get("cancel_cause").and_then(Value::as_str)),
+        latency_ms = nullable_i64_literal(row.get("latency_ms").and_then(json_i64)),
+    );
+    let response = executor
+        .execute_graphql_exact_head_cas(
+            "AgentToolCall",
+            accepted,
+            &mutation,
+            "fork::terminalize_tool_call_with_exact_evidence",
+        )
+        .await?;
+    let updated = mutation_doc_id(&response, "update_AgentToolCall")?;
+    if updated != call.child.version.doc_id {
+        anyhow::bail!("fork terminal transition updated a different tool call");
+    }
+    let terminal = verify_child_ref(
+        executor,
+        "AgentToolCall",
+        &call.child.version.doc_id,
+        Some(node_did),
+    )
+    .await?;
+    let terminal_row = exact_snapshot(
+        executor,
+        "AgentToolCall",
+        &terminal,
+        "lifecycle_state result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did",
+    )
+    .await?;
+    if terminal_row.get("lifecycle_state").and_then(Value::as_str) != Some(terminal_phase.as_str())
+    {
+        anyhow::bail!("fork child did not reach its exact terminal phase");
+    }
+    let attached = exact_ref_from_fields(
+        &terminal_row,
+        &format!("{kind}_doc_id"),
+        &format!("{kind}_composite_commit_cid"),
+        &format!("{kind}_signer_did"),
+        "fork child terminal evidence",
+    )?;
+    if attached != *evidence {
+        anyhow::bail!("fork child terminal points to different exact evidence");
+    }
+    let other = if kind == "result" {
+        "omission_doc_id"
+    } else {
+        "result_doc_id"
+    };
+    if terminal_row.get(other).and_then(Value::as_str).is_some() {
+        anyhow::bail!("fork child terminal binds both result and omission");
+    }
+    if let Some(expected) = deferred_approval {
+        let attached = exact_ref_from_fields(
+            &terminal_row,
+            "approval_doc_id",
+            "approval_composite_commit_cid",
+            "approval_signer_did",
+            "fork child approval",
+        )?;
+        if attached != *expected {
+            anyhow::bail!("fork child terminal points to a different approval");
+        }
+    }
+    Ok(())
 }
 
 async fn copy_tool_results(
@@ -1269,52 +2043,154 @@ async fn copy_tool_results(
     child_conversation_doc_id: &str,
     node_did: &str,
     calls: &[ForkedToolCall],
+    deferred_approvals: &HashMap<String, crate::SignedDocumentVersionRef>,
 ) -> Result<u32> {
     let mut copied = 0u32;
     for call in calls {
-        let Some(source) = optional_exact_ref(
-            &call.source_row,
-            "result_doc_id",
-            "result_composite_commit_cid",
-            "result_signer_did",
-            "fork source AgentToolResult",
-        )?
-        else {
-            continue;
+        let (source, source_phase, _terminal_phase) = match &call.evidence {
+            ForkedToolEvidence::NonTerminal => continue,
+            ForkedToolEvidence::Result {
+                source,
+                source_phase,
+                terminal_phase,
+            } => (source, *source_phase, *terminal_phase),
+            ForkedToolEvidence::Omission {
+                source,
+                source_phase,
+                terminal_phase,
+                ..
+            } => {
+                let row = exact_snapshot(
+                    executor,
+                    "AgentToolOutputOmission",
+                    source,
+                    "tool_call_key agent_did requester_did session_id source_phase terminal_phase reason detail created_at",
+                )
+                .await?;
+                let accepted =
+                    exact_current_ref(executor, "AgentToolCall", &call.child.version.doc_id)
+                        .await?;
+                let child_row = exact_snapshot(
+                    executor,
+                    "AgentToolCall",
+                    &accepted,
+                    "tool_call_key lifecycle_state",
+                )
+                .await?;
+                if child_row.get("lifecycle_state").and_then(Value::as_str)
+                    != Some(source_phase.as_str())
+                {
+                    anyhow::bail!("fork omission child is not in its staged source phase");
+                }
+                let omission_key = accepted.version.composite_commit_cid.clone();
+                require_child_key_absent(
+                    executor,
+                    "AgentToolOutputOmission",
+                    "omission_key",
+                    &omission_key,
+                )
+                .await?;
+                let requester_field =
+                    crate::session::requester_did_create_field(child_requester_did);
+                let source_fields = fork_source_fields(source);
+                let mutation = format!(
+                    r#"mutation {{ create_AgentToolOutputOmission(input: {{
+                        omission_key: "{}",
+                        tool_call_key: "{}",
+                        tool_call_doc_id: "{}",
+                        tool_call_composite_commit_cid: "{}",
+                        tool_call_signer_did: "{}",
+                        agent_did: "{}",
+                        {requester_field}
+                        session_id: "{}",
+                        source_phase: "{}",
+                        terminal_phase: "{}",
+                        reason: "{}",
+                        detail: "{}",
+                        created_at: "{}",
+                        {source_fields}
+                    }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&omission_key),
+                    escape_graphql_string(
+                        child_row
+                            .get("tool_call_key")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ),
+                    escape_graphql_string(&accepted.version.doc_id),
+                    escape_graphql_string(&accepted.version.composite_commit_cid),
+                    escape_graphql_string(&accepted.signer_did),
+                    escape_graphql_string(child_agent_did),
+                    escape_graphql_string(child_session_id),
+                    source_phase.as_str(),
+                    terminal_phase.as_str(),
+                    escape_graphql_string(
+                        row.get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ),
+                    escape_graphql_string(
+                        row.get("detail")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ),
+                    escape_graphql_string(
+                        row.get("created_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ),
+                );
+                let response = execute_mutation_with_retry(
+                    executor,
+                    &mutation,
+                    "fork::copy_tool_output_omission",
+                )
+                .await?;
+                let doc_id = mutation_doc_id(&response, "create_AgentToolOutputOmission")?;
+                let child_omission =
+                    verify_child_ref(executor, "AgentToolOutputOmission", &doc_id, Some(node_did))
+                        .await?;
+                require_sole_child_key(
+                    executor,
+                    "AgentToolOutputOmission",
+                    "omission_key",
+                    &omission_key,
+                    &doc_id,
+                )
+                .await?;
+                terminalize_forked_tool_call(
+                    executor,
+                    call,
+                    &accepted,
+                    "omission",
+                    &child_omission,
+                    deferred_approvals.get(&call.child.version.doc_id),
+                    node_did,
+                )
+                .await?;
+                copied += 1;
+                continue;
+            }
         };
         let row = exact_snapshot(
             executor,
             "AgentToolResult",
-            &source,
-            "result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id tool_name tool_input output_text model_output_truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted",
+            source,
+            "tool_name tool_input output_text model_output_truncated truncation_metadata created_at discarded_because_interrupted",
         )
         .await?;
-        if row.get("tool_call_doc_id").and_then(Value::as_str)
-            != Some(call.source.version.doc_id.as_str())
-        {
-            anyhow::bail!("source AgentToolResult points to a different physical source call");
-        }
-        let source_parent = crate::SignedDocumentVersionRef::new(
-            crate::DocumentVersionRef::new(
-                row.get("tool_call_doc_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                row.get("tool_call_composite_commit_cid")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            ),
-            row.get("tool_call_signer_did")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        );
-        exact_snapshot(
+        let accepted =
+            exact_current_ref(executor, "AgentToolCall", &call.child.version.doc_id).await?;
+        let child_row = exact_snapshot(
             executor,
             "AgentToolCall",
-            &source_parent,
-            "tool_call_key session_id",
+            &accepted,
+            "tool_call_key lifecycle_state",
         )
-        .await
-        .context("verifying exact historical source call for forked result")?;
+        .await?;
+        if child_row.get("lifecycle_state").and_then(Value::as_str) != Some(source_phase.as_str()) {
+            anyhow::bail!("fork result child is not in its staged source phase");
+        }
         let tool_name = row.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
         let tool_input = row.get("tool_input").and_then(|v| v.as_str()).unwrap_or("");
         let output_text = row
@@ -1339,7 +2215,7 @@ async fn copy_tool_results(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let tool_call_key = format!("{child_session_id}:{tool_call_id}");
-        let result_key = call.child.version.doc_id.clone();
+        let result_key = accepted.version.composite_commit_cid.clone();
         require_child_key_absent(executor, "AgentToolResult", "result_key", &result_key).await?;
         let requester_did_field = crate::session::requester_did_create_field(child_requester_did);
         let source_fields = fork_source_fields(&source);
@@ -1365,9 +2241,9 @@ async fn copy_tool_results(
                 }}) {{ _docID }} }}"#,
             result_key_escaped = escape_graphql_string(&result_key),
             tool_call_key_escaped = escape_graphql_string(&tool_call_key),
-            child_call_doc_id = escape_graphql_string(&call.child.version.doc_id),
-            child_call_cid = escape_graphql_string(&call.child.version.composite_commit_cid),
-            child_call_signer = escape_graphql_string(&call.child.signer_did),
+            child_call_doc_id = escape_graphql_string(&accepted.version.doc_id),
+            child_call_cid = escape_graphql_string(&accepted.version.composite_commit_cid),
+            child_call_signer = escape_graphql_string(&accepted.signer_did),
             child_agent_did_escaped = escape_graphql_string(child_agent_did),
             child_session_escaped = escape_graphql_string(child_session_id),
             tool_name_escaped = escape_graphql_string(tool_name),
@@ -1391,11 +2267,14 @@ async fn copy_tool_results(
             &doc_id,
         )
         .await?;
-        attach_child_tool_fact(
+        terminalize_forked_tool_call(
             executor,
-            &call.child.version.doc_id,
+            call,
+            &accepted,
             "result",
             &child_result,
+            deferred_approvals.get(&call.child.version.doc_id),
+            node_did,
         )
         .await?;
         copied += 1;
@@ -1410,8 +2289,9 @@ async fn copy_tool_approvals(
     child_requester_did: Option<&str>,
     node_did: &str,
     calls: &[ForkedToolCall],
-) -> Result<u32> {
+) -> Result<(u32, HashMap<String, crate::SignedDocumentVersionRef>)> {
     let mut copied = 0u32;
+    let mut deferred = HashMap::new();
     for call in calls {
         let Some(source) = optional_exact_ref(
             &call.source_row,
@@ -1452,10 +2332,25 @@ async fn copy_tool_approvals(
             executor,
             "AgentToolCall",
             &source_parent,
-            "tool_call_key session_id",
+            "tool_call_key session_id lifecycle_state",
         )
         .await
         .context("verifying exact historical source call for forked approval")?;
+        if let ForkedToolEvidence::Omission {
+            accepted,
+            reason: crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason::ApprovalDenied,
+            ..
+        } = &call.evidence
+        {
+            if &source_parent != accepted {
+                anyhow::bail!(
+                    "source approval-denied verdict and omission pin different held executions"
+                );
+            }
+            if row.get("decision").and_then(Value::as_str) != Some("denied") {
+                anyhow::bail!("approvalDenied omission does not pin a denied approval fact");
+            }
+        }
 
         let tool_call_id = call
             .source_row
@@ -1463,8 +2358,8 @@ async fn copy_tool_approvals(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let tool_call_key = format!("{child_session_id}:{tool_call_id}");
-        let approval_key = call.child.version.doc_id.clone();
-        let approval_id = format!("approval-{}", call.child.version.doc_id);
+        let approval_key = call.child.version.composite_commit_cid.clone();
+        let approval_id = format!("approval-{}", call.child.version.composite_commit_cid);
         require_child_key_absent(executor, "AgentToolApproval", "approval_key", &approval_key)
             .await?;
         let requester_did_field = crate::session::requester_did_create_field(child_requester_did);
@@ -1524,16 +2419,27 @@ async fn copy_tool_approvals(
             &doc_id,
         )
         .await?;
-        attach_child_tool_fact(
-            executor,
-            &call.child.version.doc_id,
-            "approval",
-            &child_approval,
-        )
-        .await?;
+        if call.evidence.defers_approval_binding() {
+            deferred.insert(call.child.version.doc_id.clone(), child_approval);
+        } else {
+            attach_child_tool_fact(
+                executor,
+                &call.child.version.doc_id,
+                "approval",
+                &child_approval,
+            )
+            .await?;
+        }
         copied += 1;
     }
-    Ok(copied)
+    for call in calls {
+        if call.evidence.defers_approval_binding()
+            && !deferred.contains_key(&call.child.version.doc_id)
+        {
+            anyhow::bail!("approvalDenied fork source omitted its exact denied approval");
+        }
+    }
+    Ok((copied, deferred))
 }
 
 async fn copy_compaction_entries(

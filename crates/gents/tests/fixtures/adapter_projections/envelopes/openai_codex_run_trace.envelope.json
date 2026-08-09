@@ -49,7 +49,7 @@
     }
   },
   "projection_id": "openai_codex_run_trace",
-  "projection_version": "v2",
+  "projection_version": "v3",
   "provenance": {
     "actor_did": "did:test:fixture-reader",
     "built_at": "2026-06-05T00:00:00Z",
@@ -58,7 +58,7 @@
     "runtime_version": "0.10.1",
     "source_manifest_status": "unavailable",
     "source_projection_id": "run_timeline",
-    "source_projection_version": "v2"
+    "source_projection_version": "v3"
   },
   "redaction_mode": "training_safe",
   "source_agent_did": "did:test:planner",

@@ -507,6 +507,18 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub result: Option<String>,
     #[serde(default)]
+    pub result_doc_id: Option<String>,
+    #[serde(default)]
+    pub result_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub result_signer_did: Option<String>,
+    #[serde(default)]
+    pub omission_doc_id: Option<String>,
+    #[serde(default)]
+    pub omission_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub omission_signer_did: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
@@ -593,6 +605,38 @@ pub struct AgentToolResultRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub discarded_because_interrupted: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentToolOutputOmissionRow {
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub omission_key: Option<String>,
+    #[serde(default)]
+    pub tool_call_key: Option<String>,
+    #[serde(default)]
+    pub tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub tool_call_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub tool_call_signer_did: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub requester_did: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub source_phase: Option<String>,
+    #[serde(default)]
+    pub terminal_phase: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// Immutable capture of the exact provider request body at the transport seam.

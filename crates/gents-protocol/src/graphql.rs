@@ -9,7 +9,8 @@ use crate::client_protocol::{
     RequestSnapshot, ResponseSnapshot, ResponseStatus,
 };
 use crate::row::{
-    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
+    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow,
+    AgentToolOutputOmissionRow, AgentToolResultRow,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ pub struct GraphqlSessionShape {
     pub messages: Vec<AgentMessageRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
+    pub tool_output_omissions: Vec<AgentToolOutputOmissionRow>,
 }
 
 /// Validate `name` against the GraphQL `Name` grammar:
@@ -757,6 +759,12 @@ pub fn session_shape_query(session_id: &str) -> String {
                 workflow_role
                 args
                 result
+                result_doc_id
+                result_composite_commit_cid
+                result_signer_did
+                omission_doc_id
+                omission_composite_commit_cid
+                omission_signer_did
                 deadline_at
                 selected_service_id
                 selected_tool_name
@@ -788,6 +796,22 @@ pub fn session_shape_query(session_id: &str) -> String {
                 conversation_doc_id
                 created_at
                 discarded_because_interrupted
+            }}
+            AgentToolOutputOmission(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, order: {{ created_at: ASC }}) {{
+                _docID
+                omission_key
+                tool_call_key
+                tool_call_doc_id
+                tool_call_composite_commit_cid
+                tool_call_signer_did
+                agent_did
+                requester_did
+                session_id
+                source_phase
+                terminal_phase
+                reason
+                detail
+                created_at
             }}
         }}"#
     )
@@ -846,6 +870,12 @@ pub fn parse_session_shape_response(
         .map(serde_json::from_value)
         .transpose()?
         .unwrap_or_default();
+    let tool_output_omissions = data
+        .get("AgentToolOutputOmission")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
 
     Ok(GraphqlSessionShape {
         session_id: session_id.to_string(),
@@ -858,6 +888,7 @@ pub fn parse_session_shape_response(
         messages,
         tool_calls,
         tool_results,
+        tool_output_omissions,
     })
 }
 
@@ -993,6 +1024,55 @@ mod tests {
         assert!(session_query.contains("cancel_cause"));
         assert!(session_query.contains("latency_ms"));
         assert!(session_query.contains("discarded_because_interrupted"));
+        assert!(session_query.contains("AgentToolOutputOmission"));
+        assert!(session_query.contains("omission_composite_commit_cid"));
+    }
+
+    #[test]
+    fn session_shape_preserves_output_omission_without_tool_result() {
+        let shape = parse_session_shape_response(
+            "session-1",
+            "request-1",
+            GraphqlTurnState {
+                request: None,
+                response: None,
+            },
+            &serde_json::json!({
+                "data": {
+                    "AgentMessage": [],
+                    "AgentToolCall": [{
+                        "tool_call_key": "session-1:call-1",
+                        "session_id": "session-1",
+                        "tool_call_id": "call-1",
+                        "lifecycle_state": "failed",
+                        "omission_doc_id": "omission-doc",
+                        "omission_composite_commit_cid": "omission-cid",
+                        "omission_signer_did": "did:key:agent"
+                    }],
+                    "AgentToolResult": [],
+                    "AgentToolOutputOmission": [{
+                        "omission_key": "tool-call-source-cid",
+                        "tool_call_key": "session-1:call-1",
+                        "tool_call_doc_id": "tool-call-doc",
+                        "tool_call_composite_commit_cid": "tool-call-source-cid",
+                        "tool_call_signer_did": "did:key:agent",
+                        "session_id": "session-1",
+                        "source_phase": "running",
+                        "terminal_phase": "failed",
+                        "reason": "executionLost",
+                        "detail": "worker disappeared"
+                    }]
+                }
+            }),
+        )
+        .expect("session shape");
+
+        assert!(shape.tool_results.is_empty());
+        assert_eq!(shape.tool_output_omissions.len(), 1);
+        assert_eq!(
+            shape.tool_output_omissions[0].reason.as_deref(),
+            Some("executionLost")
+        );
     }
 
     #[test]

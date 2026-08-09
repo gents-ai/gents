@@ -92,6 +92,7 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentResponse",
     "AgentResponseOutcome",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentToolApproval",
     "AgentSession",
     "AgentMessage",
@@ -129,6 +130,7 @@ const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentResponse",
     "AgentResponseOutcome",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentToolApproval",
     "AgentSession",
     "AgentMessage",
@@ -162,6 +164,7 @@ mod tests {
 
         assert!(collections.contains("AgentRequest"));
         assert!(collections.contains("AgentResponse"));
+        assert!(collections.contains("AgentToolOutputOmission"));
         assert!(collections.contains("ToolServiceRegistry"));
         assert_eq!(
             collections

@@ -49,6 +49,10 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
+        self.state
+            .lock()
+            .await
+            .register_tool_result_tool_name(internal_call_id, tool_name);
         if tool_name == crate::goal::GET_GOAL_TOOL_NAME {
             let result = self
                 .persist_get_goal_tool_call(tool_call_id, internal_call_id, args)
@@ -475,15 +479,23 @@ impl DefraSessionHook {
             let result_fact = truncated.spill_ref.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("full tool output was not retained as an exact signed fact")
             })?;
-            lc.attach_result_fact(result_fact).await?;
 
             match outcome {
-                ToolOutcome::Completed(_) => lc.complete(&truncated.text).await?,
+                ToolOutcome::Completed(_) => {
+                    lc.complete_with_result_fact(&truncated.text, result_fact)
+                        .await?
+                }
                 ToolOutcome::Failed { class, denial, .. } => {
                     if let Some(denial) = denial.as_ref() {
-                        lc.fail_with_command_denial(&truncated.text, denial).await?;
+                        lc.fail_with_command_denial_and_result_fact(
+                            &truncated.text,
+                            denial,
+                            result_fact,
+                        )
+                        .await?;
                     } else {
-                        lc.fail(&truncated.text, *class).await?;
+                        lc.fail_with_result_fact(&truncated.text, *class, result_fact)
+                            .await?;
                     }
                 }
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled => {

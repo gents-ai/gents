@@ -1,5 +1,5 @@
 {
-  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v2-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v3-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -7,7 +7,7 @@
       "const": "multi_agent_task"
     },
     "projection_version": {
-      "const": "v2"
+      "const": "v3"
     },
     "record_id": {
       "type": "string"

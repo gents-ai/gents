@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use gents::graphql::escape_graphql_string;
 use gents::session::{
     fork, fork_via_http, ForkError, ForkParams, GraphqlExecutor, HttpGraphqlExecutor,
@@ -20,8 +21,7 @@ use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::snapshots::fetch_tool_result_snapshots_for_session;
 use crate::support::{
     create_agent_behavior, create_agent_conversation, create_agent_message, create_agent_session,
-    create_agent_tool_call, create_compaction_entry, create_request, test_db_with_identity, TestDb,
-    AGENT_DID, AGENT_NAME,
+    create_compaction_entry, create_request, test_db_with_identity, TestDb, AGENT_DID, AGENT_NAME,
 };
 
 async fn test_db(name: &str) -> TestDb {
@@ -132,6 +132,46 @@ async fn exact_current_evidence(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn create_fork_tool_call(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    message_sequence: u32,
+    tool_call_id: &str,
+    tool_name: &str,
+    args: &str,
+    started_at: &str,
+) {
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    let mutation = format!(
+        r#"mutation {{ create_AgentToolCall(input: {{
+            tool_call_key: "{}",
+            session_id: "{}",
+            agent_did: "{AGENT_DID}",
+            message_sequence: {message_sequence},
+            tool_name: "{}",
+            tool_call_id: "{}",
+            args: "{}",
+            result: "",
+            status: "called",
+            lifecycle_state: "running",
+            started_at: "{}"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&tool_call_key),
+        escape_graphql_string(session_id),
+        escape_graphql_string(tool_name),
+        escape_graphql_string(tool_call_id),
+        escape_graphql_string(args),
+        escape_graphql_string(started_at),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create staged fork tool call: {:?}",
+        response.errors
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn create_exact_tool_result(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
@@ -146,7 +186,7 @@ async fn create_exact_tool_result(
         exact_current_evidence(node, "AgentToolCall", "tool_call_key", &tool_call_key).await;
     let mutation = format!(
         r#"mutation {{ create_AgentToolResult(input: {{
-            result_key: "{call_doc_id}",
+            result_key: "{call_cid}",
             tool_call_key: "{}",
             tool_call_doc_id: "{call_doc_id}",
             tool_call_composite_commit_cid: "{call_cid}",
@@ -176,17 +216,30 @@ async fn create_exact_tool_result(
         response.errors
     );
     let (result_doc_id, result_cid, result_signer) =
-        exact_current_evidence(node, "AgentToolResult", "result_key", &call_doc_id).await;
+        exact_current_evidence(node, "AgentToolResult", "result_key", &call_cid).await;
     let attach = format!(
         r#"mutation {{ update_AgentToolCall(
-            filter: {{ _docID: {{ _eq: "{}" }} }},
+            filter: {{
+                _docID: {{ _eq: "{}" }},
+                lifecycle_state: {{ _eq: "running" }},
+                result_doc_id: {{ _eq: null }},
+                omission_doc_id: {{ _eq: null }}
+            }},
             input: {{
+                result: "{}",
+                status: "completed",
+                lifecycle_state: "completed",
+                started_at: "{}",
+                completed_at: "{}",
                 result_doc_id: "{}",
                 result_composite_commit_cid: "{}",
                 result_signer_did: "{}"
             }}
         ) {{ _docID }} }}"#,
         escape_graphql_string(&call_doc_id),
+        escape_graphql_string(output_text),
+        escape_graphql_string(created_at),
+        escape_graphql_string(created_at),
         escape_graphql_string(&result_doc_id),
         escape_graphql_string(&result_cid),
         escape_graphql_string(&result_signer),
@@ -197,6 +250,85 @@ async fn create_exact_tool_result(
         "attach exact result: {:?}",
         response.errors
     );
+}
+
+async fn create_exact_tool_omission(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    terminal_phase: &str,
+    reason: &str,
+    detail: &str,
+    completed_at: &str,
+) -> (String, String, String) {
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    let (call_doc_id, call_cid, call_signer) =
+        exact_current_evidence(node, "AgentToolCall", "tool_call_key", &tool_call_key).await;
+    let mutation = format!(
+        r#"mutation {{ create_AgentToolOutputOmission(input: {{
+            omission_key: "{call_cid}",
+            tool_call_key: "{}",
+            tool_call_doc_id: "{call_doc_id}",
+            tool_call_composite_commit_cid: "{call_cid}",
+            tool_call_signer_did: "{call_signer}",
+            agent_did: "{AGENT_DID}",
+            session_id: "{}",
+            source_phase: "running",
+            terminal_phase: "{}",
+            reason: "{}",
+            detail: "{}",
+            created_at: "{}"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&tool_call_key),
+        escape_graphql_string(session_id),
+        escape_graphql_string(terminal_phase),
+        escape_graphql_string(reason),
+        escape_graphql_string(detail),
+        escape_graphql_string(completed_at),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create exact omission: {:?}",
+        response.errors
+    );
+    let omission =
+        exact_current_evidence(node, "AgentToolOutputOmission", "omission_key", &call_cid).await;
+    let terminal = format!(
+        r#"mutation {{ update_AgentToolCall(
+            filter: {{
+                _docID: {{ _eq: "{}" }},
+                lifecycle_state: {{ _eq: "running" }},
+                result_doc_id: {{ _eq: null }},
+                omission_doc_id: {{ _eq: null }}
+            }},
+            input: {{
+                result: "{}",
+                status: "completed",
+                lifecycle_state: "{}",
+                started_at: "{}",
+                completed_at: "{}",
+                omission_doc_id: "{}",
+                omission_composite_commit_cid: "{}",
+                omission_signer_did: "{}"
+            }}
+        ) {{ _docID }} }}"#,
+        escape_graphql_string(&call_doc_id),
+        escape_graphql_string(detail),
+        escape_graphql_string(terminal_phase),
+        escape_graphql_string(completed_at),
+        escape_graphql_string(completed_at),
+        escape_graphql_string(&omission.0),
+        escape_graphql_string(&omission.1),
+        escape_graphql_string(&omission.2),
+    );
+    let response = node.execute(&terminal).await;
+    assert!(
+        !response.has_errors(),
+        "bind exact omission: {:?}",
+        response.errors
+    );
+    omission
 }
 
 #[derive(Clone)]
@@ -210,11 +342,10 @@ struct EmbeddedGraphqlState {
 enum SignatureTamper {
     #[default]
     None,
-    MissingSignature,
-    MissingKey,
-    ForgedKey,
-    UnsupportedType,
-    RejectVerification,
+    ReboundCid,
+    TamperedBlock,
+    TamperedSignature,
+    RejectMaterial,
 }
 
 #[derive(Deserialize)]
@@ -262,75 +393,79 @@ async fn embedded_graphql_handler(
             defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "data": response.data,
         "errors": response.errors,
     });
-    if request.query.contains("_commits(cid:") {
-        if matches!(state.signature_tamper, SignatureTamper::MissingSignature) {
-            if let Some(row) = body.pointer_mut("/data/_commits/0") {
-                row["signature"] = serde_json::Value::Null;
-            }
-        }
-        let signature = body.pointer_mut("/data/_commits/0/signature");
-        match (state.signature_tamper, signature) {
-            (SignatureTamper::MissingKey, Some(signature)) => {
-                signature["identity"] = serde_json::Value::String(String::new());
-            }
-            (SignatureTamper::ForgedKey, Some(signature)) => {
-                signature["identity"] = serde_json::Value::String("00".to_string());
-            }
-            (SignatureTamper::UnsupportedType, Some(signature)) => {
-                signature["type"] = serde_json::Value::String("RS256".to_string());
-            }
-            _ => {}
-        }
-    }
     (StatusCode::OK, Json(body))
 }
 
 #[derive(Deserialize)]
-struct VerifySignatureQuery {
+struct SignedBlockQuery {
     cid: String,
-    #[serde(rename = "public-key")]
-    public_key: String,
-    #[serde(rename = "type")]
-    key_type: String,
 }
 
-async fn embedded_verify_signature_handler(
+async fn embedded_signed_block_handler(
     State(state): State<EmbeddedGraphqlState>,
     headers: HeaderMap,
-    Query(query): Query<VerifySignatureQuery>,
-) -> StatusCode {
-    let authenticated = headers
+    Query(query): Query<SignedBlockQuery>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Some(caller_did) = headers
         .get(reqwest::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(|token| identity::from_token(token.as_bytes()).ok())
-        .is_some_and(|identity| identity::verify_auth_token(&identity, &state.audience).is_ok());
-    if !authenticated {
-        return StatusCode::UNAUTHORIZED;
-    }
-    if matches!(state.signature_tamper, SignatureTamper::RejectVerification) {
-        return StatusCode::FORBIDDEN;
-    }
-    let key_type = match query.key_type.as_str() {
-        "ed25519" => crypto::KeyType::Ed25519,
-        "secp256k1" => crypto::KeyType::Secp256k1,
-        "secp256r1" => crypto::KeyType::Secp256r1,
-        _ => return StatusCode::BAD_REQUEST,
+        .filter(|identity| identity::verify_auth_token(identity, &state.audience).is_ok())
+        .and_then(|identity| identity.did().ok())
+    else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "invalid bearer"})),
+        );
     };
-    let Ok(expected_signer) = state.node.verified_block_signer_did(&query.cid).await else {
-        return StatusCode::NOT_FOUND;
-    };
-    let Ok(public_key) = crypto::public_key_from_string(key_type, &query.public_key) else {
-        return StatusCode::FORBIDDEN;
-    };
-    match public_key.did() {
-        Ok(did) if did == expected_signer => StatusCode::OK,
-        _ => StatusCode::FORBIDDEN,
+    if matches!(state.signature_tamper, SignatureTamper::RejectMaterial) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "signed material denied"})),
+        );
     }
+    let Ok((mut block, mut signature)) = state
+        .node
+        .authorized_signed_block_bytes(&query.cid, Some(caller_did.as_str()))
+        .await
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "signed material unavailable"})),
+        );
+    };
+    match state.signature_tamper {
+        SignatureTamper::TamperedBlock => {
+            if let Some(last) = block.last_mut() {
+                *last ^= 1;
+            }
+        }
+        SignatureTamper::TamperedSignature => {
+            if let Some(last) = signature.last_mut() {
+                *last ^= 1;
+            }
+        }
+        _ => {}
+    }
+    let encoder = base64::engine::general_purpose::STANDARD;
+    let response_cid = if matches!(state.signature_tamper, SignatureTamper::ReboundCid) {
+        "bafy-rebound"
+    } else {
+        query.cid.as_str()
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "cid": response_cid,
+            "block": encoder.encode(block),
+            "signature": encoder.encode(signature),
+        })),
+    )
 }
 
 async fn spawn_embedded_graphql_with_tamper(
@@ -350,10 +485,7 @@ async fn spawn_embedded_graphql_with_tamper(
     };
     let router = Router::new()
         .route("/api/v0/graphql", post(embedded_graphql_handler))
-        .route(
-            "/api/v0/block/verify-signature",
-            get(embedded_verify_signature_handler),
-        )
+        .route("/api/v0/block/signed", get(embedded_signed_block_handler))
         .with_state(state);
 
     tokio::spawn(async move {
@@ -378,20 +510,13 @@ async fn remote_commit_signer_evidence_fails_closed_for_tampering() {
         exact_current_evidence(&db.node, "AgentSession", "session_id", session_id).await;
 
     for (tamper, expected) in [
-        (SignatureTamper::MissingSignature, "has no signature"),
-        (SignatureTamper::MissingKey, "omitted signature identity"),
+        (SignatureTamper::ReboundCid, "rebound commit"),
+        (SignatureTamper::TamperedBlock, "block bytes do not hash"),
         (
-            SignatureTamper::ForgedKey,
-            "cryptographic verification failed",
+            SignatureTamper::TamperedSignature,
+            "signature bytes do not hash",
         ),
-        (
-            SignatureTamper::UnsupportedType,
-            "unsupported signature type",
-        ),
-        (
-            SignatureTamper::RejectVerification,
-            "cryptographic verification failed",
-        ),
+        (SignatureTamper::RejectMaterial, "HTTP 403"),
     ] {
         let endpoint = spawn_embedded_graphql_with_tamper(db.node.clone(), tamper).await;
         let access = gents::AuthenticatedGraphql::new(
@@ -660,17 +785,14 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
         "2026-04-21T10:00:02Z",
     )
     .await;
-    create_agent_tool_call(
+    create_fork_tool_call(
         &db.node,
         parent_session,
         2,
         "tc-1",
         "describe_tool",
         r#"{"service_id":"x-data","tool_name":"missing"}"#,
-        "tool 'missing' not found on service 'x-data'. Available tools: search_posts",
-        "completed",
         "2026-04-21T10:00:02Z",
-        "2026-04-21T10:00:02.025Z",
     )
     .await;
     set_tool_call_trace_fields(
@@ -682,6 +804,16 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
         "tool_not_found",
         25,
         "2026-04-21T10:00:02Z",
+        "2026-04-21T10:00:02.025Z",
+    )
+    .await;
+    create_exact_tool_result(
+        &db.node,
+        parent_session,
+        "tc-1",
+        "describe_tool",
+        r#"{"service_id":"x-data","tool_name":"missing"}"#,
+        "tool 'missing' not found on service 'x-data'. Available tools: search_posts",
         "2026-04-21T10:00:02.025Z",
     )
     .await;
@@ -703,16 +835,23 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
         "2026-04-21T10:00:04Z",
     )
     .await;
-    create_agent_tool_call(
+    create_fork_tool_call(
         &db.node,
         parent_session,
         4,
         "tc-2",
         "write_file",
         r#"{"path":"bar"}"#,
-        "ok",
-        "completed",
         "2026-04-21T10:00:04Z",
+    )
+    .await;
+    create_exact_tool_result(
+        &db.node,
+        parent_session,
+        "tc-2",
+        "write_file",
+        r#"{"path":"bar"}"#,
+        "ok",
         "2026-04-21T10:00:04Z",
     )
     .await;
@@ -796,16 +935,13 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
         "2026-04-21T10:00:03Z",
     )
     .await;
-    create_agent_tool_call(
+    create_fork_tool_call(
         &db.node,
         parent_session,
         1,
         "tc-early",
         "read_file",
         "{}",
-        "early",
-        "completed",
-        "2026-04-21T10:00:02Z",
         "2026-04-21T10:00:02Z",
     )
     .await;
@@ -819,16 +955,13 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
         "2026-04-21T10:00:02Z",
     )
     .await;
-    create_agent_tool_call(
+    create_fork_tool_call(
         &db.node,
         parent_session,
         2,
         "tc-late",
         "read_file",
         "{}",
-        "late",
-        "completed",
-        "2026-04-21T10:00:04Z",
         "2026-04-21T10:00:04Z",
     )
     .await;
@@ -882,6 +1015,247 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
     );
     assert_eq!(child_results[0].created_at, "2026-04-21T10:00:02Z");
     assert_eq!(outcome.copied_tool_results, 1);
+}
+
+#[tokio::test]
+async fn fork_stages_terminal_tool_call_until_exact_omission_is_bound() {
+    let db = test_db("fork-copy-tool-omission").await;
+    let parent_session = "parent-tool-omission";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "assistant",
+        "a1",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_fork_tool_call(
+        &db.node,
+        parent_session,
+        2,
+        "tc-timeout",
+        "long_task",
+        "{}",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    let source_omission = create_exact_tool_omission(
+        &db.node,
+        parent_session,
+        "tc-timeout",
+        "timedOut",
+        "timedOut",
+        "tool deadline elapsed",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        3,
+        "user",
+        "u2",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork copies exact omission closure");
+
+    let child_calls = fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let [child] = child_calls.as_slice() else {
+        panic!("expected one forked tool call")
+    };
+    assert_eq!(child.lifecycle_state.as_deref(), Some("timedOut"));
+    assert!(child.result_doc_id.is_none());
+    let omission_doc_id = child
+        .omission_doc_id
+        .as_deref()
+        .expect("terminal child binds omission");
+    let omission_cid = child
+        .omission_composite_commit_cid
+        .as_deref()
+        .expect("terminal child pins omission CID");
+    let response = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolOutputOmission(cid: ["{}"]) {{
+                _docID omission_key tool_call_doc_id tool_call_composite_commit_cid
+                tool_call_signer_did source_phase terminal_phase reason detail
+                fork_source_doc_id fork_source_composite_commit_cid fork_source_signer_did
+            }} }}"#,
+            escape_graphql_string(omission_cid),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["AgentToolOutputOmission"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    let omission = &rows[0];
+    assert_eq!(omission["_docID"].as_str(), Some(omission_doc_id));
+    assert_eq!(
+        omission["tool_call_doc_id"].as_str(),
+        Some(child.doc_id.as_str())
+    );
+    assert_eq!(omission["source_phase"].as_str(), Some("running"));
+    assert_eq!(omission["terminal_phase"].as_str(), Some("timedOut"));
+    assert_eq!(omission["reason"].as_str(), Some("timedOut"));
+    assert_eq!(
+        omission["fork_source_doc_id"].as_str(),
+        Some(source_omission.0.as_str())
+    );
+    assert_eq!(
+        omission["fork_source_composite_commit_cid"].as_str(),
+        Some(source_omission.1.as_str())
+    );
+    assert_eq!(
+        omission["fork_source_signer_did"].as_str(),
+        Some(source_omission.2.as_str())
+    );
+    let accepted_cid = omission["tool_call_composite_commit_cid"].as_str().unwrap();
+    assert_eq!(omission["omission_key"].as_str(), Some(accepted_cid));
+    let accepted = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(cid: ["{}"]) {{ _docID lifecycle_state }} }}"#,
+            escape_graphql_string(accepted_cid),
+        ))
+        .await;
+    assert!(!accepted.has_errors(), "{:?}", accepted.errors);
+    let rows = accepted.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["_docID"].as_str(), Some(child.doc_id.as_str()));
+    assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("running"));
+    assert_eq!(outcome.copied_tool_results, 0);
+}
+
+#[tokio::test]
+async fn fork_rejects_terminal_tool_call_without_exact_result_or_omission() {
+    let db = test_db("fork-reject-open-terminal-tool").await;
+    let parent_session = "parent-open-terminal-tool";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "user",
+        "u1",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "assistant",
+        "a1",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_fork_tool_call(
+        &db.node,
+        parent_session,
+        2,
+        "tc-open-terminal",
+        "broken_tool",
+        "{}",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    let tool_call_key = format!("{parent_session}:tc-open-terminal");
+    let (source_doc_id, _, _) =
+        exact_current_evidence(&db.node, "AgentToolCall", "tool_call_key", &tool_call_key).await;
+    let response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{
+                    result: "synthetic success",
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    started_at: "2026-04-21T10:00:02Z",
+                    completed_at: "2026-04-21T10:00:03Z"
+                }}
+            ) {{ _docID }} }}"#,
+            escape_graphql_string(&source_doc_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    create_agent_message(
+        &db.node,
+        parent_session,
+        3,
+        "user",
+        "u2",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+
+    let error = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect_err("fork must reject terminal tool without exact evidence");
+    assert!(
+        error
+            .to_string()
+            .contains("has no exact result or omission"),
+        "{error:#}"
+    );
+    let children = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ fork_source_doc_id: {{ _eq: "{}" }} }}) {{
+                _docID lifecycle_state result_doc_id omission_doc_id
+            }} }}"#,
+            escape_graphql_string(&source_doc_id),
+        ))
+        .await;
+    assert!(!children.has_errors(), "{:?}", children.errors);
+    let rows = children.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert!(
+        rows.iter().all(|row| !matches!(
+            row["lifecycle_state"].as_str(),
+            Some("completed" | "failed" | "timedOut" | "cancelled")
+        )),
+        "invalid source must not expose a forked terminal call"
+    );
 }
 
 #[tokio::test]
@@ -969,30 +1343,25 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
     for i in 1..=3 {
         let tool_call_id = format!("tc-{i}");
         let args = format!(r#"{{"index":{i}}}"#);
-        let result = format!("tool-call-result-{i}");
         let timestamp = format!("2026-04-21T10:00:0{i}Z");
-        create_agent_tool_call(
+        create_fork_tool_call(
             &db.node,
             parent_session,
             i,
             &tool_call_id,
             "read_file",
             &args,
-            &result,
-            "completed",
-            &timestamp,
             &timestamp,
         )
         .await;
 
-        let tool_input = format!(r#"{{"path":"file-{i}.txt"}}"#);
         let output_text = format!("tool-result-{i}");
         create_exact_tool_result(
             &db.node,
             parent_session,
             &tool_call_id,
             "read_file",
-            &tool_input,
+            &args,
             &output_text,
             &timestamp,
         )

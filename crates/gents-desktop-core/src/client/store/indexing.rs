@@ -6,6 +6,15 @@ use super::{ClientStore, ClientStoreRows};
 
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
+        // Omission keys group competing proposals and are intentionally not a
+        // physical uniqueness boundary. Without `_docID` the desktop cannot
+        // preserve distinct multi-host proposals, so fail closed instead of
+        // collapsing them under the shared omission key.
+        rows.tool_output_omissions.retain(|row| {
+            row.doc_id
+                .as_deref()
+                .is_some_and(|doc_id| !doc_id.trim().is_empty())
+        });
         rows.conversations.sort_by(|left, right| {
             cmp_opt_str_desc(left.updated_at.as_deref(), right.updated_at.as_deref())
                 .then_with(|| {
@@ -30,6 +39,14 @@ impl ClientStore {
                     .then_with(|| left.message_key.cmp(&right.message_key))
             },
         );
+        rows.tool_output_omissions.sort_by(|left, right| {
+            left.session_id
+                .cmp(&right.session_id)
+                .then_with(|| {
+                    cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
+                })
+                .then_with(|| left.omission_key.cmp(&right.omission_key))
+        });
         rows.requests.sort_by(|left, right| {
             left.session_id
                 .cmp(&right.session_id)
@@ -123,6 +140,8 @@ impl ClientStore {
             build_vec_index(&rows.tool_calls, |row| row.session_id.as_deref());
         let tool_results_by_session_id =
             build_vec_index(&rows.tool_results, |row| row.session_id.as_deref());
+        let tool_output_omissions_by_session_id =
+            build_vec_index(&rows.tool_output_omissions, |row| row.session_id.as_deref());
 
         let mut runtimes_by_agent_did = HashMap::new();
         for (index, row) in rows.runtimes.iter().enumerate() {
@@ -170,6 +189,7 @@ impl ClientStore {
             goals: rows.goals,
             tool_calls: rows.tool_calls,
             tool_results: rows.tool_results,
+            tool_output_omissions: rows.tool_output_omissions,
             compaction_entries: rows.compaction_entries,
             message_source_agent_dids: rows.message_source_agent_dids,
             session_source_agent_dids: rows.session_source_agent_dids,
@@ -196,6 +216,7 @@ impl ClientStore {
             requests_by_session_id,
             tool_calls_by_session_id,
             tool_results_by_session_id,
+            tool_output_omissions_by_session_id,
             runtimes_by_agent_did,
             latest_response_by_request_id,
             request_index_by_id,

@@ -52,7 +52,7 @@ abbrev Catalog := List Template
 
 def conversationTranscriptCollections : List String :=
   ["AgentRequest", "AgentResponse", "AgentResponseOutcome", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentToolApproval", "AgentSession", "AgentConversation", "CompactionEntry",
+   "AgentToolResult", "AgentToolOutputOmission", "AgentToolApproval", "AgentSession", "AgentConversation", "CompactionEntry",
    "BearerPairingReady"]
 
 def agentConfigCollections : List String :=
@@ -87,6 +87,7 @@ def conversationRules : List CollectionRule :=
   , { collection := "AgentMessage",      field := "requester_did", source := .peerDid }
   , { collection := "AgentToolCall",     field := "requester_did", source := .peerDid }
   , { collection := "AgentToolResult",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentToolOutputOmission", field := "requester_did", source := .peerDid }
   , { collection := "AgentToolApproval", field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",      field := "requester_did", source := .peerDid }
   , { collection := "AgentConversation", field := "requester_did", source := .peerDid }

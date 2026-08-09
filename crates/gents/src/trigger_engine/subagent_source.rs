@@ -477,6 +477,7 @@ impl SubagentSource {
             row.deadline_at.as_deref(),
             &payload,
             FailureClass::ServiceUnavailable,
+            crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason::RecoveryFailure,
         )
         .await
     }

@@ -7,9 +7,10 @@ use std::sync::Arc;
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
-    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow,
+    AgentToolOutputOmissionRow, AgentToolResultRow, CompactionEntryRow, EventTriggerRow, GoalRow,
+    InferenceBackendRow, InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow,
+    ToolServiceRegistryRow,
 };
 use serde::Serialize;
 
@@ -28,6 +29,7 @@ pub struct ClientStoreRows {
     pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
+    pub tool_output_omissions: Vec<AgentToolOutputOmissionRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
     #[serde(skip)]
     pub message_source_agent_dids: Vec<Option<String>>,
@@ -76,6 +78,7 @@ pub struct ClientStore {
     pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
     pub tool_results: Vec<AgentToolResultRow>,
+    pub tool_output_omissions: Vec<AgentToolOutputOmissionRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
     pub message_source_agent_dids: Vec<Option<String>>,
     pub session_source_agent_dids: Vec<Option<String>>,
@@ -102,6 +105,7 @@ pub struct ClientStore {
     requests_by_session_id: HashMap<String, Vec<usize>>,
     tool_calls_by_session_id: HashMap<String, Vec<usize>>,
     tool_results_by_session_id: HashMap<String, Vec<usize>>,
+    tool_output_omissions_by_session_id: HashMap<String, Vec<usize>>,
     runtimes_by_agent_did: HashMap<String, usize>,
     latest_response_by_request_id: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
@@ -112,6 +116,7 @@ pub struct TranscriptView<'a> {
     pub messages: Vec<&'a AgentMessageRow>,
     pub tool_calls: Vec<&'a AgentToolCallRow>,
     pub tool_results: Vec<&'a AgentToolResultRow>,
+    pub tool_output_omissions: Vec<&'a AgentToolOutputOmissionRow>,
 }
 
 /// Aggregated recent-run bookkeeping for a task, rolled up across all
@@ -188,6 +193,11 @@ impl ClientStore {
             incoming.tool_results,
             incoming.tool_result_source_agent_dids,
             tool_result_merge_key,
+        );
+        upsert_rows_by_key(
+            &mut rows.tool_output_omissions,
+            incoming.tool_output_omissions,
+            tool_output_omission_merge_key,
         );
         upsert_rows_with_sources_by_key(
             &mut rows.compaction_entries,
@@ -302,6 +312,8 @@ impl ClientStore {
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.goals.retain(|row| row.agent_did != agent_did);
         rows.tool_results
+            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
+        rows.tool_output_omissions
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.tool_selections
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
@@ -446,6 +458,11 @@ impl ClientStore {
             patch_rows.tool_result_source_agent_dids,
             tool_result_merge_key,
         );
+        upsert_rows_by_key(
+            &mut rows.tool_output_omissions,
+            patch_rows.tool_output_omissions,
+            tool_output_omission_merge_key,
+        );
         upsert_rows_with_sources_by_key(
             &mut rows.compaction_entries,
             &mut rows.compaction_entry_source_agent_dids,
@@ -490,6 +507,7 @@ impl ClientStore {
             goals: self.goals.clone(),
             tool_calls: self.tool_calls.clone(),
             tool_results: self.tool_results.clone(),
+            tool_output_omissions: self.tool_output_omissions.clone(),
             compaction_entries: self.compaction_entries.clone(),
             message_source_agent_dids: self.message_source_agent_dids.clone(),
             session_source_agent_dids: self.session_source_agent_dids.clone(),
@@ -730,6 +748,10 @@ impl ClientStore {
                 &self.tool_results,
                 self.tool_results_by_session_id.get(session_id),
             ),
+            tool_output_omissions: indexes_to_refs(
+                &self.tool_output_omissions,
+                self.tool_output_omissions_by_session_id.get(session_id),
+            ),
         }
     }
 
@@ -766,6 +788,19 @@ impl ClientStore {
                     && source_agent_matches(&self.tool_result_source_agent_dids, *index, agent_did)
             })
             .collect::<Vec<_>>();
+        let tool_output_omission_indexes = self
+            .tool_output_omissions_by_session_id
+            .get(session_id)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+            .copied()
+            .filter(|index| {
+                row_agent_matches(
+                    self.tool_output_omissions[*index].agent_did.as_deref(),
+                    agent_did,
+                )
+            })
+            .collect::<Vec<_>>();
 
         TranscriptView {
             messages: message_indexes
@@ -779,6 +814,10 @@ impl ClientStore {
             tool_results: tool_result_indexes
                 .into_iter()
                 .map(|index| &self.tool_results[index])
+                .collect(),
+            tool_output_omissions: tool_output_omission_indexes
+                .into_iter()
+                .map(|index| &self.tool_output_omissions[index])
                 .collect(),
         }
     }
@@ -918,6 +957,7 @@ impl ClientStore {
             + self.goals.len()
             + self.tool_calls.len()
             + self.tool_results.len()
+            + self.tool_output_omissions.len()
             + self.compaction_entries.len()
             + self.tasks.len()
             + self.schedules.len()
@@ -1155,6 +1195,10 @@ fn tool_result_merge_key(row: &AgentToolResultRow, source_agent_did: Option<&str
         row.conversation_doc_id.as_deref().unwrap_or_default(),
         row.created_at.as_deref().unwrap_or_default()
     )
+}
+
+fn tool_output_omission_merge_key(row: &AgentToolOutputOmissionRow) -> String {
+    row.doc_id.clone().unwrap_or_default()
 }
 
 fn compaction_entry_merge_key(row: &CompactionEntryRow, source_agent_did: Option<&str>) -> String {
@@ -1593,5 +1637,62 @@ mod tests {
         let store = store.merge_snapshot(canonical_update);
         assert_eq!(store.goals.len(), 1);
         assert_eq!(store.goals[0].status.as_deref(), Some("complete"));
+    }
+
+    #[test]
+    fn omission_facts_remain_visible_and_physical_twins_are_not_collapsed() {
+        let omission = |doc_id: &str| AgentToolOutputOmissionRow {
+            doc_id: Some(doc_id.to_string()),
+            omission_key: Some("source-cid".to_string()),
+            tool_call_key: Some("session:call".to_string()),
+            tool_call_doc_id: Some("tool-call-doc".to_string()),
+            tool_call_composite_commit_cid: Some("source-cid".to_string()),
+            tool_call_signer_did: Some("did:key:agent".to_string()),
+            agent_did: Some("did:key:agent".to_string()),
+            requester_did: None,
+            session_id: Some("session".to_string()),
+            source_phase: Some("running".to_string()),
+            terminal_phase: Some("failed".to_string()),
+            reason: Some("executionLost".to_string()),
+            detail: Some("worker disappeared".to_string()),
+            created_at: Some("2026-08-08T00:00:00Z".to_string()),
+        };
+        let first = ClientStore::from_rows(ClientStoreRows {
+            tool_output_omissions: vec![omission("doc-a")],
+            ..ClientStoreRows::default()
+        });
+        let second = ClientStore::from_rows(ClientStoreRows {
+            tool_output_omissions: vec![omission("doc-b")],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = first.merge_snapshot(second);
+        assert_eq!(merged.tool_output_omissions.len(), 2);
+        assert_eq!(merged.transcript("session").tool_output_omissions.len(), 2);
+    }
+
+    #[test]
+    fn omission_without_physical_doc_id_is_not_merged_as_a_fact() {
+        let store = ClientStore::from_rows(ClientStoreRows {
+            tool_output_omissions: vec![AgentToolOutputOmissionRow {
+                doc_id: None,
+                omission_key: Some("shared-proposal-key".to_string()),
+                tool_call_key: Some("session:call".to_string()),
+                tool_call_doc_id: Some("tool-call-doc".to_string()),
+                tool_call_composite_commit_cid: Some("source-cid".to_string()),
+                tool_call_signer_did: Some("did:key:node".to_string()),
+                agent_did: Some("did:key:agent".to_string()),
+                requester_did: None,
+                session_id: Some("session".to_string()),
+                source_phase: Some("running".to_string()),
+                terminal_phase: Some("failed".to_string()),
+                reason: Some("executionLost".to_string()),
+                detail: Some("worker disappeared".to_string()),
+                created_at: Some("2026-08-08T00:00:00Z".to_string()),
+            }],
+            ..ClientStoreRows::default()
+        });
+
+        assert!(store.tool_output_omissions.is_empty());
     }
 }

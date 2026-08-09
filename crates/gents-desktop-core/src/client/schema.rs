@@ -83,4 +83,13 @@ mod tests {
             "the exclusion must not have emptied the set: {names:?}"
         );
     }
+
+    #[test]
+    fn desktop_subscribes_to_terminal_tool_omission_evidence() {
+        let names = subscribed_collection_names();
+        assert!(
+            names.contains(&gents_protocol::schemas::AGENT_TOOL_OUTPUT_OMISSION_NAME),
+            "desktop collection subscriptions must include terminal omission evidence: {names:?}"
+        );
+    }
 }

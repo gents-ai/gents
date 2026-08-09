@@ -27,6 +27,20 @@ struct ExistingToolResultFact {
     conversation_doc_id: String,
 }
 
+#[derive(Deserialize)]
+struct ExactToolResultPayload {
+    tool_call_doc_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    tool_name: String,
+    tool_input: String,
+    output_text: String,
+    model_output_truncated: bool,
+    truncation_metadata: String,
+    conversation_doc_id: String,
+}
+
 async fn verify_existing_result_fact(
     node: &defra_node::EmbeddedNode,
     row: ExistingToolResultFact,
@@ -67,21 +81,103 @@ async fn verify_existing_result_fact(
             rows.len()
         ),
     }
-    crate::document_version::verified_current_signed_document_version(
+    let exact = crate::document_version::verified_current_signed_document_version(
         node,
         "AgentToolResult",
         &row.doc_id,
     )
-    .await
+    .await?;
+    if exact.signer_did != row.tool_call_signer_did {
+        anyhow::bail!("stored AgentToolResult signer does not match its execution parent");
+    }
+    Ok(exact)
 }
 
 impl DefraSpillTruncator {
+    /// Publish the canonical immutable full-output fact for a tool execution.
+    ///
+    /// Callers that already chose their model-facing projection use this
+    /// entry point so every successful or failed execution retains the full
+    /// observed bytes before its lifecycle row becomes terminal.
+    pub(crate) async fn retain_full_output_fact(
+        &self,
+        tool_name: &str,
+        tool_input: &str,
+        output: &str,
+        metadata: &str,
+        conversation_doc_id: Option<&str>,
+        model_output_truncated: bool,
+    ) -> Result<crate::SignedDocumentVersionRef> {
+        self.spill(
+            tool_name,
+            tool_input,
+            output,
+            metadata,
+            conversation_doc_id,
+            model_output_truncated,
+        )
+        .await
+    }
+
+    /// Re-publish a full-output proposal against the execution's new running
+    /// head without reconstructing it from the bounded model projection.
+    /// Stale retries must preserve the original bytes and truncation metadata.
+    pub(crate) async fn retain_full_output_fact_from_exact(
+        &self,
+        source: &crate::SignedDocumentVersionRef,
+    ) -> Result<crate::SignedDocumentVersionRef> {
+        let snapshot =
+            crate::document_version::verified_exact_document_snapshot_with_identity(
+                &self.node,
+                "AgentToolResult",
+                &source.version,
+                "tool_call_doc_id agent_did requester_did session_id tool_name tool_input output_text model_output_truncated truncation_metadata conversation_doc_id",
+                None,
+            )
+            .await?;
+        if snapshot.source.signer_did != source.signer_did {
+            anyhow::bail!("AgentToolResult signer changed during stale output rebind");
+        }
+        let payload: ExactToolResultPayload = snapshot.decode()?;
+        let (current_key, current) = self.exact_tool_call().await?;
+        if payload.tool_call_doc_id != current.version.doc_id
+            || payload.agent_did != self.agent_did
+            || payload.requester_did != self.requester_did
+            || payload.session_id != self.session_id
+            || payload.tool_name.trim().is_empty()
+            || current_key.trim().is_empty()
+        {
+            anyhow::bail!("AgentToolResult stale rebind changed immutable execution identity");
+        }
+        self.spill(
+            &payload.tool_name,
+            &payload.tool_input,
+            &payload.output_text,
+            &payload.truncation_metadata,
+            (!payload.conversation_doc_id.is_empty())
+                .then_some(payload.conversation_doc_id.as_str()),
+            payload.model_output_truncated,
+        )
+        .await
+    }
+
     async fn exact_tool_call(&self) -> Result<(String, crate::SignedDocumentVersionRef)> {
         #[derive(Deserialize)]
         struct Row {
             #[serde(rename = "_docID")]
             doc_id: String,
             tool_call_key: String,
+        }
+        #[derive(Deserialize)]
+        struct ExactRow {
+            #[serde(rename = "_docID")]
+            doc_id: String,
+            tool_call_key: String,
+            session_id: String,
+            tool_call_id: String,
+            agent_did: String,
+            requester_did: Option<String>,
+            lifecycle_state: String,
         }
 
         let tool_call_id = self
@@ -120,6 +216,28 @@ impl DefraSpillTruncator {
             &row.doc_id,
         )
         .await?;
+        let snapshot = crate::document_version::verified_exact_document_snapshot_with_identity(
+            &self.node,
+            "AgentToolCall",
+            &signed.version,
+            "tool_call_key session_id tool_call_id agent_did requester_did lifecycle_state",
+            None,
+        )
+        .await?;
+        if snapshot.source.signer_did != signed.signer_did {
+            anyhow::bail!("AgentToolCall signer changed during full-output retention");
+        }
+        let exact: ExactRow = snapshot.decode()?;
+        if exact.doc_id != row.doc_id
+            || exact.tool_call_key != row.tool_call_key
+            || exact.session_id != self.session_id
+            || exact.tool_call_id != tool_call_id
+            || exact.agent_did != self.agent_did
+            || exact.requester_did != self.requester_did
+            || exact.lifecycle_state != "running"
+        {
+            anyhow::bail!("full-output retention requires the exact signed running execution");
+        }
         Ok((row.tool_call_key.clone(), signed))
     }
 
@@ -133,7 +251,12 @@ impl DefraSpillTruncator {
         model_output_truncated: bool,
     ) -> Result<crate::SignedDocumentVersionRef> {
         let (tool_call_key, call) = self.exact_tool_call().await?;
-        let result_key = call.version.doc_id.clone();
+        // The exact accepted execution version is the idempotency scope. A
+        // mutable execution document may gain another live commit (for
+        // example a partial-output checkpoint) before terminalization; that
+        // newer head must be able to publish its own exact output fact rather
+        // than conflicting with evidence for the older head.
+        let result_key = call.version.composite_commit_cid.clone();
         let now = chrono::Utc::now().to_rfc3339();
         let escaped_result_key = escape_graphql_string(&result_key);
         let escaped_tool_call_key = escape_graphql_string(&tool_call_key);
@@ -154,34 +277,26 @@ impl DefraSpillTruncator {
             r#"{{ AgentToolResult(filter: {{ result_key: {{ _eq: "{}" }} }}) {{ _docID tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id tool_name tool_input output_text model_output_truncated truncation_metadata conversation_doc_id }} }}"#,
             escape_graphql_string(&result_key)
         );
-        let observe =
-            |rows: Vec<ExistingToolResultFact>| -> Result<Option<ExistingToolResultFact>> {
-                if rows.len() > 1 {
-                    anyhow::bail!(
-                        "AgentToolResult logical key has {} physical twins; refusing ambiguity",
-                        rows.len()
-                    );
-                }
-                let Some(row) = rows.into_iter().next() else {
-                    return Ok(None);
-                };
-                if row.tool_call_key == tool_call_key
-                    && row.tool_call_doc_id == call.version.doc_id
-                    && row.agent_did == self.agent_did
-                    && row.requester_did == self.requester_did
-                    && row.session_id == self.session_id
-                    && row.tool_name == tool_name
-                    && row.tool_input == tool_input
-                    && row.output_text == output
-                    && row.model_output_truncated == model_output_truncated
-                    && row.truncation_metadata == metadata
-                    && row.conversation_doc_id == conversation_doc_id.unwrap_or_default()
-                {
-                    Ok(Some(row))
-                } else {
-                    anyhow::bail!("AgentToolResult replay conflicts with immutable payload")
-                }
-            };
+        let matches = |row: &ExistingToolResultFact| {
+            row.tool_call_key == tool_call_key
+                && row.tool_call_doc_id == call.version.doc_id
+                && row.tool_call_composite_commit_cid == call.version.composite_commit_cid
+                && row.tool_call_signer_did == call.signer_did
+                && row.agent_did == self.agent_did
+                && row.requester_did == self.requester_did
+                && row.session_id == self.session_id
+                && row.tool_name == tool_name
+                && row.tool_input == tool_input
+                && row.output_text == output
+                && row.model_output_truncated == model_output_truncated
+                && row.truncation_metadata == metadata
+                && row.conversation_doc_id == conversation_doc_id.unwrap_or_default()
+        };
+        let matching = |rows: Vec<ExistingToolResultFact>| -> Option<ExistingToolResultFact> {
+            let mut rows = rows.into_iter().filter(&matches).collect::<Vec<_>>();
+            rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+            rows.into_iter().next()
+        };
         let load_existing = || async {
             let response = self.node.execute(&lookup).await;
             if response.has_errors() {
@@ -201,7 +316,7 @@ impl DefraSpillTruncator {
                     .unwrap_or_default(),
             )
         };
-        if let Some(existing) = observe(load_existing().await?)? {
+        if let Some(existing) = matching(load_existing().await?) {
             return verify_existing_result_fact(&self.node, existing).await;
         }
         let mutation = format!(
@@ -230,7 +345,7 @@ impl DefraSpillTruncator {
             match execute_mutation_with_retry(&self.node, &mutation, "spill_tool_output").await {
                 Ok(response) => response,
                 Err(create_error) => {
-                    if let Some(existing) = observe(load_existing().await?)? {
+                    if let Some(existing) = matching(load_existing().await?) {
                         return verify_existing_result_fact(&self.node, existing).await;
                     }
                     return Err(create_error);
@@ -251,12 +366,21 @@ impl DefraSpillTruncator {
             "spilled full tool output to DefraDB"
         );
 
-        crate::document_version::verified_current_signed_document_version(
-            &self.node,
-            "AgentToolResult",
-            &doc_id,
-        )
-        .await
+        let rows = load_existing().await?;
+        let existing = rows
+            .into_iter()
+            .find(|row| row.doc_id == doc_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!("created AgentToolResult disappeared during verification")
+            })?;
+        if !matches(&existing) {
+            anyhow::bail!("created AgentToolResult payload changed during verification");
+        }
+        let exact = verify_existing_result_fact(&self.node, existing).await?;
+        if exact.version.doc_id != doc_id {
+            anyhow::bail!("verified AgentToolResult changed physical identity");
+        }
+        Ok(exact)
     }
 }
 

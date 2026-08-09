@@ -730,7 +730,7 @@ async fn integration_bridge_complete_with_real_child() {
 
 #[tokio::test]
 async fn integration_bridge_complete_does_not_overwrite_externally_terminal_bridge() {
-    let db = test_db("tc-sa-bc-cas-1").await;
+    let db = crate::signed_materializer_test_db("tc-sa-bc-cas-1").await;
     let child_request_id = "child-bc-cas-1";
     make_completed_request(
         &db.node,
@@ -851,7 +851,7 @@ async fn run_bridge_failure_case(
 
 #[tokio::test]
 async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridge() {
-    let db = test_db("tc-sa-bf-cas-1").await;
+    let db = crate::signed_materializer_test_db("tc-sa-bf-cas-1").await;
     let child_id = "child-req-bf-cas-1";
     make_terminal_request(
         &db.node,

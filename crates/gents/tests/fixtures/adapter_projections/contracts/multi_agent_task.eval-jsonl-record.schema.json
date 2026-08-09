@@ -1,7 +1,13 @@
 {
-  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v2-eval-jsonl-record.schema.json",
+  "$id": "https://schemas.defra.ai/gents/adapter-projection/multi_agent_task/v3-eval-jsonl-record.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
+  "not": {
+    "required": [
+      "output",
+      "output_omission"
+    ]
+  },
   "properties": {
     "adapter_record_id": {
       "type": "string"
@@ -47,6 +53,107 @@
         }
       ]
     },
+    "output_omission": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "created_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "detail": {
+              "type": "string"
+            },
+            "evidence": {
+              "additionalProperties": false,
+              "properties": {
+                "signer_did": {
+                  "type": "string"
+                },
+                "version": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "composite_commit_cid": {
+                      "type": "string"
+                    },
+                    "doc_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "doc_id",
+                    "composite_commit_cid"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "version",
+                "signer_did"
+              ],
+              "type": "object"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "source_phase": {
+              "type": "string"
+            },
+            "terminal_phase": {
+              "type": "string"
+            },
+            "tool_call": {
+              "additionalProperties": false,
+              "properties": {
+                "signer_did": {
+                  "type": "string"
+                },
+                "version": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "composite_commit_cid": {
+                      "type": "string"
+                    },
+                    "doc_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "doc_id",
+                    "composite_commit_cid"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "version",
+                "signer_did"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reason",
+            "detail",
+            "source_phase",
+            "terminal_phase",
+            "evidence",
+            "tool_call"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "parent_request_id": {
       "anyOf": [
         {
@@ -61,7 +168,7 @@
       "const": "multi_agent_task"
     },
     "projection_version": {
-      "const": "v2"
+      "const": "v3"
     },
     "record_id": {
       "type": "string"

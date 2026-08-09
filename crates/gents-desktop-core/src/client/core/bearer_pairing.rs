@@ -1229,6 +1229,7 @@ mod tests {
             "AgentMessage",
             "AgentToolCall",
             "AgentToolResult",
+            "AgentToolOutputOmission",
             "AgentToolApproval",
             "AgentSession",
             "AgentConversation",

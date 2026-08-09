@@ -556,9 +556,12 @@ async fn tool_lifecycle_state_local(
                 filter: {{
                     session_id: {{ _eq: "{session_id}" }},
                     tool_call_id: {{ _eq: "{tool_call_id}" }}
-                }},
-                limit: 1
+                }}
             ) {{
+                _docID
+                tool_call_key
+                session_id
+                tool_call_id
                 lifecycle_state
             }}
         }}"#,
@@ -566,11 +569,62 @@ async fn tool_lifecycle_state_local(
         tool_call_id = escape_graphql_string(tool_call_id),
     );
     let response = execute_node_json(node, &query).await?;
-    Ok(response
+    let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
+        .cloned()
+        .unwrap_or_default();
+    Ok(resolve_local_tool_call_row(session_id, tool_call_id, rows)?
+        .as_ref()
         .and_then(|row| string_field(row, "lifecycle_state")))
+}
+
+fn resolve_local_tool_call_row(
+    session_id: &str,
+    tool_call_id: &str,
+    rows: Vec<Value>,
+) -> Result<Option<Value>> {
+    let expected_key = format!("{session_id}:{tool_call_id}");
+    let row = gents::session::resolve_exact_logical_match(
+        "AgentToolCall",
+        "tool_call_key",
+        &expected_key,
+        rows,
+        |row| {
+            row.get("_docID")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        },
+    )?;
+    if let Some(row) = row.as_ref() {
+        let doc_id = row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let persisted_key = row
+            .get("tool_call_key")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let persisted_session_id = row
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let persisted_tool_call_id = row
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if persisted_key != expected_key {
+            anyhow::bail!(
+                "AgentToolCall logical key mismatch: queried tool_call_key={expected_key} but _docID={doc_id} returned tool_call_key={persisted_key}"
+            );
+        }
+        if persisted_session_id != session_id || persisted_tool_call_id != tool_call_id {
+            anyhow::bail!(
+                "AgentToolCall immutable identity mismatch for tool_call_key={expected_key}: _docID={doc_id} returned session_id={persisted_session_id} tool_call_id={persisted_tool_call_id}"
+            );
+        }
+    }
+    Ok(row)
 }
 
 async fn execute_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
@@ -1186,6 +1240,41 @@ fn non_empty_str(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool_call_row(doc_id: &str) -> Value {
+        json!({
+            "_docID": doc_id,
+            "tool_call_key": "session:call",
+            "session_id": "session",
+            "tool_call_id": "call",
+            "lifecycle_state": "running"
+        })
+    }
+
+    #[test]
+    fn local_tool_lifecycle_lookup_rejects_logical_twins() {
+        let error = resolve_local_tool_call_row(
+            "session",
+            "call",
+            vec![tool_call_row("doc-z"), tool_call_row("doc-a")],
+        )
+        .expect_err("logical twins must fail closed");
+
+        let conflict = error
+            .downcast_ref::<gents::session::LogicalDocumentResolutionError>()
+            .expect("typed logical conflict");
+        assert_eq!(
+            conflict,
+            &gents::session::LogicalDocumentResolutionError::Conflict(
+                gents::session::LogicalIdConflict {
+                    collection: "AgentToolCall",
+                    logical_field: "tool_call_key",
+                    logical_value: "session:call".to_string(),
+                    document_ids: vec!["doc-a".to_string(), "doc-z".to_string()],
+                }
+            )
+        );
+    }
 
     fn row(request_id: &str, parent: Option<&str>, created_at: &str) -> AgentRequestLineageRow {
         AgentRequestLineageRow {

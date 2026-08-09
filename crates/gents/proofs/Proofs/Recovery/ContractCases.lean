@@ -42,6 +42,7 @@ def orphanedBackgroundRecoveryCase
     if row.parentLive || row.parentInterrupted || row.parentTerminal then
       cause.map fun recoveryCause =>
         match recoveryCause with
+        | .preDispatchFailure => "pre_dispatch_failure"
         | .deadlineExceeded => "deadline_exceeded"
         | .parentInterrupted => "parent_interrupted"
         | .parentTerminal => "parent_terminal"
@@ -103,6 +104,12 @@ def recoverySweepCases : List RecoverySweepCase :=
       "streaming"
       "error"
       "deadline-plumbing-audit-2026-05-12-streaming-response-lifetime"
+  , recoveryCase
+      toolCallRecoverySweep
+      "tool_pending_orphan_expired_deadline_to_failed"
+      "pending"
+      "failed"
+      "gents-1063-pending-recovery-ownership-fence"
   , recoveryCase
       toolCallRecoverySweep
       "tool_running_deadline_exceeded_to_timed_out"

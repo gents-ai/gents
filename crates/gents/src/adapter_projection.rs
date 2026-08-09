@@ -4,8 +4,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::document_version::{DocumentVersionRef, SignedDocumentVersionRef};
 use crate::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineRequestEvent, TimelineResponseEvent,
+    TimelineToolCallEvent,
 };
 
 mod atif;
@@ -15,7 +17,7 @@ pub use atif::{
     AtifToolCall, AtifTrajectory, ATIF_SCHEMA_VERSION,
 };
 
-pub const ADAPTER_PROJECTION_VERSION: &str = "v2";
+pub const ADAPTER_PROJECTION_VERSION: &str = "v3";
 pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
 pub const PROJECTION_REDACTION_ALGORITHM_VERSION: &str = "gents-redaction-v1";
 
@@ -178,6 +180,8 @@ pub struct AdapterProjectionEvalJsonlRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_omission: Option<ProjectedToolOutputOmission>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -187,6 +191,20 @@ pub struct AdapterProjectionEvalJsonlRecord {
     pub child_request_id: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
+}
+
+/// Why a terminal tool call has no output, anchored to the exact signed
+/// omission fact and the exact signed tool-call version it describes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectedToolOutputOmission {
+    pub reason: String,
+    pub detail: String,
+    pub source_phase: String,
+    pub terminal_phase: String,
+    pub evidence: SignedDocumentVersionRef,
+    pub tool_call: SignedDocumentVersionRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,7 +273,10 @@ pub enum OpenAiCodexTraceItem {
         request_id: Option<String>,
         name: String,
         arguments: String,
-        output: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_omission: Option<ProjectedToolOutputOmission>,
         status: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         child_run_id: Option<String>,
@@ -323,6 +344,10 @@ pub struct LangGraphTask {
     pub name: String,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_omission: Option<ProjectedToolOutputOmission>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub child_request_id: Option<String>,
 }
 
@@ -378,6 +403,10 @@ pub struct MultiAgentToolEvent {
     pub request_id: Option<String>,
     pub tool_name: String,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_omission: Option<ProjectedToolOutputOmission>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_service_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -738,6 +767,8 @@ pub fn adapter_projection_eval_jsonl_records(
                                         .unwrap_or_else(|_| "{}".to_string()),
                                 ),
                                 output: observation.and_then(|result| result.content.clone()),
+                                output_omission: observation
+                                    .and_then(|result| result.output_omission.clone()),
                                 tool_name: Some(tool.function_name.clone()),
                                 status,
                                 child_request_id,
@@ -824,6 +855,7 @@ pub fn adapter_projection_eval_jsonl_records(
                         name,
                         arguments,
                         output,
+                        output_omission,
                         status,
                         child_run_id,
                         started_at,
@@ -837,7 +869,8 @@ pub fn adapter_projection_eval_jsonl_records(
                         id,
                         EvalRecordFields {
                             input: Some(arguments.clone()),
-                            output: Some(output.clone()),
+                            output: output.clone(),
+                            output_omission: output_omission.clone(),
                             tool_name: Some(name.clone()),
                             status: Some(status.clone()),
                             child_request_id: child_run_id.clone(),
@@ -944,6 +977,8 @@ pub fn adapter_projection_eval_jsonl_records(
                     "langgraph_task",
                     &task.id,
                     EvalRecordFields {
+                        output: task.output.clone(),
+                        output_omission: task.output_omission.clone(),
                         tool_name: Some(task.name.clone()),
                         status: Some(task.status.clone()),
                         child_request_id: task.child_request_id.clone(),
@@ -1024,6 +1059,8 @@ pub fn adapter_projection_eval_jsonl_records(
                     "multi_agent_tool_event",
                     &tool_event.id,
                     EvalRecordFields {
+                        output: tool_event.output.clone(),
+                        output_omission: tool_event.output_omission.clone(),
                         tool_name: Some(tool_event.tool_name.clone()),
                         status: Some(tool_event.status.clone()),
                         child_request_id: tool_event.child_request_id.clone(),
@@ -1163,6 +1200,7 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
         "title": format!("{} Eval JSONL Record", kind.title()),
         "type": "object",
         "additionalProperties": false,
+        "not": { "required": ["output", "output_omission"] },
         "required": [
             "projection_id",
             "projection_version",
@@ -1191,6 +1229,7 @@ pub fn adapter_projection_eval_jsonl_record_schema(kind: AdapterProjectionKind) 
             "role": optional_string_schema(),
             "input": optional_string_schema(),
             "output": optional_string_schema(),
+            "output_omission": tool_output_omission_schema(),
             "tool_name": optional_string_schema(),
             "status": optional_string_schema(),
             "parent_request_id": optional_string_schema(),
@@ -1319,14 +1358,16 @@ fn openai_codex_projection_schema() -> Value {
                         {
                             "type": "object",
                             "additionalProperties": false,
-                            "required": ["type", "id", "name", "arguments", "output", "status"],
+                            "not": { "required": ["output", "output_omission"] },
+                            "required": ["type", "id", "name", "arguments", "status"],
                             "properties": {
                                 "type": { "const": "tool_call" },
                                 "id": string_schema(),
                                 "request_id": optional_string_schema(),
                                 "name": string_schema(),
                                 "arguments": string_schema(),
-                                "output": string_schema(),
+                                "output": optional_string_schema(),
+                                "output_omission": tool_output_omission_schema(),
                                 "status": string_schema(),
                                 "child_run_id": optional_string_schema(),
                                 "started_at": optional_string_schema(),
@@ -1404,12 +1445,15 @@ fn langgraph_projection_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
+                    "not": { "required": ["output", "output_omission"] },
                     "required": ["id", "name", "status"],
                     "properties": {
                         "id": string_schema(),
                         "request_id": optional_string_schema(),
                         "name": string_schema(),
                         "status": string_schema(),
+                        "output": optional_string_schema(),
+                        "output_omission": tool_output_omission_schema(),
                         "child_request_id": optional_string_schema()
                     }
                 }
@@ -1475,12 +1519,15 @@ fn multi_agent_projection_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
+                    "not": { "required": ["output", "output_omission"] },
                     "required": ["id", "tool_name", "status"],
                     "properties": {
                         "id": string_schema(),
                         "request_id": optional_string_schema(),
                         "tool_name": string_schema(),
                         "status": string_schema(),
+                        "output": optional_string_schema(),
+                        "output_omission": tool_output_omission_schema(),
                         "selected_service_id": optional_string_schema(),
                         "selected_tool_name": optional_string_schema(),
                         "denial_reason": optional_string_schema(),
@@ -1532,6 +1579,35 @@ fn signed_document_version_schema() -> Value {
             },
             "signer_did": string_schema()
         }
+    })
+}
+
+pub(super) fn tool_output_omission_schema() -> Value {
+    json!({
+        "anyOf": [
+            {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "reason",
+                    "detail",
+                    "source_phase",
+                    "terminal_phase",
+                    "evidence",
+                    "tool_call"
+                ],
+                "properties": {
+                    "reason": string_schema(),
+                    "detail": string_schema(),
+                    "source_phase": string_schema(),
+                    "terminal_phase": string_schema(),
+                    "evidence": signed_document_version_schema(),
+                    "tool_call": signed_document_version_schema(),
+                    "created_at": optional_string_schema()
+                }
+            },
+            { "type": "null" }
+        ]
     })
 }
 
@@ -1697,6 +1773,7 @@ struct EvalRecordFields {
     role: Option<String>,
     input: Option<String>,
     output: Option<String>,
+    output_omission: Option<ProjectedToolOutputOmission>,
     tool_name: Option<String>,
     status: Option<String>,
     parent_request_id: Option<String>,
@@ -1728,6 +1805,7 @@ fn eval_record(
         role: fields.role,
         input: fields.input,
         output: fields.output,
+        output_omission: fields.output_omission,
         tool_name: fields.tool_name,
         status: fields.status,
         parent_request_id: fields.parent_request_id,
@@ -1795,11 +1873,22 @@ fn validate_openai_codex_projection(
                 require_nonempty(violations, &format!("items[{index}].id"), id);
             }
             OpenAiCodexTraceItem::ToolCall {
-                id, name, status, ..
+                id,
+                name,
+                output,
+                output_omission,
+                status,
+                ..
             } => {
                 require_nonempty(violations, &format!("items[{index}].id"), id);
                 require_nonempty(violations, &format!("items[{index}].name"), name);
                 require_nonempty(violations, &format!("items[{index}].status"), status);
+                validate_projected_tool_output(
+                    violations,
+                    &format!("items[{index}]"),
+                    output.as_deref(),
+                    output_omission.as_ref(),
+                );
             }
         }
     }
@@ -1840,6 +1929,12 @@ fn validate_langgraph_projection(
         require_nonempty(violations, &format!("tasks[{index}].id"), &task.id);
         require_nonempty(violations, &format!("tasks[{index}].name"), &task.name);
         require_nonempty(violations, &format!("tasks[{index}].status"), &task.status);
+        validate_projected_tool_output(
+            violations,
+            &format!("tasks[{index}]"),
+            task.output.as_deref(),
+            task.output_omission.as_ref(),
+        );
     }
 }
 
@@ -1909,6 +2004,60 @@ fn validate_multi_agent_projection(
             &format!("tool_events[{index}].status"),
             &event.status,
         );
+        validate_projected_tool_output(
+            violations,
+            &format!("tool_events[{index}]"),
+            event.output.as_deref(),
+            event.output_omission.as_ref(),
+        );
+    }
+}
+
+pub(super) fn validate_projected_tool_output(
+    violations: &mut Vec<String>,
+    path: &str,
+    output: Option<&str>,
+    omission: Option<&ProjectedToolOutputOmission>,
+) {
+    if output.is_some() && omission.is_some() {
+        violations.push(format!(
+            "{path} must not contain both output and output_omission"
+        ));
+    }
+    let Some(omission) = omission else {
+        return;
+    };
+    for (field, value) in [
+        ("reason", omission.reason.as_str()),
+        ("source_phase", omission.source_phase.as_str()),
+        ("terminal_phase", omission.terminal_phase.as_str()),
+        (
+            "evidence.version.doc_id",
+            omission.evidence.version.doc_id.as_str(),
+        ),
+        (
+            "evidence.version.composite_commit_cid",
+            omission.evidence.version.composite_commit_cid.as_str(),
+        ),
+        ("evidence.signer_did", omission.evidence.signer_did.as_str()),
+        (
+            "tool_call.version.doc_id",
+            omission.tool_call.version.doc_id.as_str(),
+        ),
+        (
+            "tool_call.version.composite_commit_cid",
+            omission.tool_call.version.composite_commit_cid.as_str(),
+        ),
+        (
+            "tool_call.signer_did",
+            omission.tool_call.signer_did.as_str(),
+        ),
+    ] {
+        require_nonempty(
+            violations,
+            &format!("{path}.output_omission.{field}"),
+            value,
+        );
     }
 }
 
@@ -1964,12 +2113,14 @@ fn build_openai_codex_run_trace(
                 });
             }
             RunTimelineEvent::ToolCall(event) => {
+                let (output, output_omission) = projected_tool_output(event, context);
                 items.push(OpenAiCodexTraceItem::ToolCall {
                     id: event.tool_call_id.clone(),
                     request_id: event.request_id.clone(),
                     name: event.tool_name.clone(),
                     arguments: redact_str(&event.args, context),
-                    output: redact_str(&event.result, context),
+                    output,
+                    output_omission,
                     status: event.status.clone(),
                     child_run_id: event.child_request_id.clone(),
                     started_at: event.started_at.clone(),
@@ -2157,11 +2308,14 @@ fn build_langgraph_state_history(
         }
 
         if let RunTimelineEvent::ToolCall(tool) = event {
+            let (output, output_omission) = projected_tool_output(tool, context);
             tasks.push(LangGraphTask {
                 id: tool.tool_call_id.clone(),
                 request_id: tool.request_id.clone(),
                 name: tool.tool_name.clone(),
                 status: tool.status.clone(),
+                output,
+                output_omission,
                 child_request_id: tool.child_request_id.clone(),
             });
             if let Some(child_request_id) = tool.child_request_id.as_deref() {
@@ -2278,11 +2432,14 @@ fn build_multi_agent_task(
                 });
             }
             RunTimelineEvent::ToolCall(tool) => {
+                let (output, output_omission) = projected_tool_output(tool, context);
                 tool_events.push(MultiAgentToolEvent {
                     id: tool.tool_call_id.clone(),
                     request_id: tool.request_id.clone(),
                     tool_name: tool.tool_name.clone(),
                     status: tool.status.clone(),
+                    output,
+                    output_omission,
                     selected_service_id: tool.selected_service_id.clone(),
                     selected_tool_name: tool.selected_tool_name.clone(),
                     denial_reason: redact_option(tool.denial_reason.as_deref(), context),
@@ -2432,6 +2589,42 @@ fn last_response(timeline: &RunTimeline) -> Option<&TimelineResponseEvent> {
         RunTimelineEvent::Response(response) => Some(response),
         _ => None,
     })
+}
+
+fn projected_tool_output(
+    tool: &TimelineToolCallEvent,
+    context: &ProjectionContext,
+) -> (Option<String>, Option<ProjectedToolOutputOmission>) {
+    if let Some(fact) = tool.omission_fact.as_ref() {
+        return (
+            None,
+            Some(ProjectedToolOutputOmission {
+                reason: fact.reason.clone(),
+                detail: redact_str(&fact.detail, context),
+                source_phase: fact.source_phase.clone(),
+                terminal_phase: fact.terminal_phase.clone(),
+                evidence: SignedDocumentVersionRef::new(
+                    DocumentVersionRef::new(&fact.doc_id, &fact.composite_commit_cid),
+                    &fact.signer_did,
+                ),
+                tool_call: SignedDocumentVersionRef::new(
+                    DocumentVersionRef::new(
+                        &fact.tool_call_doc_id,
+                        &fact.tool_call_composite_commit_cid,
+                    ),
+                    &fact.tool_call_signer_did,
+                ),
+                created_at: fact.created_at.clone(),
+            }),
+        );
+    }
+
+    (
+        tool.result_fact
+            .as_ref()
+            .map(|fact| redact_str(&fact.output_text, context)),
+        None,
+    )
 }
 
 fn push_participant(

@@ -11,10 +11,11 @@ use serde_json::Value;
 
 use crate::config_client::ConfigAccess;
 use crate::document_version::{
-    document_field_version_ref_with_identity, exact_document_snapshot_query,
-    unverified_exact_document_snapshot_from_data,
+    document_field_version_ref_with_identity,
+    verified_current_signed_document_version_with_executor,
     verified_current_signed_document_version_with_identity,
-    verified_exact_document_snapshot_with_identity, VerifiedExactDocumentSnapshot,
+    verified_exact_document_snapshot_with_executor, verified_exact_document_snapshot_with_identity,
+    VerifiedExactDocumentSnapshot,
 };
 use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
@@ -22,7 +23,7 @@ use crate::run_timeline::{
     TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineRenderedRequestRow, TimelineRequestRow, TimelineResponseOutcomeRow,
     TimelineResponseRow, TimelineSessionRow, TimelineToolApprovalFact, TimelineToolCallRow,
-    TimelineToolResultFact,
+    TimelineToolOutputOmissionFact, TimelineToolResultFact,
 };
 use crate::run_timeline_manifest::{
     freeze_timeline_manifest_with_declared_edges, RunTimelineSourceManifest, TimelineCoverageGap,
@@ -140,6 +141,9 @@ const TIMELINE_TOOL_CALL_SELECTION: &str = r#"
     result_doc_id
     result_composite_commit_cid
     result_signer_did
+    omission_doc_id
+    omission_composite_commit_cid
+    omission_signer_did
     approval_doc_id
     approval_composite_commit_cid
     approval_signer_did
@@ -435,7 +439,23 @@ async fn load_timeline_request_by_id(
             }
             Ok((request, exact))
         }
-        ConfigAccess::Graphql(_) => Ok((discovered.clone(), None)),
+        ConfigAccess::Graphql(graphql) => {
+            let executor = crate::HttpGraphqlExecutor::new(graphql.clone());
+            let source = verified_current_signed_document_version_with_executor(
+                &executor,
+                "AgentRequest",
+                doc_id,
+            )
+            .await?;
+            let (request, exact) = load_timeline_request_exact(access, &source.version).await?;
+            if request.request_id != request_id {
+                anyhow::bail!(
+                    "AgentRequest {doc_id} changed logical request id from {request_id} to {} while selecting its exact source",
+                    request.request_id
+                );
+            }
+            Ok((request, exact))
+        }
     }
 }
 
@@ -457,16 +477,17 @@ async fn load_timeline_request_exact(
             let request = snapshot.decode::<TimelineRequestRow>()?;
             Ok((request, Some(ExactDocumentSource::from(snapshot))))
         }
-        ConfigAccess::Graphql(_) => {
-            let query =
-                exact_document_snapshot_query("AgentRequest", version, TIMELINE_REQUEST_SELECTION)?;
-            let response = access.execute(&query).await?;
-            let data = response
-                .get("data")
-                .ok_or_else(|| anyhow::anyhow!("exact AgentRequest query returned no data"))?;
-            let document =
-                unverified_exact_document_snapshot_from_data(data, "AgentRequest", version)?;
-            Ok((serde_json::from_value(document)?, None))
+        ConfigAccess::Graphql(graphql) => {
+            let executor = crate::HttpGraphqlExecutor::new(graphql.clone());
+            let snapshot = verified_exact_document_snapshot_with_executor(
+                &executor,
+                "AgentRequest",
+                version,
+                TIMELINE_REQUEST_SELECTION,
+            )
+            .await?;
+            let request = snapshot.decode::<TimelineRequestRow>()?;
+            Ok((request, Some(ExactDocumentSource::from(snapshot))))
         }
     }
 }
@@ -584,6 +605,9 @@ async fn load_timeline_tool_calls_for_session(
                 result_doc_id
                 result_composite_commit_cid
                 result_signer_did
+                omission_doc_id
+                omission_composite_commit_cid
+                omission_signer_did
                 approval_doc_id
                 approval_composite_commit_cid
                 approval_signer_did
@@ -619,10 +643,30 @@ async fn load_timeline_tool_calls_for_session(
 struct TimelineResultFactRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    result_key: String,
+    tool_call_key: String,
     tool_call_doc_id: String,
     tool_call_composite_commit_cid: String,
     tool_call_signer_did: String,
+    session_id: String,
     output_text: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TimelineOmissionFactRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    omission_key: String,
+    tool_call_key: String,
+    tool_call_doc_id: String,
+    tool_call_composite_commit_cid: String,
+    tool_call_signer_did: String,
+    session_id: String,
+    source_phase: String,
+    terminal_phase: String,
+    reason: String,
+    detail: String,
+    created_at: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -637,19 +681,33 @@ struct TimelineApprovalFactRow {
     reason: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct HistoricalToolCallFactRow {
+    tool_call_id: String,
+    session_id: String,
+    lifecycle_state: String,
+}
+
 async fn exact_current_ref(
     access: &ConfigAccess,
     collection: &str,
     doc_id: &str,
 ) -> Result<crate::SignedDocumentVersionRef> {
-    let ConfigAccess::Local(node) = access else {
-        anyhow::bail!(
-            "remote {collection} {doc_id} signature metadata is unverified; refusing a signed fact"
-        );
-    };
-    let identity = timeline_reader_identity(node)?;
-    verified_current_signed_document_version_with_identity(node, collection, doc_id, Some(identity))
-        .await
+    match access {
+        ConfigAccess::Local(node) => {
+            verified_current_signed_document_version_with_executor(
+                node.as_ref(),
+                collection,
+                doc_id,
+            )
+            .await
+        }
+        ConfigAccess::Graphql(graphql) => {
+            let executor = crate::HttpGraphqlExecutor::new(graphql.clone());
+            verified_current_signed_document_version_with_executor(&executor, collection, doc_id)
+                .await
+        }
+    }
 }
 
 fn complete_edge_doc_id<'a>(
@@ -672,21 +730,95 @@ fn complete_edge_doc_id<'a>(
 async fn verify_historical_tool_call_ref(
     access: &ConfigAccess,
     source: &crate::SignedDocumentVersionRef,
-) -> Result<()> {
-    let ConfigAccess::Local(node) = access else {
-        anyhow::bail!("remote AgentToolCall signatures are unverified");
+) -> Result<HistoricalToolCallFactRow> {
+    let snapshot = match access {
+        ConfigAccess::Local(node) => {
+            verified_exact_document_snapshot_with_executor(
+                node.as_ref(),
+                "AgentToolCall",
+                &source.version,
+                "tool_call_id session_id lifecycle_state",
+            )
+            .await?
+        }
+        ConfigAccess::Graphql(graphql) => {
+            let executor = crate::HttpGraphqlExecutor::new(graphql.clone());
+            verified_exact_document_snapshot_with_executor(
+                &executor,
+                "AgentToolCall",
+                &source.version,
+                "tool_call_id session_id lifecycle_state",
+            )
+            .await?
+        }
     };
-    let identity = timeline_reader_identity(node)?;
-    let snapshot = verified_exact_document_snapshot_with_identity(
-        node,
-        "AgentToolCall",
-        &source.version,
-        "tool_call_id",
-        Some(identity),
-    )
-    .await?;
     if snapshot.source.signer_did != source.signer_did {
         anyhow::bail!("historical AgentToolCall signer does not match the pinned fact edge");
+    }
+    snapshot.decode()
+}
+
+fn terminal_tool_phase(call: &TimelineToolCallRow) -> Option<&str> {
+    call.lifecycle_state
+        .as_deref()
+        .filter(|phase| matches!(*phase, "completed" | "failed" | "timedOut" | "cancelled"))
+}
+
+fn omission_reason_allows(reason: &str, source: &str, terminal: &str) -> bool {
+    match reason {
+        "preDispatchFailure" => source == "pending" && terminal == "failed",
+        "approvalDenied" => source == "awaitingApproval" && terminal == "failed",
+        "timedOut" => matches!(source, "running" | "awaitingApproval") && terminal == "timedOut",
+        "cancelled" => {
+            matches!(source, "pending" | "awaitingApproval" | "running") && terminal == "cancelled"
+        }
+        "recoveryFailure" | "executionLost" | "childDead" | "childSuperseded" => {
+            source == "running" && terminal == "failed"
+        }
+        _ => false,
+    }
+}
+
+fn validate_terminal_outcome_edge_shape(call: &TimelineToolCallRow) -> Result<()> {
+    let result = complete_edge_doc_id(
+        call.result_doc_id.as_deref(),
+        call.result_composite_commit_cid.as_deref(),
+        call.result_signer_did.as_deref(),
+        "AgentToolCall result",
+    )?;
+    let omission = complete_edge_doc_id(
+        call.omission_doc_id.as_deref(),
+        call.omission_composite_commit_cid.as_deref(),
+        call.omission_signer_did.as_deref(),
+        "AgentToolCall omission",
+    )?;
+    if result.is_some() && omission.is_some() {
+        anyhow::bail!(
+            "terminal AgentToolCall {} binds both result and omission facts",
+            call.tool_call_id
+        );
+    }
+    if terminal_tool_phase(call).is_some() && result.is_none() && omission.is_none() {
+        anyhow::bail!(
+            "terminal AgentToolCall {} has no exact result or omission fact",
+            call.tool_call_id
+        );
+    }
+    Ok(())
+}
+
+fn validate_bound_outcome_signature(
+    edge_cid: Option<&str>,
+    edge_signer: Option<&str>,
+    exact: &crate::SignedDocumentVersionRef,
+    parent_signer: &str,
+    label: &str,
+) -> Result<()> {
+    if edge_cid != Some(exact.version.composite_commit_cid.as_str())
+        || edge_signer != Some(exact.signer_did.as_str())
+        || exact.signer_did != parent_signer
+    {
+        anyhow::bail!("AgentToolCall {label} edge does not match exact signed {label} fact");
     }
     Ok(())
 }
@@ -696,18 +828,21 @@ async fn attach_exact_tool_facts(
     session_id: &str,
     calls: &mut [TimelineToolCallRow],
 ) -> Result<()> {
-    if matches!(access, ConfigAccess::Graphql(_)) {
-        // A remote endpoint exposes declared signature metadata, not locally
-        // verified block authorship. Preserve the base tool-call rows but do
-        // not promote their exact result/approval edges to signed facts.
-        return Ok(());
+    for call in calls.iter() {
+        validate_terminal_outcome_edge_shape(call)?;
     }
     let result_query = format!(
-        r#"{{ AgentToolResult(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did output_text }} }}"#,
+        r#"{{ AgentToolResult(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id output_text }} }}"#,
         escape_graphql_string(session_id)
     );
     let results: Vec<TimelineResultFactRow> =
         load_rows(access, "AgentToolResult", &result_query).await?;
+    let omission_query = format!(
+        r#"{{ AgentToolOutputOmission(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID omission_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id source_phase terminal_phase reason detail created_at }} }}"#,
+        escape_graphql_string(session_id)
+    );
+    let omissions: Vec<TimelineOmissionFactRow> =
+        load_rows(access, "AgentToolOutputOmission", &omission_query).await?;
     let approval_query = format!(
         r#"{{ AgentToolApproval(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did approver_did decision reason }} }}"#,
         escape_graphql_string(session_id)
@@ -716,6 +851,7 @@ async fn attach_exact_tool_facts(
         load_rows(access, "AgentToolApproval", &approval_query).await?;
 
     for call in calls {
+        let call_doc_id = call.doc_id.as_deref().unwrap_or_default();
         if let Some(result_doc_id) = complete_edge_doc_id(
             call.result_doc_id.as_deref(),
             call.result_composite_commit_cid.as_deref(),
@@ -732,18 +868,24 @@ async fn attach_exact_tool_facts(
                     matching.len()
                 );
             };
-            let call_doc_id = call.doc_id.as_deref().unwrap_or_default();
             if row.tool_call_doc_id != call_doc_id {
                 anyhow::bail!("result fact points to a different physical AgentToolCall");
             }
-            let exact = exact_current_ref(access, "AgentToolResult", result_doc_id).await?;
-            if call.result_composite_commit_cid.as_deref()
-                != Some(exact.version.composite_commit_cid.as_str())
-                || call.result_signer_did.as_deref() != Some(exact.signer_did.as_str())
+            if row.result_key != row.tool_call_composite_commit_cid
+                || row.session_id != call.session_id
+                || row.tool_call_key != format!("{}:{}", call.session_id, call.tool_call_id)
             {
-                anyhow::bail!("AgentToolCall result edge does not match exact signed result fact");
+                anyhow::bail!("AgentToolResult immutable binding does not match AgentToolCall");
             }
-            verify_historical_tool_call_ref(
+            let exact = exact_current_ref(access, "AgentToolResult", result_doc_id).await?;
+            validate_bound_outcome_signature(
+                call.result_composite_commit_cid.as_deref(),
+                call.result_signer_did.as_deref(),
+                &exact,
+                &row.tool_call_signer_did,
+                "result",
+            )?;
+            let historical = verify_historical_tool_call_ref(
                 access,
                 &crate::SignedDocumentVersionRef::new(
                     crate::DocumentVersionRef::new(
@@ -754,6 +896,12 @@ async fn attach_exact_tool_facts(
                 ),
             )
             .await?;
+            if historical.tool_call_id != call.tool_call_id
+                || historical.session_id != call.session_id
+                || historical.lifecycle_state != "running"
+            {
+                anyhow::bail!("AgentToolResult does not bind the running historical AgentToolCall");
+            }
             call.result_fact = Some(TimelineToolResultFact {
                 doc_id: exact.version.doc_id,
                 composite_commit_cid: exact.version.composite_commit_cid,
@@ -762,6 +910,82 @@ async fn attach_exact_tool_facts(
                 tool_call_composite_commit_cid: row.tool_call_composite_commit_cid.clone(),
                 tool_call_signer_did: row.tool_call_signer_did.clone(),
                 output_text: row.output_text.clone(),
+            });
+        }
+        if let Some(omission_doc_id) = complete_edge_doc_id(
+            call.omission_doc_id.as_deref(),
+            call.omission_composite_commit_cid.as_deref(),
+            call.omission_signer_did.as_deref(),
+            "AgentToolCall omission",
+        )? {
+            let matching = omissions
+                .iter()
+                .filter(|row| row.doc_id == omission_doc_id)
+                .collect::<Vec<_>>();
+            let [row] = matching.as_slice() else {
+                anyhow::bail!(
+                    "exact omission ref resolved to {} physical rows",
+                    matching.len()
+                );
+            };
+            if row.tool_call_doc_id != call_doc_id
+                || row.omission_key != row.tool_call_composite_commit_cid
+                || row.session_id != call.session_id
+                || row.tool_call_key != format!("{}:{}", call.session_id, call.tool_call_id)
+            {
+                anyhow::bail!(
+                    "AgentToolOutputOmission immutable binding does not match AgentToolCall"
+                );
+            }
+            let exact =
+                exact_current_ref(access, "AgentToolOutputOmission", omission_doc_id).await?;
+            validate_bound_outcome_signature(
+                call.omission_composite_commit_cid.as_deref(),
+                call.omission_signer_did.as_deref(),
+                &exact,
+                &row.tool_call_signer_did,
+                "omission",
+            )?;
+            let historical = verify_historical_tool_call_ref(
+                access,
+                &crate::SignedDocumentVersionRef::new(
+                    crate::DocumentVersionRef::new(
+                        &row.tool_call_doc_id,
+                        &row.tool_call_composite_commit_cid,
+                    ),
+                    &row.tool_call_signer_did,
+                ),
+            )
+            .await?;
+            if historical.tool_call_id != call.tool_call_id
+                || historical.session_id != call.session_id
+                || historical.lifecycle_state != row.source_phase
+                || terminal_tool_phase(call) != Some(row.terminal_phase.as_str())
+            {
+                anyhow::bail!(
+                    "AgentToolOutputOmission phase or historical call binding does not match AgentToolCall"
+                );
+            }
+            if !omission_reason_allows(&row.reason, &row.source_phase, &row.terminal_phase) {
+                anyhow::bail!(
+                    "AgentToolOutputOmission reason {} does not permit {} -> {}",
+                    row.reason,
+                    row.source_phase,
+                    row.terminal_phase
+                );
+            }
+            call.omission_fact = Some(TimelineToolOutputOmissionFact {
+                doc_id: exact.version.doc_id,
+                composite_commit_cid: exact.version.composite_commit_cid,
+                signer_did: exact.signer_did,
+                tool_call_doc_id: row.tool_call_doc_id.clone(),
+                tool_call_composite_commit_cid: row.tool_call_composite_commit_cid.clone(),
+                tool_call_signer_did: row.tool_call_signer_did.clone(),
+                source_phase: row.source_phase.clone(),
+                terminal_phase: row.terminal_phase.clone(),
+                reason: row.reason.clone(),
+                detail: row.detail.clone(),
+                created_at: row.created_at.clone(),
             });
         }
         if let Some(approval_doc_id) = complete_edge_doc_id(
@@ -793,7 +1017,7 @@ async fn attach_exact_tool_facts(
                     "AgentToolCall approval edge does not match exact signed approval fact"
                 );
             }
-            verify_historical_tool_call_ref(
+            let _ = verify_historical_tool_call_ref(
                 access,
                 &crate::SignedDocumentVersionRef::new(
                     crate::DocumentVersionRef::new(
@@ -1130,6 +1354,7 @@ fn timeline_exact_source_selection(collection: &str) -> Result<&'static str> {
         "AgentSession" | "AgentConversation" | "AgentMessage" => Ok("session_id"),
         "AgentToolCall" => Ok("tool_call_id"),
         "AgentToolResult" => Ok("result_key"),
+        "AgentToolOutputOmission" => Ok("omission_key"),
         "AgentToolApproval" => Ok("approval_id"),
         "AgentResponse" => Ok("request_id"),
         "AgentResponseOutcome" => Ok("request_doc_id"),
@@ -1586,6 +1811,7 @@ async fn freeze_exact_timeline_rows(
         }
         validate_exact_tool_fact_edges(&exact_row, &exact.exact, tool_call)?;
         exact_row.result_fact = tool_call.result_fact.clone();
+        exact_row.omission_fact = tool_call.omission_fact.clone();
         exact_row.approval_fact = tool_call.approval_fact.clone();
         if let Some(fact) = &exact_row.result_fact {
             let result_source = verified_exact_timeline_document_source(
@@ -1605,6 +1831,45 @@ async fn freeze_exact_timeline_rows(
             };
             declared_edges.push(result_source.declared_edge());
             sources.push(result_source);
+            let historical_call = crate::SignedDocumentVersionRef::new(
+                crate::DocumentVersionRef::new(
+                    &fact.tool_call_doc_id,
+                    &fact.tool_call_composite_commit_cid,
+                ),
+                &fact.tool_call_signer_did,
+            );
+            let historical_call_source = ExactTimelineSource {
+                class: TimelineSourceClass::ToolCall,
+                collection: "AgentToolCall",
+                source: verified_exact_timeline_document_source(
+                    node,
+                    &identity,
+                    "AgentToolCall",
+                    &historical_call,
+                )
+                .await?,
+            };
+            declared_edges.push(historical_call_source.declared_edge());
+            sources.push(historical_call_source);
+        }
+        if let Some(fact) = &exact_row.omission_fact {
+            let omission_source = verified_exact_timeline_document_source(
+                node,
+                &identity,
+                "AgentToolOutputOmission",
+                &crate::SignedDocumentVersionRef::new(
+                    crate::DocumentVersionRef::new(&fact.doc_id, &fact.composite_commit_cid),
+                    &fact.signer_did,
+                ),
+            )
+            .await?;
+            let omission_source = ExactTimelineSource {
+                class: TimelineSourceClass::ToolOutputOmission,
+                collection: "AgentToolOutputOmission",
+                source: omission_source,
+            };
+            declared_edges.push(omission_source.declared_edge());
+            sources.push(omission_source);
             let historical_call = crate::SignedDocumentVersionRef::new(
                 crate::DocumentVersionRef::new(
                     &fact.tool_call_doc_id,
@@ -1821,6 +2086,26 @@ fn validate_exact_tool_fact_edges(
             exact.version.doc_id
         ),
     }
+
+    let omission_edge = complete_edge_doc_id(
+        exact_row.omission_doc_id.as_deref(),
+        exact_row.omission_composite_commit_cid.as_deref(),
+        exact_row.omission_signer_did.as_deref(),
+        "exact AgentToolCall omission",
+    )?;
+    match (omission_edge, discovered.omission_fact.as_ref()) {
+        (None, None) => {}
+        (Some(omission_doc_id), Some(fact))
+            if fact.doc_id == omission_doc_id
+                && exact_row.omission_composite_commit_cid.as_deref()
+                    == Some(fact.composite_commit_cid.as_str())
+                && exact_row.omission_signer_did.as_deref() == Some(fact.signer_did.as_str()) => {}
+        _ => anyhow::bail!(
+            "AgentToolCall {} exact omission edge changed after fact verification",
+            exact.version.doc_id
+        ),
+    }
+    validate_terminal_outcome_edge_shape(exact_row)?;
 
     let approval_edge = complete_edge_doc_id(
         exact_row.approval_doc_id.as_deref(),
@@ -3637,6 +3922,88 @@ mod tests {
         let error = reject_timeline_semantic_twins(&[], &[], &[], &calls)
             .expect_err("one request slot must map to one inference call");
         assert!(error.to_string().contains("ambiguous across calls"));
+    }
+
+    fn terminal_omission_call() -> TimelineToolCallRow {
+        TimelineToolCallRow {
+            tool_call_id: "tool-call".to_string(),
+            lifecycle_state: Some("failed".to_string()),
+            omission_doc_id: Some("omission-doc".to_string()),
+            omission_composite_commit_cid: Some("omission-cid".to_string()),
+            omission_signer_did: Some("did:key:test".to_string()),
+            ..TimelineToolCallRow::default()
+        }
+    }
+
+    #[test]
+    fn terminal_tool_call_requires_exactly_one_outcome_edge() {
+        let missing = TimelineToolCallRow {
+            tool_call_id: "missing".to_string(),
+            lifecycle_state: Some("cancelled".to_string()),
+            ..TimelineToolCallRow::default()
+        };
+        assert!(validate_terminal_outcome_edge_shape(&missing).is_err());
+
+        let mut both = terminal_omission_call();
+        both.result_doc_id = Some("result-doc".to_string());
+        both.result_composite_commit_cid = Some("result-cid".to_string());
+        both.result_signer_did = Some("did:key:test".to_string());
+        assert!(validate_terminal_outcome_edge_shape(&both).is_err());
+
+        assert!(validate_terminal_outcome_edge_shape(&terminal_omission_call()).is_ok());
+    }
+
+    #[test]
+    fn unbound_outcome_proposals_do_not_replace_the_exact_terminal_edge() {
+        let call = terminal_omission_call();
+        assert!(validate_terminal_outcome_edge_shape(&call).is_ok());
+        assert_eq!(call.omission_doc_id.as_deref(), Some("omission-doc"));
+        assert!(call.result_doc_id.is_none());
+    }
+
+    #[test]
+    fn exact_outcome_signature_rejects_wrong_cid_or_signer() {
+        let exact = signed("omission-doc", "omission-cid");
+        assert!(validate_bound_outcome_signature(
+            Some("wrong-cid"),
+            Some("did:key:test"),
+            &exact,
+            "did:key:test",
+            "omission",
+        )
+        .is_err());
+        assert!(validate_bound_outcome_signature(
+            Some("omission-cid"),
+            Some("did:key:other"),
+            &exact,
+            "did:key:test",
+            "omission",
+        )
+        .is_err());
+        assert!(validate_bound_outcome_signature(
+            Some("omission-cid"),
+            Some("did:key:test"),
+            &exact,
+            "did:key:other-parent",
+            "omission",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn omission_reason_must_match_source_and_terminal_phases() {
+        assert!(omission_reason_allows("executionLost", "running", "failed"));
+        assert!(omission_reason_allows(
+            "approvalDenied",
+            "awaitingApproval",
+            "failed"
+        ));
+        assert!(!omission_reason_allows(
+            "approvalDenied",
+            "running",
+            "failed"
+        ));
+        assert!(!omission_reason_allows("unknown", "running", "failed"));
     }
 
     #[test]

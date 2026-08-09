@@ -490,6 +490,8 @@ pub async fn fetch_message_snapshots_for_session(
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct ToolCallSnapshot {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
     pub tool_call_key: String,
     #[serde(default)]
     pub request_id: Option<String>,
@@ -502,6 +504,18 @@ pub struct ToolCallSnapshot {
     pub status: String,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub result_doc_id: Option<String>,
+    #[serde(default)]
+    pub result_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub result_signer_did: Option<String>,
+    #[serde(default)]
+    pub omission_doc_id: Option<String>,
+    #[serde(default)]
+    pub omission_composite_commit_cid: Option<String>,
+    #[serde(default)]
+    pub omission_signer_did: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
     #[serde(default)]
@@ -547,8 +561,10 @@ pub async fn fetch_tool_call_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                tool_call_key request_id session_id message_sequence tool_name tool_call_id
+                _docID tool_call_key request_id session_id message_sequence tool_name tool_call_id
                 args result status lifecycle_state started_at deadline_at completed_at
+                result_doc_id result_composite_commit_cid result_signer_did
+                omission_doc_id omission_composite_commit_cid omission_signer_did
                 selected_service_id selected_tool_name tool_failure_class
                 denial_reason denied_argv denied_command denied_argument denied_subcommand
                 denied_prefix policy_mode policy_network cancel_cause latency_ms

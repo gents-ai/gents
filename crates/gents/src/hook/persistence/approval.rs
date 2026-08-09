@@ -225,10 +225,7 @@ impl DefraSessionHook {
                     let approved = {
                         let mut map = self.in_flight_lifecycles.lock().await;
                         match map.get_mut(internal_call_id) {
-                            Some(lifecycle) => {
-                                lifecycle.attach_approval_fact(&approval_fact).await?;
-                                lifecycle.approve_and_start().await?
-                            }
+                            Some(lifecycle) => lifecycle.approve_and_start(&approval_fact).await?,
                             None => continue,
                         }
                     };
@@ -248,8 +245,7 @@ impl DefraSessionHook {
                         let mut map = self.in_flight_lifecycles.lock().await;
                         match map.get_mut(internal_call_id) {
                             Some(lifecycle) => {
-                                lifecycle.attach_approval_fact(&approval_fact).await?;
-                                lifecycle.deny_approval(&denial).await?
+                                lifecycle.deny_approval(&denial, &approval_fact).await?
                             }
                             None => continue,
                         }

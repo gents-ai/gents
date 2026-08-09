@@ -159,40 +159,34 @@ impl DefraSessionHook {
         {
             Some(lifecycle) => lifecycle,
             None => {
-                return Ok("tool call cancelled".to_string());
+                return self
+                    .composite_terminal_payload(session_id, internal_call_id)
+                    .await;
             }
         };
 
         if lifecycle.is_terminal() {
             // Interrupt, deadline sweep, or recovery already won the durable race.
             self.discard_in_flight_lifecycle(internal_call_id).await;
-            return Ok(self
-                .composite_terminal_payload(session_id, &lifecycle)
-                .await);
+            return self
+                .composite_terminal_payload(session_id, lifecycle.tool_call_id())
+                .await;
         }
 
         match run_result {
             Ok(result) => {
                 lifecycle.complete(&result).await?;
-                if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Completed {
-                    Ok(result)
-                } else {
-                    // Lost CAS to cancel/timeout/fail: durable terminal wins.
-                    Ok(self
-                        .composite_terminal_payload(session_id, &lifecycle)
-                        .await)
-                }
+                // Whether this writer completed the call or lost the CAS to a
+                // competing terminal writer, only the exact bound terminal
+                // evidence is authoritative for the model-facing payload.
+                self.composite_terminal_payload(session_id, lifecycle.tool_call_id())
+                    .await
             }
             Err(error) => {
                 let (failure_class, payload) = classify_workflow_run_error(&error);
                 lifecycle.fail(&payload, failure_class).await?;
-                if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Failed {
-                    Ok(payload)
-                } else {
-                    Ok(self
-                        .composite_terminal_payload(session_id, &lifecycle)
-                        .await)
-                }
+                self.composite_terminal_payload(session_id, lifecycle.tool_call_id())
+                    .await
             }
         }
     }
@@ -200,26 +194,19 @@ impl DefraSessionHook {
     async fn composite_terminal_payload(
         &self,
         session_id: &str,
-        lifecycle: &ToolCallLifecycle,
-    ) -> String {
-        match lifecycle.state() {
-            crate::tool_call_lifecycle::ToolCallState::Cancelled => {
-                "tool call cancelled".to_string()
-            }
-            crate::tool_call_lifecycle::ToolCallState::TimedOut => {
-                "tool call deadline exceeded".to_string()
-            }
-            crate::tool_call_lifecycle::ToolCallState::Failed => "tool call failed".to_string(),
-            crate::tool_call_lifecycle::ToolCallState::Completed => {
-                crate::tool_call_lifecycle::query::load_tool_call_result(
-                    &self.node,
-                    session_id,
-                    lifecycle.tool_call_id(),
-                )
-                .await
-                .unwrap_or_else(|_| "tool call completed".to_string())
-            }
-            _ => "tool call cancelled".to_string(),
+        tool_call_id: &str,
+    ) -> anyhow::Result<String> {
+        use crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence;
+
+        let evidence = crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+            &self.node,
+            session_id,
+            tool_call_id,
+        )
+        .await?;
+        match evidence {
+            ExactToolCallTerminalEvidence::Output(output) => Ok(output.output_text),
+            ExactToolCallTerminalEvidence::Omission(omission) => Ok(omission.detail),
         }
     }
 

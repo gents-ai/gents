@@ -15,14 +15,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::document_config::SubagentTarget;
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{
     drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
     QueueSource,
 };
 use crate::lifecycle::ExecutionOrigin;
 use crate::session;
-use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
@@ -386,6 +385,9 @@ struct TranscriptToolCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ReadToolOutputRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_key: String,
     tool_call_id: String,
     tool_name: String,
     request_id: Option<String>,
@@ -1047,9 +1049,10 @@ pub(crate) async fn handle_read_tool_output(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session}" }},
                     tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
-                }},
-                limit: 1
+                }}
             ) {{
+                _docID
+                tool_call_key
                 tool_call_id
                 tool_name
                 request_id
@@ -1067,7 +1070,25 @@ pub(crate) async fn handle_read_tool_output(
     if response.has_errors() {
         anyhow::bail!("read_tool_output query failed: {:?}", response.errors);
     }
-    let Some(row) = first_row::<ReadToolOutputRow>(response.data.as_ref(), "AgentToolCall") else {
+    let rows: Vec<ReadToolOutputRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding complete AgentToolCall read_tool_output match set")?
+        .unwrap_or_default();
+    let Some(row) = crate::tool_call_lifecycle::query::resolve_exact_tool_call_match(
+        &caller.session_id,
+        tool_call_id,
+        rows,
+        |row| row.doc_id.as_str(),
+        |row| row.tool_call_key.as_str(),
+        |row| row.session_id.as_deref().unwrap_or_default(),
+        |row| row.tool_call_id.as_str(),
+    )?
+    else {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     };
     if !caller.authorizes(
@@ -2019,6 +2040,9 @@ mod cross_deployment_timeout_tests {
     #[test]
     fn unmaterialized_explanation_is_retryable_until_bridge_terminal() {
         let running = SpawnBridgeRow {
+            doc_id: "doc-running".to_string(),
+            request_id: "parent".to_string(),
+            child_request_id: "child-1".to_string(),
             tool_call_id: "tc-running".to_string(),
             lifecycle_state: Some("running".to_string()),
             await_mode: Some("background".to_string()),
@@ -2032,6 +2056,9 @@ mod cross_deployment_timeout_tests {
         assert!(message.contains("2026-07-01T00:01:00Z"));
 
         let failed = SpawnBridgeRow {
+            doc_id: "doc-failed".to_string(),
+            request_id: "parent".to_string(),
+            child_request_id: "child-1".to_string(),
             tool_call_id: "tc-failed".to_string(),
             lifecycle_state: Some("failed".to_string()),
             await_mode: Some("background".to_string()),
@@ -2123,6 +2150,10 @@ struct ChildRequestEdgeRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentToolCallEdgeRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_key: String,
+    session_id: String,
     tool_call_id: String,
     request_id: Option<String>,
     lifecycle_state: Option<String>,
@@ -2161,6 +2192,10 @@ pub(crate) async fn try_load_authorized_child_edge(
 /// observable on the parent control plane.
 #[derive(Debug, Deserialize)]
 pub(crate) struct SpawnBridgeRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    child_request_id: String,
     pub(crate) tool_call_id: String,
     pub(crate) lifecycle_state: Option<String>,
     pub(crate) await_mode: Option<String>,
@@ -2224,9 +2259,11 @@ pub(crate) async fn load_spawn_bridge_row(
                 filter: {{
                     request_id: {{ _eq: "{escaped_caller}" }},
                     child_request_id: {{ _eq: "{escaped_child}" }}
-                }},
-                limit: 1
+                }}
             ) {{
+                _docID
+                request_id
+                child_request_id
                 tool_call_id
                 lifecycle_state
                 await_mode
@@ -2241,7 +2278,36 @@ pub(crate) async fn load_spawn_bridge_row(
             response.errors
         );
     }
-    Ok(first_row(response.data.as_ref(), "AgentToolCall"))
+    let rows: Vec<SpawnBridgeRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding complete caller-owned spawn bridge match set")?
+        .unwrap_or_default();
+    let logical_value = format!("{caller_request_id}:{child_request_id}");
+    let row = crate::session::resolve_exact_logical_match(
+        "AgentToolCall",
+        "request_id+child_request_id",
+        &logical_value,
+        rows,
+        |row| row.doc_id.as_str(),
+    )?;
+    if let Some(row) = row.as_ref() {
+        if row.request_id != caller_request_id || row.child_request_id != child_request_id {
+            anyhow::bail!(
+                "AgentToolCall spawn bridge immutable identity mismatch: _docID={} returned request_id={} child_request_id={} expected request_id={} child_request_id={}",
+                row.doc_id,
+                row.request_id,
+                row.child_request_id,
+                caller_request_id,
+                child_request_id
+            );
+        }
+    }
+    Ok(row)
 }
 
 pub(crate) async fn load_authorized_child_edge(
@@ -2328,9 +2394,11 @@ pub(crate) async fn load_authorized_child_edge(
                     session_id: {{ _eq: "{escaped_parent_session_id}" }},
                     request_id: {{ _eq: "{escaped_parent_request_id}" }},
                     tool_call_id: {{ _eq: "{escaped_parent_tool_call_id}" }}
-                }},
-                limit: 1
+                }}
             ) {{
+                _docID
+                tool_call_key
+                session_id
                 tool_call_id
                 request_id
                 lifecycle_state
@@ -2351,12 +2419,27 @@ pub(crate) async fn load_authorized_child_edge(
             tool_call_response.errors
         );
     }
-    let tool_call: ParentToolCallEdgeRow =
-        first_row(tool_call_response.data.as_ref(), "AgentToolCall").ok_or_else(|| {
-            anyhow!(
-                "parent AgentToolCall {parent_tool_call_id} not found for child {child_request_id}"
-            )
-        })?;
+    let tool_call_rows: Vec<ParentToolCallEdgeRow> = tool_call_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding complete parent AgentToolCall match set")?
+        .unwrap_or_default();
+    let tool_call = crate::tool_call_lifecycle::query::resolve_exact_tool_call_match(
+        &parent_context.session_id,
+        &parent_tool_call_id,
+        tool_call_rows,
+        |row| row.doc_id.as_str(),
+        |row| row.tool_call_key.as_str(),
+        |row| row.session_id.as_str(),
+        |row| row.tool_call_id.as_str(),
+    )?
+    .ok_or_else(|| {
+        anyhow!("parent AgentToolCall {parent_tool_call_id} not found for child {child_request_id}")
+    })?;
     if tool_call.request_id.as_deref() != Some(parent_context.request_id.as_str()) {
         anyhow::bail!(
             "parent AgentToolCall {parent_tool_call_id} is not linked to parent request {}",
@@ -2420,9 +2503,11 @@ pub(crate) async fn load_child_terminal_row(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                limit: 1
+                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }}
             ) {{
+                _docID
+                request_id
+                agent_did
                 status
                 lifecycle_state
                 failure_reason
@@ -2436,10 +2521,78 @@ pub(crate) async fn load_child_terminal_row(
             response.errors
         );
     }
-    Ok(first_row::<ChildRequestTerminalRow>(
-        response.data.as_ref(),
+    let rows: Vec<ChildRequestTerminalRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding complete child AgentRequest match set")?
+        .unwrap_or_default();
+    let row = match rows.as_slice() {
+        [] => return Ok(None),
+        [row] => row,
+        rows => anyhow::bail!(
+            "child AgentRequest {child_request_id} resolved to {} physical documents; refusing ambiguous terminal authority",
+            rows.len()
+        ),
+    };
+    if row.doc_id.trim().is_empty()
+        || row.request_id != child_request_id
+        || row.agent_did.trim().is_empty()
+    {
+        anyhow::bail!(
+            "child AgentRequest {child_request_id} is missing exact immutable identity fields"
+        );
+    }
+    let current = crate::document_version::verified_current_signed_document_version(
+        node,
         "AgentRequest",
-    ))
+        &row.doc_id,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "verifying exact signed child AgentRequest terminal authority for {child_request_id}"
+        )
+    })?;
+    let exact_query = format!(
+        r#"{{ AgentRequest(cid: ["{}"]) {{
+            _docID request_id agent_did status lifecycle_state failure_reason
+        }} }}"#,
+        escape_graphql_string(&current.version.composite_commit_cid),
+    );
+    let exact_response = node.execute(&exact_query).await;
+    if exact_response.has_errors() {
+        anyhow::bail!(
+            "loading exact child AgentRequest {child_request_id} terminal version failed: {:?}",
+            exact_response.errors
+        );
+    }
+    let exact_rows: Vec<ChildRequestTerminalRow> = exact_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding exact child AgentRequest terminal version")?
+        .unwrap_or_default();
+    let exact = match exact_rows.as_slice() {
+        [exact]
+            if exact.doc_id == row.doc_id
+                && exact.request_id == child_request_id
+                && exact.agent_did == row.agent_did =>
+        {
+            exact.clone()
+        }
+        rows => anyhow::bail!(
+            "exact child AgentRequest {child_request_id} reconstructed {} rows or changed immutable identity",
+            rows.len()
+        ),
+    };
+    Ok(Some(exact))
 }
 
 pub(crate) fn render_assistant_message_text(content: &str) -> Result<String> {
@@ -2475,8 +2628,12 @@ pub(crate) fn render_assistant_message_text(content: &str) -> Result<String> {
     Ok(parts.join("\n"))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ChildRequestTerminalRow {
+    #[serde(rename = "_docID")]
+    pub(crate) doc_id: String,
+    pub(crate) request_id: String,
+    pub(crate) agent_did: String,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
     pub failure_reason: Option<String>,
@@ -2545,46 +2702,50 @@ pub(crate) async fn fail_running_subagent_tool_call(
     deadline_at: Option<&str>,
     result: &str,
     failure: FailureClass,
+    omission_reason: crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason,
 ) -> Result<bool> {
-    let now = Utc::now();
-    let started_at = parse_rfc3339(started_at).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
+    let started_at = parse_rfc3339(started_at).unwrap_or_else(Utc::now);
     let escaped_doc_id = escape_graphql_string(doc_id);
     let escaped_result = escape_graphql_string(result);
     let started_at_str = started_at.to_rfc3339();
-    let completed_at_str = now.to_rfc3339();
     let failure_class = failure.as_str();
     let deadline_field = parse_rfc3339(deadline_at)
         .map(|deadline| format!(r#", deadline_at: "{}""#, deadline.to_rfc3339()))
         .unwrap_or_default();
-
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "failed",
-                    started_at: "{started_at_str}"{deadline_field},
-                    completed_at: "{completed_at_str}",
-                    tool_failure_class: "{failure_class}",
-                    latency_ms: {latency_ms}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-
-    let response =
-        execute_mutation_with_retry(node, &mutation, "fail_running_subagent_tool_call").await?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentToolCall"))
-        .is_some_and(response_has_documents))
+    crate::tool_call_lifecycle::evidence::terminalize_with_omission(
+        node,
+        doc_id,
+        crate::tool_call_lifecycle::ToolCallState::Running,
+        crate::tool_call_lifecycle::ToolCallState::Failed,
+        omission_reason,
+        result,
+        "fail_running_subagent_with_exact_omission",
+        |omission| {
+            let now = Utc::now();
+            let omission_fields =
+                crate::tool_call_lifecycle::evidence::omission_fields_fragment(omission);
+            format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }}, lifecycle_state: {{ _eq: "running" }} }},
+                        input: {{
+                            result: "{escaped_result}",
+                            status: "completed",
+                            lifecycle_state: "failed",
+                            started_at: "{started_at_str}"{deadline_field},
+                            completed_at: "{}",
+                            tool_failure_class: "{failure_class}",
+                            {omission_fields}
+                            latency_ms: {}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                now.to_rfc3339(),
+                (now - started_at).num_milliseconds().max(0),
+            )
+        },
+    )
+    .await
 }
 
 fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -2721,47 +2882,37 @@ mod tests {
 
     #[test]
     fn project_child_terminal_maps_child_states() {
+        let row = |status: &str, lifecycle_state: &str, failure_reason: Option<&str>| {
+            ChildRequestTerminalRow {
+                doc_id: "bafyre-child-request".to_string(),
+                request_id: "child-request".to_string(),
+                agent_did: "did:key:child".to_string(),
+                status: Some(status.to_string()),
+                lifecycle_state: Some(lifecycle_state.to_string()),
+                failure_reason: failure_reason.map(str::to_string),
+            }
+        };
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                status: Some("error".to_string()),
-                lifecycle_state: Some("failed".to_string()),
-                failure_reason: Some("bad output".to_string()),
-            }),
+            project_child_terminal(&row("error", "failed", Some("bad output"))),
             Some(ChildTerminal::Failed {
                 reason: "bad output".to_string(),
                 failure_class: FailureClass::External,
             })
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                status: Some("processing".to_string()),
-                lifecycle_state: Some("dead".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row("processing", "dead", None)),
             Some(ChildTerminal::Dead)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                status: Some("interrupted".to_string()),
-                lifecycle_state: Some("interrupted".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row("interrupted", "interrupted", None)),
             Some(ChildTerminal::Interrupted)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                status: Some("superseded".to_string()),
-                lifecycle_state: Some("superseded".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row("superseded", "superseded", None)),
             Some(ChildTerminal::Superseded)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                status: Some("complete".to_string()),
-                lifecycle_state: Some("completed".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row("complete", "completed", None)),
             None
         );
     }

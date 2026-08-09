@@ -5,10 +5,102 @@ struct BackgroundedRow {
     lifecycle_state: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub(super) struct StoredToolCallResult {
     pub tool_name: String,
     pub result: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DurableToolCallIdentityRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_key: String,
+    session_id: String,
+    tool_call_id: String,
+    tool_name: String,
+}
+
+#[derive(Debug)]
+pub(super) struct DurableToolCallIdentity {
+    pub tool_name: String,
+}
+
+/// Distinguish a hook-owned meta result from a result backed by a durable
+/// AgentToolCall. The complete logical match set and exact signed current
+/// version are verified before a row is treated as durable; ambiguity or
+/// immutable-identity drift fails closed instead of falling back to stream
+/// bytes.
+pub(super) async fn load_durable_tool_call_identity(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> anyhow::Result<Option<DurableToolCallIdentity>> {
+    let expected_key = format!("{session_id}:{tool_call_id}");
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}" }} }}) {{
+                _docID tool_call_key session_id tool_call_id tool_name
+            }} }}"#,
+            crate::graphql::escape_graphql_string(&expected_key),
+        ))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "loading durable tool-result authority {expected_key}: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<DurableToolCallIdentityRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
+    let Some(row) = crate::tool_call_lifecycle::query::resolve_exact_tool_call_match(
+        session_id,
+        tool_call_id,
+        rows,
+        |row| row.doc_id.as_str(),
+        |row| row.tool_call_key.as_str(),
+        |row| row.session_id.as_str(),
+        |row| row.tool_call_id.as_str(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let current = crate::document_version::verified_current_signed_document_version(
+        node,
+        "AgentToolCall",
+        &row.doc_id,
+    )
+    .await?;
+    let exact = crate::document_version::verified_exact_document_snapshot_with_identity(
+        node,
+        "AgentToolCall",
+        &current.version,
+        "tool_call_key session_id tool_call_id tool_name",
+        None,
+    )
+    .await?;
+    if exact.source.signer_did != current.signer_did {
+        anyhow::bail!("durable tool-result authority signer changed during exact reload");
+    }
+    let exact: DurableToolCallIdentityRow = exact.decode()?;
+    if exact.doc_id != row.doc_id
+        || exact.tool_call_key != expected_key
+        || exact.session_id != session_id
+        || exact.tool_call_id != tool_call_id
+        || exact.tool_name != row.tool_name
+        || exact.tool_name.trim().is_empty()
+    {
+        anyhow::bail!("durable tool-result authority changed immutable identity");
+    }
+    Ok(Some(DurableToolCallIdentity {
+        tool_name: exact.tool_name,
+    }))
 }
 
 pub(super) async fn count_live_backgrounded_rows(
@@ -157,41 +249,38 @@ pub(super) async fn load_stored_tool_call_result(
     session_id: &str,
     tool_call_id: &str,
 ) -> anyhow::Result<StoredToolCallResult> {
-    let escaped_session_id = crate::graphql::escape_graphql_string(session_id);
-    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
-    let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
-                limit: 1
-            ) {{
-                tool_name
-                result
-            }}
-        }}"#
-    );
-
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading stored tool call result for session_id={session_id} tool_call_id={tool_call_id} failed: {:?}",
-            response.errors
-        );
+    let exact = crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+        node,
+        session_id,
+        tool_call_id,
+    )
+    .await?;
+    match exact {
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Output(output) => {
+            Ok(StoredToolCallResult {
+                tool_name: output.tool_name,
+                result: output.output_text,
+            })
+        }
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission)
+            if matches!(
+                omission.reason.as_str(),
+                "preDispatchFailure" | "approvalDenied"
+            ) =>
+        {
+            Ok(StoredToolCallResult {
+                tool_name: omission.tool_name,
+                result: omission.detail,
+            })
+        }
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission) => {
+            anyhow::bail!(
+                "AgentToolCall {session_id}:{tool_call_id} has no output ({}: {})",
+                omission.reason,
+                omission.detail
+            )
+        }
     }
-
-    let mut rows: Vec<StoredToolCallResult> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-
-    rows.pop().ok_or_else(|| {
-        anyhow::anyhow!(
-            "loading stored tool call result: no AgentToolCall for session_id={session_id} tool_call_id={tool_call_id}"
-        )
-    })
 }
 
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
@@ -357,17 +446,6 @@ pub(super) fn stable_hash(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
-}
-
-pub(super) fn is_subagent_tool_result_payload(raw: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return false;
-    };
-    value
-        .get("service_id")
-        .and_then(|value| value.as_str())
-        .is_some_and(|service_id| service_id == "subagent")
-        || (value.get("child_request_id").is_some() && value.get("await_mode").is_some())
 }
 
 pub(super) fn json_string(value: serde_json::Value) -> String {

@@ -12,7 +12,10 @@ use crate::run_timeline::{
     TimelineToolCallEvent,
 };
 
-use super::{redact_json_value, redact_option, redact_str, ProjectionContext};
+use super::{
+    projected_tool_output, redact_json_value, redact_option, redact_str,
+    validate_projected_tool_output, ProjectedToolOutputOmission, ProjectionContext,
+};
 
 pub const ATIF_SCHEMA_VERSION: &str = "ATIF-v1.7";
 
@@ -100,6 +103,8 @@ pub struct AtifObservationResult {
     pub source_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_omission: Option<ProjectedToolOutputOmission>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<BTreeMap<String, Value>>,
 }
@@ -370,6 +375,14 @@ pub(super) fn validate_atif_trajectory(violations: &mut Vec<String>, trajectory:
         }
         if let Some(observation) = step.observation.as_ref() {
             for (result_index, result) in observation.results.iter().enumerate() {
+                validate_projected_tool_output(
+                    violations,
+                    &format!(
+                        "output.projection.steps[{index}].observation.results[{result_index}]"
+                    ),
+                    result.content.as_deref(),
+                    result.output_omission.as_ref(),
+                );
                 if let Some(source_call_id) = result.source_call_id.as_deref() {
                     if !tool_call_ids.contains(source_call_id) {
                         violations.push(format!(
@@ -478,9 +491,11 @@ pub(super) fn atif_projection_schema() -> Value {
             "observation_result": {
                 "type": "object",
                 "additionalProperties": false,
+                "not": { "required": ["content", "output_omission"] },
                 "properties": {
                     "source_call_id": optional_string_schema(),
                     "content": optional_string_schema(),
+                    "output_omission": super::tool_output_omission_schema(),
                     "extra": optional_object_schema()
                 }
             },
@@ -594,37 +609,41 @@ fn tool_payload(
         .collect::<Vec<_>>();
     let results = tools
         .iter()
-        .map(|tool| AtifObservationResult {
-            source_call_id: Some(tool.tool_call_id.clone()),
-            content: Some(redact_str(&tool.result, context)),
-            extra: optional_extra([
-                ("status", string_value(&tool.status)),
-                (
-                    "tool_failure_class",
-                    optional_string_value(tool.tool_failure_class.as_deref()),
-                ),
-                (
-                    "denial_reason",
-                    redact_option(tool.denial_reason.as_deref(), context).map(Value::String),
-                ),
-                ("latency_ms", tool.latency_ms.map(|latency| json!(latency))),
-                (
-                    "await_mode",
-                    optional_string_value(tool.await_mode.as_deref()),
-                ),
-                (
-                    "cancel_policy",
-                    optional_string_value(tool.cancel_policy.as_deref()),
-                ),
-                (
-                    "cancel_cause",
-                    redact_option(tool.cancel_cause.as_deref(), context).map(Value::String),
-                ),
-                (
-                    "child_request_id",
-                    optional_string_value(tool.child_request_id.as_deref()),
-                ),
-            ]),
+        .map(|tool| {
+            let (content, output_omission) = projected_tool_output(tool, context);
+            AtifObservationResult {
+                source_call_id: Some(tool.tool_call_id.clone()),
+                content,
+                output_omission,
+                extra: optional_extra([
+                    ("status", string_value(&tool.status)),
+                    (
+                        "tool_failure_class",
+                        optional_string_value(tool.tool_failure_class.as_deref()),
+                    ),
+                    (
+                        "denial_reason",
+                        redact_option(tool.denial_reason.as_deref(), context).map(Value::String),
+                    ),
+                    ("latency_ms", tool.latency_ms.map(|latency| json!(latency))),
+                    (
+                        "await_mode",
+                        optional_string_value(tool.await_mode.as_deref()),
+                    ),
+                    (
+                        "cancel_policy",
+                        optional_string_value(tool.cancel_policy.as_deref()),
+                    ),
+                    (
+                        "cancel_cause",
+                        redact_option(tool.cancel_cause.as_deref(), context).map(Value::String),
+                    ),
+                    (
+                        "child_request_id",
+                        optional_string_value(tool.child_request_id.as_deref()),
+                    ),
+                ]),
+            }
         })
         .collect::<Vec<_>>();
     (Some(tool_calls), Some(AtifObservation { results }))

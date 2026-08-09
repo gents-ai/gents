@@ -1,7 +1,10 @@
 //! Pure-Rust consumer of the exact immutable ToolFact foundation model (#1073).
 //! Production schema/writer/projection cutover is deliberately deferred.
 
-use crate::lean_vocab_test::{lean_tool_fact_cases, LeanToolFactCase};
+use crate::lean_vocab_test::{
+    lean_tool_execution_split_cases, lean_tool_fact_cases, lean_tool_terminal_evidence_cases,
+    LeanToolExecutionSplitCase, LeanToolFactCase,
+};
 
 #[allow(clippy::too_many_arguments)]
 fn witness(
@@ -261,4 +264,263 @@ pub(super) fn generated_cases_pin_exact_immutable_tool_facts() {
         .iter()
         .filter(|row| row.disposition == "rejected")
         .all(|row| row.immutable_noop));
+}
+
+pub(super) fn generated_cases_pin_exact_execution_split() {
+    let expected = [
+        LeanToolExecutionSplitCase {
+            name: "completion_requires_exact_running_output".into(),
+            operation: "complete_execution".into(),
+            disposition: "applied".into(),
+            exact_projection: true,
+            output_pins_running: true,
+            terminal_output_closed: true,
+            owner_preserved: true,
+            approval_pins_held: false,
+            immutable_noop: false,
+        },
+        LeanToolExecutionSplitCase {
+            name: "completion_replay_is_idempotent".into(),
+            operation: "complete_execution".into(),
+            disposition: "observed_identical".into(),
+            exact_projection: true,
+            output_pins_running: true,
+            terminal_output_closed: true,
+            owner_preserved: true,
+            approval_pins_held: false,
+            immutable_noop: true,
+        },
+        LeanToolExecutionSplitCase {
+            name: "completion_rejects_non_current_head".into(),
+            operation: "complete_execution".into(),
+            disposition: "rejected".into(),
+            exact_projection: false,
+            output_pins_running: false,
+            terminal_output_closed: false,
+            owner_preserved: false,
+            approval_pins_held: false,
+            immutable_noop: true,
+        },
+        LeanToolExecutionSplitCase {
+            name: "competing_output_proposal_is_unbound".into(),
+            operation: "commit_output".into(),
+            disposition: "applied".into(),
+            exact_projection: false,
+            output_pins_running: false,
+            terminal_output_closed: false,
+            owner_preserved: false,
+            approval_pins_held: false,
+            immutable_noop: false,
+        },
+        LeanToolExecutionSplitCase {
+            name: "output_rejects_wrong_execution_version".into(),
+            operation: "commit_output".into(),
+            disposition: "rejected".into(),
+            exact_projection: false,
+            output_pins_running: false,
+            terminal_output_closed: false,
+            owner_preserved: false,
+            approval_pins_held: false,
+            immutable_noop: true,
+        },
+        LeanToolExecutionSplitCase {
+            name: "approval_chain_pins_held_execution".into(),
+            operation: "approve_and_complete".into(),
+            disposition: "applied".into(),
+            exact_projection: true,
+            output_pins_running: true,
+            terminal_output_closed: true,
+            owner_preserved: true,
+            approval_pins_held: true,
+            immutable_noop: false,
+        },
+        LeanToolExecutionSplitCase {
+            name: "approval_replay_is_idempotent".into(),
+            operation: "commit_approval".into(),
+            disposition: "observed_identical".into(),
+            exact_projection: false,
+            output_pins_running: false,
+            terminal_output_closed: false,
+            owner_preserved: false,
+            approval_pins_held: false,
+            immutable_noop: true,
+        },
+        LeanToolExecutionSplitCase {
+            name: "approval_rejects_non_held_execution".into(),
+            operation: "commit_approval".into(),
+            disposition: "rejected".into(),
+            exact_projection: false,
+            output_pins_running: false,
+            terminal_output_closed: false,
+            owner_preserved: false,
+            approval_pins_held: false,
+            immutable_noop: true,
+        },
+    ];
+
+    assert_eq!(lean_tool_execution_split_cases(), expected);
+}
+
+pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
+    let expected = [
+        (
+            "failed_execution_retains_full_output",
+            "applied",
+            "output",
+            "failed",
+            "",
+            false,
+            false,
+        ),
+        (
+            "failed_output_terminal_replay_is_idempotent",
+            "observed_identical",
+            "output",
+            "failed",
+            "",
+            false,
+            true,
+        ),
+        (
+            "timeout_has_typed_omission",
+            "applied",
+            "omission",
+            "timed_out",
+            "timed_out",
+            false,
+            false,
+        ),
+        (
+            "held_timeout_has_typed_omission_without_verdict",
+            "applied",
+            "omission",
+            "timed_out",
+            "timed_out",
+            false,
+            false,
+        ),
+        (
+            "cancellation_has_typed_omission",
+            "applied",
+            "omission",
+            "cancelled",
+            "cancelled",
+            false,
+            false,
+        ),
+        (
+            "predispatch_failure_has_typed_omission",
+            "applied",
+            "omission",
+            "failed",
+            "pre_dispatch_failure",
+            false,
+            false,
+        ),
+        (
+            "execution_loss_has_typed_omission",
+            "applied",
+            "omission",
+            "failed",
+            "execution_lost",
+            false,
+            false,
+        ),
+        (
+            "recovery_failure_has_typed_omission",
+            "applied",
+            "omission",
+            "failed",
+            "recovery_failure",
+            false,
+            false,
+        ),
+        (
+            "dead_child_has_typed_omission",
+            "applied",
+            "omission",
+            "failed",
+            "child_dead",
+            false,
+            false,
+        ),
+        (
+            "superseded_child_has_typed_omission",
+            "applied",
+            "omission",
+            "failed",
+            "child_superseded",
+            false,
+            false,
+        ),
+        (
+            "approval_denial_pins_approval_and_omission",
+            "applied",
+            "omission",
+            "failed",
+            "approval_denied",
+            true,
+            false,
+        ),
+        (
+            "omission_replay_is_idempotent",
+            "observed_identical",
+            "omission",
+            "timed_out",
+            "timed_out",
+            false,
+            true,
+        ),
+        (
+            "competing_omission_proposal_is_unbound",
+            "applied",
+            "none",
+            "",
+            "",
+            false,
+            false,
+        ),
+        (
+            "wrong_phase_reason_pair_is_rejected",
+            "rejected",
+            "none",
+            "",
+            "",
+            false,
+            true,
+        ),
+        (
+            "omission_terminal_replay_is_idempotent",
+            "observed_identical",
+            "omission",
+            "timed_out",
+            "timed_out",
+            false,
+            true,
+        ),
+    ];
+    let actual = lean_tool_terminal_evidence_cases();
+    assert_eq!(actual.len(), expected.len());
+
+    for (row, expected) in actual.iter().zip(expected) {
+        assert_eq!(
+            (
+                row.name.as_str(),
+                row.disposition.as_str(),
+                row.evidence_kind.as_str(),
+                row.terminal_phase.as_str(),
+                row.omission_reason.as_str(),
+                row.exact_approval_bound,
+                row.immutable_noop,
+            ),
+            expected
+        );
+        assert!(!row.operation.is_empty());
+        if row.exact_projection {
+            assert!(row.evidence_closed);
+            assert!(row.mutually_exclusive);
+            assert!(row.owner_preserved);
+            assert!(row.phase_reason_valid);
+        }
+    }
 }

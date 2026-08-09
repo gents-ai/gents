@@ -487,6 +487,16 @@ fn generated_tool_fact_cases_pin_exact_immutable_tool_facts() {
 }
 
 #[test]
+fn generated_tool_execution_split_cases_pin_exact_version_graph() {
+    tool_fact::generated_cases_pin_exact_execution_split();
+}
+
+#[test]
+fn generated_tool_terminal_evidence_cases_close_every_terminal_path() {
+    tool_fact::generated_cases_close_terminal_output_or_omission_evidence();
+}
+
+#[test]
 fn generated_fork_provenance_cases_pin_exact_child_sources() {
     fork_provenance::generated_cases_pin_exact_fork_sources();
 }

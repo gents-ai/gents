@@ -1,5 +1,8 @@
 type AgentToolCall @branchable {
-    tool_call_key: String @index(unique: true) @immutable
+    # Replicated logical-key twins must remain visible to conflict detection;
+    # a DefraDB unique index chooses an index winner but does not remove the
+    # losing CRDT document.
+    tool_call_key: String @index @immutable
     request_id: String @index @immutable
     session_id: String @index @immutable
     agent_did: String @index @immutable
@@ -12,6 +15,9 @@ type AgentToolCall @branchable {
     result_doc_id: String @index
     result_composite_commit_cid: String
     result_signer_did: String
+    omission_doc_id: String @index
+    omission_composite_commit_cid: String
+    omission_signer_did: String
     approval_doc_id: String @index
     approval_composite_commit_cid: String
     approval_signer_did: String

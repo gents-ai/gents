@@ -22,7 +22,7 @@ pub(crate) async fn execute_mutation_with_retry(
     Ok(resp)
 }
 
-pub(super) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
+pub(crate) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,

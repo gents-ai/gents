@@ -31,10 +31,17 @@ use gents::run_timeline_manifest::{
     TimelineRootSelector, TimelineSlotRequirement, TimelineSourceClass, TimelineSourceDecision,
     TimelineSourceSlot,
 };
+use gents::tool_call_lifecycle::{
+    load_durable_tool_call_terminal_evidence, DurableToolCallTerminalEvidence,
+};
 use gents::trace_export::{
     analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
-    raw_message_json, AmyToolCallTraceRecord,
+    raw_message_json, AmyToolCallTraceRecord, AmyToolOutputOmission, AmyToolOutputOmissionReason,
+    AmyToolOutputOmissionTerminalPhase, AmyToolTerminalEvidenceAvailability,
+    AmyToolTerminalEvidenceUnavailable, AmyToolTerminalEvidenceUnavailableReason,
+    ToolCallTraceAnalysis, ToolFailureClass, TraceToolError,
 };
+use gents::HttpGraphqlExecutor;
 #[cfg(test)]
 use gents::{DocumentVersionRef, SignedDocumentVersionRef};
 use serde::de::DeserializeOwned;
@@ -1049,11 +1056,12 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
             .as_ref()
             .and_then(|request| request.session_id.as_deref())
     });
-    let tool_calls = load_tool_calls(&access, args.limit, session_filter).await?;
+    let mut tool_calls = load_tool_calls(&access, args.limit, session_filter).await?;
     if tool_calls.is_empty() {
         write_jsonl::<AmyToolCallTraceRecord>(args.output_file.as_deref(), &[])?;
         return Ok(());
     }
+    attach_durable_tool_outcomes(&access, &mut tool_calls).await?;
 
     let session_ids = unique_tool_call_session_ids(&tool_calls);
     let messages = load_messages_for_tool_calls(&access, &tool_calls).await?;
@@ -1090,6 +1098,66 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
     };
 
     write_jsonl(args.output_file.as_deref(), &records)
+}
+
+fn omission_failure_class(reason: AmyToolOutputOmissionReason) -> ToolFailureClass {
+    match reason {
+        AmyToolOutputOmissionReason::ApprovalDenied => ToolFailureClass::ApprovalDenied,
+        AmyToolOutputOmissionReason::PreDispatchFailure => ToolFailureClass::ServiceUnavailable,
+        AmyToolOutputOmissionReason::TimedOut
+        | AmyToolOutputOmissionReason::Cancelled
+        | AmyToolOutputOmissionReason::RecoveryFailure
+        | AmyToolOutputOmissionReason::ExecutionLost
+        | AmyToolOutputOmissionReason::ChildDead
+        | AmyToolOutputOmissionReason::ChildSuperseded => ToolFailureClass::External,
+    }
+}
+
+fn omission_retryable(reason: AmyToolOutputOmissionReason) -> bool {
+    matches!(
+        reason,
+        AmyToolOutputOmissionReason::RecoveryFailure
+            | AmyToolOutputOmissionReason::ExecutionLost
+            | AmyToolOutputOmissionReason::ChildDead
+            | AmyToolOutputOmissionReason::ChildSuperseded
+    )
+}
+
+fn apply_terminal_evidence_analysis(
+    tool_call: &ToolCallRow,
+    analysis: &mut ToolCallTraceAnalysis,
+) -> String {
+    if tool_call.terminal_evidence_unavailable.is_some() {
+        analysis.native_tool_output = None;
+        analysis.tool_result_ok = false;
+        analysis.tool_failure_class = None;
+        analysis.tool_error = None;
+        return tool_call.lifecycle_state.clone();
+    }
+
+    let Some(omission) = tool_call.output_omission.as_ref() else {
+        return tool_call.status.clone();
+    };
+    let failure_class = omission_failure_class(omission.reason);
+    let status = omission.terminal_phase.as_str().to_string();
+    let detail = omission.detail.clone();
+    let retryable = omission_retryable(omission.reason);
+
+    analysis.native_tool_output = None;
+    analysis.tool_result_ok = false;
+    analysis.tool_failure_class = Some(failure_class);
+    analysis.tool_error = Some(TraceToolError {
+        failure_class,
+        service_id: None,
+        tool_name: Some(tool_call.tool_name.clone()),
+        requested_tool_name: None,
+        path: None,
+        message: Some(detail.clone()),
+        retryable: Some(retryable),
+        available_tools: None,
+        raw_error_text: detail,
+    });
+    status
 }
 
 fn build_records(
@@ -1129,12 +1197,14 @@ fn build_records(
             });
             let request_failure = combined_request_failure_text(request, response);
             let request_failure_class = analyze_request_failure(request_failure.as_deref());
-            let analysis = analyze_tool_call(
+            let mut analysis = analyze_tool_call(
                 &tool_call.tool_name,
                 &tool_call.args,
-                &tool_call.result,
+                tool_call.result.as_deref().unwrap_or_default(),
                 &tool_call.status,
             );
+            let tool_status = apply_terminal_evidence_analysis(tool_call, &mut analysis);
+            let tool_call_completed = tool_call.lifecycle_state.eq_ignore_ascii_case("completed");
             let message = tool_call
                 .message_sequence
                 .and_then(|sequence| messages.get(&(tool_call.session_id.clone(), sequence)));
@@ -1209,10 +1279,13 @@ fn build_records(
                 repair_attempt: None,
                 final_arguments_sent: analysis.final_arguments_sent,
                 tool_result: tool_call.result.clone(),
+                tool_result_evidence: tool_call.result_evidence.clone(),
+                tool_output_omission: tool_call.output_omission.clone(),
+                tool_terminal_evidence_unavailable: tool_call.terminal_evidence_unavailable.clone(),
                 native_tool_output: analysis.native_tool_output,
                 tool_result_ok: analysis.tool_result_ok,
-                tool_call_completed: tool_call.status.eq_ignore_ascii_case("completed"),
-                tool_status: tool_call.status.clone(),
+                tool_call_completed,
+                tool_status,
                 task_outcome: None,
                 tool_failure_class: analysis.tool_failure_class,
                 tool_error: analysis.tool_error,
@@ -1254,14 +1327,137 @@ async fn load_tool_calls(
                 tool_name
                 tool_call_id
                 args
-                result
                 status
+                lifecycle_state
                 started_at
                 completed_at
             }}
         }}"#
     );
     load_rows(access, "AgentToolCall", &query).await
+}
+
+fn is_remote_replication_lag_error(error: &anyhow::Error) -> bool {
+    let detail = format!("{error:#}");
+    [
+        "no AgentToolCall for session_id=",
+        "binds neither result nor omission",
+        "was not found",
+        "returned no document",
+        "failed (HTTP 404",
+    ]
+    .iter()
+    .any(|marker| detail.contains(marker))
+        && ![
+            "refusing ambiguous",
+            "signer",
+            "signature verification failed",
+            "does not bind",
+            "mismatch",
+            "incoherent",
+            "binds both",
+            "partial or empty",
+        ]
+        .iter()
+        .any(|marker| detail.contains(marker))
+}
+
+fn apply_terminal_evidence_result(
+    tool_call: &mut ToolCallRow,
+    evidence: Result<DurableToolCallTerminalEvidence>,
+    tolerate_remote_lag: bool,
+) -> Result<()> {
+    let evidence = match evidence {
+        Ok(evidence) => evidence,
+        Err(error) if tolerate_remote_lag && is_remote_replication_lag_error(&error) => {
+            tool_call.terminal_evidence_unavailable = Some(AmyToolTerminalEvidenceUnavailable {
+                availability: AmyToolTerminalEvidenceAvailability::EvidenceUnavailable,
+                reason: AmyToolTerminalEvidenceUnavailableReason::MissingOnQueriedReplica,
+                retryable: true,
+                detail: format!("{error:#}"),
+            });
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    match evidence {
+        DurableToolCallTerminalEvidence::Output {
+            output_text,
+            evidence,
+            ..
+        } => {
+            tool_call.result = Some(output_text);
+            tool_call.result_evidence = Some(evidence);
+        }
+        DurableToolCallTerminalEvidence::Omission {
+            terminal_phase,
+            reason,
+            detail,
+            evidence,
+            ..
+        } => {
+            let Some(terminal_phase) =
+                AmyToolOutputOmissionTerminalPhase::from_persisted(terminal_phase.as_str())
+            else {
+                anyhow::bail!(
+                    "terminal omission evidence has unknown terminal phase {terminal_phase}"
+                );
+            };
+            let Some(reason) = AmyToolOutputOmissionReason::from_persisted(reason.as_str()) else {
+                anyhow::bail!("terminal omission evidence has unknown reason {reason}");
+            };
+            anyhow::ensure!(
+                reason.allows_terminal(terminal_phase),
+                "terminal omission evidence reason {reason:?} is incompatible with terminal phase {}",
+                terminal_phase.as_str()
+            );
+            tool_call.output_omission = Some(AmyToolOutputOmission {
+                terminal_phase,
+                reason,
+                detail,
+                evidence,
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn attach_durable_tool_outcomes(
+    access: &ConfigAccess,
+    tool_calls: &mut [ToolCallRow],
+) -> Result<()> {
+    for tool_call in tool_calls.iter_mut().filter(|tool_call| {
+        matches!(
+            tool_call.lifecycle_state.as_str(),
+            "completed" | "failed" | "timedOut" | "cancelled"
+        )
+    }) {
+        let (evidence, tolerate_remote_lag) = match access {
+            ConfigAccess::Local(node) => (
+                load_durable_tool_call_terminal_evidence(
+                    node.as_ref(),
+                    &tool_call.session_id,
+                    &tool_call.tool_call_id,
+                )
+                .await,
+                false,
+            ),
+            ConfigAccess::Graphql(graphql) => {
+                let executor = HttpGraphqlExecutor::new(graphql.clone());
+                (
+                    load_durable_tool_call_terminal_evidence(
+                        &executor,
+                        &tool_call.session_id,
+                        &tool_call.tool_call_id,
+                    )
+                    .await,
+                    true,
+                )
+            }
+        };
+        apply_terminal_evidence_result(tool_call, evidence, tolerate_remote_lag)?;
+    }
+    Ok(())
 }
 
 async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<RequestRow> {
@@ -1710,9 +1906,18 @@ struct ToolCallRow {
     #[serde(default)]
     args: String,
     #[serde(default)]
-    result: String,
+    #[serde(skip)]
+    result: Option<String>,
+    #[serde(skip)]
+    result_evidence: Option<gents::SignedDocumentVersionRef>,
+    #[serde(skip)]
+    output_omission: Option<AmyToolOutputOmission>,
+    #[serde(skip)]
+    terminal_evidence_unavailable: Option<AmyToolTerminalEvidenceUnavailable>,
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    lifecycle_state: String,
     #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
@@ -1826,6 +2031,217 @@ mod tests {
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 
     use super::*;
+
+    fn signed_fixture(doc_id: &str, cid: &str) -> SignedDocumentVersionRef {
+        SignedDocumentVersionRef {
+            version: DocumentVersionRef {
+                doc_id: doc_id.to_string(),
+                composite_commit_cid: cid.to_string(),
+            },
+            signer_did: "did:key:trace-fixture".to_string(),
+        }
+    }
+
+    fn trace_export_args_fixture() -> TraceExportArgs {
+        TraceExportArgs {
+            home: None,
+            graphql: None,
+            session_id: None,
+            request_id: None,
+            run_id: None,
+            case_id: None,
+            limit: 10,
+            output_file: None,
+        }
+    }
+
+    #[test]
+    fn legacy_trace_exports_typed_omission_as_failure_not_empty_success() {
+        let tool_call = ToolCallRow {
+            session_id: "omission-session".to_string(),
+            tool_name: "slow_tool".to_string(),
+            tool_call_id: "omission-call".to_string(),
+            args: "{}".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "timedOut".to_string(),
+            output_omission: Some(AmyToolOutputOmission {
+                terminal_phase: AmyToolOutputOmissionTerminalPhase::TimedOut,
+                reason: AmyToolOutputOmissionReason::TimedOut,
+                detail: "tool call deadline exceeded".to_string(),
+                evidence: signed_fixture("omission-doc", "omission-cid"),
+            }),
+            ..empty_tool_call()
+        };
+        let records = build_records(
+            &[tool_call],
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &trace_export_args_fixture(),
+        );
+        let record = records.first().expect("omission trace record");
+        assert_eq!(record.tool_result, None);
+        assert_eq!(record.tool_result_evidence, None);
+        assert_eq!(record.tool_result_ok, false);
+        assert!(!record.tool_call_completed);
+        assert_eq!(record.tool_status, "timedOut");
+        assert_eq!(record.tool_failure_class, Some(ToolFailureClass::External));
+        assert_eq!(record.failure_class, Some(ToolFailureClass::External));
+        assert_eq!(
+            record
+                .tool_error
+                .as_ref()
+                .and_then(|error| error.message.as_deref()),
+            Some("tool call deadline exceeded")
+        );
+        assert!(record.tool_output_omission.is_some());
+        assert!(record.tool_terminal_evidence_unavailable.is_none());
+        let omission_json = serde_json::to_value(record).expect("serialize omission trace row");
+        assert_eq!(
+            omission_json
+                .pointer("/tool_output_omission/terminal_phase")
+                .and_then(Value::as_str),
+            Some("timedOut")
+        );
+        assert_eq!(
+            omission_json
+                .pointer("/tool_output_omission/reason")
+                .and_then(Value::as_str),
+            Some("timedOut")
+        );
+    }
+
+    #[test]
+    fn graphql_replication_lag_marks_one_row_and_preserves_following_output() {
+        let mut lagged = ToolCallRow {
+            session_id: "graphql-session".to_string(),
+            tool_name: "lagged_tool".to_string(),
+            tool_call_id: "lagged-call".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            ..empty_tool_call()
+        };
+        apply_terminal_evidence_result(
+            &mut lagged,
+            Err(anyhow::anyhow!(
+                "exact AgentToolResult snapshot result-doc at result-cid returned no document"
+            )),
+            true,
+        )
+        .expect("remote replication lag must remain row-local");
+        let unavailable = lagged
+            .terminal_evidence_unavailable
+            .as_ref()
+            .expect("typed unavailable marker");
+        assert_eq!(
+            unavailable.availability,
+            AmyToolTerminalEvidenceAvailability::EvidenceUnavailable
+        );
+        assert_eq!(
+            unavailable.reason,
+            AmyToolTerminalEvidenceUnavailableReason::MissingOnQueriedReplica
+        );
+        assert!(unavailable.retryable);
+
+        let mut replicated = ToolCallRow {
+            session_id: "graphql-session".to_string(),
+            tool_name: "ready_tool".to_string(),
+            tool_call_id: "ready-call".to_string(),
+            args: "{}".to_string(),
+            status: "completed".to_string(),
+            lifecycle_state: "completed".to_string(),
+            ..empty_tool_call()
+        };
+        apply_terminal_evidence_result(
+            &mut replicated,
+            Ok(DurableToolCallTerminalEvidence::Output {
+                tool_name: "ready_tool".to_string(),
+                output_text: "ready output".to_string(),
+                evidence: signed_fixture("result-doc", "result-cid"),
+            }),
+            true,
+        )
+        .expect("a later replicated row must still export");
+        assert_eq!(replicated.result.as_deref(), Some("ready output"));
+
+        let records = build_records(
+            &[lagged, replicated],
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &trace_export_args_fixture(),
+        );
+        assert_eq!(records.len(), 2);
+        assert!(!records[0].tool_result_ok);
+        assert!(records[0].tool_call_completed);
+        assert_eq!(records[0].tool_status, "completed");
+        assert_eq!(records[0].failure_class, None);
+        assert_eq!(records[0].tool_failure_class, None);
+        assert_eq!(records[0].tool_error, None);
+        assert!(records[0].tool_terminal_evidence_unavailable.is_some());
+        let lagged_json = serde_json::to_value(&records[0]).expect("serialize lagged trace row");
+        assert_eq!(
+            lagged_json
+                .pointer("/tool_terminal_evidence_unavailable/availability")
+                .and_then(Value::as_str),
+            Some("evidence_unavailable")
+        );
+        assert_eq!(
+            lagged_json
+                .pointer("/tool_terminal_evidence_unavailable/reason")
+                .and_then(Value::as_str),
+            Some("missing_on_queried_replica")
+        );
+        assert!(records[1].tool_result_ok);
+        assert_eq!(records[1].tool_result.as_deref(), Some("ready output"));
+    }
+
+    #[test]
+    fn graphql_trace_still_rejects_terminal_evidence_corruption() {
+        let mut tool_call = empty_tool_call();
+        let error = apply_terminal_evidence_result(
+            &mut tool_call,
+            Err(anyhow::anyhow!(
+                "AgentToolCall result signer does not match exact result fact"
+            )),
+            true,
+        )
+        .expect_err("cryptographic corruption must abort remote trace export");
+        assert!(format!("{error:#}").contains("signer does not match"));
+        assert!(tool_call.terminal_evidence_unavailable.is_none());
+
+        let error = apply_terminal_evidence_result(
+            &mut tool_call,
+            Err(anyhow::anyhow!(
+                "terminal AgentToolCall session:call binds both result and omission"
+            )),
+            true,
+        )
+        .expect_err("dual terminal edges are corruption, not replication lag");
+        assert!(format!("{error:#}").contains("binds both"));
+        assert!(tool_call.terminal_evidence_unavailable.is_none());
+    }
+
+    #[test]
+    fn graphql_trace_does_not_treat_signed_material_server_failure_as_replication_lag() {
+        let mut tool_call = empty_tool_call();
+        let error = apply_terminal_evidence_result(
+            &mut tool_call,
+            Err(anyhow::anyhow!(
+                "loading signed material for remote commit bafy-result failed (HTTP 500 Internal Server Error): unavailable"
+            )),
+            true,
+        )
+        .expect_err("remote server failures must abort trace export");
+        assert!(format!("{error:#}").contains("HTTP 500"));
+        assert!(tool_call.terminal_evidence_unavailable.is_none());
+    }
 
     #[tokio::test]
     async fn trace_export_session_lookup_rejects_logical_twins() {
@@ -2552,8 +2968,12 @@ mod tests {
             tool_name: String::new(),
             tool_call_id: String::new(),
             args: String::new(),
-            result: String::new(),
+            result: None,
+            result_evidence: None,
+            output_omission: None,
+            terminal_evidence_unavailable: None,
             status: String::new(),
+            lifecycle_state: String::new(),
             started_at: None,
             completed_at: None,
         }

@@ -490,6 +490,7 @@ async fn fetch_tool_call_row(
                     _docID
                     request_id
                     deadline_at
+                    tool_name
                     lifecycle_state
                     result
                     status
@@ -498,6 +499,7 @@ async fn fetch_tool_call_row(
                     result_doc_id
                     result_composite_commit_cid
                     result_signer_did
+                    omission_doc_id
                     approval_doc_id
                     approval_composite_commit_cid
                     approval_signer_did
@@ -1112,6 +1114,529 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
 }
 
 #[tokio::test]
+async fn stale_terminal_retry_preserves_full_spilled_output_and_truncation_metadata() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-stale-full-spill-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, _signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+
+    let session_id = "stale-full-spill-session";
+    let tool_call_id = "stale-full-spill-call";
+    let tool_name = "oversized";
+    let tool_args = "{}";
+    let full_output = (0..12)
+        .map(|index| format!("full-line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new(
+        node.clone(),
+        "stale-full-spill-request".to_string(),
+        session_id.to_string(),
+        "did:test:general".to_string(),
+        tool_call_id.to_string(),
+        0,
+        tool_name.to_string(),
+        tool_args.to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    );
+    lifecycle.start_running().await.unwrap();
+
+    let truncator =
+        crate::truncation::DefraSpillTruncator::new(node.clone(), "did:test:general", session_id)
+            .with_tool_call_id(tool_call_id);
+    let retained = crate::truncation::Truncator::truncate(
+        &truncator,
+        tool_name,
+        tool_args,
+        &full_output,
+        crate::truncation::TruncationMode::Head,
+        &crate::truncation::TruncationLimits {
+            max_lines: 3,
+            max_bytes: 1024,
+        },
+        None,
+    )
+    .await
+    .expect("retain the canonical full output before terminalization");
+    assert!(retained.truncated);
+    let initial_fact = retained
+        .spill_ref
+        .as_ref()
+        .expect("truncation must retain an exact full-output fact")
+        .clone();
+
+    // Advance the physical execution through two nonterminal signed heads.
+    // The retained fact now points at a stale running version, forcing the
+    // terminal writer through its stale-evidence re-publication path.
+    lifecycle.background().await.unwrap();
+    lifecycle.foreground().await.unwrap();
+    let current_running = crate::document_version::verified_current_signed_document_version(
+        &node,
+        "AgentToolCall",
+        lifecycle.doc_id().expect("persisted tool call"),
+    )
+    .await
+    .expect("verify the advanced running head");
+    let initial_response = node
+        .execute(&format!(
+            r#"{{ AgentToolResult(cid: ["{}"]) {{
+                output_text model_output_truncated truncation_metadata
+                tool_call_composite_commit_cid
+            }} }}"#,
+            crate::graphql::escape_graphql_string(&initial_fact.version.composite_commit_cid)
+        ))
+        .await;
+    assert!(
+        !initial_response.has_errors(),
+        "query initial full-output fact: {:?}",
+        initial_response.errors
+    );
+    let initial_payload = initial_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolResult"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("initial exact full-output payload");
+    assert_ne!(
+        initial_payload["tool_call_composite_commit_cid"].as_str(),
+        Some(current_running.version.composite_commit_cid.as_str()),
+        "the test must make the retained output parent stale"
+    );
+
+    lifecycle
+        .complete_with_result_fact(&retained.text, &initial_fact)
+        .await
+        .expect("stale terminal evidence should be republished and bound");
+
+    let terminal = fetch_tool_call_row(&node, session_id, tool_call_id).await;
+    assert_eq!(terminal["lifecycle_state"].as_str(), Some("completed"));
+    assert_eq!(terminal["result"].as_str(), Some(retained.text.as_str()));
+    let bound_cid = terminal["result_composite_commit_cid"]
+        .as_str()
+        .expect("terminal call must bind an exact result fact");
+    assert_ne!(
+        bound_cid, initial_fact.version.composite_commit_cid,
+        "a stale result fact must be republished against the new running head"
+    );
+    let bound_response = node
+        .execute(&format!(
+            r#"{{ AgentToolResult(cid: ["{}"]) {{
+                _docID output_text model_output_truncated truncation_metadata
+                tool_call_composite_commit_cid
+            }} }}"#,
+            crate::graphql::escape_graphql_string(bound_cid)
+        ))
+        .await;
+    assert!(
+        !bound_response.has_errors(),
+        "query terminally bound full-output fact: {:?}",
+        bound_response.errors
+    );
+    let bound_payload = bound_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolResult"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .cloned()
+        .expect("terminally bound exact full-output payload");
+    assert_eq!(
+        bound_payload["output_text"].as_str(),
+        Some(full_output.as_str())
+    );
+    assert_eq!(
+        bound_payload["model_output_truncated"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        bound_payload["truncation_metadata"], initial_payload["truncation_metadata"],
+        "stale retry must copy the original truncation contract verbatim"
+    );
+    assert_eq!(
+        bound_payload["tool_call_composite_commit_cid"].as_str(),
+        Some(current_running.version.composite_commit_cid.as_str()),
+        "the replacement fact must bind the exact advanced running head"
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        bound_payload["truncation_metadata"]
+            .as_str()
+            .expect("truncation metadata string"),
+    )
+    .expect("valid truncation metadata");
+    assert_eq!(metadata["truncated"].as_bool(), Some(true));
+    assert_eq!(metadata["original_lines"].as_u64(), Some(12));
+    assert_eq!(metadata["max_lines"].as_u64(), Some(3));
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn hook_owned_subagent_meta_results_persist_without_fabricating_tool_calls() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-hook-owned-meta-results-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        signing_identity.did(),
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Inspect the child fleet"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("hook-owned-meta-request".to_string()))
+        .await;
+
+    let cases = [
+        (
+            crate::toolset::LIST_SUBAGENTS_TOOL_NAME,
+            "hook-meta-list",
+            "model-meta-list",
+            "{}",
+        ),
+        (
+            crate::toolset::READ_SUBAGENT_TOOL_NAME,
+            "hook-meta-read",
+            "model-meta-read",
+            r#"{"child_request_id":""}"#,
+        ),
+        (
+            crate::toolset::STEER_SUBAGENT_TOOL_NAME,
+            "hook-meta-steer",
+            "model-meta-steer",
+            r#"{"child_request_id":"","message":"next"}"#,
+        ),
+        (
+            crate::toolset::CANCEL_SUBAGENT_TOOL_NAME,
+            "hook-meta-cancel",
+            "model-meta-cancel",
+            r#"{"child_request_id":""}"#,
+        ),
+        (
+            crate::toolset::WAIT_SUBAGENT_TOOL_NAME,
+            "hook-meta-wait",
+            "model-meta-wait",
+            r#"{"child_request_id":""}"#,
+        ),
+    ];
+    let mut skip_results = Vec::new();
+    for (tool_name, internal_call_id, model_call_id, args) in cases {
+        let action = hook
+            .on_tool_call(
+                tool_name,
+                Some(model_call_id.to_string()),
+                internal_call_id,
+                args,
+            )
+            .await;
+        let ToolCallHookAction::Skip { reason } = action else {
+            panic!("{tool_name} must execute inside the hook");
+        };
+        skip_results.push((
+            tool_name.to_string(),
+            internal_call_id.to_string(),
+            model_call_id.to_string(),
+            args.to_string(),
+            reason,
+        ));
+    }
+
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: skip_results
+            .iter()
+            .map(|(tool_name, internal_call_id, model_call_id, args, _)| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: internal_call_id.clone(),
+                    call_id: Some(model_call_id.clone()),
+                    function: ToolFunction {
+                        name: tool_name.clone(),
+                        arguments: serde_json::from_str(args).expect("valid test arguments"),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    })
+    .await
+    .unwrap();
+
+    for (_, internal_call_id, model_call_id, _, reason) in &skip_results {
+        hook.persist_stream_tool_result_message(
+            &ToolResult {
+                id: internal_call_id.clone(),
+                call_id: Some(model_call_id.clone()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: reason.clone(),
+                })],
+            },
+            internal_call_id,
+        )
+        .await
+        .expect("hook-owned meta result should persist from its registered identity");
+    }
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 2 + skip_results.len());
+    let rendered = format!("{history:?}");
+    for (tool_name, _, _, _, _) in &skip_results {
+        assert!(
+            rendered.contains(tool_name),
+            "persisted transcript omitted hook-owned {tool_name} result: {rendered}"
+        );
+    }
+    let rows = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(
+        !rows.has_errors(),
+        "query hook-owned calls: {:?}",
+        rows.errors
+    );
+    assert_eq!(
+        rows.data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "hook-owned control results must not fabricate durable executions"
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn pre_dispatch_meta_rejections_persist_from_exact_omissions() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-hook-predispatch-meta-rejections-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        signing_identity.did(),
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Start background work"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("predispatch-meta-request".to_string()))
+        .await;
+    let args = r#"{"unexpected":true}"#;
+    let cases = [(
+        crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+        "predispatch-spawn-process",
+        "model-spawn-process",
+    )];
+    let mut results = Vec::new();
+    for (tool_name, internal_call_id, model_call_id) in cases {
+        let action = hook
+            .on_tool_call(
+                tool_name,
+                Some(model_call_id.to_string()),
+                internal_call_id,
+                args,
+            )
+            .await;
+        let ToolCallHookAction::Skip { reason } = action else {
+            panic!("invalid {tool_name} must return its durable rejection");
+        };
+        results.push((
+            tool_name.to_string(),
+            internal_call_id.to_string(),
+            model_call_id.to_string(),
+            reason,
+        ));
+    }
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: results
+            .iter()
+            .map(|(tool_name, internal_call_id, model_call_id, _)| {
+                AssistantContent::ToolCall(ToolCall {
+                    id: internal_call_id.clone(),
+                    call_id: Some(model_call_id.clone()),
+                    function: ToolFunction {
+                        name: tool_name.clone(),
+                        arguments: serde_json::from_str(args).unwrap(),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    })
+    .await
+    .unwrap();
+
+    for (_, internal_call_id, model_call_id, _) in &results {
+        hook.persist_stream_tool_result_message(
+            &ToolResult {
+                id: internal_call_id.clone(),
+                call_id: Some(model_call_id.clone()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "forged streamed rejection".to_string(),
+                })],
+            },
+            internal_call_id,
+        )
+        .await
+        .expect("typed pre-dispatch omission should authorize its rejection detail");
+    }
+
+    let session_id = hook.session_id().await.expect("session id");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    let rendered = format!("{history:?}");
+    assert!(rendered.contains("invalid spawn_process arguments"));
+    assert!(
+        !rendered.contains("forged streamed rejection"),
+        "durable rejections must come from exact omission facts"
+    );
+    let rows = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
+                tool_name lifecycle_state result_doc_id omission_doc_id
+            }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(
+        !rows.has_errors(),
+        "query durable pre-dispatch rejections: {:?}",
+        rows.errors
+    );
+    let rows = rows
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .expect("pre-dispatch rows");
+    assert_eq!(rows.len(), 1);
+    for row in rows {
+        assert_eq!(row["lifecycle_state"].as_str(), Some("failed"));
+        assert!(row["result_doc_id"].is_null());
+        assert!(row["omission_doc_id"].as_str().is_some());
+    }
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn durable_spawn_subagent_rejects_malformed_streamed_receipt() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-hook-malformed-spawn-receipt-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        signing_identity.did(),
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Start a subagent"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("malformed-spawn-receipt-request".to_string()))
+        .await;
+
+    let internal_call_id = "malformed-spawn-receipt";
+    let model_call_id = "model-malformed-spawn-receipt";
+    let args = r#"{"unexpected":true}"#;
+    let action = hook
+        .on_tool_call(
+            crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+            Some(model_call_id.to_string()),
+            internal_call_id,
+            args,
+        )
+        .await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("invalid spawn_subagent must create a durable rejection");
+    };
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: internal_call_id.to_string(),
+            call_id: Some(model_call_id.to_string()),
+            function: ToolFunction {
+                name: crate::toolset::SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+                arguments: serde_json::from_str(args).unwrap(),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .await
+    .unwrap();
+
+    let error = hook
+        .persist_stream_tool_result_message(
+            &ToolResult {
+                id: internal_call_id.to_string(),
+                call_id: Some(model_call_id.to_string()),
+                content: vec![ToolResultContent::Text(Text { text: reason })],
+            },
+            internal_call_id,
+        )
+        .await
+        .expect_err("durable spawn_subagent must reject a non-receipt payload");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("streamed subagent receipt omitted child_request_id"),
+        "unexpected malformed-receipt error: {error}"
+    );
+
+    let session_id = hook.session_id().await.expect("session id");
+    assert_eq!(
+        crate::session::load_history(&node, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "malformed spawn receipt must not become a transcript result"
+    );
+    let row = fetch_tool_call_row(&node, &session_id, internal_call_id).await;
+    assert_eq!(row["tool_name"].as_str(), Some("spawn_subagent"));
+    assert_eq!(row["lifecycle_state"].as_str(), Some("failed"));
+    assert!(row["result_doc_id"].is_null());
+    assert!(row["omission_doc_id"].as_str().is_some());
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-cancel-{}", uuid::Uuid::new_v4()));
@@ -1663,6 +2188,246 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         Some("completed")
     );
 
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn streamed_tool_result_rejects_corrupt_exact_edge_without_consuming_retry() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-hook-corrupt-terminal-evidence-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let agent_did = signing_identity.did();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        agent_did,
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run a tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-corrupt-terminal-evidence".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+
+    assert!(matches!(
+        hook.on_tool_call(
+            "echo",
+            Some("call-corrupt".to_string()),
+            "internal-corrupt",
+            "{}"
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "echo",
+            Some("call-corrupt".to_string()),
+            "internal-corrupt",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::Completed("durable output".to_string()),
+        )
+        .await,
+        HookAction::Continue
+    ));
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "internal-corrupt".to_string(),
+            call_id: Some("call-corrupt".to_string()),
+            function: ToolFunction {
+                name: "echo".to_string(),
+                arguments: json!({}),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .await
+    .unwrap();
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-corrupt").await;
+    let doc_id = row["_docID"].as_str().expect("tool call doc id");
+    let result_cid = row["result_composite_commit_cid"]
+        .as_str()
+        .expect("exact result cid");
+    let corrupt = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ result_composite_commit_cid: "corrupt-result-cid" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+        ))
+        .await;
+    assert!(
+        !corrupt.has_errors(),
+        "corrupting exact result edge failed: {:?}",
+        corrupt.errors
+    );
+
+    let streamed = ToolResult {
+        id: "internal-corrupt".to_string(),
+        call_id: Some("call-corrupt".to_string()),
+        content: vec![ToolResultContent::Text(Text {
+            text: "forged stream fallback".to_string(),
+        })],
+    };
+    let error = hook
+        .persist_stream_tool_result_message(&streamed, "internal-corrupt")
+        .await
+        .expect_err("corrupt exact result edge must fail closed");
+    assert!(
+        !format!("{error:#}").is_empty(),
+        "verification failure must retain an actionable error"
+    );
+    assert_eq!(
+        crate::session::load_history(&node, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "stream bytes must not become a transcript fact after verification failure"
+    );
+
+    let repair = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ result_composite_commit_cid: "{}" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(doc_id),
+            crate::graphql::escape_graphql_string(result_cid),
+        ))
+        .await;
+    assert!(
+        !repair.has_errors(),
+        "repairing exact result edge failed: {:?}",
+        repair.errors
+    );
+    hook.persist_stream_tool_result_message(&streamed, "internal-corrupt")
+        .await
+        .expect("verification failure must not consume the retry dedupe slot");
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3, "repaired retry must persist one result");
+    let history = format!("{history:?}");
+    assert!(
+        history.contains("durable output"),
+        "repaired retry must use the immutable result fact: {history}"
+    );
+    assert!(
+        !history.contains("forged stream fallback"),
+        "repaired retry must still use the immutable result fact"
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn streamed_tool_result_rejects_exact_omission_instead_of_stream_bytes() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-hook-terminal-omission-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let agent_did = signing_identity.did();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        agent_did,
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run a slow tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("req-terminal-omission".to_string()))
+        .await;
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    hook.set_request_deadline_at(Some(deadline)).await;
+    assert!(matches!(
+        hook.on_tool_call(
+            "slow",
+            Some("call-omitted".to_string()),
+            "internal-omitted",
+            "{}"
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "slow",
+            Some("call-omitted".to_string()),
+            "internal-omitted",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::TimedOut {
+                deadline_at: Some(deadline),
+            },
+        )
+        .await,
+        HookAction::Terminate { .. }
+    ));
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "internal-omitted".to_string(),
+            call_id: Some("call-omitted".to_string()),
+            function: ToolFunction {
+                name: "slow".to_string(),
+                arguments: json!({}),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .await
+    .unwrap();
+
+    let error = hook
+        .persist_stream_tool_result_message(
+            &ToolResult {
+                id: "internal-omitted".to_string(),
+                call_id: Some("call-omitted".to_string()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "forged timeout output".to_string(),
+                })],
+            },
+            "internal-omitted",
+        )
+        .await
+        .expect_err("an exact omission must not be projected as output");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("has no output (timedOut:"),
+        "unexpected omission error: {error}"
+    );
+    let session_id = hook.session_id().await.expect("session id");
+    assert_eq!(
+        crate::session::load_history(&node, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "omitted output must not create a user tool-result message"
+    );
+
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 

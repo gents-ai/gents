@@ -37,6 +37,7 @@ pub struct ToolCallRecoveryReport {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SubagentLivenessReport {
+    pub expired_fork_staging_cancelled: usize,
     pub expired_children_terminalized: usize,
     pub bridges_projected: usize,
     pub queued_descendants_interrupted: usize,
@@ -121,6 +122,21 @@ struct RunningToolCallRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     unclaimed_deadline_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PendingToolCallRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    tool_call_key: String,
+    session_id: String,
+    tool_call_id: String,
+    agent_did: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    deadline_at: Option<String>,
 }
 
 impl RunningToolCallRow {
@@ -235,11 +251,26 @@ enum RecoveryOutcome {
     UnclaimedCrossDeploymentSpawn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingRecoveryOutcome {
+    PreDispatchFailure,
+    ParentInterrupted,
+}
+
 impl super::ToolCallLifecycle {
     pub async fn recover_all(
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<ToolCallRecoveryReport> {
+        // `persist_pending` deliberately creates a durable genesis before a
+        // dispatcher may advance it to running/held. A pending row is not by
+        // itself proof of abandonment: another deployment may still own the
+        // live parent and advance it. Recovery therefore requires either the
+        // explicit tool deadline to have expired or a same-owner terminal
+        // parent. The exact-evidence transaction loses safely if a concurrent
+        // replay has already advanced the same physical execution.
+        let expired_fork_staging = recover_expired_fork_staging(node, agent_did).await?;
+        let pending_recovered = recover_stuck_pending_tool_calls(node, agent_did).await?;
         let materialized_children = recover_orphan_subagent_children(node, agent_did).await?;
         if materialized_children > 0 {
             tracing::info!(
@@ -248,7 +279,9 @@ impl super::ToolCallLifecycle {
             );
         }
 
-        let tool_calls_recovered = recover_stuck_running_tool_calls(node, agent_did).await?;
+        let tool_calls_recovered = expired_fork_staging
+            + pending_recovered
+            + recover_stuck_running_tool_calls(node, agent_did).await?;
         let pending_side_effects =
             Self::reconcile_background_completion_side_effects(node, agent_did)
                 .await?
@@ -288,6 +321,9 @@ impl super::ToolCallLifecycle {
     ) -> Result<SubagentLivenessReport> {
         let mut report = SubagentLivenessReport::default();
 
+        report.expired_fork_staging_cancelled =
+            recover_expired_fork_staging(node, agent_did).await?;
+
         let bridge_rows = load_running_subagent_bridge_rows(node).await?;
         // One batched liveness read for every bridge's child, instead of a
         // per-bridge query on the 5s tick.
@@ -318,6 +354,7 @@ impl super::ToolCallLifecycle {
         if !report.is_noop() {
             tracing::info!(
                 expired_children_terminalized = report.expired_children_terminalized,
+                expired_fork_staging_cancelled = report.expired_fork_staging_cancelled,
                 bridges_projected = report.bridges_projected,
                 queued_descendants_interrupted = report.queued_descendants_interrupted,
                 "reconciled subagent liveness"
@@ -642,9 +679,349 @@ impl super::ToolCallLifecycle {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ForkStagingRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    agent_did: String,
+    lifecycle_state: String,
+    deadline_at: Option<String>,
+}
+
+fn fork_staging_expired(deadline_at: Option<&str>) -> bool {
+    deadline_at
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|deadline| deadline.with_timezone(&Utc) <= Utc::now())
+}
+
+/// Cancel fork staging whose bounded lease expired before the exact copied
+/// terminal evidence could be attached. This is a recovery fallback, not a
+/// successful fork projection: the explicit omission keeps an interrupted
+/// fork visible and prevents staged non-terminal rows from becoming immortal.
+async fn recover_expired_fork_staging(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentToolCall(filter: {{
+                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                status: {{ _eq: "forkStaging" }},
+                lifecycle_state: {{ _in: ["pending", "awaitingApproval", "running"] }},
+                fork_source_doc_id: {{ _ne: "" }}
+            }}) {{
+                _docID
+                agent_did
+                lifecycle_state
+                deadline_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying expired fork tool staging for {agent_did}: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<ForkStagingRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value::<Vec<ForkStagingRow>>)
+        .transpose()
+        .context("decoding fork staging recovery rows")?
+        .unwrap_or_default();
+    let mut recovered = 0;
+    for row in rows {
+        if row.agent_did != agent_did || !fork_staging_expired(row.deadline_at.as_deref()) {
+            continue;
+        }
+        let Some(source) = ToolCallState::from_persisted(&row.lifecycle_state) else {
+            continue;
+        };
+        if source.is_terminal() {
+            continue;
+        }
+        let doc_id = escape_graphql_string(&row.doc_id);
+        let source_phase = source.as_str();
+        let detail = "fork staging lease expired before copied terminal evidence was bound";
+        let escaped_detail = escape_graphql_string(detail);
+        let completed_at = Utc::now().to_rfc3339();
+        if super::evidence::terminalize_with_omission(
+            node,
+            &row.doc_id,
+            source,
+            ToolCallState::Cancelled,
+            super::evidence::ToolOutputOmissionReason::Cancelled,
+            detail,
+            "recover_expired_fork_staging",
+            |omission| {
+                let omission_fields = super::evidence::omission_fields_fragment(omission);
+                format!(
+                    r#"mutation {{
+                        update_AgentToolCall(
+                            filter: {{
+                                _docID: {{ _eq: "{doc_id}" }},
+                                lifecycle_state: {{ _eq: "{source_phase}" }},
+                                status: {{ _eq: "forkStaging" }}
+                            }},
+                            input: {{
+                                result: "{escaped_detail}",
+                                status: "completed",
+                                lifecycle_state: "cancelled",
+                                completed_at: "{completed_at}",
+                                cancel_cause: "interrupted",
+                                {omission_fields}
+                                unclaimed_deadline_at: null
+                            }}
+                        ) {{ _docID }}
+                    }}"#
+                )
+            },
+        )
+        .await?
+        {
+            recovered += 1;
+        }
+    }
+    Ok(recovered)
+}
+
+async fn recover_stuck_pending_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentToolCall(filter: {{
+                lifecycle_state: {{ _eq: "pending" }},
+                agent_did: {{ _eq: "{escaped_agent_did}" }}
+            }}) {{
+                _docID
+                request_id
+                tool_call_key
+                session_id
+                tool_call_id
+                agent_did
+                status
+                deadline_at
+            }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying stuck pending tool calls for {agent_did}: {:?}",
+            response.errors
+        );
+    }
+    let rows: Vec<PendingToolCallRow> = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .cloned()
+        .map(serde_json::from_value::<Vec<PendingToolCallRow>>)
+        .transpose()
+        .context("decoding pending AgentToolCall recovery rows")?
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.status != "forkStaging")
+        .collect();
+    let mut logical_keys = std::collections::HashSet::with_capacity(rows.len());
+    for row in &rows {
+        let expected_key = format!("{}:{}", row.session_id, row.tool_call_id);
+        if row.agent_did != agent_did
+            || row.doc_id.trim().is_empty()
+            || row.tool_call_key != expected_key
+        {
+            anyhow::bail!(
+                "pending AgentToolCall {} has incoherent immutable execution identity",
+                row.doc_id
+            );
+        }
+        if !logical_keys.insert(row.tool_call_key.as_str()) {
+            anyhow::bail!(
+                "pending AgentToolCall logical key {} has physical twins; refusing recovery ambiguity",
+                row.tool_call_key
+            );
+        }
+    }
+    let mut recovered = 0;
+    let mut parent_cache: std::collections::HashMap<String, Option<ParentRequestRow>> =
+        std::collections::HashMap::new();
+    let now = Utc::now();
+    for row in rows {
+        let parent = if let Some(cached) = parent_cache.get(&row.request_id) {
+            cached.clone()
+        } else {
+            let loaded = lookup_parent_request(node, agent_did, &row.request_id).await?;
+            parent_cache.insert(row.request_id.clone(), loaded.clone());
+            loaded
+        };
+        let Some(outcome) = classify_pending_tool_recovery(&row, parent.as_ref(), now) else {
+            continue;
+        };
+        if recover_pending_tool_call_row(node, &row, outcome).await? {
+            recovered += 1;
+        }
+    }
+    Ok(recovered)
+}
+
+/// A durable pending row may still be owned by a dispatcher on another
+/// deployment. Only its explicit deadline or a same-owner terminal parent is
+/// evidence that advancing it is no longer legal.
+fn classify_pending_tool_recovery(
+    row: &PendingToolCallRow,
+    parent: Option<&ParentRequestRow>,
+    now: DateTime<Utc>,
+) -> Option<PendingRecoveryOutcome> {
+    if parse_datetime(row.deadline_at.as_deref()).is_some_and(|deadline| now >= deadline) {
+        Some(PendingRecoveryOutcome::PreDispatchFailure)
+    } else if parent.is_some_and(request_is_interrupted) {
+        Some(PendingRecoveryOutcome::ParentInterrupted)
+    } else if parent.is_some_and(request_is_terminal) {
+        Some(PendingRecoveryOutcome::PreDispatchFailure)
+    } else {
+        None
+    }
+}
+
+async fn recover_pending_tool_call_row(
+    node: &EmbeddedNode,
+    row: &PendingToolCallRow,
+    outcome: PendingRecoveryOutcome,
+) -> Result<bool> {
+    let deadline_at = parse_datetime(row.deadline_at.as_deref());
+    let detail = match outcome {
+        PendingRecoveryOutcome::PreDispatchFailure => match deadline_at {
+            Some(deadline) if Utc::now() >= deadline => format!(
+                "tool dispatch was not admitted before deadline {}",
+                deadline.to_rfc3339()
+            ),
+            _ => "tool dispatch was not admitted before its parent became terminal".to_string(),
+        },
+        PendingRecoveryOutcome::ParentInterrupted => {
+            "tool call cancelled because parent request was interrupted".to_string()
+        }
+    };
+    let escaped_detail = escape_graphql_string(&detail);
+    let escaped_doc_id = escape_graphql_string(&row.doc_id);
+    let completed_at = Utc::now().to_rfc3339();
+    let (terminal_state, omission_reason, failure_class_field, cancel_cause_field) = match outcome {
+        PendingRecoveryOutcome::PreDispatchFailure => (
+            ToolCallState::Failed,
+            super::evidence::ToolOutputOmissionReason::PreDispatchFailure,
+            format!(
+                r#"tool_failure_class: "{}","#,
+                FailureClass::External.as_str()
+            ),
+            String::new(),
+        ),
+        PendingRecoveryOutcome::ParentInterrupted => (
+            ToolCallState::Cancelled,
+            super::evidence::ToolOutputOmissionReason::Cancelled,
+            String::new(),
+            format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()),
+        ),
+    };
+    super::evidence::terminalize_with_omission(
+        node,
+        &row.doc_id,
+        ToolCallState::Pending,
+        terminal_state,
+        omission_reason,
+        &detail,
+        "recover_pending_tool_call_with_exact_omission",
+        |omission| {
+            let omission_fields = super::evidence::omission_fields_fragment(omission);
+            format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{
+                            _docID: {{ _eq: "{escaped_doc_id}" }},
+                            lifecycle_state: {{ _eq: "pending" }}
+                        }},
+                        input: {{
+                            result: "{escaped_detail}",
+                            status: "completed",
+                            lifecycle_state: "{lifecycle_state}",
+                            completed_at: "{completed_at}",
+                            {failure_class_field}
+                            {cancel_cause_field}
+                            {omission_fields}
+                            unclaimed_deadline_at: null
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                lifecycle_state = terminal_state.as_str(),
+            )
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending_row(deadline_at: Option<String>) -> PendingToolCallRow {
+        PendingToolCallRow {
+            doc_id: "pending-doc".to_string(),
+            request_id: "request-1".to_string(),
+            tool_call_key: "session-1:call-1".to_string(),
+            session_id: "session-1".to_string(),
+            tool_call_id: "call-1".to_string(),
+            agent_did: "did:test:agent".to_string(),
+            status: "called".to_string(),
+            deadline_at,
+        }
+    }
+
+    fn parent(state: &str) -> ParentRequestRow {
+        ParentRequestRow {
+            agent_did: "did:test:agent".to_string(),
+            status: state.to_string(),
+            lifecycle_state: Some(state.to_string()),
+            subagent_depth: None,
+        }
+    }
+
+    #[test]
+    fn pending_recovery_preserves_live_or_unresolved_owner_before_deadline() {
+        let now = Utc::now();
+        let row = pending_row(Some((now + chrono::Duration::minutes(5)).to_rfc3339()));
+        let live = parent("processing");
+        assert_eq!(classify_pending_tool_recovery(&row, Some(&live), now), None);
+        assert_eq!(classify_pending_tool_recovery(&row, None, now), None);
+    }
+
+    #[test]
+    fn pending_recovery_uses_deadline_then_owned_terminal_parent() {
+        let now = Utc::now();
+        let expired = pending_row(Some((now - chrono::Duration::seconds(1)).to_rfc3339()));
+        assert_eq!(
+            classify_pending_tool_recovery(&expired, None, now),
+            Some(PendingRecoveryOutcome::PreDispatchFailure)
+        );
+
+        let active = pending_row(Some((now + chrono::Duration::minutes(5)).to_rfc3339()));
+        let interrupted = parent("interrupted");
+        assert_eq!(
+            classify_pending_tool_recovery(&active, Some(&interrupted), now),
+            Some(PendingRecoveryOutcome::ParentInterrupted)
+        );
+        let terminal = parent("failed");
+        assert_eq!(
+            classify_pending_tool_recovery(&active, Some(&terminal), now),
+            Some(PendingRecoveryOutcome::PreDispatchFailure)
+        );
+    }
+
+    #[test]
+    fn fork_staging_requires_an_explicit_expired_lease() {
+        assert!(!fork_staging_expired(None));
+        assert!(!fork_staging_expired(Some("not-a-date")));
+        assert!(fork_staging_expired(Some("2020-01-01T00:00:00Z")));
+    }
 
     #[test]
     fn timeout_recovery_persists_external_failure_class() {
@@ -988,6 +1365,7 @@ async fn fail_unauthorized_orphan_subagent_tool_call(
         row.deadline_at.as_deref(),
         &payload,
         FailureClass::ServiceUnavailable,
+        super::evidence::ToolOutputOmissionReason::RecoveryFailure,
     )
     .await
 }
@@ -1174,7 +1552,10 @@ async fn load_running_tool_call_rows_with_filter(
     let query = format!(
         r#"{{
         AgentToolCall(
-            filter: {{ lifecycle_state: {{ _eq: "running" }}{extra_filter} }}
+            filter: {{
+                lifecycle_state: {{ _eq: "running" }}
+                {extra_filter}
+            }}
         ) {{
             _docID
             request_id
@@ -1732,10 +2113,17 @@ async fn recover_bridge_terminal_child(
     };
 
     if child_request_completed(&child) {
-        let result = load_child_completion_result(node, child_request_id)
-            .await?
-            .unwrap_or_else(|| format!("child request {child_request_id} completed"));
-        recover_bridge_completed_row(node, row, &result).await?;
+        let Some(result) = load_child_completion_result(node, child_request_id).await? else {
+            tracing::warn!(
+                child_request_id,
+                tool_call_doc_id = %row.doc_id,
+                "completed child has no verified immutable response yet; leaving bridge running for recovery"
+            );
+            return Ok(false);
+        };
+        if !recover_bridge_completed_row(node, row, &result).await? {
+            return Ok(false);
+        }
         ensure_background_subagent_projection_side_effects(node, agent_did, row, child_request_id)
             .await?;
         return Ok(true);
@@ -1744,7 +2132,9 @@ async fn recover_bridge_terminal_child(
     let Some(terminal) = project_child_terminal(&child) else {
         return Ok(false);
     };
-    recover_bridge_failed_row(node, row, &terminal).await?;
+    if !recover_bridge_failed_row(node, row, &terminal).await? {
+        return Ok(false);
+    }
     ensure_background_subagent_projection_side_effects(node, agent_did, row, child_request_id)
         .await?;
     Ok(true)
@@ -2103,48 +2493,55 @@ async fn recover_bridge_completed_row(
     node: &EmbeddedNode,
     row: &RunningToolCallRow,
     child_result: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
     let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
     let latency_ms = (now - started_at).num_milliseconds().max(0);
     let escaped_doc_id = escape_graphql_string(&row.doc_id);
     let escaped_result = escape_graphql_string(child_result);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "completed",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    completed_at: "{completed_at}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null
-                }}
-            ) {{ _docID }}
-        }}"#,
-        started_at = started_at.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        completed_at = now.to_rfc3339(),
-    );
-
-    execute_mutation_with_retry(node, &mutation, "recover_bridge_completed_child")
-        .await
-        .context("recover bridge completed child mutation")?;
-    Ok(())
+    super::evidence::terminalize_with_output(
+        node,
+        &row.doc_id,
+        child_result,
+        "bridge_recovery",
+        "recover_bridge_completed_with_exact_output",
+        |output| {
+            let output_fields = super::evidence::result_fields_fragment(output);
+            format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{
+                            _docID: {{ _eq: "{escaped_doc_id}" }},
+                            lifecycle_state: {{ _eq: "running" }}
+                        }},
+                        input: {{
+                            result: "{escaped_result}",
+                            status: "completed",
+                            lifecycle_state: "completed",
+                            started_at: "{started_at}",
+                            deadline_at: "{deadline_at}",
+                            completed_at: "{completed_at}",
+                            {output_fields}
+                            latency_ms: {latency_ms},
+                            unclaimed_deadline_at: null
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                started_at = started_at.to_rfc3339(),
+                deadline_at = deadline_at.to_rfc3339(),
+                completed_at = now.to_rfc3339(),
+            )
+        },
+    )
+    .await
 }
 
 async fn recover_bridge_failed_row(
     node: &EmbeddedNode,
     row: &RunningToolCallRow,
     terminal: &ChildTerminal,
-) -> Result<()> {
+) -> Result<bool> {
     let now = Utc::now();
     let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
     let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
@@ -2162,49 +2559,99 @@ async fn recover_bridge_failed_row(
     } else {
         String::new()
     };
-    let optional_fields = match terminal {
+    let build_mutation = |exact_fields: String, result_fields: String| {
+        format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        lifecycle_state: {{ _eq: "running" }}
+                    }},
+                    input: {{
+                        {result_fields}
+                        {cancel_cause_field}
+                        {exact_fields}
+                        status: "completed",
+                        lifecycle_state: "{projected}",
+                        started_at: "{started_at}",
+                        deadline_at: "{deadline_at}",
+                        completed_at: "{completed_at}",
+                        latency_ms: {latency_ms},
+                        unclaimed_deadline_at: null
+                    }}
+                ) {{ _docID }}
+            }}"#,
+            started_at = started_at.to_rfc3339(),
+            deadline_at = deadline_at.to_rfc3339(),
+            completed_at = now.to_rfc3339(),
+        )
+    };
+    match terminal {
         ChildTerminal::Failed {
             reason,
             failure_class,
-        } => {
-            let escaped_reason = escape_graphql_string(reason);
-            let failure_class = failure_class.as_str();
-            format!(
-                r#"result: "{escaped_reason}",
-                    tool_failure_class: "{failure_class}","#
+        } if !reason.trim().is_empty() => {
+            let failure_fields = format!(
+                r#"result: "{}", tool_failure_class: "{}","#,
+                escape_graphql_string(reason),
+                failure_class.as_str(),
+            );
+            super::evidence::terminalize_with_output(
+                node,
+                &row.doc_id,
+                reason,
+                "bridge_failure_recovery",
+                "recover_bridge_failure_with_exact_output",
+                |output| {
+                    build_mutation(
+                        super::evidence::result_fields_fragment(output),
+                        failure_fields.clone(),
+                    )
+                },
             )
+            .await
         }
-        _ => String::new(),
-    };
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    {optional_fields}
-                    {cancel_cause_field}
-                    status: "completed",
-                    lifecycle_state: "{projected}",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    completed_at: "{completed_at}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null
-                }}
-            ) {{ _docID }}
-        }}"#,
-        started_at = started_at.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        completed_at = now.to_rfc3339(),
-    );
-
-    execute_mutation_with_retry(node, &mutation, "recover_bridge_terminal_child")
-        .await
-        .context("recover bridge terminal child mutation")?;
-    Ok(())
+        terminal => {
+            let (reason, detail, failure_fields) = match terminal {
+                ChildTerminal::Failed { failure_class, .. } => (
+                    super::evidence::ToolOutputOmissionReason::RecoveryFailure,
+                    "child request failed without a durable output",
+                    format!(r#"tool_failure_class: "{}","#, failure_class.as_str()),
+                ),
+                ChildTerminal::Dead => (
+                    super::evidence::ToolOutputOmissionReason::ChildDead,
+                    "child request reached the dead terminal state",
+                    String::new(),
+                ),
+                ChildTerminal::Interrupted => (
+                    super::evidence::ToolOutputOmissionReason::Cancelled,
+                    "child request was interrupted",
+                    String::new(),
+                ),
+                ChildTerminal::Superseded => (
+                    super::evidence::ToolOutputOmissionReason::ChildSuperseded,
+                    "child request was superseded",
+                    String::new(),
+                ),
+            };
+            super::evidence::terminalize_with_omission(
+                node,
+                &row.doc_id,
+                ToolCallState::Running,
+                terminal.projected_state(),
+                reason,
+                detail,
+                "recover_bridge_terminal_with_exact_omission",
+                |omission| {
+                    build_mutation(
+                        super::evidence::omission_fields_fragment(omission),
+                        failure_fields.clone(),
+                    )
+                },
+            )
+            .await
+        }
+    }
 }
 
 /// Terminalize a running tool-call row. Returns `Ok(true)` when the
@@ -2249,36 +2696,51 @@ async fn recover_tool_call_row(
     } else {
         "completed".to_string()
     };
-
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "{terminal_status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    started_at: "{started_at_str}"{deadline_field},
-                    completed_at: "{completed_at_str}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null{failure_class_field}{cancel_cause_field}{remote_cancel_intent_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        lifecycle_state = outcome.lifecycle_state().as_str(),
-    );
-
-    let response = execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
-        .await
-        .context("recover running tool call mutation")?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentToolCall"))
-        .is_some_and(response_has_documents))
+    let omission_reason = match outcome {
+        RecoveryOutcome::TimedOut => super::evidence::ToolOutputOmissionReason::TimedOut,
+        RecoveryOutcome::Cancelled | RecoveryOutcome::BackgroundInterrupted => {
+            super::evidence::ToolOutputOmissionReason::Cancelled
+        }
+        RecoveryOutcome::Failed => super::evidence::ToolOutputOmissionReason::RecoveryFailure,
+        RecoveryOutcome::UnclaimedCrossDeploymentSpawn => {
+            super::evidence::ToolOutputOmissionReason::ExecutionLost
+        }
+    };
+    let detail = outcome.result_text(deadline_at);
+    super::evidence::terminalize_with_omission(
+        node,
+        &row.doc_id,
+        ToolCallState::Running,
+        outcome.lifecycle_state(),
+        omission_reason,
+        &detail,
+        "recover_running_tool_call_with_exact_omission",
+        |omission| {
+            let omission_fields = super::evidence::omission_fields_fragment(omission);
+            format!(
+                r#"mutation {{
+                    update_AgentToolCall(
+                        filter: {{
+                            _docID: {{ _eq: "{escaped_doc_id}" }},
+                            lifecycle_state: {{ _eq: "running" }}
+                        }},
+                        input: {{
+                            result: "{escaped_result}",
+                            status: "{terminal_status}",
+                            lifecycle_state: "{lifecycle_state}",
+                            started_at: "{started_at_str}"{deadline_field},
+                            completed_at: "{completed_at_str}",
+                            {omission_fields}
+                            latency_ms: {latency_ms},
+                            unclaimed_deadline_at: null{failure_class_field}{cancel_cause_field}{remote_cancel_intent_fields}
+                        }}
+                    ) {{ _docID }}
+                }}"#,
+                lifecycle_state = outcome.lifecycle_state().as_str(),
+            )
+        },
+    )
+    .await
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {

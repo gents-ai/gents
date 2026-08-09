@@ -215,6 +215,12 @@ pub struct TimelineToolCallRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_signer_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omission_doc_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omission_composite_commit_cid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omission_signer_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_composite_commit_cid: Option<String>,
@@ -222,6 +228,8 @@ pub struct TimelineToolCallRow {
     pub approval_signer_did: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_fact: Option<TimelineToolResultFact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omission_fact: Option<TimelineToolOutputOmissionFact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_fact: Option<TimelineToolApprovalFact>,
     #[serde(default)]
@@ -277,6 +285,22 @@ pub struct TimelineToolResultFact {
     pub tool_call_composite_commit_cid: String,
     pub tool_call_signer_did: String,
     pub output_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineToolOutputOmissionFact {
+    pub doc_id: String,
+    pub composite_commit_cid: String,
+    pub signer_did: String,
+    pub tool_call_doc_id: String,
+    pub tool_call_composite_commit_cid: String,
+    pub tool_call_signer_did: String,
+    pub source_phase: String,
+    pub terminal_phase: String,
+    pub reason: String,
+    pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -549,6 +573,8 @@ pub struct TimelineToolCallEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_fact: Option<TimelineToolResultFact>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub omission_fact: Option<TimelineToolOutputOmissionFact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_fact: Option<TimelineToolApprovalFact>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -788,8 +814,17 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 tool_name: tool_call.tool_name.clone(),
                 tool_call_id: tool_call.tool_call_id.clone(),
                 args: tool_call.args.clone(),
-                result: tool_call.result.clone(),
+                result: match (&tool_call.result_fact, &tool_call.omission_fact) {
+                    (Some(result), None) => result.output_text.clone(),
+                    (None, Some(_)) => String::new(),
+                    // Non-terminal rows may only have the mutable streaming
+                    // preview. Terminal exactness is enforced while facts are
+                    // attached by the timeline fetcher.
+                    (None, None) => tool_call.result.clone(),
+                    (Some(_), Some(_)) => String::new(),
+                },
                 result_fact: tool_call.result_fact.clone(),
+                omission_fact: tool_call.omission_fact.clone(),
                 approval_fact: tool_call.approval_fact.clone(),
                 status: tool_call.status.clone(),
                 lifecycle_state: tool_call.lifecycle_state.clone(),
@@ -1410,6 +1445,54 @@ mod tests {
         assert!(!encoded.contains("\"request_json\":"));
         assert!(!encoded.contains("provider-body"));
         assert!(encoded.contains("request_json_field_cid"));
+    }
+
+    #[test]
+    fn omission_fact_is_exported_without_fabricating_tool_output() {
+        let omission = TimelineToolOutputOmissionFact {
+            doc_id: "omission-doc".to_string(),
+            composite_commit_cid: "omission-cid".to_string(),
+            signer_did: "did:key:agent".to_string(),
+            tool_call_doc_id: "tool-call-doc".to_string(),
+            tool_call_composite_commit_cid: "tool-call-source-cid".to_string(),
+            tool_call_signer_did: "did:key:agent".to_string(),
+            source_phase: "running".to_string(),
+            terminal_phase: "failed".to_string(),
+            reason: "executionLost".to_string(),
+            detail: "worker disappeared".to_string(),
+            created_at: Some("2026-08-08T00:00:00Z".to_string()),
+        };
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "request".to_string(),
+                session_id: Some("session".to_string()),
+                ..Default::default()
+            },
+            tool_calls: vec![TimelineToolCallRow {
+                doc_id: Some("tool-call-doc".to_string()),
+                request_id: Some("request".to_string()),
+                session_id: "session".to_string(),
+                tool_call_id: "call".to_string(),
+                tool_name: "worker".to_string(),
+                result: "synthetic failure text must not become output".to_string(),
+                lifecycle_state: Some("failed".to_string()),
+                omission_fact: Some(omission.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let event = timeline.events.iter().find_map(|event| match event {
+            RunTimelineEvent::ToolCall(event) => Some(event),
+            _ => None,
+        });
+        let event = event.expect("tool event");
+        assert_eq!(event.result, "");
+        assert_eq!(event.result_fact, None);
+        assert_eq!(event.omission_fact.as_ref(), Some(&omission));
+        let json = serde_json::to_value(event).expect("serialize tool event");
+        assert!(json.get("omission_fact").is_some());
+        assert!(json.get("result_fact").is_none());
     }
 
     fn inference_call(

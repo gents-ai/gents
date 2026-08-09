@@ -8,14 +8,14 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        37,
+        38,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
     let expected_sweep_ids = [
         "request_lifecycle_recover_all_requests",
         "request_lifecycle_recover_all_streaming_responses",
-        "tool_call_lifecycle_recover_all_running_calls",
+        "tool_call_lifecycle_recover_all_incomplete_calls",
         "tool_call_lifecycle_reconcile_orphaned_background_tools",
         "tool_call_lifecycle_reconcile_background_completion_side_effects",
         "tool_call_lifecycle_reconcile_terminal_parent_owned_tools",
@@ -53,7 +53,7 @@ pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence
     );
     assert_eq!(
         equivalence_cases.len(),
-        37,
+        38,
         "Lean recovery equivalence witness count drifted"
     );
 
@@ -130,7 +130,7 @@ fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
         "request_lifecycle_recover_all_streaming_responses" => {
             "Recovery.responseRecover_matches_uninterrupted"
         }
-        "tool_call_lifecycle_recover_all_running_calls" => {
+        "tool_call_lifecycle_recover_all_incomplete_calls" => {
             "Recovery.toolCallRecover_matches_uninterrupted"
         }
         "tool_call_lifecycle_reconcile_orphaned_background_tools" => {
@@ -353,7 +353,7 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
 }
 
 async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
-    let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
+    let db = signed_materializer_test_db(&format!("recovery-sweep-{}", case.name)).await;
     let parent_request_id = format!("{}-parent", case.name);
     let parent_session_id = format!("{}-parent-session", case.name);
     let parent_doc_id = create_request(
@@ -522,7 +522,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
 }
 
 pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
-    let db = test_db("recovery-465-convergence").await;
+    let db = signed_materializer_test_db("recovery-465-convergence").await;
 
     let parent_request_id = "convergence-465-parent";
     let parent_session_id = "convergence-465-parent-session";
@@ -1282,6 +1282,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
             "cancel recovery should persist cancel_cause=interrupted"
         );
     }
+    assert_tool_recovery_has_exact_terminal_evidence(&db.node, &row).await;
 }
 
 async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
@@ -1360,6 +1361,42 @@ async fn seed_tool_parent_and_row(
     .await;
     let future_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let past_deadline = chrono::Utc::now() - chrono::Duration::seconds(5);
+    if case.name == "tool_pending_orphan_expired_deadline_to_failed" {
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{}:{}"
+                    request_id: "{}-missing"
+                    session_id: "{}"
+                    agent_did: "{}"
+                    message_sequence: 1
+                    tool_name: "slow_tool"
+                    tool_call_id: "{}"
+                    args: "{{}}"
+                    result: ""
+                    status: "called"
+                    lifecycle_state: "pending"
+                    deadline_at: "{}"
+                    await_mode: "foreground"
+                    cancel_policy: "cascade"
+                }}) {{ _docID }}
+            }}"#,
+            escape_graphql_string(parent_session_id),
+            escape_graphql_string(tool_call_id),
+            escape_graphql_string(parent_request_id),
+            escape_graphql_string(parent_session_id),
+            escape_graphql_string(agent_did),
+            escape_graphql_string(tool_call_id),
+            past_deadline.to_rfc3339(),
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed pending tool-call recovery row: {:?}",
+            response.errors
+        );
+        return;
+    }
     let is_orphan_case = case.sweep_id == "tool_call_lifecycle_reconcile_orphaned_background_tools";
     let parent_observed = case.parent_live == Some(true)
         || case.parent_interrupted == Some(true)
@@ -1819,10 +1856,18 @@ async fn fetch_response_recovery_row(node: &EmbeddedNode, request_id: &str) -> R
 
 #[derive(Debug, Deserialize)]
 struct ToolRecoveryRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     status: Option<String>,
     lifecycle_state: Option<String>,
     tool_failure_class: Option<String>,
     cancel_cause: Option<String>,
+    result_doc_id: Option<String>,
+    result_composite_commit_cid: Option<String>,
+    result_signer_did: Option<String>,
+    omission_doc_id: Option<String>,
+    omission_composite_commit_cid: Option<String>,
+    omission_signer_did: Option<String>,
 }
 
 async fn fetch_tool_recovery_row(node: &EmbeddedNode, tool_call_id: &str) -> ToolRecoveryRow {
@@ -1830,14 +1875,76 @@ async fn fetch_tool_recovery_row(node: &EmbeddedNode, tool_call_id: &str) -> Too
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
+                _docID
                 status
                 lifecycle_state
                 tool_failure_class
                 cancel_cause
+                result_doc_id
+                result_composite_commit_cid
+                result_signer_did
+                omission_doc_id
+                omission_composite_commit_cid
+                omission_signer_did
             }}
         }}"#
     );
     first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn assert_tool_recovery_has_exact_terminal_evidence(
+    node: &EmbeddedNode,
+    row: &ToolRecoveryRow,
+) {
+    let output = row.result_doc_id.as_deref();
+    let omission = row.omission_doc_id.as_deref();
+    assert_ne!(
+        output.is_some(),
+        omission.is_some(),
+        "terminal recovery must bind exactly one output or omission"
+    );
+    let (collection, doc_id, cid, signer) = match (output, omission) {
+        (Some(doc_id), None) => (
+            "AgentToolResult",
+            doc_id,
+            row.result_composite_commit_cid.as_deref(),
+            row.result_signer_did.as_deref(),
+        ),
+        (None, Some(doc_id)) => (
+            "AgentToolOutputOmission",
+            doc_id,
+            row.omission_composite_commit_cid.as_deref(),
+            row.omission_signer_did.as_deref(),
+        ),
+        _ => unreachable!("XOR asserted above"),
+    };
+    assert!(cid.is_some_and(|value| !value.trim().is_empty()));
+    assert!(signer.is_some_and(|value| !value.trim().is_empty()));
+    let query = format!(
+        r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ tool_call_doc_id }} }}"#,
+        escape_graphql_string(doc_id),
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "load exact {collection} recovery evidence: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(collection))
+        .and_then(serde_json::Value::as_array)
+        .expect("terminal evidence rows");
+    let [evidence] = rows.as_slice() else {
+        panic!("expected one exact {collection}, got {}", rows.len());
+    };
+    assert_eq!(
+        evidence
+            .get("tool_call_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(row.doc_id.as_str())
+    );
 }
 
 #[derive(Debug, Deserialize)]

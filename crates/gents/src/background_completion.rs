@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
@@ -131,6 +131,17 @@ pub(crate) struct AgentToolCallDateTimeRow {
     pub(crate) stuck_since: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BackgroundCompletionToolRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    tool_call_key: String,
+    session_id: String,
+    tool_call_id: String,
+    status: Option<String>,
+    lifecycle_state: Option<String>,
+}
+
 pub async fn reconcile_unclaimed_cross_deployment_spawns(
     node: Arc<EmbeddedNode>,
     local_did: &str,
@@ -201,6 +212,7 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
             row.deadline_at.as_deref(),
             &payload,
             FailureClass::ServiceUnavailable,
+            crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason::ExecutionLost,
         )
         .await?;
         outcomes.push(UnclaimedSpawnReconcileOutcome::Failed {
@@ -812,13 +824,23 @@ async fn mark_background_tool_completion_side_effects_done(
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<()> {
-    let tool_call_key = escape_graphql_string(&format!("{session_id}:{tool_call_id}"));
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
-                limit: 1
-            ) {{ _docID status lifecycle_state }}
+                filter: {{
+                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
+                }}
+            ) {{
+                _docID
+                tool_call_key
+                session_id
+                tool_call_id
+                status
+                lifecycle_state
+            }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -828,28 +850,33 @@ async fn mark_background_tool_completion_side_effects_done(
             response.errors
         );
     }
-    let row = response
+    let rows: Vec<BackgroundCompletionToolRow> = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
-    let doc_id = row
-        .get("_docID")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
-    let status = row
-        .get("status")
-        .and_then(serde_json::Value::as_str)
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding complete background completion AgentToolCall match set")?
         .unwrap_or_default();
+    let row = crate::tool_call_lifecycle::query::resolve_exact_tool_call_match(
+        session_id,
+        tool_call_id,
+        rows,
+        |row| row.doc_id.as_str(),
+        |row| row.tool_call_key.as_str(),
+        |row| row.session_id.as_str(),
+        |row| row.tool_call_id.as_str(),
+    )?
+    .ok_or_else(|| {
+        anyhow!("background completion tool row {session_id}:{tool_call_id} not found")
+    })?;
+    let doc_id = row.doc_id.as_str();
+    let status = row.status.as_deref().unwrap_or_default();
     if status == "completed" {
         return Ok(());
     }
-    let lifecycle_state = row
-        .get("lifecycle_state")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    let lifecycle_state = row.lifecycle_state.as_deref().unwrap_or_default();
     if !(status == "completionPending" || status.starts_with("completionPending:"))
         || !matches!(
             lifecycle_state,
@@ -857,7 +884,7 @@ async fn mark_background_tool_completion_side_effects_done(
         )
     {
         anyhow::bail!(
-            "background completion tool row {tool_call_key} is not awaiting terminal side effects"
+            "background completion tool row {session_id}:{tool_call_id} is not awaiting terminal side effects"
         );
     }
     let escaped_doc_id = escape_graphql_string(doc_id);

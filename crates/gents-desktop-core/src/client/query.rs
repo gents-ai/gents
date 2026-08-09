@@ -5,16 +5,18 @@ use defra_node::EmbeddedNode;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow,
-    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow, AgentToolResultRow,
-    CompactionEntryRow, EventTriggerRow, GoalRow, InferenceBackendRow, InferenceProfileRow,
-    ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
+    AgentResponseRow, AgentRuntimeRow, AgentSessionRow, AgentToolCallRow,
+    AgentToolOutputOmissionRow, AgentToolResultRow, CompactionEntryRow, EventTriggerRow, GoalRow,
+    InferenceBackendRow, InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow,
+    ToolServiceRegistryRow,
 };
 use gents_protocol::schemas::{
     AGENT_BEHAVIOR_NAME, AGENT_CONVERSATION_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
     AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
-    AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME,
-    GOAL_NAME, INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME,
-    TASK_NAME, TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    AGENT_TOOL_CALL_NAME, AGENT_TOOL_OUTPUT_OMISSION_NAME, AGENT_TOOL_RESULT_NAME,
+    COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME, GOAL_NAME, INFERENCE_BACKEND_NAME,
+    INFERENCE_PROFILE_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOL_SELECTION_NAME,
+    TOOL_SERVICE_REGISTRY_NAME,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -34,8 +36,9 @@ const AGENT_MESSAGE_FIELDS: &str =
 const AGENT_SESSION_FIELDS: &str =
     "session_id agent_name requester_did behavior_id started ended status";
 const GOAL_FIELDS: &str = "goal_id session_id agent_did objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state child_request_id await_mode cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
+const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did status lifecycle_state child_request_id await_mode cancel_policy workflow_group_id workflow_role deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
 const AGENT_TOOL_RESULT_FIELDS: &str = "result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id tool_name tool_input output_text model_output_truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
+const AGENT_TOOL_OUTPUT_OMISSION_FIELDS: &str = "_docID omission_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did agent_did requester_did session_id source_phase terminal_phase reason detail created_at";
 const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted original_tokens compacted_tokens created_at";
 const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template enabled output_schema_ref created_at updated_at";
 const SKILL_FIELDS: &str = "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
@@ -59,6 +62,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         goals: load_goals(node).await?,
         tool_calls: load_agent_tool_calls(node).await?,
         tool_results: load_agent_tool_results(node).await?,
+        tool_output_omissions: load_agent_tool_output_omissions(node).await?,
         compaction_entries: load_compaction_entries(node).await?,
         tasks: load_tasks(node).await?,
         schedules: load_schedules(node).await?,
@@ -125,6 +129,12 @@ pub(crate) fn isolate_legacy_bearer_rows(
             .filter(|row| is_bearer_did(row.agent_did.as_deref()))
             .filter_map(|row| row.session_id.clone()),
     );
+    bearer_sessions.extend(
+        rows.tool_output_omissions
+            .iter()
+            .filter(|row| is_bearer_did(row.agent_did.as_deref()))
+            .filter_map(|row| row.session_id.clone()),
+    );
 
     rows.conversations.retain(|row| {
         !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
@@ -143,6 +153,9 @@ pub(crate) fn isolate_legacy_bearer_rows(
                 || requester_matches(row.requester_did.as_deref())
         },
     );
+    rows.tool_output_omissions.retain(|row| {
+        !is_bearer_did(row.agent_did.as_deref()) || requester_matches(row.requester_did.as_deref())
+    });
     retain_rows_with_sources(
         &mut rows.messages,
         &mut rows.message_source_agent_dids,
@@ -327,6 +340,19 @@ pub async fn load_agent_tool_results(node: &EmbeddedNode) -> Result<Vec<AgentToo
     .await
 }
 
+pub async fn load_agent_tool_output_omissions(
+    node: &EmbeddedNode,
+) -> Result<Vec<AgentToolOutputOmissionRow>> {
+    load_rows(
+        node,
+        AGENT_TOOL_OUTPUT_OMISSION_NAME,
+        &format!(
+            "query {{ {AGENT_TOOL_OUTPUT_OMISSION_NAME} {{ {AGENT_TOOL_OUTPUT_OMISSION_FIELDS} }} }}"
+        ),
+    )
+    .await
+}
+
 pub async fn load_compaction_entries(node: &EmbeddedNode) -> Result<Vec<CompactionEntryRow>> {
     load_rows(
         node,
@@ -452,6 +478,7 @@ fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
         goals: parse_query_rows(&data, "Goal")?,
         tool_calls: parse_query_rows(&data, "AgentToolCall")?,
         tool_results: parse_query_rows(&data, "AgentToolResult")?,
+        tool_output_omissions: parse_query_rows(&data, "AgentToolOutputOmission")?,
         compaction_entries: parse_query_rows(&data, "CompactionEntry")?,
         ..ClientStoreRows::default()
     }))
@@ -588,6 +615,7 @@ query DesktopRemoteChatPatch {{
   Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
   AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentToolResult(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }}
+  AgentToolOutputOmission(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_TOOL_OUTPUT_OMISSION_FIELDS} }}
   CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {COMPACTION_ENTRY_FIELDS} }}
 }}
 "#
@@ -704,6 +732,14 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
+        AGENT_TOOL_OUTPUT_OMISSION_NAME => {
+            rows.tool_output_omissions = load_rows(
+                node,
+                AGENT_TOOL_OUTPUT_OMISSION_NAME,
+                &format!("query {{ {AGENT_TOOL_OUTPUT_OMISSION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_OUTPUT_OMISSION_FIELDS} }} }}"),
+            )
+            .await?;
+        }
         COMPACTION_ENTRY_NAME => {
             rows.compaction_entries = load_rows(
                 node,
@@ -795,6 +831,7 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | GOAL_NAME
             | AGENT_TOOL_CALL_NAME
             | AGENT_TOOL_RESULT_NAME
+            | AGENT_TOOL_OUTPUT_OMISSION_NAME
             | COMPACTION_ENTRY_NAME
             | TASK_NAME
             | SCHEDULE_NAME
@@ -865,6 +902,14 @@ pub async fn load_agent_scoped_snapshot(
         AGENT_TOOL_RESULT_NAME,
         &format!(
             "query {{ {AGENT_TOOL_RESULT_NAME}({did_filter}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"
+        ),
+    )
+    .await?;
+    let tool_output_omissions: Vec<AgentToolOutputOmissionRow> = load_rows(
+        node,
+        AGENT_TOOL_OUTPUT_OMISSION_NAME,
+        &format!(
+            "query {{ {AGENT_TOOL_OUTPUT_OMISSION_NAME}({did_filter}) {{ {AGENT_TOOL_OUTPUT_OMISSION_FIELDS} }} }}"
         ),
     )
     .await?;
@@ -957,6 +1002,7 @@ pub async fn load_agent_scoped_snapshot(
         goals,
         tool_calls,
         tool_results,
+        tool_output_omissions,
         compaction_entries,
         tasks,
         schedules,
@@ -1212,6 +1258,9 @@ mod tests {
     fn doc_patch_support_excludes_pairing_control_collections() {
         assert!(supports_doc_patch_collection(INFERENCE_BACKEND_NAME));
         assert!(supports_doc_patch_collection(TOOL_SERVICE_REGISTRY_NAME));
+        assert!(supports_doc_patch_collection(
+            AGENT_TOOL_OUTPUT_OMISSION_NAME
+        ));
         assert!(!supports_doc_patch_collection("PeerPairingApplied"));
         assert!(!supports_doc_patch_collection("BearerPairingReady"));
     }

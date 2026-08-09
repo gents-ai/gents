@@ -119,6 +119,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentToolApproval",
     "AgentSession",
     "AgentConversation",
@@ -139,6 +140,7 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentToolApproval",
     "AgentSession",
     "AgentConversation",
@@ -174,6 +176,11 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentToolResult",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolOutputOmission",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -218,6 +225,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "AgentToolResult",
+    "AgentToolOutputOmission",
     "AgentToolApproval",
     "AgentSession",
     "AgentConversation",
@@ -261,6 +269,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentToolResult",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentToolOutputOmission",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
@@ -758,6 +771,7 @@ mod tests {
         }
         for local_collection in [
             "AgentToolResult",
+            "AgentToolOutputOmission",
             "AgentSession",
             "AgentConversation",
             "CompactionEntry",
@@ -771,7 +785,7 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 19);
+        assert_eq!(t.collections.len(), 20);
         assert!(t.collections.contains(&"AgentResponseOutcome"));
         assert!(t.collections.contains(&"AgentToolApproval"));
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
