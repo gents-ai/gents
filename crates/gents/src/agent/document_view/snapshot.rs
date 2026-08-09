@@ -27,6 +27,33 @@ use crate::agent::{
 use crate::identity::AgentPrincipal;
 use crate::tool_surface::SubagentToolConfig;
 
+pub(super) fn linked_datastore_tool_surface_facts(
+    selection: &crate::document_config::ToolSelectionDocument,
+    view: &DocumentRuntimeView,
+) -> Result<Vec<crate::ConfigFactRef>> {
+    let mut facts = selection
+        .datastore_tool_surface_ids
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|surface_id| {
+            let surface_id = surface_id.trim();
+            view.datastore_tool_surfaces
+                .get(surface_id)
+                .map(|surface| surface.fact.clone())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "ToolSelection {} references missing DatastoreToolSurface {}",
+                        selection.selection_id,
+                        surface_id
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    facts.sort_by(|left, right| left.logical_id.cmp(&right.logical_id));
+    Ok(facts)
+}
+
 pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     node: &EmbeddedNode,
     context: &DocumentResolveContext,
@@ -161,33 +188,45 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     )
                 })?;
             let inference_profile = inference_profile_record.value.clone();
-            let (tool_selection, subagent_tools, tool_selection_fact) = match behavior
-                .tool_selection_id
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-            {
-                Some(selection_id) => match view.tool_selections.get(selection_id) {
-                    Some(record) => {
-                        record.value.validate()?;
-                        validate_subagent_targets_resolve(&record.value, view)?;
-                        (
-                            tool_selection_from_document(&record.value)?,
-                            subagent_tool_config_from_document(&record.value),
-                            Some(record.fact.clone()),
-                        )
-                    }
-                    None => anyhow::bail!(
-                        "behavior {} references missing tool selection {}",
-                        behavior.behavior_id,
-                        selection_id
+            let (tool_selection, subagent_tools, tool_selection_fact, datastore_tool_surface_facts) =
+                match behavior
+                    .tool_selection_id
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    Some(selection_id) => match view.tool_selections.get(selection_id) {
+                        Some(record) => {
+                            let mut selection = record.value.clone();
+                            let surface_facts =
+                                linked_datastore_tool_surface_facts(&selection, view)?;
+                            selection.write_tools = Some(
+                                crate::agent::document_view::merge_write_tools_with_surfaces(
+                                    &record.value,
+                                    view,
+                                )?,
+                            );
+                            selection.validate()?;
+                            validate_subagent_targets_resolve(&selection, view)?;
+                            (
+                                tool_selection_from_document(&selection)?,
+                                subagent_tool_config_from_document(&selection),
+                                Some(record.fact.clone()),
+                                surface_facts,
+                            )
+                        }
+                        None => anyhow::bail!(
+                            "behavior {} references missing tool selection {}",
+                            behavior.behavior_id,
+                            selection_id
+                        ),
+                    },
+                    None => (
+                        ToolSelection::default(),
+                        SubagentToolConfig::default(),
+                        None,
+                        Vec::new(),
                     ),
-                },
-                None => (
-                    ToolSelection::default(),
-                    SubagentToolConfig::default(),
-                    None,
-                ),
-            };
+                };
             Ok((
                 backend,
                 inference_profile,
@@ -196,6 +235,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 backend_record.fact.clone(),
                 inference_profile_record.fact.clone(),
                 tool_selection_fact,
+                datastore_tool_surface_facts,
             ))
         })();
 
@@ -208,6 +248,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                 backend_fact,
                 inference_profile_fact,
                 tool_selection_fact,
+                datastore_tool_surface_facts,
             )) => {
                 let behavior_id = behavior.behavior_id.clone();
                 let behavior_value = behavior.clone();
@@ -241,8 +282,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     inference_backend: backend_fact,
                     inference_profile: inference_profile_fact,
                     tool_selection: tool_selection_fact,
+                    datastore_tool_surfaces: datastore_tool_surface_facts,
                     skills: skill_facts,
-                    resolution_algorithm_version: 1,
+                    resolution_algorithm_version: 2,
                 };
                 config_provenance.validate_for_behavior(&behavior_id, &behavior.agent_did)?;
                 behavior_config_provenance.insert(behavior_id.clone(), Arc::new(config_provenance));

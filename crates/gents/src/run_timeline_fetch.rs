@@ -1366,6 +1366,7 @@ fn timeline_exact_source_selection(collection: &str) -> Result<&'static str> {
         "InferenceBackend" => Ok("backend_id"),
         "InferenceProfile" => Ok("profile_id"),
         "ToolSelection" => Ok("selection_id"),
+        "DatastoreToolSurface" => Ok("surface_id"),
         "Skill" => Ok("skill_id"),
         other => anyhow::bail!("unsupported exact timeline source collection {other}"),
     }
@@ -2481,6 +2482,12 @@ async fn verified_rendered_request_edge_sources(
         if let Some(tool_selection) = &config.tool_selection {
             config_refs.push((tool_selection, "ToolSelection"));
         }
+        config_refs.extend(
+            config
+                .datastore_tool_surfaces
+                .iter()
+                .map(|surface| (surface, "DatastoreToolSurface")),
+        );
         config_refs.extend(config.skills.iter().map(|skill| (skill, "Skill")));
         for (fact_ref, expected_collection) in config_refs {
             if fact_ref.collection != expected_collection {
@@ -2795,6 +2802,7 @@ fn resolved_config_fact_refs(
     if let Some(tool_selection) = provenance.tool_selection.as_ref() {
         facts.push(tool_selection);
     }
+    facts.extend(provenance.datastore_tool_surfaces.iter());
     facts.extend(provenance.skills.iter());
     facts
 }
@@ -2806,6 +2814,7 @@ fn timeline_config_collection(collection: &str) -> Result<&'static str> {
         "InferenceBackend" => Ok("InferenceBackend"),
         "InferenceProfile" => Ok("InferenceProfile"),
         "ToolSelection" => Ok("ToolSelection"),
+        "DatastoreToolSurface" => Ok("DatastoreToolSurface"),
         "Skill" => Ok("Skill"),
         other => anyhow::bail!("unsupported timeline config source collection {other}"),
     }
@@ -3399,6 +3408,7 @@ mod tests {
             inference_backend: config_fact("InferenceBackend", "backend", "backend-doc"),
             inference_profile: config_fact("InferenceProfile", "profile", "profile-doc"),
             tool_selection: Some(config_fact("ToolSelection", "selection", "selection-doc")),
+            datastore_tool_surfaces: Vec::new(),
             skills: vec![config_fact("Skill", "skill", "skill-doc")],
             resolution_algorithm_version: 1,
         };

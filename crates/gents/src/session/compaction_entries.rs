@@ -401,6 +401,7 @@ fn config_sources(
     if let Some(tool_selection) = provenance.tool_selection.as_ref() {
         sources.push(tool_selection);
     }
+    sources.extend(provenance.datastore_tool_surfaces.iter());
     sources.extend(provenance.skills.iter());
     sources
 }
@@ -634,6 +635,7 @@ fn config_logical_field(collection: &str) -> Result<&'static str> {
         "InferenceBackend" => Ok("backend_id"),
         "InferenceProfile" => Ok("profile_id"),
         "ToolSelection" => Ok("selection_id"),
+        "DatastoreToolSurface" => Ok("surface_id"),
         "Skill" => Ok("skill_id"),
         _ => anyhow::bail!("unsupported CompactionEntry config collection {collection}"),
     }
@@ -1462,6 +1464,7 @@ pub(crate) async fn create_test_config_provenance(
         inference_backend: facts.remove(0),
         inference_profile: facts.remove(0),
         tool_selection: None,
+        datastore_tool_surfaces: Vec::new(),
         skills: Vec::new(),
         resolution_algorithm_version: 1,
     })

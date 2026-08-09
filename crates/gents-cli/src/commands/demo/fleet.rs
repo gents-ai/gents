@@ -45,6 +45,18 @@ impl Fleet {
 }
 
 pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Result<Child> {
+    spawn_server_with_args(bin, home, port, log, &[])
+}
+
+/// `extra` appends server flags (e.g. `--apply-root <pack>`) after the shared
+/// demo defaults.
+pub(super) fn spawn_server_with_args(
+    bin: &Path,
+    home: &Path,
+    port: u16,
+    log: &Path,
+    extra: &[&str],
+) -> Result<Child> {
     let file = std::fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
     let errfile = file.try_clone()?;
     let mut cmd = Command::new(bin);
@@ -64,6 +76,7 @@ pub(super) fn spawn_server(bin: &Path, home: &Path, port: u16, log: &Path) -> Re
         "--p2p-discovery",
         "disabled",
     ]);
+    cmd.args(extra);
     cmd.env("GENTS_OPENAI_CHAT_COMPLETIONS", "1");
     cmd.env("GENTS_REGISTRY_HEARTBEAT_MS", "1000");
     cmd.env("GENTS_PAIRING_SWEEP_MS", "1000");

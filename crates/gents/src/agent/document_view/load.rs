@@ -5,9 +5,10 @@ use crate::backend_registry::lookup_backend_at_cid;
 use crate::document_config::{
     ensure_agent_principal, list_all_tool_selection_records, list_event_trigger_records,
     list_schedule_records, list_task_records, load_agent_behavior_at_cid,
-    load_agent_principal_at_cid, load_inference_profile_at_cid, load_skill_at_cid,
-    load_tool_selection_at_cid, load_tool_selection_record, AgentBehavior, AgentPrincipal,
-    InferenceProfile, SkillDocument, ToolSelectionDocument,
+    load_agent_principal_at_cid, load_datastore_tool_surface_at_cid, load_inference_profile_at_cid,
+    load_skill_at_cid, load_tool_selection_at_cid, load_tool_selection_record, AgentBehavior,
+    AgentPrincipal, DatastoreToolSurfaceDocument, InferenceProfile, SkillDocument,
+    ToolSelectionDocument,
 };
 
 use super::{DocumentRecord, DocumentRuntimeView, UnversionedDocumentRecord};
@@ -212,6 +213,34 @@ pub(super) async fn load_verified_skill_by_doc_id(
     )
 }
 
+pub(super) async fn load_verified_datastore_tool_surface_by_doc_id(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> Result<DocumentRecord<DatastoreToolSurfaceDocument>> {
+    let source = crate::document_version::verified_current_signed_document_version(
+        node,
+        "DatastoreToolSurface",
+        doc_id,
+    )
+    .await?;
+    let collection_version_id =
+        exact_collection_version_id(node, "DatastoreToolSurface", &source).await?;
+    let snapshot =
+        load_datastore_tool_surface_at_cid(node, &source.version.composite_commit_cid).await?;
+    let logical_id = snapshot
+        .as_ref()
+        .map(|(_, value)| value.surface_id.trim().to_owned())
+        .unwrap_or_default();
+    exact_record(
+        "DatastoreToolSurface",
+        logical_id,
+        doc_id,
+        collection_version_id,
+        source,
+        snapshot,
+    )
+}
+
 pub(super) fn insert_unique<T>(
     records: &mut std::collections::HashMap<String, DocumentRecord<T>>,
     record: DocumentRecord<T>,
@@ -261,6 +290,7 @@ pub(crate) async fn load_document_runtime_view(
         principal,
         behaviors: HashMap::new(),
         skills: HashMap::new(),
+        datastore_tool_surfaces: HashMap::new(),
         tool_selections: HashMap::new(),
         inference_profiles: HashMap::new(),
         backends: HashMap::new(),
@@ -336,6 +366,19 @@ pub(crate) async fn load_document_runtime_view(
             );
         }
         insert_unique(&mut view.skills, record)?;
+    }
+
+    for doc_id in list_logical_doc_ids(node, "DatastoreToolSurface", "agent_did", agent_did).await?
+    {
+        let record = load_verified_datastore_tool_surface_by_doc_id(node, &doc_id).await?;
+        if record.value.agent_did != agent_did {
+            anyhow::bail!(
+                "DatastoreToolSurface exact snapshot {} belongs to {}, expected {agent_did}",
+                record.doc_id,
+                record.value.agent_did
+            );
+        }
+        insert_unique(&mut view.datastore_tool_surfaces, record)?;
     }
 
     for (doc_id, task) in list_task_records(node).await? {

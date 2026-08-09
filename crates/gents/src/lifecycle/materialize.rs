@@ -230,6 +230,8 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
 
+    // A trigger fire is not replayable, so retry the signed create without
+    // changing its deterministic request identity.
     let response = node
         .execute_request_with_retry(
             defra_node::QueryRequest::new(mutation).with_identity(Some(query_identity.clone())),

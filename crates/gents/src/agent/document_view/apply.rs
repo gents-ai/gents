@@ -3,15 +3,17 @@ use defra_node::EmbeddedNode;
 
 use crate::backend_registry::lookup_backend_by_doc_id;
 use crate::document_config::{
-    load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id, load_event_trigger_by_doc_id,
+    load_agent_behavior_by_doc_id, load_agent_principal_by_doc_id,
+    load_datastore_tool_surface_by_doc_id, load_event_trigger_by_doc_id,
     load_inference_profile_by_doc_id, load_schedule_by_doc_id, load_skill_by_doc_id,
     load_task_by_doc_id, load_tool_selection_by_doc_id,
 };
 
 use super::load::{
     load_verified_backend_by_doc_id, load_verified_behavior_by_doc_id,
-    load_verified_principal_by_doc_id, load_verified_profile_by_doc_id,
-    load_verified_skill_by_doc_id, load_verified_tool_selection_by_doc_id,
+    load_verified_datastore_tool_surface_by_doc_id, load_verified_principal_by_doc_id,
+    load_verified_profile_by_doc_id, load_verified_skill_by_doc_id,
+    load_verified_tool_selection_by_doc_id,
 };
 use super::snapshot::behavior_references_ready;
 use super::{
@@ -102,6 +104,26 @@ pub(crate) async fn apply_control_update(
     }
     if view.has_skill_doc_id(doc_id) {
         view.remove_skill_by_doc_id(doc_id);
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+
+    if load_datastore_tool_surface_by_doc_id(node, doc_id)
+        .await?
+        .is_some()
+    {
+        let record = load_verified_datastore_tool_surface_by_doc_id(node, doc_id).await?;
+        let surface = &record.value;
+        if surface.agent_did != agent_did {
+            if view.remove_datastore_tool_surface_by_doc_id(doc_id) {
+                return Ok(ControlUpdateOutcome::Applied);
+            }
+            return Ok(ControlUpdateOutcome::Irrelevant);
+        }
+        replace_verified_record(&mut view.datastore_tool_surfaces, record)?;
+        return Ok(ControlUpdateOutcome::Applied);
+    }
+    if view.has_datastore_tool_surface_doc_id(doc_id) {
+        view.remove_datastore_tool_surface_by_doc_id(doc_id);
         return Ok(ControlUpdateOutcome::Applied);
     }
 

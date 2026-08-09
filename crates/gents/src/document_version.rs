@@ -831,6 +831,11 @@ pub struct ResolvedBehaviorConfigProvenance {
     pub inference_backend: ConfigFactRef,
     pub inference_profile: ConfigFactRef,
     pub tool_selection: Option<ConfigFactRef>,
+    /// Linked datastore write surfaces in canonical ascending `logical_id`
+    /// order. These definitions contribute directly to the provider tool
+    /// surface and therefore must be pinned independently of ToolSelection.
+    #[serde(default)]
+    pub datastore_tool_surfaces: Vec<ConfigFactRef>,
     /// Effective skills in canonical ascending `logical_id` order.
     pub skills: Vec<ConfigFactRef>,
     pub resolution_algorithm_version: u32,
@@ -855,6 +860,9 @@ impl ResolvedBehaviorConfigProvenance {
         if let Some(tool_selection) = &self.tool_selection {
             tool_selection.validate("ToolSelection")?;
         }
+        for surface in &self.datastore_tool_surfaces {
+            surface.validate("DatastoreToolSurface")?;
+        }
         for skill in &self.skills {
             skill.validate("Skill")?;
         }
@@ -869,6 +877,15 @@ impl ResolvedBehaviorConfigProvenance {
             anyhow::bail!(
                 "behavior provenance {} does not match behavior {behavior_id}",
                 self.behavior.logical_id
+            );
+        }
+        if let Some((left, right)) = self.datastore_tool_surfaces.windows(2).find_map(|pair| {
+            (pair[0].logical_id >= pair[1].logical_id).then_some((&pair[0], &pair[1]))
+        }) {
+            anyhow::bail!(
+                "datastore tool surface provenance must be unique and canonically ordered; found {} before {}",
+                left.logical_id,
+                right.logical_id
             );
         }
         if let Some((left, right)) = self.skills.windows(2).find_map(|pair| {
@@ -1223,6 +1240,7 @@ mod tests {
             inference_backend: fact("InferenceBackend", "backend"),
             inference_profile: fact("InferenceProfile", "profile"),
             tool_selection: Some(fact("ToolSelection", "tools")),
+            datastore_tool_surfaces: Vec::new(),
             skills: vec![fact("Skill", "alpha"), fact("Skill", "zeta")],
             resolution_algorithm_version: 1,
         }
@@ -1247,6 +1265,31 @@ mod tests {
 
         let mut unsorted = provenance();
         unsorted.skills.reverse();
+        assert!(unsorted
+            .validate_for_behavior("default", "did:key:zAgent")
+            .unwrap_err()
+            .to_string()
+            .contains("unique and canonically ordered"));
+    }
+
+    #[test]
+    fn resolved_behavior_config_provenance_rejects_duplicate_or_unsorted_datastore_surfaces() {
+        let mut duplicate = provenance();
+        duplicate.datastore_tool_surfaces = vec![
+            fact("DatastoreToolSurface", "alpha"),
+            fact("DatastoreToolSurface", "alpha"),
+        ];
+        assert!(duplicate
+            .validate_for_behavior("default", "did:key:zAgent")
+            .unwrap_err()
+            .to_string()
+            .contains("unique and canonically ordered"));
+
+        let mut unsorted = provenance();
+        unsorted.datastore_tool_surfaces = vec![
+            fact("DatastoreToolSurface", "zeta"),
+            fact("DatastoreToolSurface", "alpha"),
+        ];
         assert!(unsorted
             .validate_for_behavior("default", "did:key:zAgent")
             .unwrap_err()

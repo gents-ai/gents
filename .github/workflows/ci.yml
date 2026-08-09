@@ -221,10 +221,22 @@ jobs:
         if: matrix.suite == 'support'
         run: cargo build -p gents-lens-fixture-add-label --target wasm32-unknown-unknown
 
-      - name: Run migration package tests
+      # Every workspace package whose tests are not run by the runtime, cli, or
+      # desktop steps below. The package-coverage guard above only proves each
+      # package is COMPILED; without this these suites build and never execute,
+      # so a broken assertion in them can survive indefinitely.
+      - name: Run support package tests
         if: matrix.suite == 'support'
         run: |
-          cargo test -p gents-migration -p gents-lens-fixture-add-label
+          cargo test \
+            -p gents-migration \
+            -p gents-lens-fixture-add-label \
+            -p gents-protocol \
+            -p gents-schemas \
+            -p gents-codex-protocol \
+            -p gents-chatgpt-login \
+            -p gents-fs-runner \
+            -p gents-lean-contract
 
       - name: Run PR runtime smoke tests
         if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
@@ -238,6 +250,15 @@ jobs:
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_status -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_reconciliation reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+
+      # Real-model end-to-end: no mocks. The pack applies to a throwaway home,
+      # seeds one document, and gates on both trigger stages reaching a
+      # terminal state. Runners reach the shared DeepSeek box over Tailscale;
+      # GENTS_EXP_ENDPOINT/GENTS_EXP_MODEL retarget it without editing config.
+      - name: Run demo packs end to end
+        if: matrix.suite == 'cli'
+        timeout-minutes: 15
+        run: cargo run -p gents-cli --bin gents -- demo run pipeline --http-port 19891
 
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'

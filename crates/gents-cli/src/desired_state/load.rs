@@ -6,10 +6,11 @@ use serde::Deserialize;
 use super::normalize::normalize_manifest;
 use super::validate::validate_manifest;
 use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredEventTrigger, DesiredInferenceBackend,
-    DesiredInferenceProfile, DesiredPeerPairing, DesiredProjectionAcpBinding, DesiredSchedule,
-    DesiredSkill, DesiredStateCounts, DesiredStateManifest, DesiredStateValidationReport,
-    DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry, HasUniqueId,
+    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredDatastoreToolSurface, DesiredEventTrigger,
+    DesiredInferenceBackend, DesiredInferenceProfile, DesiredPeerPairing,
+    DesiredProjectionAcpBinding, DesiredSchedule, DesiredSkill, DesiredStateCounts,
+    DesiredStateManifest, DesiredStateValidationReport, DesiredTask, DesiredToolSelection,
+    DesiredToolServiceRegistry, HasUniqueId,
 };
 use gents::Collection;
 
@@ -33,6 +34,8 @@ pub(crate) fn load_manifest_root(
     let mut agent_behaviors: Vec<DesiredAgentBehavior> =
         load_per_doc_collection(root, Collection::AgentBehavior, &mut errors);
     let skills: Vec<DesiredSkill> = load_per_doc_collection(root, Collection::Skill, &mut errors);
+    let datastore_tool_surfaces: Vec<DesiredDatastoreToolSurface> =
+        load_per_doc_collection(root, Collection::DatastoreToolSurface, &mut errors);
     let tool_selections: Vec<DesiredToolSelection> =
         load_per_doc_collection(root, Collection::ToolSelection, &mut errors);
     let inference_backends: Vec<DesiredInferenceBackend> =
@@ -72,6 +75,7 @@ pub(crate) fn load_manifest_root(
         agent_principal: usize::from(principal.is_some()),
         agent_behaviors: agent_behaviors.len(),
         skills: skills.len(),
+        datastore_tool_surfaces: datastore_tool_surfaces.len(),
         tool_selections: tool_selections.len(),
         inference_backends: inference_backends.len(),
         inference_profiles: inference_profiles.len(),
@@ -90,6 +94,7 @@ pub(crate) fn load_manifest_root(
             agent_principal: principal,
             agent_behaviors,
             skills,
+            datastore_tool_surfaces,
             tool_selections,
             inference_backends,
             inference_profiles,
@@ -172,16 +177,8 @@ fn load_peer_pairings(root: &Path, errors: &mut Vec<String>) -> Vec<DesiredPeerP
     let mut did_to_handle = std::collections::BTreeMap::<String, String>::new();
     for (handle, path) in subdirs {
         let object_path = path.join("object.json");
-        let bytes = match fs::read(&object_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                errors.push(if error.kind() == std::io::ErrorKind::NotFound {
-                    format!("per-doc dir is missing object.json: {}", path.display())
-                } else {
-                    format!("reading {} failed: {error}", object_path.display())
-                });
-                continue;
-            }
+        let Some(bytes) = read_document_json(&object_path, errors) else {
+            continue;
         };
         let pairing: DesiredPeerPairing = match serde_json::from_slice(&bytes) {
             Ok(pairing) => pairing,
@@ -225,17 +222,47 @@ fn load_agent_principal(root: &Path, errors: &mut Vec<String>) -> Option<Desired
         ));
         return None;
     }
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            errors.push(format!("reading {} failed: {error}", path.display()));
-            return None;
-        }
-    };
+    let bytes = read_document_json(&path, errors)?;
     match serde_json::from_slice(&bytes) {
         Ok(value) => Some(value),
         Err(error) => {
             errors.push(format!("invalid {}: {error}", path.display()));
+            None
+        }
+    }
+}
+
+/// Read a document JSON file and expand `${VAR}` references. Interpolation is
+/// scoped to document JSON: `.md` sidecars carry runtime `{{ }}` templates and
+/// are hydrated separately, untouched.
+fn read_document_json(path: &Path, errors: &mut Vec<String>) -> Option<Vec<u8>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            errors.push(if error.kind() == std::io::ErrorKind::NotFound {
+                format!("per-doc dir is missing object.json: {}", path.display())
+            } else {
+                format!("reading {} failed: {error}", path.display())
+            });
+            return None;
+        }
+    };
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            errors.push(format!("{} is not valid UTF-8", path.display()));
+            return None;
+        }
+    };
+    match super::interpolate::interpolate(&text) {
+        Ok(expanded) => Some(expanded.into_bytes()),
+        Err(missing) => {
+            errors.push(format!(
+                "{} references unset environment variable(s): {}. Set them, or give each a \
+                 default with ${{NAME:-value}}.",
+                path.display(),
+                missing.join(", ")
+            ));
             None
         }
     }
@@ -321,12 +348,8 @@ where
             ));
             continue;
         }
-        let bytes = match fs::read(&object_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                errors.push(format!("reading {} failed: {error}", object_path.display()));
-                continue;
-            }
+        let Some(bytes) = read_document_json(&object_path, errors) else {
+            continue;
         };
         let parsed: T = match serde_json::from_slice(&bytes) {
             Ok(parsed) => parsed,

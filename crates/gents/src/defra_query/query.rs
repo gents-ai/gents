@@ -71,6 +71,7 @@ pub const AGENT_CONFIG_QUERY_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
     "ToolSelection",
     "Skill",
+    "DatastoreToolSurface",
     "InferenceBackend",
     "InferenceProfile",
     "ToolServiceRegistry",

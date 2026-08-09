@@ -74,6 +74,7 @@ fn config_provenance(
         inference_backend: config_fact("InferenceBackend", "backend-general", "cid-backend"),
         inference_profile: config_fact("InferenceProfile", "profile-general", "cid-profile"),
         tool_selection: None,
+        datastore_tool_surfaces: Vec::new(),
         skills: Vec::new(),
         resolution_algorithm_version: 1,
     }

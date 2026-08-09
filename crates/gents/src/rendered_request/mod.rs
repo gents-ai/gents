@@ -1392,6 +1392,7 @@ mod tests {
                 "tools-doc",
                 "bafy-tools",
             )),
+            datastore_tool_surfaces: Vec::new(),
             skills: vec![
                 config_fact("Skill", "review", "skill-doc-1", "bafy-skill-1"),
                 config_fact("Skill", "write", "skill-doc-2", "bafy-skill-2"),

@@ -131,6 +131,7 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "InferenceProfile",
     "ToolServiceRegistry",
     "Skill",
+    "DatastoreToolSurface",
 ];
 
 const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
@@ -237,6 +238,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "InferenceProfile",
     "ToolServiceRegistry",
     "Skill",
+    "DatastoreToolSurface",
     "PersonaConfigRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
@@ -323,6 +325,7 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "InferenceProfile",
     "ToolServiceRegistry",
     "Skill",
+    "DatastoreToolSurface",
 ];
 
 /// Discovery (network control-plane) collections: the membership documents a
@@ -340,6 +343,7 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "InferenceProfile",
     "ToolServiceRegistry",
     "Skill",
+    "DatastoreToolSurface",
 ];
 
 /// Narrow network-control collections: the signed network-membership substrate
@@ -584,7 +588,7 @@ mod tests {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 17);
+        assert_eq!(t.collections.len(), 19);
         assert!(t.collections.contains(&"AgentRequest"));
         assert!(t.collections.contains(&"AgentResponseOutcome"));
         assert!(t.collections.contains(&"AgentToolApproval"));
@@ -612,7 +616,7 @@ mod tests {
     fn conversation_scope_filters_transcript_by_requester_and_readiness_by_claimant() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 11);
+        assert_eq!(f.len(), 12);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(p.field, "requester_did");
         assert_eq!(p.value, "did:key:bob");
@@ -785,7 +789,7 @@ mod tests {
     fn machine_template_scopes_conversation_and_issuer_owned_directory() {
         let t = resolve_template("machine").expect("machine template registered");
         assert_eq!(t.delivery, Delivery::Push);
-        assert_eq!(t.collections.len(), 20);
+        assert_eq!(t.collections.len(), 21);
         assert!(t.collections.contains(&"AgentResponseOutcome"));
         assert!(t.collections.contains(&"AgentToolApproval"));
         assert!(t.collections.contains(&AGENT_DIRECTORY_COLLECTION));
