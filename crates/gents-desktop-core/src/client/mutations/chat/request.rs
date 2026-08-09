@@ -502,11 +502,10 @@ async fn load_retry_parent_in_txn(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if rows.len() != 1 {
-        bail!(
-            "retry parent request_id is ambiguous or absent across {} documents",
-            rows.len()
-        );
+    match rows.len() {
+        0 => bail!("retry parent request not found"),
+        1 => {}
+        count => bail!("retry parent request_id is ambiguous across {count} documents"),
     }
     let row = rows
         .into_iter()
@@ -1040,11 +1039,10 @@ async fn fetch_retry_lineage(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    if rows.len() != 1 {
-        bail!(
-            "retry parent request_id is ambiguous or absent across {} documents",
-            rows.len()
-        );
+    match rows.len() {
+        0 => bail!("retry parent request not found"),
+        1 => {}
+        count => bail!("retry parent request_id is ambiguous across {count} documents"),
     }
     let row = rows
         .into_iter()
