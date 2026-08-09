@@ -3,7 +3,7 @@ use support::*;
 
 use anyhow::{Context, Result};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
-use gents::ensure_runtime_schemas;
+use gents::{ensure_runtime_schemas, KeyIdentity};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -14,16 +14,13 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
     let data_dir = agent_home.join("data");
     let service_id = format!("fixture-mcp-{}", Uuid::new_v4().simple());
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+    let _signing_identity = {
+        let (node, signing_identity) =
+            initialize_signed_mcp_home(&agent_home, &data_dir, "mcp-probe-single").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, "online").await?;
-    }
+        signing_identity
+    };
 
     let agent_home = agent_home.to_str().context("agent home utf8")?;
     let output = run_cli_json(
@@ -87,18 +84,15 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
     let missing_address_id = format!("b-fixture-mcp-{}", Uuid::new_v4().simple());
     let offline_id = format!("z-fixture-mcp-{}", Uuid::new_v4().simple());
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+    let _signing_identity = {
+        let (node, signing_identity) =
+            initialize_signed_mcp_home(&agent_home, &data_dir, "mcp-probe-all").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, "online").await?;
         seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, "online").await?;
         seed_mcp_service(&node, &offline_id, "offline-host", "", "", 0, "offline").await?;
-    }
+        signing_identity
+    };
 
     let agent_home = agent_home.to_str().context("agent home utf8")?;
     let output = run_cli_json(
@@ -143,15 +137,12 @@ async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let agent_home = tempdir.path().join("agent-home");
     let data_dir = agent_home.join("data");
 
-    {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+    let _signing_identity = {
+        let (node, signing_identity) =
+            initialize_signed_mcp_home(&agent_home, &data_dir, "mcp-probe-missing").await?;
         ensure_runtime_schemas(&node).await?;
-    }
+        signing_identity
+    };
 
     let agent_home = agent_home.to_str().context("agent home utf8")?;
     let stderr = run_cli_failure_stderr(
@@ -195,6 +186,41 @@ fn assert_last_error_contains(row: &Value, needle: &str) -> Result<()> {
         "expected last_error to contain {needle:?}, got {last_error:?}"
     );
     Ok(())
+}
+
+async fn initialize_signed_mcp_home(
+    agent_home: &std::path::Path,
+    data_dir: &std::path::Path,
+    agent_name: &str,
+) -> Result<(EmbeddedNode, KeyIdentity)> {
+    std::fs::create_dir_all(agent_home)
+        .with_context(|| format!("creating MCP probe home {}", agent_home.display()))?;
+    let agent_home_arg = agent_home.to_str().context("MCP probe home utf8")?;
+    let initialized = run_init_json(
+        agent_home,
+        &[
+            "--identity-only",
+            "--home",
+            agent_home_arg,
+            "--agent-name",
+            agent_name,
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&initialized)?;
+    let key_path = initialized
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("identity-only init output missing key_path")?;
+    let signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading MCP probe signing key {key_path}"))?;
+    let node = EmbeddedNode::builder()
+        .data_path(data_dir)
+        .with_storage_backend(StorageBackend::RocksDb)
+        .with_node_identity_did(&agent_did)
+        .build()
+        .await
+        .context("opening signed embedded MCP probe node")?;
+    Ok((node, signing_identity))
 }
 
 async fn seed_mcp_service(

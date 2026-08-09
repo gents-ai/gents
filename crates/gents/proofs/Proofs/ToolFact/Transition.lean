@@ -103,23 +103,26 @@ def commitApproval
       else
         ⟨.rejected, state⟩
 
-/-- Exact references stored by one transcript/tool projection row. -/
-structure TranscriptJoin where
+/-- Exact references stored by one durable fact-join row. This foundation
+resolves immutable call/result/approval facts only; it does not authorize a
+model-facing transcript projection. -/
+structure ExactFactRefs where
   call : SignedRef
   result : SignedRef
   approval : Option SignedRef
   deriving DecidableEq, Repr
 
-structure Projection where
+structure ExactFactJoin where
   call : ToolCallFact
   result : ToolResultFact
   approval : Option ToolApprovalFact
   deriving DecidableEq, Repr
 
-/-- Projection never guesses through a logical id or a newer collection head.
-All exact physical refs must resolve and child facts must point back to the
-same exact signed call ref. -/
-def projectExact (state : State) (join : TranscriptJoin) : Option Projection :=
+/-- An exact fact join never guesses through a logical id or a newer
+collection head. All exact physical refs must resolve and child facts must
+point back to the same exact signed call ref. Model-facing authority belongs
+exclusively to `ToolFact.ExecutionSplit`. -/
+def joinExactFacts (state : State) (join : ExactFactRefs) : Option ExactFactJoin :=
   match exactCall? state.calls join.call, exactResult? state.results join.result with
   | some call, some result =>
       if result.call = join.call then

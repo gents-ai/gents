@@ -21,6 +21,6 @@ pub(crate) struct LeanToolFactCase {
     pub(crate) approval_durable: bool,
     pub(crate) result_pins_exact_call: bool,
     pub(crate) approval_pins_exact_call: bool,
-    pub(crate) exact_projection: bool,
+    pub(crate) exact_fact_join: bool,
     pub(crate) immutable_noop: bool,
 }

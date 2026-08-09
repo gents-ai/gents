@@ -4,6 +4,7 @@ use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
+use gents::tool_call_lifecycle::DurableToolCallTerminalEvidence;
 use gents::{
     interrupt_request, AgentIdentity, BackgroundExecutionRegistry, BackgroundToolRegistry,
     DefraSessionHook, FailurePolicy,
@@ -145,12 +146,30 @@ impl ToolDyn for ConcurrentGateTool {
 
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_name: Option<String>,
     result: Option<String>,
+    result_doc_id: Option<String>,
+    result_composite_commit_cid: Option<String>,
+    result_signer_did: Option<String>,
     lifecycle_state: Option<String>,
     cancel_cause: Option<String>,
     await_mode: Option<String>,
     child_request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolResultRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    result_key: String,
+    tool_call_doc_id: String,
+    tool_call_composite_commit_cid: String,
+    tool_call_signer_did: String,
+    output_text: String,
+    model_output_truncated: bool,
+    truncation_metadata: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,8 +320,12 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
                 }}
                 limit: 1
             ) {{
+                _docID
                 tool_name
                 result
+                result_doc_id
+                result_composite_commit_cid
+                result_signer_did
                 lifecycle_state
                 cancel_cause
                 await_mode
@@ -311,6 +334,25 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
         }}"#
     );
     first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+async fn load_exact_tool_result(node: &EmbeddedNode, composite_commit_cid: &str) -> ToolResultRow {
+    let composite_commit_cid = escape_graphql_string(composite_commit_cid);
+    let query = format!(
+        r#"{{
+            AgentToolResult(cid: ["{composite_commit_cid}"]) {{
+                _docID
+                result_key
+                tool_call_doc_id
+                tool_call_composite_commit_cid
+                tool_call_signer_did
+                output_text
+                model_output_truncated
+                truncation_metadata
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentToolResult")
 }
 
 async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
@@ -385,7 +427,13 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(row.await_mode.as_deref(), Some("background"));
     assert_eq!(row.child_request_id.as_deref(), None);
-    assert_eq!(row.result.as_deref(), Some("done"));
+    super::assert_exact_result_projection(
+        row.result.as_deref().expect("background tool projection"),
+        "done",
+        row.result_doc_id
+            .as_deref()
+            .expect("background tool exact result document"),
+    );
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
         0
@@ -757,6 +805,17 @@ async fn panicking_background_tool_terminalizes_and_notifies() {
         .result
         .as_deref()
         .is_some_and(|result| { result.contains("intentional background tool panic") }));
+    let evidence = gents::tool_call_lifecycle::load_durable_tool_call_terminal_evidence(
+        db.node.as_ref(),
+        &session_id,
+        &tool_call_id,
+    )
+    .await
+    .expect("panicking background tool must retain verified exact output");
+    let DurableToolCallTerminalEvidence::Output { output_text, .. } = evidence else {
+        panic!("panicking background tool must bind an exact output fact");
+    };
+    assert!(output_text.contains("intentional background tool panic"));
 
     // The notification append is a separate mutation after the terminal row
     // write (the row carries `completionPending:tool_panicked` until the side
@@ -782,7 +841,7 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
         registry(
             vec![Box::new(LargeOutputTool {
                 name: "big_tool",
-                output: big_output,
+                output: big_output.clone(),
             })],
             &["big_tool"],
         ),
@@ -825,10 +884,96 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
 
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
+    let model_projection = row
+        .result
+        .as_deref()
+        .expect("terminal AgentToolCall must retain its canonical model projection");
+    assert!(
+        model_projection.len() < full_len,
+        "AgentToolCall must not duplicate oversized exact output"
+    );
+    assert!(model_projection.contains("[Showing lines"));
+    assert!(envelope_result.contains("[Showing lines"));
+
+    let result_doc_id = row
+        .result_doc_id
+        .as_deref()
+        .expect("terminal AgentToolCall must bind an exact AgentToolResult");
+    let result_composite_commit_cid = row
+        .result_composite_commit_cid
+        .as_deref()
+        .expect("terminal AgentToolCall must pin the exact AgentToolResult CID");
+    assert!(row.result_signer_did.as_deref().is_some());
+    let exact_result = load_exact_tool_result(db.node.as_ref(), result_composite_commit_cid).await;
+    assert_eq!(exact_result.doc_id, result_doc_id);
+    assert_eq!(exact_result.tool_call_doc_id, row.doc_id);
     assert_eq!(
-        row.result.as_deref().map(str::len),
-        Some(full_len),
-        "the AgentToolCall row must keep the full output"
+        exact_result.result_key,
+        exact_result.tool_call_composite_commit_cid
+    );
+    assert_eq!(
+        row.result_signer_did.as_deref(),
+        Some(exact_result.tool_call_signer_did.as_str())
+    );
+    assert_eq!(
+        exact_result.output_text, big_output,
+        "immutable AgentToolResult must retain the complete output"
+    );
+    assert!(exact_result.model_output_truncated);
+    assert!(!exact_result.truncation_metadata.trim().is_empty());
+
+    let first_page = skip_reason_json(
+        hook.on_tool_call(
+            "read_process",
+            None,
+            "meta-read-big-first",
+            &serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "offset": 0,
+                "max_tokens": 4_096
+            })
+            .to_string(),
+        )
+        .await,
+    );
+    assert_eq!(first_page["status"], "completed");
+    assert_eq!(first_page["exited"], true);
+    assert_eq!(first_page["first_available_offset"], 0);
+    assert_eq!(first_page["total_bytes"], full_len as u64);
+    assert_eq!(first_page["has_more"], true);
+    let first_output = first_page["output"]
+        .as_str()
+        .expect("first read_process output page");
+    assert_eq!(first_output, &big_output[..first_output.len()]);
+    assert_eq!(
+        first_page["next_offset"].as_u64(),
+        Some(first_output.len() as u64)
+    );
+
+    let tail_offset = (full_len - 1_024) as u64;
+    let tail_page = skip_reason_json(
+        hook.on_tool_call(
+            "read_process",
+            None,
+            "meta-read-big-tail",
+            &serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "offset": tail_offset,
+                "max_tokens": 4_096
+            })
+            .to_string(),
+        )
+        .await,
+    );
+    assert_eq!(tail_page["status"], "completed");
+    assert_eq!(tail_page["first_available_offset"], 0);
+    assert_eq!(tail_page["total_bytes"], full_len as u64);
+    assert_eq!(tail_page["has_more"], false);
+    assert_eq!(tail_page["next_offset"], full_len as u64);
+    assert_eq!(
+        tail_page["output"].as_str(),
+        Some(&big_output[tail_offset as usize..]),
+        "read_process must expose the exact retained tail beyond the bounded model projection"
     );
 }
 
@@ -1306,6 +1451,23 @@ async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_to
     let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
+    let evidence = gents::tool_call_lifecycle::load_durable_tool_call_terminal_evidence(
+        db.node.as_ref(),
+        &session_id,
+        &tool_call_id,
+    )
+    .await
+    .expect("cancelled background tool must retain verified exact omission");
+    let DurableToolCallTerminalEvidence::Omission {
+        terminal_phase,
+        reason,
+        ..
+    } = evidence
+    else {
+        panic!("cancelled background tool must bind an exact omission fact");
+    };
+    assert_eq!(terminal_phase, "cancelled");
+    assert_eq!(reason, "cancelled");
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_process").await,
         0

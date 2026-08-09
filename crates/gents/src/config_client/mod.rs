@@ -127,6 +127,26 @@ impl ConfigAccess {
                 .ok_or_else(|| anyhow::anyhow!("embedded database has no signing identity")),
         }
     }
+
+    /// Resolve the DID that is guaranteed to sign a mutation before it is
+    /// issued through this access path.
+    ///
+    /// A remote DefraDB prefers a request identity only when that identity's
+    /// signing key is registered in the server process; otherwise it falls
+    /// back to the node identity. The client cannot inspect that registry, so
+    /// differing request and node DIDs are ambiguous and must fail closed.
+    pub async fn known_mutation_signer_did(&self) -> Result<String> {
+        let node_did = self.node_identity_did().await?;
+        if let Self::Graphql(graphql) = self {
+            let authenticated_did = graphql.authenticated_did();
+            if authenticated_did != node_did {
+                anyhow::bail!(
+                    "remote mutation signer is ambiguous: authenticated DID {authenticated_did} differs from endpoint node DID {node_did}"
+                );
+            }
+        }
+        Ok(node_did)
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -295,6 +295,13 @@ fn tool_result_text(content: &ToolResultContent) -> &str {
     }
 }
 
+fn assert_exact_result_projection(actual: &str, expected_text: &str) {
+    assert_eq!(
+        actual, expected_text,
+        "lossless exact-result projection must not render its durable pointer"
+    );
+}
+
 fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
         preamble: None,
@@ -2034,7 +2041,8 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
 
     // The tool ran, its (bounded) result was threaded/yielded, and the loop
     // reached a text response on the next turn.
-    assert_eq!(tool_results, vec!["ECHOED".to_string()]);
+    assert_eq!(tool_results.len(), 1);
+    assert_exact_result_projection(&tool_results[0], "ECHOED");
     assert_eq!(final_text.as_deref(), Some("done"));
 
     // The generator drove the tool-call lifecycle directly: on_tool_call started
@@ -2612,7 +2620,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
 
 #[tokio::test]
 async fn oversized_tool_result_is_bounded_before_threading() {
-    let (_node, hook, _identity) = test_hook().await;
+    let (node, hook, _identity) = test_hook().await;
     let prompt = Message::user("read the big thing");
     ready_hook_for(&hook).await;
 
@@ -2637,8 +2645,8 @@ async fn oversized_tool_result_is_bounded_before_threading() {
         ],
     ]);
     let stream = run_loop_stream(
-        model,
-        Some(hook),
+        model.clone(),
+        Some(hook.clone()),
         prompt,
         Vec::new(),
         Arc::new(tools),
@@ -2646,27 +2654,66 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     );
     futures::pin_mut!(stream);
 
-    let mut bounded_len = None;
+    let mut threaded_projection = None;
     while let Some(item) = stream.next().await {
         if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
             StreamedUserContent::ToolResult { tool_result, .. },
         )) = item.expect("loop item should be Ok")
         {
-            bounded_len = Some(
+            threaded_projection = Some(
                 tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
                     &tool_result.content.first(),
                 ))
-                .len(),
+                .to_string(),
             );
         }
     }
 
-    let bounded_len = bounded_len.expect("a tool result should have been yielded");
+    let threaded_projection = threaded_projection.expect("a tool result should have been yielded");
+    let bounded_len = threaded_projection.len();
     assert!(
         bounded_len < full_len,
         "expected the threaded result to be bounded: bounded={bounded_len} full={full_len}"
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
+    assert!(threaded_projection.contains("[Full output: DefraDB doc "));
+
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    let second_turn_projection = histories[1]
+        .iter()
+        .find_map(|message| match message {
+            Message::User { content } => content.iter().find_map(|item| match item {
+                UserContent::ToolResult(result) => {
+                    Some(tool_result_text(first_content(&result.content)).to_string())
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("second provider turn must receive the tool result");
+    assert_eq!(second_turn_projection, threaded_projection);
+
+    let session_id = hook.session_id().await.expect("session id");
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ result result_doc_id }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .expect("AgentToolCall rows");
+    let [row] = rows.as_slice() else {
+        panic!("expected one persisted tool call, got {}", rows.len());
+    };
+    assert!(row["result_doc_id"].as_str().is_some());
+    assert_eq!(
+        row["result"].as_str(),
+        Some(threaded_projection.as_str()),
+        "the uninterrupted provider turn must consume the exact persisted projection"
+    );
 }
 
 #[tokio::test]
@@ -2742,8 +2789,7 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
             if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
                 if {
                     let text = tool_result_text(first_content(&result.content));
-                    text.starts_with("ECHOED")
-                        && text.contains("[Full output: DefraDB doc ")
+                    text == "ECHOED"
                 })))),
         "tool-using one-shot must persist the tool-result message; history: {history:?}"
     );
@@ -3169,10 +3215,11 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     // (a) The intended call ran: salvage recovered `tool_name: list_hosts`.
     assert_eq!(
-        tool_results,
-        vec!["described:list_hosts".to_string()],
+        tool_results.len(),
+        1,
         "the salvageable #589 payload must run the intended call, not waste a turn"
     );
+    assert_exact_result_projection(&tool_results[0], "described:list_hosts");
 
     // (b) The next provider request carries object-shaped arguments. (The
     // durable AgentMessage fence lives in the StreamProcessor harness —

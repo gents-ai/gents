@@ -364,7 +364,6 @@ struct ListBackgroundToolRow {
     child_request_id: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
-    result: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,7 +396,6 @@ struct ReadToolOutputRow {
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
-    result: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -439,6 +437,42 @@ pub(crate) enum ReadToolOutputOutcome {
     Found(ReadToolOutputResponse),
     NotAuthorized,
     NotBackgrounded,
+}
+
+async fn exact_retained_tool_output(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    expected_tool_name: &str,
+) -> Result<Option<String>> {
+    match crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+        node,
+        session_id,
+        tool_call_id,
+    )
+    .await?
+    {
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Output(output) => {
+            if output.tool_name != expected_tool_name {
+                anyhow::bail!(
+                    "exact retained output tool name {} does not match AgentToolCall {}",
+                    output.tool_name,
+                    expected_tool_name
+                );
+            }
+            Ok(Some(output.output_text))
+        }
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission) => {
+            if omission.tool_name != expected_tool_name {
+                anyhow::bail!(
+                    "exact output omission tool name {} does not match AgentToolCall {}",
+                    omission.tool_name,
+                    expected_tool_name
+                );
+            }
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -663,7 +697,6 @@ pub(crate) async fn handle_list_background_tools(
                 child_request_id
                 started_at
                 completed_at
-                result
             }}
         }}"#
     );
@@ -717,8 +750,11 @@ pub(crate) async fn handle_list_background_tools(
                 .map(|snapshot| (snapshot.stdout_bytes, snapshot.stderr_bytes))
                 .unwrap_or((0, 0))
         } else {
-            let persisted =
-                persisted_tool_output_streams(&row.tool_name, row.result.as_deref().unwrap_or(""));
+            let full_output =
+                exact_retained_tool_output(node, &row.session_id, &tool_call_id, &row.tool_name)
+                    .await?
+                    .unwrap_or_default();
+            let persisted = persisted_tool_output_streams(&row.tool_name, &full_output);
             (persisted.stdout.len() as u64, persisted.stderr.len() as u64)
         };
 
@@ -1062,7 +1098,6 @@ pub(crate) async fn handle_read_tool_output(
                 await_mode
                 lifecycle_state
                 child_request_id
-                result
             }}
         }}"#
     );
@@ -1114,8 +1149,15 @@ pub(crate) async fn handle_read_tool_output(
     let exited = status != "running";
     let max_bytes = args.validated_max_bytes();
     let (slice, exit_code) = if exited {
-        let result = row.result.as_deref().unwrap_or_default();
-        let persisted = persisted_tool_output_streams(&row.tool_name, result);
+        let full_output = exact_retained_tool_output(
+            node,
+            row.session_id.as_deref().unwrap_or_default(),
+            &row.tool_call_id,
+            &row.tool_name,
+        )
+        .await?
+        .unwrap_or_default();
+        let persisted = persisted_tool_output_streams(&row.tool_name, &full_output);
         // Merge stdout + stderr into a single logical buffer behind one byte cursor.
         // The capture stores the two streams separately with no preserved interleave
         // order, so combining them with a stable labeled boundary (stdout first,

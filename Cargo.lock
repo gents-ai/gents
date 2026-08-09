@@ -4920,6 +4920,7 @@ dependencies = [
  "chrono-tz",
  "crypto",
  "defra-core",
+ "defra-http",
  "defra-node",
  "defra-p2p-adapter",
  "dirs 5.0.1",

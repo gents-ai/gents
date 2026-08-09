@@ -174,10 +174,13 @@ fn write_simple_manifest_root(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_import_round_trips_and_requires_override() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let source_home = tempdir.path().join("source-home");
     let target_home = tempdir.path().join("target-home");
-    fs::create_dir_all(&source_home)?;
     fs::create_dir_all(&target_home)?;
+
+    run_init_json(
+        &target_home,
+        &["--identity-only", "--agent-name", "config-import-writer"],
+    )?;
 
     let agent_name = format!("cli-import-{}", Uuid::new_v4().simple());
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
@@ -327,6 +330,15 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let reapply_root = tempdir.path().join("reapply-root");
     fs::create_dir_all(&source_home)?;
     fs::create_dir_all(&target_home)?;
+
+    run_init_json(
+        &source_home,
+        &["--identity-only", "--agent-name", "config-export-writer"],
+    )?;
+    run_init_json(
+        &target_home,
+        &["--identity-only", "--agent-name", "config-reapply-writer"],
+    )?;
 
     let agent_name = format!("cli-export-apply-{}", Uuid::new_v4().simple());
     let model_name = format!("mock-model-{}", Uuid::new_v4().simple());

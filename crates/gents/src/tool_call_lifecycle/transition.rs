@@ -448,6 +448,18 @@ impl ToolCallLifecycle {
         if current.state == expected_source {
             return Ok(false);
         }
+        super::query::load_exact_tool_call_terminal_evidence(
+            &self.node,
+            &self.session_id,
+            &self.tool_call_id,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "{method} cannot adopt AgentToolCall {expected_doc_id} after it moved from {} without coherent terminal evidence",
+                expected_source.as_str()
+            )
+        })?;
         self.doc_id = Some(current.doc_id);
         self.deadline_at = current.deadline_at;
         self.state = current.state;
@@ -462,6 +474,24 @@ impl ToolCallLifecycle {
         self.workflow_group_id = current.workflow_group_id;
         self.workflow_role = current.workflow_role;
         Ok(true)
+    }
+
+    /// Publication errors are suppressed only for a fully verified competing
+    /// terminal graph. Otherwise the writer's original failure remains the
+    /// primary error, augmented with the failed adoption check when present.
+    async fn adopt_after_terminal_evidence_publication_error(
+        &mut self,
+        expected_source: ToolCallState,
+        method: &'static str,
+        publication_error: anyhow::Error,
+    ) -> Result<()> {
+        match self.adopt_if_source_moved(expected_source, method).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(publication_error),
+            Err(adoption_error) => Err(publication_error.context(format!(
+                "{method} cannot adopt a competing terminal execution: {adoption_error:#}"
+            ))),
+        }
     }
 
     async fn retain_terminal_omission_fact(

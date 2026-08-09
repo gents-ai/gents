@@ -18,11 +18,23 @@ def toolTerminalEvidenceCaseJson (row : ToolTerminalEvidenceCase) : String :=
     ++ "\"mutually_exclusive\":" ++ boolString row.mutuallyExclusive ++ ","
     ++ "\"owner_preserved\":" ++ boolString row.ownerPreserved ++ ","
     ++ "\"phase_reason_valid\":" ++ boolString row.phaseReasonValid ++ ","
+    ++ "\"approval_edge_kind\":" ++ jsonString row.approvalEdgeKind ++ ","
     ++ "\"exact_approval_bound\":" ++ boolString row.exactApprovalBound ++ ","
     ++ "\"immutable_noop\":" ++ boolString row.immutableNoop
     ++ "}"
 
 def toolTerminalEvidenceCasesJson : String :=
   jsonArray (toolTerminalEvidenceCases.map toolTerminalEvidenceCaseJson)
+
+def omissionPhaseMatrixCaseJson (row : OmissionPhaseMatrixCase) : String :=
+  "{"
+    ++ "\"reason\":" ++ jsonString row.reason ++ ","
+    ++ "\"source_phase\":" ++ jsonString row.sourcePhase ++ ","
+    ++ "\"terminal_phase\":" ++ jsonString row.terminalPhase ++ ","
+    ++ "\"allowed\":" ++ boolString row.allowed
+    ++ "}"
+
+def omissionPhaseMatrixCasesJson : String :=
+  jsonArray (omissionPhaseMatrixCases.map omissionPhaseMatrixCaseJson)
 
 end Conformance.Contracts

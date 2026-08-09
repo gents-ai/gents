@@ -945,9 +945,6 @@ impl DefraSessionHook {
         cause: CancelCause,
         completion_reason: &str,
     ) -> anyhow::Result<(ToolCallLifecycle, bool)> {
-        self.background_executions
-            .cancel(lifecycle.tool_call_id())
-            .await;
         let won_terminal_compare = if lifecycle.is_running() {
             lifecycle
                 .cancel_during_run_owned(cause, completion_reason)
@@ -955,6 +952,18 @@ impl DefraSessionHook {
         } else {
             false
         };
+        // Persist the caller's typed cancellation before signalling the live
+        // task. Otherwise the cancelled worker can race this writer and
+        // terminalize the same row as a generic `interrupted`, erasing the
+        // distinction between an explicit user action and runtime teardown.
+        // A lost compare reloads the durable terminal row; only stop the live
+        // execution when this writer won or another writer already cancelled
+        // it.
+        if won_terminal_compare || lifecycle.is_cancelled() {
+            self.background_executions
+                .cancel(lifecycle.tool_call_id())
+                .await;
+        }
         Ok((lifecycle, won_terminal_compare))
     }
 

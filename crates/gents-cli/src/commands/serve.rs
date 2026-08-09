@@ -434,17 +434,19 @@ pub(crate) async fn serve_with_control(
                 reason: "the Codex shim has not bound yet".to_string(),
             }
         }));
-    let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
-        defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
-            runtime_graphql,
-            agent_name.clone(),
-            identity.did().to_string(),
-            mcp_query_scope,
-            Some(backend_health.clone()),
-            p2p_admission_state.clone(),
-            Some(codex_shim_health.clone()),
-        )),
-    );
+    let signed_block_http = gents::signed_block_http::SignedBlockHttpBridge::new();
+    let extra_routes = runtime_contract_router(
+        runtime_graphql,
+        agent_name.clone(),
+        identity.did().to_string(),
+        mcp_query_scope,
+        Some(backend_health.clone()),
+        p2p_admission_state.clone(),
+        Some(codex_shim_health.clone()),
+    )
+    .merge(signed_block_http.router());
+    let mut node_builder = crate::persistent_node_builder(&data_dir)
+        .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     if let Some(node_identity_did) = server_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
@@ -457,6 +459,9 @@ pub(crate) async fn serve_with_control(
             .await
             .context("building embedded DefraDB node")?,
     );
+    signed_block_http
+        .bind(&node)
+        .context("binding authenticated signed-block HTTP export")?;
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
     let (ready_tx, mut ready_rx) = watch::channel(ProcessLifecycleState::Uninitialized);
     let (runnable_tx, runnable_rx) = watch::channel::<Vec<String>>(Vec::new());

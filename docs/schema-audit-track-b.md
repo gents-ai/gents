@@ -13,11 +13,11 @@ The document deliberately separates **current evidence** from **target
 decisions**. A target decision is the proposed breaking contract for Track B;
 it is not a claim that the current SDL or runtime already enforces it.
 
-The current-state evidence in this revision is refreshed through commit
-`f6d03cb6`. The exact provider-attempt edge, immutable transcript finalization,
-and immutable response-outcome checkpoints have landed. Track B remains open
-because exact traversal, fleet ownership, ACP, gossip/late-peer verification,
-and governed retention are not complete.
+The audit baseline was commit `f6d03cb6`; current-state evidence is refreshed
+through the working branch for PR #1065. The exact provider-attempt edge,
+immutable transcript finalization, and immutable response-outcome checkpoints
+have landed. Track B remains open because exact traversal, fleet ownership,
+ACP, gossip/late-peer verification, and governed retention are not complete.
 
 Retention classes and evidence downgrades use the
 [shared retention and erasure lattice](schema-retention-lattice.md); this track

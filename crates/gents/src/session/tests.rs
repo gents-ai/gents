@@ -995,6 +995,102 @@ async fn session_ensure_rejects_singleton_immutable_owner_mismatch() {
 }
 
 #[tokio::test]
+async fn requester_aware_session_ensure_preserves_create_time_identity_fields() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema(
+        r#"
+        type AgentSession {
+            session_id: String
+            agent_name: String
+            agent_did: String
+            requester_did: String
+            behavior_id: String
+            started: DateTime
+            ended: DateTime
+            status: String
+        }
+        "#,
+    )
+    .await
+    .unwrap();
+    let response = node
+        .execute(
+            r#"mutation {
+                create_AgentSession(input: {
+                    session_id: "requester-bound-session"
+                    agent_name: "create-time-name"
+                    agent_did: "did:key:z-agent"
+                    requester_did: "did:key:z-requester"
+                    behavior_id: "behavior"
+                    started: "2026-08-08T00:00:00Z"
+                    status: "paused"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    ensure_session_with_behavior_id_and_requester_did(
+        &node,
+        "requester-bound-session",
+        "different-runtime-name",
+        "did:key:z-agent",
+        "behavior",
+        Some("did:key:z-requester"),
+    )
+    .await
+    .unwrap();
+
+    let response = node
+        .execute(
+            r#"{
+                AgentSession(filter: { session_id: { _eq: "requester-bound-session" } }) {
+                    agent_name agent_did requester_did behavior_id started status
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.unwrap()["AgentSession"][0];
+    assert_eq!(row["agent_name"], "create-time-name");
+    assert_eq!(row["agent_did"], "did:key:z-agent");
+    assert_eq!(row["requester_did"], "did:key:z-requester");
+    assert_eq!(row["behavior_id"], "behavior");
+    assert_eq!(row["started"], "2026-08-08T00:00:00Z");
+    assert_eq!(row["status"], "active");
+
+    let error = ensure_session_with_behavior_id_and_requester_did(
+        &node,
+        "requester-bound-session",
+        "different-runtime-name",
+        "did:key:z-agent",
+        "behavior",
+        Some("did:key:z-other-requester"),
+    )
+    .await
+    .expect_err("an existing session must reject a different requester principal");
+    assert!(
+        error.to_string().contains("immutable requester mismatch"),
+        "{error:#}"
+    );
+
+    let response = node
+        .execute(
+            r#"{
+                AgentSession(filter: { session_id: { _eq: "requester-bound-session" } }) {
+                    agent_name requester_did status
+                }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.unwrap()["AgentSession"][0];
+    assert_eq!(row["agent_name"], "create-time-name");
+    assert_eq!(row["requester_did"], "did:key:z-requester");
+    assert_eq!(row["status"], "active");
+}
+
+#[tokio::test]
 async fn upsert_conversation_from_request_keeps_title_empty_until_generated() {
     let data_path =
         std::env::temp_dir().join(format!("gents-conversation-{}", uuid::Uuid::new_v4()));

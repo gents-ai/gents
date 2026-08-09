@@ -1,5 +1,16 @@
 mod support;
 
+fn assert_exact_result_projection(actual: &str, expected_text: &str, result_doc_id: &str) {
+    assert!(
+        !result_doc_id.trim().is_empty(),
+        "lossless model output must still bind exact durable result evidence"
+    );
+    assert_eq!(
+        actual, expected_text,
+        "untruncated model-facing output must not render its durable result-document pointer"
+    );
+}
+
 #[path = "e2e_subagent/r4_subagent_completion.rs"]
 mod r4_subagent_completion;
 #[path = "e2e_subagent/r4_subagent_tools.rs"]

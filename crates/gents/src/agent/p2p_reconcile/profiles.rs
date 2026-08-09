@@ -85,6 +85,7 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
     "AgentRuntime",
     "ToolSelection",
+    "DatastoreToolSurface",
     "InferenceProfile",
     "InferenceBackend",
     "AgentConversation",
@@ -109,6 +110,7 @@ const AGENT_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
     "AgentRuntime",
     "ToolSelection",
+    "DatastoreToolSurface",
     "InferenceBackend",
     "InferenceProfile",
 ];
@@ -117,6 +119,7 @@ const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
     "ToolSelection",
+    "DatastoreToolSurface",
     "InferenceBackend",
     "InferenceProfile",
     "ToolServiceRegistry",
@@ -146,6 +149,7 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
     "AgentRuntime",
     "ToolSelection",
+    "DatastoreToolSurface",
     "InferenceBackend",
     "InferenceProfile",
 ];
@@ -188,5 +192,27 @@ mod tests {
             collections,
             ["AgentRequest".to_string()].into_iter().collect()
         );
+    }
+
+    #[test]
+    fn profiles_that_replicate_tool_selection_include_its_datastore_surface_dependency() {
+        for profile in [
+            P2pCollectionProfile::Runtime,
+            P2pCollectionProfile::Agent,
+            P2pCollectionProfile::DesktopConfig,
+            P2pCollectionProfile::Discovery,
+        ] {
+            let collections = profile.collection_names();
+            assert!(
+                collections.contains(&"ToolSelection"),
+                "{} must carry tool selection",
+                profile.id()
+            );
+            assert!(
+                collections.contains(&"DatastoreToolSurface"),
+                "{} must replicate the fail-closed datastore surface dependency",
+                profile.id()
+            );
+        }
     }
 }

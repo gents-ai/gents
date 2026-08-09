@@ -125,6 +125,7 @@ pub mod schedule_cron;
 pub mod schema;
 pub mod self_config;
 pub mod session;
+pub mod signed_block_http;
 pub mod skills;
 pub mod streaming;
 pub mod template;

@@ -589,27 +589,21 @@ async fn subagent_source_rejects_unsigned_bridge_admission() {
     );
     source.wait_ready().await;
 
-    let args = serde_json::json!({
-        "behavior_id": behavior_id,
-        "prompt": "unsigned bridge must not materialize"
-    })
-    .to_string();
-    let mut lifecycle = ToolCallLifecycle::new_subagent(
-        db.node.clone(),
-        parent_request_id.to_string(),
-        "r3-session-unsigned-bridge".to_string(),
-        agent_did.to_string(),
-        parent_tool_call_id.to_string(),
-        1,
-        "spawn_subagent".to_string(),
-        args,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
+    // Publish the deliberately unsigned bridge directly. The production
+    // lifecycle writer now verifies its own commit after creation, so using
+    // `start_running` here would stop at the writer boundary before the source
+    // admission path observes and rejects the unsigned document.
+    create_orphan_subagent_tool_call_for_agent(
+        db.node.as_ref(),
+        parent_request_id,
+        "r3-session-unsigned-bridge",
+        parent_tool_call_id,
+        child_request_id,
         AwaitMode::Foreground,
-        CancelPolicy::Cascade,
-        child_request_id.to_string(),
-        agent_did.to_string(),
-    );
-    lifecycle.start_running().await.unwrap();
+        agent_did,
+        behavior_id,
+    )
+    .await;
 
     assert_no_child_request_for_tool(
         db.node.as_ref(),

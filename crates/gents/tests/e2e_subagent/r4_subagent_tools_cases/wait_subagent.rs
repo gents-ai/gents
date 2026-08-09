@@ -84,16 +84,22 @@ async fn wait_subagent_waits_on_existing_bridge_without_lifecycle_row() {
     assert_eq!(result["await_mode"], "foreground");
     assert_eq!(result["status"], "completed");
     assert_eq!(result["final_response"], "wait_subagent final answer");
-
     let completed_bridge =
         fetch_tool_call(db.node.as_ref(), &session_id, "internal-wait-spawn").await;
     assert_eq!(
         completed_bridge.lifecycle_state.as_deref(),
         Some("completed")
     );
-    assert_eq!(
-        completed_bridge.result.as_deref(),
-        Some("wait_subagent final answer")
+    super::super::assert_exact_result_projection(
+        completed_bridge
+            .result
+            .as_deref()
+            .expect("wait_subagent bridge projection"),
+        "wait_subagent final answer",
+        completed_bridge
+            .result_doc_id
+            .as_deref()
+            .expect("wait_subagent exact result document"),
     );
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_subagent").await,
@@ -227,15 +233,25 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
         assert_eq!(result["status"], expected_status);
         assert_eq!(result["error"]["reason"], expected_error_reason);
         assert_eq!(result["error"]["failure_class"], "external");
-
         let bridge = fetch_tool_call(db.node.as_ref(), &session_id, &internal_call_id).await;
         assert_eq!(
             bridge.lifecycle_state.as_deref(),
             Some(expected_tool_state),
             "unexpected bridge state for child terminal {child_state}"
         );
+        if let Some(result_doc_id) = bridge.result_doc_id.as_deref() {
+            let projection = bridge
+                .result
+                .as_deref()
+                .expect("failed child bridge projection");
+            let retained = failure_reason.expect("output-bearing child failure reason");
+            super::super::assert_exact_result_projection(projection, retained, result_doc_id);
+        }
         if let Some(reason) = failure_reason {
-            assert_eq!(bridge.result.as_deref(), Some(reason));
+            assert!(bridge
+                .result
+                .as_deref()
+                .is_some_and(|value| value.starts_with(reason)));
             assert_eq!(bridge.tool_failure_class.as_deref(), Some("external"));
         }
         assert_eq!(

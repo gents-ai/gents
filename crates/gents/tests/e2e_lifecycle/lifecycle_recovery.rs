@@ -15,7 +15,7 @@ use crate::support::snapshots::{
 use crate::support::{
     build_request, conversation_status_by_doc_id, create_conversation_row,
     create_conversation_row_for_agent, create_request, create_request_for_agent, first_row,
-    test_db, test_db_with_duplicate_tolerant_conversations,
+    test_db_with_duplicate_tolerant_conversations,
     test_db_with_duplicate_tolerant_conversations_and_identity, test_db_with_identity,
     upsert_conversation_for_agent, TestDb, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
@@ -501,11 +501,12 @@ async fn recover_all_publishes_error_outcome_when_response_doc_is_missing() {
 
 #[tokio::test]
 async fn recover_all_times_out_expired_running_tool_calls() {
-    let db = test_db("tool-call-recover-timeout").await;
-    create_request(
+    let (db, agent_did) = signed_recovery_db("tool-call-recover-timeout").await;
+    create_request_for_agent(
         &db.node,
         "tool-timeout-req",
         "tool-timeout-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
@@ -515,7 +516,7 @@ async fn recover_all_times_out_expired_running_tool_calls() {
         db.node.clone(),
         "tool-timeout-req".to_string(),
         "tool-timeout-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "tool-timeout-call".to_string(),
         1,
         "never".to_string(),
@@ -524,7 +525,7 @@ async fn recover_all_times_out_expired_running_tool_calls() {
     );
     lifecycle.start_running().await.unwrap();
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
@@ -607,19 +608,21 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
 
 #[tokio::test]
 async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
-    let db = test_db("tool-call-recover-cancel").await;
-    let interrupted_doc = create_request(
+    let (db, agent_did) = signed_recovery_db("tool-call-recover-cancel").await;
+    let interrupted_doc = create_request_for_agent(
         &db.node,
         "tool-cancel-req",
         "tool-cancel-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
     .await;
-    create_request(
+    create_request_for_agent(
         &db.node,
         "tool-other-req",
         "tool-other-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
@@ -631,7 +634,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         db.node.clone(),
         "tool-cancel-req".to_string(),
         "tool-cancel-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "tool-cancel-call".to_string(),
         1,
         "slow".to_string(),
@@ -644,7 +647,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
         db.node.clone(),
         "tool-other-req".to_string(),
         "tool-other-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "tool-other-call".to_string(),
         1,
         "slow".to_string(),
@@ -653,7 +656,7 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
     );
     unrelated.start_running().await.unwrap();
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
@@ -680,19 +683,21 @@ async fn recover_all_cancels_running_tool_call_for_interrupted_parent_only() {
 
 #[tokio::test]
 async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
-    let db = test_db("tool-call-recover-cascade").await;
-    let interrupted_doc = create_request(
+    let (db, agent_did) = signed_recovery_db("tool-call-recover-cascade").await;
+    let interrupted_doc = create_request_for_agent(
         &db.node,
         "tool-cascade-parent",
         "tool-cascade-parent-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
     .await;
-    create_request(
+    create_request_for_agent(
         &db.node,
         "tool-cascade-child",
         "tool-cascade-child-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
@@ -703,7 +708,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
         db.node.clone(),
         "tool-cascade-parent".to_string(),
         "tool-cascade-parent-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "tool-cascade-call".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -716,7 +721,7 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
     );
     lifecycle.start_running().await.unwrap();
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 1);
@@ -736,19 +741,21 @@ async fn recover_all_cascades_interrupted_parent_to_subagent_child() {
 
 #[tokio::test]
 async fn recover_all_leaves_detached_subagent_tool_running() {
-    let db = test_db("tool-call-recover-detach").await;
-    let interrupted_doc = create_request(
+    let (db, agent_did) = signed_recovery_db("tool-call-recover-detach").await;
+    let interrupted_doc = create_request_for_agent(
         &db.node,
         "tool-detach-parent",
         "tool-detach-parent-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
     .await;
-    create_request(
+    create_request_for_agent(
         &db.node,
         "tool-detach-child",
         "tool-detach-child-session",
+        &agent_did,
         "processing",
         "2026-03-23T00:00:00Z",
     )
@@ -759,7 +766,7 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
         db.node.clone(),
         "tool-detach-parent".to_string(),
         "tool-detach-parent-session".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         "tool-detach-call".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -772,7 +779,7 @@ async fn recover_all_leaves_detached_subagent_tool_running() {
     );
     lifecycle.start_running().await.unwrap();
 
-    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+    let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
     assert_eq!(report.tool_calls_recovered, 0);

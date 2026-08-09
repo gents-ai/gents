@@ -158,7 +158,10 @@ theorem conversation_readiness_crossing_is_claimant_scoped (peerDid localDid : D
 theorem machine_filter_eq (peerDid homeDid : Did) :
     scopeFilter machineTemplate.scope [] peerDid homeDid =
       scopeFilter conversationTemplate.scope [] peerDid homeDid ++
-        [ { collection := "AgentDirectoryEntry"
+        [ { collection := "PersonaConfigRequest"
+          , field := "requester_did"
+          , value := peerDid }
+        , { collection := "AgentDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
   simp [scopeFilter, machineTemplate, machineRules, conversationTemplate]
@@ -166,7 +169,8 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
 theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
-      = (conversationTranscriptCollections ++ ["AgentDirectoryEntry"]).toFinset := by
+      = (conversationTranscriptCollections ++
+          ["PersonaConfigRequest", "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, conversationTranscriptCollections]
 

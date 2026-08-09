@@ -36,6 +36,7 @@ struct RequestSessionRow {
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     result: Option<String>,
+    result_doc_id: Option<String>,
     lifecycle_state: Option<String>,
     await_mode: Option<String>,
 }
@@ -538,7 +539,7 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
                     tool_call_id: {{ _eq: "{tool_call_id}" }}
                 }},
                 limit: 1
-            ) {{ result lifecycle_state await_mode }}
+            ) {{ result result_doc_id lifecycle_state await_mode }}
         }}"#
     );
     first_row(&node.execute(&query).await, "AgentToolCall")
@@ -637,7 +638,13 @@ async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-1").await;
     assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
-    assert_eq!(tool.result.as_deref(), Some("child final answer <ok>"));
+    super::assert_exact_result_projection(
+        tool.result.as_deref().expect("background child projection"),
+        "child final answer <ok>",
+        tool.result_doc_id
+            .as_deref()
+            .expect("background child exact result document"),
+    );
 
     let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
     assert_eq!(messages.len(), 1);
@@ -841,7 +848,12 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert!(messages[0].content.contains("spawn_subagent"));
     assert_eq!(messages[1].sequence, 2);
     assert_eq!(messages[1].role, "user");
-    assert!(messages[1].content.contains("child_request_id"));
+    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "spawn-bg-order").await;
+    assert!(messages[1].content.contains("fast background child done"));
+    assert!(
+        tool.result_doc_id.is_some(),
+        "lossless projection must retain exact durable result authority without rendering it"
+    );
     assert_eq!(messages[2].sequence, 3);
     assert!(messages[2].content.contains("<subagent-notification"));
 }

@@ -23,10 +23,8 @@ fn user_text_message(text: &str) -> Message {
     }
 }
 
-fn is_spilled_observation(actual: &str, expected: &str) -> bool {
-    actual.strip_prefix(expected).is_some_and(|suffix| {
-        suffix.starts_with("\n[Full output: DefraDB doc ") && suffix.ends_with(']')
-    })
+fn is_lossless_observation(actual: &str, expected: &str) -> bool {
+    actual == expected
 }
 
 fn session_state_for_test() -> SessionState {
@@ -666,7 +664,28 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
             r#"{"status":"blocked","reason":"needs approval"}"#,
         )
         .await;
-    assert!(matches!(action, ToolCallHookAction::Skip { .. }));
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("update_goal must execute inside the hook");
+    };
+    let exact = crate::tool_call_lifecycle::query::load_exact_tool_call_output(
+        &node,
+        &session_id,
+        "blocked-during-wrapup",
+    )
+    .await
+    .expect("hook-owned goal result must bind exact terminal output");
+    assert_eq!(
+        reason, exact.model_projection,
+        "the live Skip result must equal the durable replay projection"
+    );
+    assert!(
+        !exact.evidence.version.doc_id.trim().is_empty(),
+        "hook-owned durable results must retain exact pointer authority"
+    );
+    assert!(
+        !reason.contains("[Full output: DefraDB doc "),
+        "lossless hook-owned results must not render their retained-fact pointer"
+    );
     let goal = crate::goal::load_canonical_goal(node.as_ref(), "did:test:general", &session_id)
         .await
         .expect("load goal")
@@ -1037,8 +1056,10 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         .expect("physical result document id");
     assert_eq!(
         spill.get("result_key").and_then(|value| value.as_str()),
-        Some(call_doc_id),
-        "one immutable result fact is keyed by the physical call"
+        spill
+            .get("tool_call_composite_commit_cid")
+            .and_then(|value| value.as_str()),
+        "one immutable result fact is keyed by the exact accepted execution version"
     );
     assert_eq!(
         spill
@@ -1110,6 +1131,145 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         Some(2101)
     );
 
+    let exact_output = crate::tool_call_lifecycle::query::load_exact_tool_call_output(
+        &node,
+        &session_id,
+        "internal-oversized",
+    )
+    .await
+    .expect("canonical bounded projection must verify against exact full output");
+    assert_eq!(exact_output.output_text, full_output);
+    assert_eq!(exact_output.model_projection, persisted_result);
+
+    let forged = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{ result: "forged bounded projection" }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(call_doc_id),
+        ))
+        .await;
+    assert!(
+        !forged.has_errors(),
+        "write adversarial signed terminal projection: {:?}",
+        forged.errors
+    );
+    let error = crate::tool_call_lifecycle::query::load_exact_tool_call_output(
+        &node,
+        &session_id,
+        "internal-oversized",
+    )
+    .await
+    .expect_err("mutable terminal projection must remain bound to exact output evidence");
+    assert!(
+        error
+            .to_string()
+            .contains("model projection does not match its exact AgentToolResult"),
+        "unexpected projection mismatch error: {error:#}"
+    );
+
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn completed_tool_backfill_persists_bounded_model_projection_not_full_output() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-bounded-result-backfill-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        signing_identity.did(),
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run an oversized tool"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    hook.set_active_request_id(Some("req-bounded-result-backfill".to_string()))
+        .await;
+
+    let full_output = (0..2101)
+        .map(|index| format!("backfill-line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(matches!(
+        hook.on_tool_call(
+            "oversized",
+            Some("model-oversized".to_string()),
+            "internal-oversized",
+            "{}",
+        )
+        .await,
+        ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "oversized",
+            Some("model-oversized".to_string()),
+            "internal-oversized",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::Completed(full_output.clone()),
+        )
+        .await,
+        HookAction::Continue
+    ));
+
+    let session_id = hook.session_id().await.expect("session id");
+    let tool_call = fetch_tool_call_row(&node, &session_id, "internal-oversized").await;
+    let model_projection = tool_call["result"]
+        .as_str()
+        .expect("terminal call must retain its bounded model projection")
+        .to_string();
+    assert!(model_projection.contains("[Showing lines 1-2000 of 2101"));
+    assert!(!model_projection.contains("backfill-line-2100"));
+    assert_ne!(model_projection, full_output);
+
+    // Model a provider abort: the durable execution completed before its
+    // streamed ToolResult arrived, so persisting the partial assistant turn
+    // leaves backfill responsible for closing the transcript pair.
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "internal-oversized".to_string(),
+            call_id: Some("model-oversized".to_string()),
+            function: ToolFunction {
+                name: "oversized".to_string(),
+                arguments: json!({}),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        hook.backfill_completed_tool_results().await.unwrap(),
+        1,
+        "one completed execution should receive its missing transcript result"
+    );
+
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert!(matches!(
+        &history[2],
+        Message::User { content }
+            if matches!(first_content(content), UserContent::ToolResult(tool_result)
+                if tool_result.call_id.as_deref() == Some("model-oversized")
+                    && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text })
+                        if text == &model_projection
+                            && !text.contains("backfill-line-2100")))
+    ));
+
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1207,14 +1367,13 @@ async fn stale_terminal_retry_preserves_full_spilled_output_and_truncation_metad
         "the test must make the retained output parent stale"
     );
 
-    lifecycle
+    let returned_projection = lifecycle
         .complete_with_result_fact(&retained.text, &initial_fact)
         .await
         .expect("stale terminal evidence should be republished and bound");
 
     let terminal = fetch_tool_call_row(&node, session_id, tool_call_id).await;
     assert_eq!(terminal["lifecycle_state"].as_str(), Some("completed"));
-    assert_eq!(terminal["result"].as_str(), Some(retained.text.as_str()));
     let bound_cid = terminal["result_composite_commit_cid"]
         .as_str()
         .expect("terminal call must bind an exact result fact");
@@ -1270,6 +1429,30 @@ async fn stale_terminal_retry_preserves_full_spilled_output_and_truncation_metad
     assert_eq!(metadata["truncated"].as_bool(), Some(true));
     assert_eq!(metadata["original_lines"].as_u64(), Some(12));
     assert_eq!(metadata["max_lines"].as_u64(), Some(3));
+    let bound_doc_id = bound_payload["_docID"]
+        .as_str()
+        .expect("replacement result physical identity");
+    let canonical_projection = crate::truncation::canonical_model_projection(
+        &full_output,
+        bound_doc_id,
+        true,
+        bound_payload["truncation_metadata"]
+            .as_str()
+            .expect("replacement truncation contract"),
+    )
+    .expect("replacement fact deterministically derives its model projection");
+    assert_eq!(
+        terminal["result"].as_str(),
+        Some(canonical_projection.as_str())
+    );
+    assert_ne!(
+        canonical_projection, retained.text,
+        "stale republish must refresh the spill pointer to the replacement exact fact"
+    );
+    assert_eq!(
+        returned_projection, canonical_projection,
+        "the live caller must receive the projection bound by the winning terminal CAS"
+    );
 
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1425,6 +1608,81 @@ async fn hook_owned_subagent_meta_results_persist_without_fabricating_tool_calls
 }
 
 #[tokio::test]
+async fn registered_native_tool_result_requires_exact_tool_call_authority() {
+    let data_path = std::env::temp_dir().join(format!(
+        "gents-native-result-authority-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let (node, signing_identity) = signed_test_node(Some(&data_path)).await;
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        signing_identity.did(),
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Read the notes"), &[])
+            .await,
+        HookAction::Continue
+    ));
+
+    let internal_call_id = "native-without-durable-call";
+    let model_call_id = "model-native-without-durable-call";
+    hook.state
+        .lock()
+        .await
+        .register_tool_result_tool_name(internal_call_id, "read_file");
+    hook.persist_message(&Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: internal_call_id.to_string(),
+            call_id: Some(model_call_id.to_string()),
+            function: ToolFunction {
+                name: "read_file".to_string(),
+                arguments: json!({"path": "notes.txt"}),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    })
+    .await
+    .unwrap();
+
+    let error = hook
+        .persist_stream_tool_result_message(
+            &ToolResult {
+                id: internal_call_id.to_string(),
+                call_id: Some(model_call_id.to_string()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: "forged native tool output".to_string(),
+                })],
+            },
+            internal_call_id,
+        )
+        .await
+        .expect_err("a normal tool registration must not grant hook-owned authority");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("no exact AgentToolCall authority"),
+        "unexpected missing-authority error: {error}"
+    );
+
+    let session_id = hook.session_id().await.expect("session id");
+    assert_eq!(
+        crate::session::load_history(&node, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "unauthorized streamed output must not become a transcript result"
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
 async fn pre_dispatch_meta_rejections_persist_from_exact_omissions() {
     let data_path = std::env::temp_dir().join(format!(
         "gents-hook-predispatch-meta-rejections-{}",
@@ -1549,7 +1807,7 @@ async fn pre_dispatch_meta_rejections_persist_from_exact_omissions() {
 }
 
 #[tokio::test]
-async fn durable_spawn_subagent_rejects_malformed_streamed_receipt() {
+async fn durable_spawn_subagent_rejection_persists_from_exact_omission() {
     let data_path = std::env::temp_dir().join(format!(
         "gents-hook-malformed-spawn-receipt-{}",
         uuid::Uuid::new_v4()
@@ -1600,32 +1858,35 @@ async fn durable_spawn_subagent_rejects_malformed_streamed_receipt() {
     .await
     .unwrap();
 
-    let error = hook
-        .persist_stream_tool_result_message(
-            &ToolResult {
-                id: internal_call_id.to_string(),
-                call_id: Some(model_call_id.to_string()),
-                content: vec![ToolResultContent::Text(Text { text: reason })],
-            },
-            internal_call_id,
-        )
-        .await
-        .expect_err("durable spawn_subagent must reject a non-receipt payload");
-    let error = format!("{error:#}");
-    assert!(
-        error.contains("streamed subagent receipt omitted child_request_id"),
-        "unexpected malformed-receipt error: {error}"
-    );
+    hook.persist_stream_tool_result_message(
+        &ToolResult {
+            id: internal_call_id.to_string(),
+            call_id: Some(model_call_id.to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: "forged streamed rejection".to_string(),
+            })],
+        },
+        internal_call_id,
+    )
+    .await
+    .expect("terminal spawn_subagent rejection must use its exact omission");
 
     let session_id = hook.session_id().await.expect("session id");
-    assert_eq!(
-        crate::session::load_history(&node, &session_id)
-            .await
-            .unwrap()
-            .len(),
-        2,
-        "malformed spawn receipt must not become a transcript result"
-    );
+    let history = crate::session::load_history(&node, &session_id)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    let Message::User { content } = &history[2] else {
+        panic!("expected durable spawn rejection result");
+    };
+    let UserContent::ToolResult(tool_result) = first_content(content) else {
+        panic!("expected durable spawn rejection tool result");
+    };
+    let ToolResultContent::Text(text) = first_content(&tool_result.content) else {
+        panic!("expected text spawn rejection result");
+    };
+    assert_eq!(text.text, reason);
+    assert_ne!(text.text, "forged streamed rejection");
     let row = fetch_tool_call_row(&node, &session_id, internal_call_id).await;
     assert_eq!(row["tool_name"].as_str(), Some("spawn_subagent"));
     assert_eq!(row["lifecycle_state"].as_str(), Some("failed"));
@@ -2133,7 +2394,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.call_id.as_deref() == Some("call-1")
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text })
-                        if is_spilled_observation(text, "fn main() {}\n")))
+                        if is_lossless_observation(text, "fn main() {}\n")))
     ));
     assert!(matches!(
         &history[3],
@@ -2180,8 +2441,8 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     assert!(
         row.get("result")
             .and_then(|value| value.as_str())
-            .is_some_and(|text| is_spilled_observation(text, "fn main() {}\n")),
-        "persisted tool result must retain the observation and signed spill pointer"
+            .is_some_and(|text| is_lossless_observation(text, "fn main() {}\n")),
+        "persisted lossless tool result must omit its rendered spill pointer"
     );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
@@ -2630,8 +2891,8 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     };
     let compact_observation = "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma";
     assert!(
-        is_spilled_observation(text, compact_observation),
-        "model observation must stay compact and retain the signed spill pointer"
+        is_lossless_observation(text, compact_observation),
+        "lossless model observation must stay compact without rendering its spill pointer"
     );
     assert!(!text.contains("gents_fs"));
 
@@ -2639,8 +2900,8 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     assert!(
         row.get("result")
             .and_then(|value| value.as_str())
-            .is_some_and(|text| is_spilled_observation(text, raw_read_output)),
-        "tool-call row must retain the raw result and signed spill pointer"
+            .is_some_and(|text| is_lossless_observation(text, raw_read_output)),
+        "lossless tool-call row must retain the raw result without rendering its spill pointer"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -2762,7 +3023,7 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     assert!(matches!(
         first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text })
-            if is_spilled_observation(text, tool_result_text)
+            if is_lossless_observation(text, tool_result_text)
     ));
 
     let resp = node
@@ -2956,8 +3217,8 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     assert!(
         row.get("result")
             .and_then(|value| value.as_str())
-            .is_some_and(|text| is_spilled_observation(text, "second result")),
-        "persisted tool result must retain the observation and signed spill pointer"
+            .is_some_and(|text| is_lossless_observation(text, "second result")),
+        "persisted lossless tool result must omit its rendered spill pointer"
     );
     assert_eq!(
         row.get("status").and_then(|value| value.as_str()),
@@ -3008,7 +3269,7 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
             if matches!(first_content(content), UserContent::ToolResult(tool_result)
                 if tool_result.id == "call-2"
                     && matches!(first_content(&tool_result.content), ToolResultContent::Text(Text { text })
-                        if is_spilled_observation(text, "second result")))
+                        if is_lossless_observation(text, "second result")))
     ));
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -3022,9 +3283,24 @@ async fn write_approval_document(
     decision: &str,
     reason: &str,
 ) {
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let held = crate::config_client::list_held_tool_calls(&access, Some(agent_did))
+        .await
+        .expect("list exact held call before approval");
+    let matching = held
+        .iter()
+        .filter(|call| call.tool_call_id == tool_call_id)
+        .collect::<Vec<_>>();
+    let [target] = matching.as_slice() else {
+        panic!(
+            "expected one physical held call for {tool_call_id}, got {}",
+            matching.len()
+        );
+    };
     crate::config_client::write_tool_approval(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &access,
         &crate::config_client::ToolApprovalVerdict {
+            tool_call_doc_id: target.doc_id.clone(),
             tool_call_id: tool_call_id.to_string(),
             agent_did: agent_did.to_string(),
             request_id: Some("req-hold".to_string()),
@@ -3229,6 +3505,46 @@ async fn held_tool_call_dispatches_after_operator_approval() {
     );
     assert_exact_approval_edge(&node, &row).await;
 
+    let action = hook
+        .on_tool_result(
+            "guarded",
+            None,
+            "internal-approve",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::TimedOut {
+                deadline_at: Some(deadline),
+            },
+        )
+        .await;
+    assert!(
+        matches!(action, HookAction::Terminate { .. }),
+        "timing out the approved running call must terminate the turn, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-approve").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("timedOut")
+    );
+    assert_exact_approval_edge(&node, &row).await;
+    match crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+        &node,
+        &session_id,
+        "internal-approve",
+    )
+    .await
+    .expect("approved running timeout must load exact terminal evidence")
+    {
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission) => {
+            assert_eq!(omission.terminal_phase, "timedOut");
+            assert_eq!(omission.reason, "timedOut");
+            assert!(omission.detail.contains("deadline exceeded"));
+        }
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Output(_) => {
+            panic!("timed out approved call must resolve to omission evidence")
+        }
+    }
+
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -3285,6 +3601,69 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
         row.get("tool_failure_class")
             .and_then(|value| value.as_str()),
         Some("approvalDenied")
+    );
+
+    match crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+        &node,
+        &session_id,
+        "internal-deny",
+    )
+    .await
+    .expect("valid denial must load through exact terminal evidence")
+    {
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission) => {
+            assert_eq!(omission.terminal_phase, "failed");
+            assert_eq!(omission.reason, "approvalDenied");
+            assert!(omission.detail.contains("not on my watch"));
+        }
+        crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Output(_) => {
+            panic!("denied held call must resolve to omission evidence")
+        }
+    }
+
+    let call_doc_id = row
+        .get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .expect("denied call physical document id");
+    let corrupt = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{}" }} }},
+                input: {{
+                    approval_doc_id: null,
+                    approval_composite_commit_cid: null,
+                    approval_signer_did: null
+                }}
+            ) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(call_doc_id),
+        ))
+        .await;
+    assert!(
+        !corrupt.has_errors(),
+        "clearing exact approval edge failed: {:?}",
+        corrupt.errors
+    );
+    let corrupted = fetch_tool_call_row(&node, &session_id, "internal-deny").await;
+    assert!(corrupted
+        .get("approval_doc_id")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(corrupted
+        .get("approval_composite_commit_cid")
+        .is_none_or(serde_json::Value::is_null));
+    assert!(corrupted
+        .get("approval_signer_did")
+        .is_none_or(serde_json::Value::is_null));
+
+    let error = crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
+        &node,
+        &session_id,
+        "internal-deny",
+    )
+    .await
+    .expect_err("approvalDenied without an exact approval edge must fail closed");
+    assert!(
+        format!("{error:#}").contains("approvalDenied terminal has no exact approval call edge"),
+        "unexpected missing-approval error: {error:#}"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);

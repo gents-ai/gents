@@ -8,9 +8,11 @@ use axum::{
 };
 use base64::Engine as _;
 use gents::graphql::escape_graphql_string;
+use gents::run_timeline::RunTimelineEvent;
 use gents::session::{
     fork, fork_via_http, ForkError, ForkParams, GraphqlExecutor, HttpGraphqlExecutor,
 };
+use gents_protocol::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use identity::Identity as _;
 use serde::Deserialize;
 use tokio::net::TcpListener;
@@ -172,6 +174,111 @@ async fn create_fork_tool_call(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn create_approved_fork_tool_call(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    message_sequence: u32,
+    tool_call_id: &str,
+    tool_name: &str,
+    args: &str,
+    started_at: &str,
+) {
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    let deadline_at = "2026-04-21T10:05:00Z";
+    let create = format!(
+        r#"mutation {{ create_AgentToolCall(input: {{
+            tool_call_key: "{}",
+            session_id: "{}",
+            agent_did: "{AGENT_DID}",
+            message_sequence: {message_sequence},
+            tool_name: "{}",
+            tool_call_id: "{}",
+            args: "{}",
+            result: "",
+            status: "called",
+            lifecycle_state: "awaitingApproval",
+            deadline_at: "{deadline_at}"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&tool_call_key),
+        escape_graphql_string(session_id),
+        escape_graphql_string(tool_name),
+        escape_graphql_string(tool_call_id),
+        escape_graphql_string(args),
+    );
+    let response = node.execute(&create).await;
+    assert!(
+        !response.has_errors(),
+        "create held fork tool call: {:?}",
+        response.errors
+    );
+    let (held_doc_id, held_cid, held_signer) =
+        exact_current_evidence(node, "AgentToolCall", "tool_call_key", &tool_call_key).await;
+    let approval_key = held_doc_id.clone();
+    let create_approval = format!(
+        r#"mutation {{ create_AgentToolApproval(input: {{
+            approval_id: "approval-{}",
+            approval_key: "{}",
+            tool_call_id: "{}",
+            tool_call_key: "{}",
+            tool_call_doc_id: "{}",
+            tool_call_composite_commit_cid: "{}",
+            tool_call_signer_did: "{}",
+            session_id: "{}",
+            agent_did: "{AGENT_DID}",
+            decision: "approved",
+            approver_did: "{}",
+            created_at: "{}"
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(&held_doc_id),
+        escape_graphql_string(&approval_key),
+        escape_graphql_string(tool_call_id),
+        escape_graphql_string(&tool_call_key),
+        escape_graphql_string(&held_doc_id),
+        escape_graphql_string(&held_cid),
+        escape_graphql_string(&held_signer),
+        escape_graphql_string(session_id),
+        escape_graphql_string(&held_signer),
+        escape_graphql_string(started_at),
+    );
+    let response = node.execute(&create_approval).await;
+    assert!(
+        !response.has_errors(),
+        "create exact approval: {:?}",
+        response.errors
+    );
+    let (approval_doc_id, approval_cid, approval_signer) =
+        exact_current_evidence(node, "AgentToolApproval", "approval_key", &approval_key).await;
+    let approve = format!(
+        r#"mutation {{ update_AgentToolCall(
+            filter: {{
+                _docID: {{ _eq: "{}" }},
+                lifecycle_state: {{ _eq: "awaitingApproval" }},
+                approval_doc_id: {{ _eq: null }}
+            }},
+            input: {{
+                lifecycle_state: "running",
+                started_at: "{}",
+                deadline_at: "{deadline_at}",
+                approval_doc_id: "{}",
+                approval_composite_commit_cid: "{}",
+                approval_signer_did: "{}"
+            }}
+        ) {{ _docID }} }}"#,
+        escape_graphql_string(&held_doc_id),
+        escape_graphql_string(started_at),
+        escape_graphql_string(&approval_doc_id),
+        escape_graphql_string(&approval_cid),
+        escape_graphql_string(&approval_signer),
+    );
+    let response = node.execute(&approve).await;
+    assert!(
+        !response.has_errors(),
+        "approve held fork tool call: {:?}",
+        response.errors
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn create_exact_tool_result(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
@@ -181,9 +288,54 @@ async fn create_exact_tool_result(
     output_text: &str,
     created_at: &str,
 ) {
+    create_exact_tool_result_with_limits(
+        node,
+        session_id,
+        tool_call_id,
+        tool_name,
+        tool_input,
+        output_text,
+        created_at,
+        gents::TruncationLimits::default(),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_exact_tool_result_with_limits(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_input: &str,
+    output_text: &str,
+    created_at: &str,
+    projection_limits: gents::TruncationLimits,
+) {
     let tool_call_key = format!("{session_id}:{tool_call_id}");
     let (call_doc_id, call_cid, call_signer) =
         exact_current_evidence(node, "AgentToolCall", "tool_call_key", &tool_call_key).await;
+    let (bounded_output, truncated_by, truncated) = gents::truncation::truncate_text(
+        output_text,
+        gents::TruncationMode::Head,
+        &projection_limits,
+    );
+    let truncated_by = truncated_by.map(|trigger| match trigger {
+        gents::truncation::TruncationTrigger::Lines => "lines",
+        gents::truncation::TruncationTrigger::Bytes => "bytes",
+    });
+    let projection_metadata = serde_json::json!({
+        "projection_version": 1,
+        "truncated": truncated,
+        "truncated_by": truncated_by,
+        "mode": "head",
+        "original_lines": output_text.lines().count(),
+        "original_bytes": output_text.len(),
+        "max_lines": projection_limits.max_lines,
+        "max_bytes": projection_limits.max_bytes,
+        "spill_reference": true,
+    })
+    .to_string();
     let mutation = format!(
         r#"mutation {{ create_AgentToolResult(input: {{
             result_key: "{call_cid}",
@@ -196,8 +348,8 @@ async fn create_exact_tool_result(
             tool_name: "{}",
             tool_input: "{}",
             output_text: "{}",
-            model_output_truncated: false,
-            truncation_metadata: "",
+            model_output_truncated: {truncated},
+            truncation_metadata: "{}",
             conversation_doc_id: "",
             created_at: "{}",
             discarded_because_interrupted: false
@@ -207,6 +359,7 @@ async fn create_exact_tool_result(
         escape_graphql_string(tool_name),
         escape_graphql_string(tool_input),
         escape_graphql_string(output_text),
+        escape_graphql_string(&projection_metadata),
         escape_graphql_string(created_at),
     );
     let response = node.execute(&mutation).await;
@@ -217,6 +370,11 @@ async fn create_exact_tool_result(
     );
     let (result_doc_id, result_cid, result_signer) =
         exact_current_evidence(node, "AgentToolResult", "result_key", &call_cid).await;
+    let model_projection = if truncated {
+        format!("{bounded_output}\n[Full output: DefraDB doc {result_doc_id}]")
+    } else {
+        bounded_output
+    };
     let attach = format!(
         r#"mutation {{ update_AgentToolCall(
             filter: {{
@@ -237,7 +395,7 @@ async fn create_exact_tool_result(
             }}
         ) {{ _docID }} }}"#,
         escape_graphql_string(&call_doc_id),
-        escape_graphql_string(output_text),
+        escape_graphql_string(&model_projection),
         escape_graphql_string(created_at),
         escape_graphql_string(created_at),
         escape_graphql_string(&result_doc_id),
@@ -336,6 +494,21 @@ struct EmbeddedGraphqlState {
     node: Arc<defra_node::EmbeddedNode>,
     audience: String,
     signature_tamper: SignatureTamper,
+    fork_stage_barrier: Option<Arc<ForkStageBarrier>>,
+}
+
+struct ForkStageBarrier {
+    staged: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl Default for ForkStageBarrier {
+    fn default() -> Self {
+        Self {
+            staged: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -386,6 +559,8 @@ async fn embedded_graphql_handler(
             Json(serde_json::json!({"error": "invalid bearer DID"})),
         );
     };
+    let is_fork_staging_create = request.query.contains("create_AgentToolCall")
+        && request.query.contains("status: \"forkStaging\"");
     let response = state
         .node
         .execute_request_with_retry(
@@ -393,6 +568,17 @@ async fn embedded_graphql_handler(
             defra_node::ExecuteRetryPolicy::default(),
         )
         .await;
+    if is_fork_staging_create && !response.has_errors() {
+        if let Some(barrier) = &state.fork_stage_barrier {
+            barrier.staged.add_permits(1);
+            let permit = barrier
+                .release
+                .acquire()
+                .await
+                .expect("fork staging barrier remains open");
+            permit.forget();
+        }
+    }
     let body = serde_json::json!({
         "data": response.data,
         "errors": response.errors,
@@ -472,6 +658,21 @@ async fn spawn_embedded_graphql_with_tamper(
     node: Arc<defra_node::EmbeddedNode>,
     signature_tamper: SignatureTamper,
 ) -> String {
+    spawn_embedded_graphql_with_options(node, signature_tamper, None).await
+}
+
+async fn spawn_embedded_graphql_with_stage_barrier(
+    node: Arc<defra_node::EmbeddedNode>,
+    barrier: Arc<ForkStageBarrier>,
+) -> String {
+    spawn_embedded_graphql_with_options(node, SignatureTamper::None, Some(barrier)).await
+}
+
+async fn spawn_embedded_graphql_with_options(
+    node: Arc<defra_node::EmbeddedNode>,
+    signature_tamper: SignatureTamper,
+    fork_stage_barrier: Option<Arc<ForkStageBarrier>>,
+) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("bind embedded graphql listener");
@@ -482,10 +683,14 @@ async fn spawn_embedded_graphql_with_tamper(
         node,
         audience: addr.to_string(),
         signature_tamper,
+        fork_stage_barrier,
     };
     let router = Router::new()
         .route("/api/v0/graphql", post(embedded_graphql_handler))
-        .route("/api/v0/block/signed", get(embedded_signed_block_handler))
+        .route(
+            gents::signed_block_http::SIGNED_BLOCK_HTTP_PATH,
+            get(embedded_signed_block_handler),
+        )
         .with_state(state);
 
     tokio::spawn(async move {
@@ -576,6 +781,138 @@ async fn set_tool_call_trace_fields(
         "set tool call trace fields failed: {:?}",
         resp.errors
     );
+}
+
+async fn set_tool_call_subagent_bridge(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+    child_request_id: &str,
+) {
+    let tool_call_key = format!("{session_id}:{tool_call_id}");
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{ tool_call_key: {{ _eq: "{}" }} }},
+                input: {{
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "{}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(&tool_call_key),
+        escape_graphql_string(child_request_id),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set source subagent bridge failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_terminal_source_subagent_bridge(
+    node: &defra_node::EmbeddedNode,
+    parent_session: &str,
+    child_request_id: &str,
+) {
+    create_agent_session(node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(node, AGENT_NAME, AGENT_DID).await;
+    create_request(
+        node,
+        child_request_id,
+        "source-child-session",
+        "processing",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        node,
+        parent_session,
+        1,
+        "user",
+        "delegate",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_agent_message(
+        node,
+        parent_session,
+        2,
+        "assistant",
+        "spawned background child",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_fork_tool_call(
+        node,
+        parent_session,
+        2,
+        "spawn-call",
+        "spawn_subagent",
+        r#"{"target":"worker","prompt":"work","await_mode":"background"}"#,
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    set_tool_call_subagent_bridge(node, parent_session, "spawn-call", child_request_id).await;
+    create_exact_tool_result(
+        node,
+        parent_session,
+        "spawn-call",
+        "spawn_subagent",
+        r#"{"target":"worker","prompt":"work","await_mode":"background"}"#,
+        r#"{"status":"accepted"}"#,
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        node,
+        parent_session,
+        3,
+        "user",
+        "fork here",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+}
+
+async fn fetch_tool_call_bridge_rows(
+    node: &defra_node::EmbeddedNode,
+    session_id: Option<&str>,
+    status: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let mut filters = Vec::new();
+    if let Some(session_id) = session_id {
+        filters.push(format!(
+            r#"session_id: {{ _eq: "{}" }}"#,
+            escape_graphql_string(session_id)
+        ));
+    }
+    if let Some(status) = status {
+        filters.push(format!(
+            r#"status: {{ _eq: "{}" }}"#,
+            escape_graphql_string(status)
+        ));
+    }
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ {} }}) {{
+                _docID session_id status lifecycle_state child_request_id fork_source_doc_id
+            }} }}"#,
+            filters.join(", ")
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fetch tool-call bridge rows failed: {:?}",
+        response.errors
+    );
+    response.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .expect("AgentToolCall rows")
+        .clone()
 }
 
 #[tokio::test]
@@ -976,6 +1313,14 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
     )
     .await;
 
+    let parent_early_result_doc_id =
+        fetch_tool_call_snapshots_for_session(&db.node, parent_session)
+            .await
+            .into_iter()
+            .find(|call| call.tool_call_id == "tc-early")
+            .and_then(|call| call.result_doc_id)
+            .expect("source terminal call has exact result evidence");
+
     let outcome = fork(
         &db.node,
         ForkParams {
@@ -1001,7 +1346,28 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
     assert_eq!(child_results[0].tool_name, "read_file");
     assert_eq!(child_results[0].tool_input, "{}");
     assert!(!child_results[0].truncated);
-    assert_eq!(child_results[0].truncation_metadata, "");
+    let child_metadata: serde_json::Value =
+        serde_json::from_str(&child_results[0].truncation_metadata)
+            .expect("forked result preserves projection contract");
+    assert_eq!(child_metadata["spill_reference"].as_bool(), Some(true));
+    let child_calls = fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let [child_call] = child_calls.as_slice() else {
+        panic!("expected one forked result-bearing tool call")
+    };
+    let child_result_doc_id = child_call
+        .result_doc_id
+        .as_deref()
+        .expect("forked terminal call pins child result evidence");
+    assert_ne!(child_result_doc_id, parent_early_result_doc_id);
+    assert_eq!(child_call.result, "early");
+    assert!(
+        !child_call.result.contains(&parent_early_result_doc_id),
+        "forked projection retained the source result authority"
+    );
+    assert!(
+        !child_call.result.contains("[Full output: DefraDB doc"),
+        "lossless forked projections must not render a paging pointer"
+    );
     let (child_conversation_doc_id, _, _) = exact_current_evidence(
         &db.node,
         "AgentConversation",
@@ -1015,6 +1381,391 @@ async fn fork_copies_only_results_pinned_by_a_copied_tool_call() {
     );
     assert_eq!(child_results[0].created_at, "2026-04-21T10:00:02Z");
     assert_eq!(outcome.copied_tool_results, 1);
+}
+
+#[tokio::test]
+async fn fork_rebinds_copied_tool_result_message_to_child_result_fact() {
+    let db = test_db("fork-rebind-tool-result-message").await;
+    let parent_session = "parent-tool-result-message";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "assistant",
+        "assistant tool call",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_fork_tool_call(
+        &db.node,
+        parent_session,
+        1,
+        "tc-message",
+        "read_file",
+        "{}",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    let full_output = (0..5)
+        .map(|index| format!("durable-line-{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    create_exact_tool_result_with_limits(
+        &db.node,
+        parent_session,
+        "tc-message",
+        "read_file",
+        "{}",
+        &full_output,
+        "2026-04-21T10:00:02Z",
+        gents::TruncationLimits {
+            max_lines: 2,
+            max_bytes: 1024,
+        },
+    )
+    .await;
+
+    let source_call = fetch_tool_call_snapshots_for_session(&db.node, parent_session)
+        .await
+        .into_iter()
+        .next()
+        .expect("source result-bearing call");
+    let source_result_doc_id = source_call
+        .result_doc_id
+        .clone()
+        .expect("source call pins exact result");
+    let source_message = serde_json::to_string(&Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "tc-message".to_string(),
+            call_id: Some("tc-message".to_string()),
+            content: vec![ToolResultContent::Text(Text {
+                text: source_call.result.clone(),
+            })],
+        })],
+    })
+    .expect("encode source tool-result message");
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "user",
+        &source_message,
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            // The tool-result observation is the only user-role row. Forking
+            // at the end includes both the assistant call and its result.
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork succeeds");
+
+    let child_call = fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id)
+        .await
+        .into_iter()
+        .next()
+        .expect("child result-bearing call");
+    let child_result_doc_id = child_call
+        .result_doc_id
+        .as_deref()
+        .expect("child call pins copied result");
+    assert_ne!(child_result_doc_id, source_result_doc_id);
+
+    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let encoded_child_result = child_messages
+        .iter()
+        .find(|message| message.sequence == 2)
+        .map(|message| message.content.as_str())
+        .expect("copied child tool-result message");
+    let child_message: Message =
+        serde_json::from_str(encoded_child_result).expect("decode child tool-result message");
+    let Message::User { content } = child_message else {
+        panic!("copied result message is not a user message")
+    };
+    let [UserContent::ToolResult(tool_result)] = content.as_slice() else {
+        panic!("copied result message does not contain one tool result")
+    };
+    let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
+        panic!("copied tool result does not contain one text projection")
+    };
+    assert_eq!(text.text, child_call.result);
+    assert!(
+        text.text
+            .ends_with(&format!("[Full output: DefraDB doc {child_result_doc_id}]")),
+        "copied transcript must point at the child result: {:?}",
+        text.text
+    );
+    assert!(
+        !text.text.contains(&source_result_doc_id),
+        "copied transcript retained the source result authority"
+    );
+}
+
+#[tokio::test]
+async fn fork_replays_approved_execution_before_timeline_reads_terminal_result() {
+    let db = test_db("fork-approved-tool-timeline").await;
+    let parent_session = "parent-approved-tool-timeline";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "assistant",
+        "approved tool call",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_approved_fork_tool_call(
+        &db.node,
+        parent_session,
+        1,
+        "tc-approved",
+        "write_file",
+        r#"{"path":"approved.txt"}"#,
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_exact_tool_result(
+        &db.node,
+        parent_session,
+        "tc-approved",
+        "write_file",
+        r#"{"path":"approved.txt"}"#,
+        "ok",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "user",
+        "continue from the approved result",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("active fork succeeds");
+    assert_eq!(outcome.copied_tool_calls, 1);
+    assert_eq!(outcome.copied_tool_approvals, 1);
+    assert_eq!(outcome.copied_tool_results, 1);
+
+    let child_request_id = "fork-approved-timeline-request";
+    create_request(
+        &db.node,
+        child_request_id,
+        &outcome.session_id,
+        "completed",
+        "2026-04-21T10:00:05Z",
+    )
+    .await;
+    let access = gents::config_client::ConfigAccess::Local(db.node.clone());
+    let timeline = gents::run_timeline_fetch::load_run_timeline(&access, child_request_id)
+        .await
+        .expect("forked approved result has a valid exact timeline");
+    let tool = timeline
+        .events
+        .iter()
+        .find_map(|event| match event {
+            RunTimelineEvent::ToolCall(tool) if tool.tool_call_id == "tc-approved" => Some(tool),
+            _ => None,
+        })
+        .expect("timeline contains copied approved tool call");
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
+    assert_eq!(
+        tool.approval_fact
+            .as_ref()
+            .map(|approval| approval.decision.as_str()),
+        Some("approved")
+    );
+    assert_eq!(
+        tool.result_fact
+            .as_ref()
+            .map(|result| result.output_text.as_str()),
+        Some("ok")
+    );
+    let running = tool
+        .result_fact
+        .as_ref()
+        .expect("copied result pins the intermediate running execution");
+    let exact_running_query = format!(
+        r#"{{ AgentToolCall(
+            cid: ["{}"],
+            docID: ["{}"]
+        ) {{ _docID status lifecycle_state deadline_at approval_doc_id }} }}"#,
+        escape_graphql_string(&running.tool_call_composite_commit_cid),
+        escape_graphql_string(&running.tool_call_doc_id),
+    );
+    let response = db.node.execute(&exact_running_query).await;
+    assert!(
+        !response.has_errors(),
+        "load copied intermediate running execution: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .expect("exact copied running rows");
+    let [running_row] = rows.as_slice() else {
+        panic!("expected one exact copied running execution, got {rows:?}")
+    };
+    assert_eq!(running_row["lifecycle_state"].as_str(), Some("running"));
+    assert_eq!(running_row["status"].as_str(), Some("forkStaging"));
+    assert_eq!(
+        running_row["approval_doc_id"].as_str(),
+        tool.approval_fact
+            .as_ref()
+            .map(|approval| approval.doc_id.as_str())
+    );
+    let staging_deadline = chrono::DateTime::parse_from_rfc3339(
+        running_row["deadline_at"]
+            .as_str()
+            .expect("copied running staging deadline"),
+    )
+    .expect("valid copied running staging deadline")
+    .with_timezone(&chrono::Utc);
+    assert!(
+        staging_deadline > chrono::Utc::now(),
+        "terminal approval replay must retain its future fork-staging lease"
+    );
+}
+
+#[tokio::test]
+async fn active_approved_nonterminal_fork_stays_hidden_until_state_is_restored() {
+    let db = test_db("fork-approved-nonterminal-staging").await;
+    let parent_session = "parent-approved-nonterminal";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        1,
+        "assistant",
+        "approved tool call still running",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    create_approved_fork_tool_call(
+        &db.node,
+        parent_session,
+        1,
+        "tc-approved-running",
+        "long_task",
+        "{}",
+        "2026-04-21T10:00:02Z",
+    )
+    .await;
+    create_agent_message(
+        &db.node,
+        parent_session,
+        2,
+        "user",
+        "fork while it is running",
+        "2026-04-21T10:00:03Z",
+    )
+    .await;
+
+    let barrier = Arc::new(ForkStageBarrier::default());
+    let endpoint =
+        spawn_embedded_graphql_with_stage_barrier(db.node.clone(), barrier.clone()).await;
+    let access = gents::AuthenticatedGraphql::new(
+        endpoint,
+        db.node_identity().expect("signed test node identity"),
+    )
+    .await
+    .expect("authenticated GraphQL access");
+    let fork_task = tokio::spawn(async move {
+        fork_via_http(
+            access,
+            ForkParams {
+                source_session_id: parent_session,
+                fork_at_user_turn: 1,
+                caller_agent_did: AGENT_DID,
+                target_behavior_id: None,
+            },
+        )
+        .await
+    });
+    let staged = tokio::time::timeout(std::time::Duration::from_secs(10), barrier.staged.acquire())
+        .await
+        .expect("approved fork reached durable staging")
+        .expect("fork staging semaphore remains open");
+    staged.forget();
+
+    let local_access = gents::config_client::ConfigAccess::Local(db.node.clone());
+    let held = gents::config_client::list_held_tool_calls(&local_access, Some(AGENT_DID))
+        .await
+        .expect("list operator-visible held calls during fork");
+    assert!(
+        held.is_empty(),
+        "an approved nonterminal copy must not surface as a new approval request"
+    );
+    let staging_rows = fetch_tool_call_bridge_rows(&db.node, None, Some("forkStaging")).await;
+    let [staging] = staging_rows.as_slice() else {
+        panic!("expected one approved nonterminal staging row")
+    };
+    assert_eq!(
+        staging["lifecycle_state"].as_str(),
+        Some("awaitingApproval")
+    );
+
+    // The HTTP harness intentionally pauses after the durable create and does
+    // not implement DefraDB's transaction endpoints used by the later exact
+    // approval transition. End that visibility probe, then run the complete
+    // embedded fork to verify the atomic restored state.
+    fork_task.abort();
+    barrier.release.add_permits(1);
+    let _ = fork_task.await;
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("approved nonterminal fork succeeds");
+    let child_calls = fetch_tool_call_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let [child] = child_calls.as_slice() else {
+        panic!("expected one copied approved nonterminal call")
+    };
+    assert_eq!(child.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(child.status, "called");
+    assert_eq!(
+        child.deadline_at.as_deref(),
+        Some("2026-04-21T10:05:00Z"),
+        "the approval transition atomically restores the source operational deadline"
+    );
+    assert_eq!(child.started_at.as_deref(), Some("2026-04-21T10:00:02Z"));
 }
 
 #[tokio::test]
@@ -1151,7 +1902,108 @@ async fn fork_stages_terminal_tool_call_until_exact_omission_is_bound() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["_docID"].as_str(), Some(child.doc_id.as_str()));
     assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("running"));
-    assert_eq!(outcome.copied_tool_results, 0);
+    assert_eq!(
+        outcome.copied_tool_results, 1,
+        "the copied exact omission is the terminal tool evidence for this call"
+    );
+}
+
+#[tokio::test]
+async fn completed_fork_does_not_claim_the_source_subagent_request() {
+    let db = test_db("fork-clears-source-subagent-bridge").await;
+    let parent_session = "parent-source-subagent-bridge";
+    let source_child_request_id = "source-child-request";
+    create_terminal_source_subagent_bridge(&db.node, parent_session, source_child_request_id).await;
+
+    let source_rows = fetch_tool_call_bridge_rows(&db.node, Some(parent_session), None).await;
+    let [source] = source_rows.as_slice() else {
+        panic!("expected one source subagent bridge")
+    };
+    assert_eq!(
+        source["child_request_id"].as_str(),
+        Some(source_child_request_id)
+    );
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork copies the terminal tool evidence");
+
+    let child_rows = fetch_tool_call_bridge_rows(&db.node, Some(&outcome.session_id), None).await;
+    let [child] = child_rows.as_slice() else {
+        panic!("expected one completed fork tool call")
+    };
+    assert_eq!(child["lifecycle_state"].as_str(), Some("completed"));
+    assert!(
+        child["child_request_id"].is_null(),
+        "a completed fork must not expose the source session's child request"
+    );
+}
+
+#[tokio::test]
+async fn active_http_fork_staging_never_exposes_the_source_subagent_request() {
+    let db = test_db("fork-staging-clears-source-subagent-bridge").await;
+    let parent_session = "parent-staged-source-subagent-bridge";
+    let source_child_request_id = "source-staged-child-request";
+    create_terminal_source_subagent_bridge(&db.node, parent_session, source_child_request_id).await;
+
+    let barrier = Arc::new(ForkStageBarrier::default());
+    let endpoint =
+        spawn_embedded_graphql_with_stage_barrier(db.node.clone(), barrier.clone()).await;
+    let access = gents::AuthenticatedGraphql::new(
+        endpoint,
+        db.node_identity().expect("signed test node identity"),
+    )
+    .await
+    .expect("authenticated GraphQL access");
+    let fork_task = tokio::spawn(async move {
+        fork_via_http(
+            access,
+            ForkParams {
+                source_session_id: parent_session,
+                fork_at_user_turn: 1,
+                caller_agent_did: AGENT_DID,
+                target_behavior_id: None,
+            },
+        )
+        .await
+    });
+
+    let staged = tokio::time::timeout(std::time::Duration::from_secs(10), barrier.staged.acquire())
+        .await
+        .expect("fork reached durable staging")
+        .expect("fork staging semaphore remains open");
+    staged.forget();
+
+    let staging_rows = fetch_tool_call_bridge_rows(&db.node, None, Some("forkStaging")).await;
+    let [staging] = staging_rows.as_slice() else {
+        panic!("expected one active fork-staging tool call")
+    };
+    assert_eq!(staging["lifecycle_state"].as_str(), Some("running"));
+    assert!(
+        staging["fork_source_doc_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "staging row must retain immutable source provenance"
+    );
+    assert!(
+        staging["child_request_id"].is_null(),
+        "even an active staging row must not expose the source child request"
+    );
+
+    // This test intentionally holds the remote fork between the durable stage
+    // create and terminal evidence binding. The completed-fork regression
+    // above covers the terminal contract independently.
+    fork_task.abort();
+    barrier.release.add_permits(1);
+    let _ = fork_task.await;
 }
 
 #[tokio::test]

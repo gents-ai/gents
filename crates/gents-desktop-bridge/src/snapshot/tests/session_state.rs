@@ -1009,6 +1009,12 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             tool_call_id: Some("call-1".to_string()),
             args: Some("{\"command\":\"ls\"}".to_string()),
             result: None,
+            result_doc_id: None,
+            result_composite_commit_cid: None,
+            result_signer_did: None,
+            omission_doc_id: Some("omission-tool-1".to_string()),
+            omission_composite_commit_cid: Some("cid-omission-tool-1".to_string()),
+            omission_signer_did: Some("did:test:amy".to_string()),
             status: Some("cancelled".to_string()),
             lifecycle_state: Some("cancelled".to_string()),
             child_request_id: None,
@@ -1172,6 +1178,12 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             tool_call_id: Some("call-cascade-1".to_string()),
             args: Some("{\"path\":\"/tmp/foo\"}".to_string()),
             result: None,
+            result_doc_id: None,
+            result_composite_commit_cid: None,
+            result_signer_did: None,
+            omission_doc_id: Some("omission-tool-cascade-1".to_string()),
+            omission_composite_commit_cid: Some("cid-omission-tool-cascade-1".to_string()),
+            omission_signer_did: Some("did:test:amy".to_string()),
             status: Some("cancelled".to_string()),
             lifecycle_state: Some("cancelled".to_string()),
             child_request_id: None,
@@ -1386,6 +1398,17 @@ fn transcript_contract_tool_calls(
             args: Some(r#"{"file_path":"/tmp/transcript-contract.txt"}"#.to_string()),
             result: (lifecycle_state == "completed")
                 .then(|| format!("payload-{}", case.payload_hash)),
+            result_doc_id: (lifecycle_state == "completed")
+                .then(|| format!("result-doc-{}-{index}", case.name)),
+            result_composite_commit_cid: (lifecycle_state == "completed")
+                .then(|| format!("result-cid-{}-{index}", case.name)),
+            result_signer_did: (lifecycle_state == "completed").then(|| "did:test:amy".to_string()),
+            omission_doc_id: (lifecycle_state == "cancelled")
+                .then(|| format!("omission-doc-{}-{index}", case.name)),
+            omission_composite_commit_cid: (lifecycle_state == "cancelled")
+                .then(|| format!("omission-cid-{}-{index}", case.name)),
+            omission_signer_did: (lifecycle_state == "cancelled")
+                .then(|| "did:test:amy".to_string()),
             status: Some(lifecycle_state.to_string()),
             lifecycle_state: Some(lifecycle_state.to_string()),
             child_request_id: None,

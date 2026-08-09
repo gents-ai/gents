@@ -1,12 +1,23 @@
-use crate::support::test_db;
+use crate::support::TestDb;
 #[allow(unused_imports)]
 use gents::tool_call_lifecycle::{
     create_subagent_request, AwaitMode, CancelCause, CancelPolicy, CascadeIntent, ChildTerminal,
-    FailureClass, IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    DurableToolCallTerminalEvidence, FailureClass, IllegalToolCallTransition, ToolCallLifecycle,
+    MAX_SUBAGENT_DEPTH,
 };
 
 fn test_deadline() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() + chrono::Duration::minutes(5)
+}
+
+async fn test_db(name: &str) -> TestDb {
+    crate::signed_materializer_test_db(name).await
+}
+
+fn registered_agent_did(node: &gents::defra_node::EmbeddedNode) -> String {
+    node.node_identity_did()
+        .expect("subagent conformance fixtures must register a signing identity")
+        .to_string()
 }
 
 async fn make_completed_request(
@@ -57,7 +68,7 @@ async fn make_completed_request(
                 {ptc}
             }}) {{ _docID }}
         }}"#,
-        agent_did = crate::support::AGENT_DID,
+        agent_did = registered_agent_did(node),
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
@@ -125,7 +136,7 @@ async fn make_terminal_request(
                 {ptc}
             }}) {{ _docID }}
         }}"#,
-        agent_did = crate::support::AGENT_DID,
+        agent_did = registered_agent_did(node),
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         prf = parent_req_field,
         ptc = parent_tc_field,
@@ -142,12 +153,13 @@ async fn make_terminal_request(
 async fn fetch_tool_call_state_and_result(
     node: &gents::defra_node::EmbeddedNode,
     tool_call_id: &str,
-) -> (String, String) {
+) -> (String, String, Option<String>) {
     let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{
             lifecycle_state
             result
+            result_doc_id
         }} }}"#
     );
     let resp = node.execute(&query).await;
@@ -158,6 +170,7 @@ async fn fetch_tool_call_state_and_result(
     (
         rows[0]["lifecycle_state"].as_str().unwrap().to_string(),
         rows[0]["result"].as_str().unwrap().to_string(),
+        rows[0]["result_doc_id"].as_str().map(ToOwned::to_owned),
     )
 }
 
@@ -187,7 +200,7 @@ async fn integration_load_round_trip_preserves_subagent_fields() {
         db.node.clone(),
         "req-load-rt-1".to_string(),
         "sess-load-rt-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-load-rt-1".to_string(),
         3,
         "spawn_subagent".to_string(),
@@ -248,7 +261,7 @@ async fn integration_load_round_trip_foreground_cascade_also_preserved() {
         db.node.clone(),
         "req-load-rt-2".to_string(),
         "sess-load-rt-2".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-load-rt-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -298,7 +311,7 @@ async fn integration_load_round_trip_native_tool_has_no_child_request_id() {
         db.node.clone(),
         "req-load-rt-3".to_string(),
         "sess-load-rt-3".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-load-rt-3".to_string(),
         0,
         "echo".to_string(),
@@ -343,7 +356,7 @@ async fn integration_background_then_foreground_persists_round_trip() {
         db.node.clone(),
         "req-int-1".to_string(),
         "sess-int-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-int-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -408,7 +421,7 @@ async fn integration_mode_flips_tolerate_stale_same_target_owner() {
         db.node.clone(),
         "req-mode-cas-1".to_string(),
         "sess-mode-cas-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-mode-cas-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -454,7 +467,7 @@ async fn integration_detach_one_way_persists() {
         db.node.clone(),
         "req-det-1".to_string(),
         "sess-det-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-det-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -521,7 +534,7 @@ async fn integration_detach_rejects_native_tool() {
         db.node.clone(),
         "req-det-native-1".to_string(),
         "sess-det-native-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-det-native-1".to_string(),
         0,
         "echo".to_string(),
@@ -671,7 +684,7 @@ async fn integration_bridge_complete_with_real_child() {
         db.node.clone(),
         "parent-req-bc1".to_string(),
         "sess-bc1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-bc1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -700,6 +713,7 @@ async fn integration_bridge_complete_with_real_child() {
             r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "tc-bc1" } }) {
             lifecycle_state
             result
+            result_doc_id
             child_request_id
         } }"#,
         )
@@ -716,10 +730,12 @@ async fn integration_bridge_complete_with_real_child() {
         Some("completed"),
         "lifecycle_state should be 'completed' after bridge_complete"
     );
-    assert_eq!(
-        row["result"].as_str(),
-        Some("child final assistant message"),
-        "result should be the projected child output"
+    super::assert_exact_result_projection(
+        row["result"].as_str().expect("projected child output"),
+        "child final assistant message",
+        row["result_doc_id"]
+            .as_str()
+            .expect("exact child output result document"),
     );
     assert_eq!(
         row["child_request_id"].as_str(),
@@ -746,7 +762,7 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
         db.node.clone(),
         "parent-req-bc-cas1".to_string(),
         "sess-bc-cas1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-bc-cas1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -775,9 +791,11 @@ async fn integration_bridge_complete_does_not_overwrite_externally_terminal_brid
         !transitioned,
         "bridge_complete should lose the persisted running compare"
     );
-    let (state, result) = fetch_tool_call_state_and_result(&db.node, "tc-bc-cas1").await;
+    let (state, result, result_doc_id) =
+        fetch_tool_call_state_and_result(&db.node, "tc-bc-cas1").await;
     assert_eq!(state, "cancelled");
     assert_eq!(result, "tool call cancelled");
+    assert!(result_doc_id.is_none());
 }
 
 async fn run_bridge_failure_case(
@@ -785,6 +803,7 @@ async fn run_bridge_failure_case(
     terminal_state: &str,
     child_terminal: ChildTerminal,
     expected_lifecycle_state: &str,
+    expected_evidence: BridgeFailureEvidence,
 ) {
     let db = test_db(&format!("tc-sa-bf-{name_suffix}")).await;
     let session = format!("sess-bf-{name_suffix}");
@@ -807,7 +826,7 @@ async fn run_bridge_failure_case(
         db.node.clone(),
         parent_req.clone(),
         session.clone(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         tc_id.clone(),
         1,
         "spawn_subagent".to_string(),
@@ -847,6 +866,46 @@ async fn run_bridge_failure_case(
         terminal_state,
         rows[0]["lifecycle_state"]
     );
+
+    let evidence = gents::tool_call_lifecycle::load_durable_tool_call_terminal_evidence(
+        db.node.as_ref(),
+        &session,
+        &tc_id,
+    )
+    .await
+    .expect("bridge failure must have verified exact terminal evidence");
+    match (expected_evidence, evidence) {
+        (
+            BridgeFailureEvidence::Output(expected_output),
+            DurableToolCallTerminalEvidence::Output { output_text, .. },
+        ) => assert_eq!(output_text, expected_output),
+        (
+            BridgeFailureEvidence::Omission {
+                terminal_phase: expected_terminal_phase,
+                reason: expected_reason,
+            },
+            DurableToolCallTerminalEvidence::Omission {
+                terminal_phase,
+                reason,
+                ..
+            },
+        ) => {
+            assert_eq!(terminal_phase, expected_terminal_phase);
+            assert_eq!(reason, expected_reason);
+        }
+        (expected, actual) => panic!(
+            "unexpected exact terminal evidence for child terminal {terminal_state}: expected {expected:?}, got {actual:?}"
+        ),
+    }
+}
+
+#[derive(Debug)]
+enum BridgeFailureEvidence {
+    Output(&'static str),
+    Omission {
+        terminal_phase: &'static str,
+        reason: &'static str,
+    },
 }
 
 #[tokio::test]
@@ -867,7 +926,7 @@ async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridg
         db.node.clone(),
         "parent-req-bf-cas1".to_string(),
         "sess-bf-cas1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-bf-cas1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -896,9 +955,16 @@ async fn integration_bridge_failure_does_not_overwrite_externally_terminal_bridg
         !transitioned,
         "bridge_failure should lose the persisted running compare"
     );
-    let (state, result) = fetch_tool_call_state_and_result(&db.node, "tc-bf-cas1").await;
+    let (state, result, result_doc_id) =
+        fetch_tool_call_state_and_result(&db.node, "tc-bf-cas1").await;
     assert_eq!(state, "completed");
-    assert_eq!(result, "already completed");
+    super::assert_exact_result_projection(
+        &result,
+        "already completed",
+        result_doc_id
+            .as_deref()
+            .expect("externally completed exact result document"),
+    );
 }
 
 #[tokio::test]
@@ -911,13 +977,42 @@ async fn integration_bridge_failure_failed_projects_to_failed() {
             failure_class: FailureClass::External,
         },
         "failed",
+        BridgeFailureEvidence::Output("child failed"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn integration_bridge_failure_without_output_records_recovery_omission() {
+    run_bridge_failure_case(
+        "failed-empty",
+        "failed",
+        ChildTerminal::Failed {
+            reason: String::new(),
+            failure_class: FailureClass::External,
+        },
+        "failed",
+        BridgeFailureEvidence::Omission {
+            terminal_phase: "failed",
+            reason: "recoveryFailure",
+        },
     )
     .await;
 }
 
 #[tokio::test]
 async fn integration_bridge_failure_dead_projects_to_failed() {
-    run_bridge_failure_case("dead", "dead", ChildTerminal::Dead, "failed").await;
+    run_bridge_failure_case(
+        "dead",
+        "dead",
+        ChildTerminal::Dead,
+        "failed",
+        BridgeFailureEvidence::Omission {
+            terminal_phase: "failed",
+            reason: "childDead",
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -927,6 +1022,10 @@ async fn integration_bridge_failure_interrupted_projects_to_cancelled() {
         "interrupted",
         ChildTerminal::Interrupted,
         "cancelled",
+        BridgeFailureEvidence::Omission {
+            terminal_phase: "cancelled",
+            reason: "cancelled",
+        },
     )
     .await;
 }
@@ -938,6 +1037,10 @@ async fn integration_bridge_failure_superseded_projects_to_failed() {
         "superseded",
         ChildTerminal::Superseded,
         "failed",
+        BridgeFailureEvidence::Omission {
+            terminal_phase: "failed",
+            reason: "childSuperseded",
+        },
     )
     .await;
 }
@@ -949,7 +1052,7 @@ async fn integration_cascade_intent_for_cascade_subagent_returns_some() {
         db.node.clone(),
         "req-cas-1".to_string(),
         "sess-cas-1".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-cas-1".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -976,7 +1079,7 @@ async fn integration_cascade_intent_for_detached_subagent_returns_none() {
         db.node.clone(),
         "req-cas-2".to_string(),
         "sess-cas-2".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-cas-2".to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1002,7 +1105,7 @@ async fn integration_cascade_intent_for_native_returns_none() {
         db.node.clone(),
         "req-cas-3".to_string(),
         "sess-cas-3".to_string(),
-        "did:test:test".to_string(),
+        registered_agent_did(&db.node),
         "tc-cas-3".to_string(),
         1,
         "echo".to_string(),

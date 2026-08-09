@@ -99,6 +99,17 @@ fn signed_materializer_agent_did(db: &support::TestDb) -> &str {
         .expect("signed materializer fixture must configure a node identity")
 }
 
+fn assert_exact_result_projection(actual: &str, expected_text: &str, result_doc_id: &str) {
+    assert!(
+        !result_doc_id.trim().is_empty(),
+        "lossless model output must still bind exact durable result evidence"
+    );
+    assert_eq!(
+        actual, expected_text,
+        "untruncated model-facing output must not render its durable result-document pointer"
+    );
+}
+
 #[path = "conformance/backend_health.rs"]
 mod backend_health;
 #[path = "conformance/background.rs"]
@@ -489,6 +500,7 @@ fn generated_tool_fact_cases_pin_exact_immutable_tool_facts() {
 #[test]
 fn generated_tool_execution_split_cases_pin_exact_version_graph() {
     tool_fact::generated_cases_pin_exact_execution_split();
+    tool_fact::generated_cases_bind_model_projection_to_exact_output();
 }
 
 #[test]

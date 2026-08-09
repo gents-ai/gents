@@ -25,7 +25,7 @@ def toolFactCaseJson (row : ToolFactCase) : String :=
     ++ "\"approval_durable\":" ++ boolString row.approvalDurable ++ ","
     ++ "\"result_pins_exact_call\":" ++ boolString row.resultPinsExactCall ++ ","
     ++ "\"approval_pins_exact_call\":" ++ boolString row.approvalPinsExactCall ++ ","
-    ++ "\"exact_projection\":" ++ boolString row.exactProjection ++ ","
+    ++ "\"exact_fact_join\":" ++ boolString row.exactFactJoin ++ ","
     ++ "\"immutable_noop\":" ++ boolString row.immutableNoop
     ++ "}"
 

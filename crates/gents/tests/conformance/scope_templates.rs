@@ -22,7 +22,7 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
     assert!(matches!(t.scope, Scope::PerCollection(_)));
 
     let filter = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-    for col in [
+    const TRANSCRIPT: &[&str] = &[
         "AgentRequest",
         "AgentResponse",
         "AgentResponseOutcome",
@@ -35,7 +35,27 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         "AgentConversation",
         "CompactionEntry",
         "BearerPairingReady",
-    ] {
+    ];
+    const CONFIG: &[&str] = &[
+        "AgentBehavior",
+        "ToolSelection",
+        "InferenceBackend",
+        "InferenceProfile",
+        "ToolServiceRegistry",
+        "Skill",
+        "DatastoreToolSurface",
+    ];
+    let mut expected_collections = TRANSCRIPT
+        .iter()
+        .chain(CONFIG.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    expected_collections.sort_unstable();
+    let mut actual_collections = t.collections.to_vec();
+    actual_collections.sort_unstable();
+    assert_eq!(actual_collections, expected_collections);
+
+    for &col in TRANSCRIPT {
         let pred = filter.get(col).expect("transcript collection filter");
         let expected_field = if col == "BearerPairingReady" {
             "claimant_did"
@@ -45,14 +65,8 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
         assert_eq!(pred.field, expected_field);
         assert_eq!(pred.value, "did:key:bob");
     }
-    for col in [
-        "AgentBehavior",
-        "ToolSelection",
-        "InferenceBackend",
-        "InferenceProfile",
-        "ToolServiceRegistry",
-        "Skill",
-    ] {
+    assert_eq!(filter.len(), TRANSCRIPT.len());
+    for &col in CONFIG {
         assert!(t.collections.contains(&col));
         assert!(!filter.contains_key(col), "config {col} must be unfiltered");
     }
@@ -113,6 +127,21 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
             value: "did:key:issuer".to_string(),
         })
     );
+    assert_eq!(
+        filters.get("PersonaConfigRequest"),
+        Some(&FilterPredicate {
+            field: "requester_did".to_string(),
+            value: "did:key:phone".to_string(),
+        })
+    );
+    let conversation = resolve_template("conversation").expect("conversation in catalog");
+    let mut expected = conversation.collections.to_vec();
+    expected.extend(["PersonaConfigRequest", AGENT_DIRECTORY_COLLECTION]);
+    expected.sort_unstable();
+    let mut actual = template.collections.to_vec();
+    actual.sort_unstable();
+    assert_eq!(actual, expected, "machine collection set must be exact");
+    assert_eq!(filters.len(), 14, "machine rule set must be exact");
 }
 
 #[test]

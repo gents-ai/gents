@@ -31,6 +31,9 @@ use crate::run_timeline_manifest::{
     TimelineObservedSource, TimelineRootCandidate, TimelineRootSelector, TimelineSlotRequirement,
     TimelineSourceClass, TimelineSourceDecision, TimelineSourceSlot,
 };
+use crate::tool_call_lifecycle::{
+    validate_retained_approval_edge, ExactToolCallEdgeRef, RetainedApprovalFact,
+};
 use gents_protocol::graphql::graphql_rows_from_response;
 
 const TIMELINE_REQUEST_SELECTION: &str = r#"
@@ -669,13 +672,17 @@ struct TimelineOmissionFactRow {
     created_at: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 struct TimelineApprovalFactRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    approval_key: String,
+    tool_call_id: String,
+    tool_call_key: String,
     tool_call_doc_id: String,
     tool_call_composite_commit_cid: String,
     tool_call_signer_did: String,
+    session_id: String,
     approver_did: String,
     decision: String,
     reason: Option<String>,
@@ -686,6 +693,9 @@ struct HistoricalToolCallFactRow {
     tool_call_id: String,
     session_id: String,
     lifecycle_state: String,
+    approval_doc_id: Option<String>,
+    approval_composite_commit_cid: Option<String>,
+    approval_signer_did: Option<String>,
 }
 
 async fn exact_current_ref(
@@ -737,7 +747,7 @@ async fn verify_historical_tool_call_ref(
                 node.as_ref(),
                 "AgentToolCall",
                 &source.version,
-                "tool_call_id session_id lifecycle_state",
+                "tool_call_id session_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
             )
             .await?
         }
@@ -747,7 +757,7 @@ async fn verify_historical_tool_call_ref(
                 &executor,
                 "AgentToolCall",
                 &source.version,
-                "tool_call_id session_id lifecycle_state",
+                "tool_call_id session_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
             )
             .await?
         }
@@ -758,6 +768,30 @@ async fn verify_historical_tool_call_ref(
     snapshot.decode()
 }
 
+fn historical_approval_edge(
+    row: &HistoricalToolCallFactRow,
+) -> Result<Option<ExactToolCallEdgeRef>> {
+    Ok(
+        match (
+            row.approval_doc_id.as_deref(),
+            row.approval_composite_commit_cid.as_deref(),
+            row.approval_signer_did.as_deref(),
+        ) {
+            (None, None, None) => None,
+            (Some(doc_id), Some(cid), Some(signer))
+                if !doc_id.trim().is_empty()
+                    && !cid.trim().is_empty()
+                    && !signer.trim().is_empty() =>
+            {
+                Some(ExactToolCallEdgeRef::new(doc_id, cid, signer))
+            }
+            _ => anyhow::bail!(
+                "historical AgentToolCall approval exact reference is partial or empty"
+            ),
+        },
+    )
+}
+
 fn terminal_tool_phase(call: &TimelineToolCallRow) -> Option<&str> {
     call.lifecycle_state
         .as_deref()
@@ -765,18 +799,23 @@ fn terminal_tool_phase(call: &TimelineToolCallRow) -> Option<&str> {
 }
 
 fn omission_reason_allows(reason: &str, source: &str, terminal: &str) -> bool {
-    match reason {
-        "preDispatchFailure" => source == "pending" && terminal == "failed",
-        "approvalDenied" => source == "awaitingApproval" && terminal == "failed",
-        "timedOut" => matches!(source, "running" | "awaitingApproval") && terminal == "timedOut",
-        "cancelled" => {
-            matches!(source, "pending" | "awaitingApproval" | "running") && terminal == "cancelled"
-        }
-        "recoveryFailure" | "executionLost" | "childDead" | "childSuperseded" => {
-            source == "running" && terminal == "failed"
-        }
-        _ => false,
+    crate::tool_call_lifecycle::tool_output_omission_transition_allowed(reason, source, terminal)
+}
+
+fn validate_approval_immutable_binding(
+    call: &TimelineToolCallRow,
+    call_doc_id: &str,
+    approval: &TimelineApprovalFactRow,
+) -> Result<()> {
+    if approval.tool_call_doc_id != call_doc_id
+        || approval.tool_call_id != call.tool_call_id
+        || approval.tool_call_key != format!("{}:{}", call.session_id, call.tool_call_id)
+        || approval.session_id != call.session_id
+        || approval.approval_key != approval.tool_call_doc_id
+    {
+        anyhow::bail!("AgentToolApproval immutable binding does not match AgentToolCall");
     }
+    Ok(())
 }
 
 fn validate_terminal_outcome_edge_shape(call: &TimelineToolCallRow) -> Result<()> {
@@ -844,7 +883,7 @@ async fn attach_exact_tool_facts(
     let omissions: Vec<TimelineOmissionFactRow> =
         load_rows(access, "AgentToolOutputOmission", &omission_query).await?;
     let approval_query = format!(
-        r#"{{ AgentToolApproval(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did approver_did decision reason }} }}"#,
+        r#"{{ AgentToolApproval(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID approval_key tool_call_id tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id approver_did decision reason }} }}"#,
         escape_graphql_string(session_id)
     );
     let approvals: Vec<TimelineApprovalFactRow> =
@@ -852,6 +891,13 @@ async fn attach_exact_tool_facts(
 
     for call in calls {
         let call_doc_id = call.doc_id.as_deref().unwrap_or_default();
+        let mut source_context: Option<(
+            Option<String>,
+            String,
+            ExactToolCallEdgeRef,
+            Option<ExactToolCallEdgeRef>,
+        )> = None;
+        let mut retained_approval = None;
         if let Some(result_doc_id) = complete_edge_doc_id(
             call.result_doc_id.as_deref(),
             call.result_composite_commit_cid.as_deref(),
@@ -902,6 +948,17 @@ async fn attach_exact_tool_facts(
             {
                 anyhow::bail!("AgentToolResult does not bind the running historical AgentToolCall");
             }
+            let source_approval = historical_approval_edge(&historical)?;
+            source_context = Some((
+                None,
+                historical.lifecycle_state.clone(),
+                ExactToolCallEdgeRef::new(
+                    &row.tool_call_doc_id,
+                    &row.tool_call_composite_commit_cid,
+                    &row.tool_call_signer_did,
+                ),
+                source_approval,
+            ));
             call.result_fact = Some(TimelineToolResultFact {
                 doc_id: exact.version.doc_id,
                 composite_commit_cid: exact.version.composite_commit_cid,
@@ -974,6 +1031,17 @@ async fn attach_exact_tool_facts(
                     row.terminal_phase
                 );
             }
+            let source_approval = historical_approval_edge(&historical)?;
+            source_context = Some((
+                Some(row.reason.clone()),
+                row.source_phase.clone(),
+                ExactToolCallEdgeRef::new(
+                    &row.tool_call_doc_id,
+                    &row.tool_call_composite_commit_cid,
+                    &row.tool_call_signer_did,
+                ),
+                source_approval,
+            ));
             call.omission_fact = Some(TimelineToolOutputOmissionFact {
                 doc_id: exact.version.doc_id,
                 composite_commit_cid: exact.version.composite_commit_cid,
@@ -1004,9 +1072,7 @@ async fn attach_exact_tool_facts(
                     matching.len()
                 );
             };
-            if row.tool_call_doc_id != call.doc_id.as_deref().unwrap_or_default() {
-                anyhow::bail!("approval fact points to a different physical AgentToolCall");
-            }
+            validate_approval_immutable_binding(call, call_doc_id, row)?;
             let exact = exact_current_ref(access, "AgentToolApproval", approval_doc_id).await?;
             if call.approval_composite_commit_cid.as_deref()
                 != Some(exact.version.composite_commit_cid.as_str())
@@ -1017,7 +1083,7 @@ async fn attach_exact_tool_facts(
                     "AgentToolCall approval edge does not match exact signed approval fact"
                 );
             }
-            let _ = verify_historical_tool_call_ref(
+            let historical = verify_historical_tool_call_ref(
                 access,
                 &crate::SignedDocumentVersionRef::new(
                     crate::DocumentVersionRef::new(
@@ -1028,6 +1094,28 @@ async fn attach_exact_tool_facts(
                 ),
             )
             .await?;
+            if historical.tool_call_id != call.tool_call_id
+                || historical.session_id != call.session_id
+                || historical.lifecycle_state != "awaitingApproval"
+                || historical_approval_edge(&historical)?.is_some()
+            {
+                anyhow::bail!(
+                    "AgentToolApproval does not bind the awaitingApproval historical AgentToolCall"
+                );
+            }
+            retained_approval = Some(RetainedApprovalFact {
+                edge: ExactToolCallEdgeRef::new(
+                    &exact.version.doc_id,
+                    &exact.version.composite_commit_cid,
+                    &exact.signer_did,
+                ),
+                decision: row.decision.clone(),
+                execution: ExactToolCallEdgeRef::new(
+                    &row.tool_call_doc_id,
+                    &row.tool_call_composite_commit_cid,
+                    &row.tool_call_signer_did,
+                ),
+            });
             call.approval_fact = Some(TimelineToolApprovalFact {
                 doc_id: exact.version.doc_id,
                 composite_commit_cid: exact.version.composite_commit_cid,
@@ -1038,6 +1126,15 @@ async fn attach_exact_tool_facts(
                 decision: row.decision.clone(),
                 reason: row.reason.clone(),
             });
+        }
+        if let Some((reason, source_phase, source_execution, source_approval)) = source_context {
+            validate_retained_approval_edge(
+                reason.as_deref(),
+                &source_phase,
+                &source_execution,
+                source_approval.as_ref(),
+                retained_approval.as_ref(),
+            )?;
         }
     }
     Ok(())
@@ -4014,6 +4111,137 @@ mod tests {
             "failed"
         ));
         assert!(!omission_reason_allows("unknown", "running", "failed"));
+    }
+
+    fn approval_edge() -> ExactToolCallEdgeRef {
+        ExactToolCallEdgeRef::new("approval-doc", "approval-cid", "did:key:approver")
+    }
+
+    fn source_execution() -> ExactToolCallEdgeRef {
+        ExactToolCallEdgeRef::new("tool-call-doc", "accepted-cid", "did:key:owner")
+    }
+
+    #[test]
+    fn timeline_uses_exact_denial_call_edge_contract() {
+        let source = source_execution();
+        let approval = RetainedApprovalFact {
+            edge: approval_edge(),
+            decision: "denied".to_string(),
+            execution: source.clone(),
+        };
+        assert_eq!(
+            validate_retained_approval_edge(
+                Some("approvalDenied"),
+                "awaitingApproval",
+                &source,
+                None,
+                Some(&approval),
+            )
+            .expect("exact denial"),
+            crate::tool_call_lifecycle::RetainedApprovalEdgeKind::DenialCallEdge
+        );
+        assert!(validate_retained_approval_edge(
+            Some("approvalDenied"),
+            "awaitingApproval",
+            &source,
+            None,
+            None,
+        )
+        .is_err());
+
+        let wrong_source =
+            ExactToolCallEdgeRef::new("tool-call-doc", "different-accepted-cid", "did:key:owner");
+        assert!(validate_retained_approval_edge(
+            Some("approvalDenied"),
+            "awaitingApproval",
+            &wrong_source,
+            None,
+            Some(&approval),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn timeline_requires_approved_running_source_to_carry_same_edge() {
+        let source = source_execution();
+        let edge = approval_edge();
+        let approval = RetainedApprovalFact {
+            edge: edge.clone(),
+            decision: "approved".to_string(),
+            execution: ExactToolCallEdgeRef::new("tool-call-doc", "held-cid", "did:key:owner"),
+        };
+        validate_retained_approval_edge(
+            Some("timedOut"),
+            "running",
+            &source,
+            Some(&edge),
+            Some(&approval),
+        )
+        .expect("approved edge retained by running source");
+
+        assert!(validate_retained_approval_edge(
+            Some("timedOut"),
+            "running",
+            &source,
+            None,
+            Some(&approval),
+        )
+        .is_err());
+        assert!(validate_retained_approval_edge(
+            Some("timedOut"),
+            "running",
+            &source,
+            Some(&edge),
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn approval_fact_requires_exact_logical_and_execution_keys() {
+        let call = TimelineToolCallRow {
+            doc_id: Some("tool-call-doc".to_string()),
+            session_id: "session-1".to_string(),
+            tool_call_id: "call-1".to_string(),
+            ..TimelineToolCallRow::default()
+        };
+        let approval = TimelineApprovalFactRow {
+            doc_id: "approval-doc".to_string(),
+            approval_key: "tool-call-doc".to_string(),
+            tool_call_id: "call-1".to_string(),
+            tool_call_key: "session-1:call-1".to_string(),
+            tool_call_doc_id: "tool-call-doc".to_string(),
+            tool_call_composite_commit_cid: "accepted-cid".to_string(),
+            tool_call_signer_did: "did:key:owner".to_string(),
+            session_id: "session-1".to_string(),
+            approver_did: "did:key:approver".to_string(),
+            decision: "denied".to_string(),
+            reason: None,
+        };
+        validate_approval_immutable_binding(&call, "tool-call-doc", &approval)
+            .expect("complete approval binding");
+
+        for mismatched in [
+            TimelineApprovalFactRow {
+                approval_key: "different-cid".to_string(),
+                ..approval.clone()
+            },
+            TimelineApprovalFactRow {
+                tool_call_key: "session-1:different-call".to_string(),
+                ..approval.clone()
+            },
+            TimelineApprovalFactRow {
+                session_id: "different-session".to_string(),
+                ..approval
+            },
+        ] {
+            assert!(
+                validate_approval_immutable_binding(&call, "tool-call-doc", &mismatched)
+                    .expect_err("mismatched immutable approval binding must fail closed")
+                    .to_string()
+                    .contains("immutable binding does not match")
+            );
+        }
     }
 
     #[test]

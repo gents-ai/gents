@@ -86,70 +86,70 @@ theorem approval_twin_rejected
   simp [commitApproval, h_call, h_evidence]
   split <;> rfl
 
-theorem projection_exact_result_pins_call
-    {state : State} {join : TranscriptJoin} {projection : Projection}
-    (h_project : projectExact state join = some projection) :
-    projection.result.call = join.call := by
+theorem exact_fact_join_result_pins_call
+    {state : State} {join : ExactFactRefs} {joined : ExactFactJoin}
+    (h_join : joinExactFacts state join = some joined) :
+    joined.result.call = join.call := by
   cases h_call : exactCall? state.calls join.call with
-  | none => simp [projectExact, h_call] at h_project
+  | none => simp [joinExactFacts, h_call] at h_join
   | some call =>
       cases h_result : exactResult? state.results join.result with
-      | none => simp [projectExact, h_call, h_result] at h_project
+      | none => simp [joinExactFacts, h_call, h_result] at h_join
       | some result =>
           by_cases h_pins : result.call = join.call
           · cases h_approval : join.approval with
             | none =>
-                simp [projectExact, h_call, h_result, h_pins, h_approval] at h_project
-                subst projection
+                simp [joinExactFacts, h_call, h_result, h_pins, h_approval] at h_join
+                subst joined
                 exact h_pins
             | some approvalRef =>
                 cases h_exact : exactApproval? state.approvals approvalRef with
                 | none =>
-                    simp [projectExact, h_call, h_result, h_pins, h_approval,
-                      h_exact] at h_project
+                    simp [joinExactFacts, h_call, h_result, h_pins, h_approval,
+                      h_exact] at h_join
                 | some approval =>
                     by_cases h_approval_pins : approval.call = join.call
-                    · simp [projectExact, h_call, h_result, h_pins, h_approval,
-                        h_exact, h_approval_pins] at h_project
-                      subst projection
+                    · simp [joinExactFacts, h_call, h_result, h_pins, h_approval,
+                        h_exact, h_approval_pins] at h_join
+                      subst joined
                       exact h_pins
-                    · simp [projectExact, h_call, h_result, h_pins, h_approval,
-                        h_exact, h_approval_pins] at h_project
-          · simp [projectExact, h_call, h_result, h_pins] at h_project
+                    · simp [joinExactFacts, h_call, h_result, h_pins, h_approval,
+                        h_exact, h_approval_pins] at h_join
+          · simp [joinExactFacts, h_call, h_result, h_pins] at h_join
 
-theorem projection_exact_approval_pins_call
-    {state : State} {join : TranscriptJoin} {projection : Projection}
+theorem exact_fact_join_approval_pins_call
+    {state : State} {join : ExactFactRefs} {joined : ExactFactJoin}
     {approval : ToolApprovalFact}
-    (h_project : projectExact state join = some projection)
-    (h_approval : projection.approval = some approval) :
+    (h_join : joinExactFacts state join = some joined)
+    (h_approval : joined.approval = some approval) :
     approval.call = join.call := by
   cases h_call : exactCall? state.calls join.call with
-  | none => simp [projectExact, h_call] at h_project
+  | none => simp [joinExactFacts, h_call] at h_join
   | some call =>
       cases h_result : exactResult? state.results join.result with
-      | none => simp [projectExact, h_call, h_result] at h_project
+      | none => simp [joinExactFacts, h_call, h_result] at h_join
       | some result =>
           by_cases h_result_pins : result.call = join.call
           · cases h_ref : join.approval with
             | none =>
-                simp [projectExact, h_call, h_result, h_result_pins, h_ref] at h_project
-                subst projection
+                simp [joinExactFacts, h_call, h_result, h_result_pins, h_ref] at h_join
+                subst joined
                 simp at h_approval
             | some approvalRef =>
                 cases h_exact : exactApproval? state.approvals approvalRef with
                 | none =>
-                    simp [projectExact, h_call, h_result, h_result_pins, h_ref,
-                      h_exact] at h_project
+                    simp [joinExactFacts, h_call, h_result, h_result_pins, h_ref,
+                      h_exact] at h_join
                 | some resolved =>
                     by_cases h_pins : resolved.call = join.call
-                    · simp [projectExact, h_call, h_result, h_result_pins, h_ref,
-                        h_exact, h_pins] at h_project
-                      subst projection
+                    · simp [joinExactFacts, h_call, h_result, h_result_pins, h_ref,
+                        h_exact, h_pins] at h_join
+                      subst joined
                       simp at h_approval
                       subst approval
                       exact h_pins
-                    · simp [projectExact, h_call, h_result, h_result_pins, h_ref,
-                        h_exact, h_pins] at h_project
-          · simp [projectExact, h_call, h_result, h_result_pins] at h_project
+                    · simp [joinExactFacts, h_call, h_result, h_result_pins, h_ref,
+                        h_exact, h_pins] at h_join
+          · simp [joinExactFacts, h_call, h_result, h_result_pins] at h_join
 
 end ToolFact

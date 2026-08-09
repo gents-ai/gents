@@ -58,6 +58,7 @@ clap = { version = "4", features = ["derive", "env"] }
 acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
 crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
 defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
+defra-http = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c3f5168a73c5f2be45678c74697b3d4c1728cfae" }
 gents-protocol = { path = "crates/gents-protocol" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }

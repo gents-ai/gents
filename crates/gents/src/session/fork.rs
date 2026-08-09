@@ -118,9 +118,12 @@ impl GraphqlExecutor for EmbeddedNode {
             {
                 Ok(response) => match txn.commit().await {
                     Ok(()) => return Ok(response),
+                    // Commit consumes/removes this transaction before DefraDB
+                    // reports the conflict, so the next attempt begins cleanly
+                    // and no follow-up discard is possible or necessary.
                     Err(error)
                         if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES
-                            && is_defradb_transaction_conflict_text(&error.to_string()) =>
+                            && mutation_error_is_explicit_conflict(&error) =>
                     {
                         tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
                     }
@@ -161,11 +164,125 @@ impl HttpGraphqlExecutor {
     }
 }
 
+fn graphql_request_options(
+    configured: GraphqlRequestOptions,
+    document: &str,
+) -> GraphqlRequestOptions {
+    let significant = graphql_significant_prefix(document);
+    let definitely_read_only =
+        significant.starts_with('{') || graphql_operation_keyword(significant) == Some("query");
+    if !definitely_read_only {
+        // A transport timeout is commit-ambiguous. Retrying a create can mint
+        // a second physical Defra document before the caller can recover by
+        // its immutable logical key. Only an explicit query or shorthand
+        // selection set gets the retryable-read policy; mutations and any
+        // unrecognized document shape get one HTTP attempt.
+        GraphqlRequestOptions {
+            max_attempts: 1,
+            retry_backoff: std::time::Duration::ZERO,
+            ..configured
+        }
+    } else {
+        configured
+    }
+}
+
+/// Return the first GraphQL operation keyword after the grammar's ignored
+/// tokens. This intentionally does not parse the whole document, but it does
+/// handle comments, commas, a UTF-8 BOM, and compact `mutation{...}` syntax so
+/// a mutation can never accidentally inherit the retryable-read policy.
+fn graphql_operation_keyword(document: &str) -> Option<&str> {
+    let remaining = graphql_significant_prefix(document);
+    let keyword_len = remaining
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_alphanumeric() || *character == '_')
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    Some(&remaining[..keyword_len])
+}
+
+fn graphql_significant_prefix(document: &str) -> &str {
+    let mut remaining = document;
+    loop {
+        remaining = remaining.trim_start_matches(|character: char| {
+            character.is_whitespace() || character == ',' || character == '\u{feff}'
+        });
+        if let Some(comment) = remaining.strip_prefix('#') {
+            remaining = comment
+                .find(['\n', '\r'])
+                .map(|end| &comment[end + 1..])
+                .unwrap_or_default();
+            continue;
+        }
+        break;
+    }
+    remaining
+}
+
+fn mutation_error_is_explicit_conflict(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| is_defradb_transaction_conflict_text(&cause.to_string()))
+}
+
 #[derive(serde::Deserialize)]
 struct SignedBlockBundle {
     cid: String,
     block: String,
     signature: String,
+}
+
+const DEFRA_SIGNED_BLOCK_HTTP_SUFFIX: &str = "/block/signed";
+
+fn may_fallback_from_canonical_signed_block_route(
+    route_index: usize,
+    status: reqwest::StatusCode,
+) -> bool {
+    route_index == 0
+        && matches!(
+            status,
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::SERVICE_UNAVAILABLE
+        )
+}
+
+impl HttpGraphqlExecutor {
+    async fn load_signed_block_bundle(&self, cid: &str) -> Result<SignedBlockBundle> {
+        let api_base = crate::config_client::graphql_api_base(self.access.endpoint())?;
+        for (index, suffix) in [
+            DEFRA_SIGNED_BLOCK_HTTP_SUFFIX,
+            crate::signed_block_http::SIGNED_BLOCK_HTTP_SUFFIX,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut signed_url = reqwest::Url::parse(&format!("{api_base}{suffix}"))?;
+            signed_url.query_pairs_mut().append_pair("cid", cid);
+            let response = self.access.get(signed_url).await?;
+            let status = response.status();
+            let body = response.bytes().await?;
+            if status.is_success() {
+                return serde_json::from_slice(&body)
+                    .with_context(|| format!("decoding signed material for remote commit {cid}"));
+            }
+
+            // A normal DefraDB server exposes the canonical route.  The
+            // embedded builder pinned by Gents currently installs that route
+            // without its block adapter, so only route absence/unavailability
+            // may fall back to the node-authenticated Gents bridge.  In
+            // particular, never turn a canonical authentication or NAC denial
+            // into a bridge request.
+            let canonical_unavailable =
+                may_fallback_from_canonical_signed_block_route(index, status);
+            if canonical_unavailable {
+                continue;
+            }
+            anyhow::bail!(
+                "loading signed material for remote commit {cid} failed (HTTP {status}): {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        unreachable!("signed-block route list is non-empty")
+    }
 }
 
 fn locally_verified_block_signer_did(
@@ -217,12 +334,140 @@ fn locally_verified_block_signer_did(
 
 #[cfg(test)]
 mod local_signature_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
     use crypto::PrivateKey;
     use defra_core::block::{
         Block, CrdtDelta, LwwDeltaPayload, Signature, SignatureHeader, SignatureType,
     };
 
-    use super::locally_verified_block_signer_did;
+    use super::{
+        execute_mutation_with_retry, graphql_request_options, locally_verified_block_signer_did,
+        may_fallback_from_canonical_signed_block_route, mutation_error_is_explicit_conflict,
+        GraphqlExecuteResponse, GraphqlExecutor,
+    };
+
+    #[test]
+    fn remote_mutation_classification_handles_comments_and_compact_syntax() {
+        let configured = gents_protocol::graphql::GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(17),
+            max_attempts: 5,
+            retry_backoff: std::time::Duration::from_millis(100),
+        };
+        for document in [
+            "mutation { create_AgentToolResult(input: {}) { _docID } }",
+            "mutation{create_AgentToolResult(input:{}){_docID}}",
+            "# generated request\nmutation NamedMutation { create_Widget(input: {}) { _docID } }",
+            "\u{feff}, # first comment\r\n # second comment\n mutation{create_Widget(input:{}){_docID}}",
+            "fragment WidgetFields on Widget { _docID } mutation Named { create_Widget(input: {}) { ...WidgetFields } }",
+        ] {
+            let mutation = graphql_request_options(configured, document);
+            assert_eq!(mutation.timeout, configured.timeout, "{document:?}");
+            assert_eq!(mutation.max_attempts, 1, "{document:?}");
+            assert_eq!(
+                mutation.retry_backoff,
+                std::time::Duration::ZERO,
+                "{document:?}"
+            );
+        }
+
+        let query = graphql_request_options(configured, "{ AgentToolResult { _docID } }");
+        assert_eq!(query.max_attempts, configured.max_attempts);
+        assert_eq!(query.retry_backoff, configured.retry_backoff);
+
+        let commented_query = graphql_request_options(
+            configured,
+            "# mutation is mentioned only in a comment\nquery Named { Widget { _docID } }",
+        );
+        assert_eq!(commented_query.max_attempts, configured.max_attempts);
+        assert_eq!(commented_query.retry_backoff, configured.retry_backoff);
+    }
+
+    #[test]
+    fn only_explicit_conflicts_are_retryable_mutation_errors() {
+        let conflict = anyhow::anyhow!("DefraDB transaction conflict while committing")
+            .context("remote mutation failed");
+        assert!(mutation_error_is_explicit_conflict(&conflict));
+        let timeout = anyhow::anyhow!("request timed out after server accepted bytes");
+        assert!(!mutation_error_is_explicit_conflict(&timeout));
+    }
+
+    #[derive(Clone, Copy)]
+    enum FirstMutationResult {
+        ExplicitConflict,
+        AmbiguousTransport,
+    }
+
+    struct ScriptedMutationExecutor {
+        attempts: AtomicUsize,
+        first_result: FirstMutationResult,
+    }
+
+    #[async_trait]
+    impl GraphqlExecutor for ScriptedMutationExecutor {
+        async fn execute_graphql(&self, _query: &str) -> anyhow::Result<GraphqlExecuteResponse> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt > 0 {
+                return Ok(GraphqlExecuteResponse {
+                    data: Some(serde_json::json!({"created": true})),
+                    errors: Vec::new(),
+                });
+            }
+            match self.first_result {
+                FirstMutationResult::ExplicitConflict => {
+                    Err(anyhow::anyhow!("transaction conflict. Please retry"))
+                }
+                FirstMutationResult::AmbiguousTransport => Err(anyhow::anyhow!(
+                    "connection closed after request body was sent"
+                )),
+            }
+        }
+
+        async fn execute_graphql_exact_head_cas(
+            &self,
+            _collection: &str,
+            _accepted: &crate::SignedDocumentVersionRef,
+            _mutation: &str,
+            _operation: &'static str,
+        ) -> anyhow::Result<GraphqlExecuteResponse> {
+            unreachable!("not used by mutation retry tests")
+        }
+
+        async fn verified_signer_did(&self, _cid: &str) -> anyhow::Result<String> {
+            unreachable!("not used by mutation retry tests")
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_conflict_retries_but_ambiguous_transport_does_not() {
+        let conflict = ScriptedMutationExecutor {
+            attempts: AtomicUsize::new(0),
+            first_result: FirstMutationResult::ExplicitConflict,
+        };
+        execute_mutation_with_retry(
+            &conflict,
+            "mutation{create_Widget(input:{}){_docID}}",
+            "test",
+        )
+        .await
+        .expect("an explicit transaction conflict should retry");
+        assert_eq!(conflict.attempts.load(Ordering::SeqCst), 2);
+
+        let ambiguous = ScriptedMutationExecutor {
+            attempts: AtomicUsize::new(0),
+            first_result: FirstMutationResult::AmbiguousTransport,
+        };
+        let error = execute_mutation_with_retry(
+            &ambiguous,
+            "# compact\nmutation{create_Widget(input:{}){_docID}}",
+            "test",
+        )
+        .await
+        .expect_err("an ambiguous transport result must not retry");
+        assert!(error.to_string().contains("ambiguous"), "{error:#}");
+        assert_eq!(ambiguous.attempts.load(Ordering::SeqCst), 1);
+    }
 
     fn signed_bundle() -> (String, String, Vec<u8>, Vec<u8>) {
         let private_key = crypto::generate_ed25519().expect("generate test signing key");
@@ -285,30 +530,43 @@ mod local_signature_tests {
             "{tampered:#}"
         );
     }
+
+    #[test]
+    fn canonical_signed_block_fallback_never_bypasses_auth_or_nac_denial() {
+        assert!(may_fallback_from_canonical_signed_block_route(
+            0,
+            reqwest::StatusCode::NOT_FOUND
+        ));
+        assert!(may_fallback_from_canonical_signed_block_route(
+            0,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        ));
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(!may_fallback_from_canonical_signed_block_route(0, status));
+        }
+        assert!(!may_fallback_from_canonical_signed_block_route(
+            1,
+            reqwest::StatusCode::NOT_FOUND
+        ));
+    }
 }
 
 #[async_trait]
 impl GraphqlExecutor for HttpGraphqlExecutor {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
-        let value = self.access.execute(query, self.options).await?;
+        let value = self
+            .access
+            .execute(query, graphql_request_options(self.options, query))
+            .await?;
         Ok(GraphqlExecuteResponse::from_http_value(value))
     }
 
     async fn verified_signer_did(&self, cid: &str) -> Result<String> {
-        let api_base = crate::config_client::graphql_api_base(self.access.endpoint())?;
-        let mut signed_url = reqwest::Url::parse(&format!("{api_base}/block/signed"))?;
-        signed_url.query_pairs_mut().append_pair("cid", cid);
-        let response = self.access.get(signed_url).await?;
-        let status = response.status();
-        let body = response.bytes().await?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "loading signed material for remote commit {cid} failed (HTTP {status}): {}",
-                String::from_utf8_lossy(&body)
-            );
-        }
-        let bundle: SignedBlockBundle = serde_json::from_slice(&body)
-            .with_context(|| format!("decoding signed material for remote commit {cid}"))?;
+        let bundle = self.load_signed_block_bundle(cid).await?;
         if bundle.cid != cid {
             anyhow::bail!("remote signed-material response rebound commit {cid}");
         }
@@ -339,9 +597,12 @@ impl GraphqlExecutor for HttpGraphqlExecutor {
             {
                 Ok(response) => match txn.commit().await {
                     Ok(()) => return Ok(response),
+                    // A returned explicit conflict is finalized and safe to
+                    // retry with a new transaction. Any other result, including
+                    // commit-ambiguous transport failure, returns immediately.
                     Err(error)
                         if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES
-                            && is_defradb_transaction_conflict_text(&error.to_string()) =>
+                            && mutation_error_is_explicit_conflict(&error) =>
                     {
                         tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
                     }
@@ -395,7 +656,7 @@ async fn execute_fork_exact_head_cas_in_txn(
             current.version.composite_commit_cid
         );
     }
-    let mutation_value = txn.execute(mutation).await?;
+    let mutation_value = txn.execute_once(mutation).await?;
     let response = GraphqlExecuteResponse::from_http_value(mutation_value);
     if response.has_errors() {
         anyhow::bail!(
@@ -708,76 +969,119 @@ fn optional_exact_ref(
     }
 }
 
-async fn attach_child_tool_fact(
+async fn approve_and_start_forked_tool_call(
     executor: &(impl GraphqlExecutor + ?Sized),
-    child_call_doc_id: &str,
-    kind: &str,
-    fact: &crate::SignedDocumentVersionRef,
-) -> Result<()> {
-    let (doc_field, cid_field, signer_field) = match kind {
-        "result" => (
-            "result_doc_id",
-            "result_composite_commit_cid",
-            "result_signer_did",
-        ),
-        "approval" => (
+    held: &crate::SignedDocumentVersionRef,
+    approval: &crate::SignedDocumentVersionRef,
+    started_at: &str,
+    source_status: &str,
+    source_deadline_at: Option<&str>,
+    restore_source_observable_state: bool,
+    node_did: &str,
+) -> Result<crate::SignedDocumentVersionRef> {
+    if started_at.trim().is_empty() {
+        anyhow::bail!("approved fork source omitted started_at");
+    }
+    let held_row = exact_snapshot(
+        executor,
+        "AgentToolCall",
+        held,
+        "status lifecycle_state deadline_at approval_doc_id approval_composite_commit_cid approval_signer_did",
+    )
+    .await?;
+    let staging_deadline_at = held_row
+        .get("deadline_at")
+        .and_then(Value::as_str)
+        .filter(|deadline| !deadline.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("approved fork staging row omitted its lease deadline"))?;
+    if held_row.get("status").and_then(Value::as_str) != Some("forkStaging")
+        || held_row.get("lifecycle_state").and_then(Value::as_str) != Some("awaitingApproval")
+        || optional_exact_ref(
+            &held_row,
             "approval_doc_id",
             "approval_composite_commit_cid",
             "approval_signer_did",
-        ),
-        _ => anyhow::bail!("unsupported child tool fact kind {kind}"),
+            "held fork child approval",
+        )?
+        .is_some()
+    {
+        anyhow::bail!("approved fork child is not an edge-free held staging row");
+    }
+    let (next_status, next_deadline_at) = if restore_source_observable_state {
+        (source_status, source_deadline_at)
+    } else {
+        ("forkStaging", Some(staging_deadline_at))
     };
     let mutation = format!(
-        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }}, {doc_field}: {{ _eq: null }}, {cid_field}: {{ _eq: null }}, {signer_field}: {{ _eq: null }} }}, input: {{ {doc_field}: "{}", {cid_field}: "{}", {signer_field}: "{}" }}) {{ _docID }} }}"#,
-        escape_graphql_string(child_call_doc_id),
-        escape_graphql_string(&fact.version.doc_id),
-        escape_graphql_string(&fact.version.composite_commit_cid),
-        escape_graphql_string(&fact.signer_did),
+        r#"mutation {{ update_AgentToolCall(
+            filter: {{
+                _docID: {{ _eq: "{}" }},
+                lifecycle_state: {{ _eq: "awaitingApproval" }},
+                approval_doc_id: {{ _eq: null }},
+                approval_composite_commit_cid: {{ _eq: null }},
+                approval_signer_did: {{ _eq: null }}
+            }},
+            input: {{
+                status: "{}",
+                lifecycle_state: "running",
+                started_at: "{}",
+                deadline_at: {},
+                approval_doc_id: "{}",
+                approval_composite_commit_cid: "{}",
+                approval_signer_did: "{}"
+            }}
+        ) {{ _docID }} }}"#,
+        escape_graphql_string(&held.version.doc_id),
+        escape_graphql_string(next_status),
+        escape_graphql_string(started_at),
+        nullable_string_literal(next_deadline_at),
+        escape_graphql_string(&approval.version.doc_id),
+        escape_graphql_string(&approval.version.composite_commit_cid),
+        escape_graphql_string(&approval.signer_did),
     );
-    let response =
-        execute_mutation_with_retry(executor, &mutation, &format!("fork::attach_child_{kind}"))
-            .await?;
-    let updated = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentToolCall"))
-        .is_some_and(|value| match value {
-            Value::Object(row) => row.get("_docID").is_some(),
-            Value::Array(rows) => rows.len() == 1 && rows[0].get("_docID").is_some(),
-            _ => false,
-        });
-    if !updated {
-        let query = format!(
-            r#"query {{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID {doc_field} {cid_field} {signer_field} }} }}"#,
-            escape_graphql_string(child_call_doc_id),
-        );
-        let current = executor.execute_graphql(&query).await?;
-        if current.has_errors() {
-            anyhow::bail!(
-                "loading child call after {kind} attachment CAS failed: {}",
-                render_graphql_errors(&current)
-            );
-        }
-        let rows = current
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let already_attached = matches!(rows.as_slice(), [row]
-            if row.get(doc_field).and_then(Value::as_str) == Some(fact.version.doc_id.as_str())
-                && row.get(cid_field).and_then(Value::as_str)
-                    == Some(fact.version.composite_commit_cid.as_str())
-                && row.get(signer_field).and_then(Value::as_str)
-                    == Some(fact.signer_did.as_str()));
-        if !already_attached {
-            anyhow::bail!(
-                "attaching child {kind} did not update one empty edge or match the exact existing fact"
-            );
-        }
+    let response = executor
+        .execute_graphql_exact_head_cas(
+            "AgentToolCall",
+            held,
+            &mutation,
+            "fork::approve_and_start_tool_call",
+        )
+        .await?;
+    let updated = mutation_doc_id(&response, "update_AgentToolCall")?;
+    if updated != held.version.doc_id {
+        anyhow::bail!("fork approval transition updated a different tool call");
     }
-    Ok(())
+    let running = verify_child_ref(
+        executor,
+        "AgentToolCall",
+        &held.version.doc_id,
+        Some(node_did),
+    )
+    .await?;
+    let row = exact_snapshot(
+        executor,
+        "AgentToolCall",
+        &running,
+        "status lifecycle_state started_at deadline_at approval_doc_id approval_composite_commit_cid approval_signer_did",
+    )
+    .await?;
+    if row.get("status").and_then(Value::as_str) != Some(next_status)
+        || row.get("lifecycle_state").and_then(Value::as_str) != Some("running")
+        || row.get("started_at").and_then(Value::as_str) != Some(started_at)
+        || row.get("deadline_at").and_then(Value::as_str) != next_deadline_at
+        || optional_exact_ref(
+            &row,
+            "approval_doc_id",
+            "approval_composite_commit_cid",
+            "approval_signer_did",
+            "fork child approval",
+        )?
+        .as_ref()
+            != Some(approval)
+    {
+        anyhow::bail!("fork child did not reach the exact approved running state");
+    }
+    Ok(running)
 }
 
 #[derive(Debug, Clone)]
@@ -804,6 +1108,17 @@ pub struct ForkOutcome {
     pub copied_tool_results: u32,
     pub copied_tool_approvals: u32,
     pub copied_compaction_entries: u32,
+}
+
+#[derive(Debug, Default)]
+struct CopiedToolEvidence {
+    count: u32,
+    /// Exact source `AgentToolResult._docID` to the corresponding child result.
+    ///
+    /// Forked transcript messages are immutable, so any model-facing evidence
+    /// pointer must be rebound before the child message is created. Omission
+    /// facts never authorize paging and therefore never enter this map.
+    result_doc_id_rewrites: HashMap<String, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -996,18 +1311,6 @@ async fn fork_with_executor(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
-    let copied_messages = copy_messages(
-        executor,
-        params.source_session_id,
-        &child_session_id,
-        parent_agent_did,
-        parent.requester_did.as_deref(),
-        &node_did,
-        cut_seq,
-    )
-    .await
-    .map_err(ForkError::ForkCopyFailed)?;
-
     let copied_tool_calls = copy_tool_calls(
         executor,
         params.source_session_id,
@@ -1048,6 +1351,22 @@ async fn fork_with_executor(
     .await
     .map_err(ForkError::ForkCopyFailed)?;
 
+    // Messages are immutable and their serialized tool-result observations
+    // carry exact DefraDB pointers. Mint and bind the child evidence first so
+    // copy_messages can replace source-session pointers before creation.
+    let copied_messages = copy_messages(
+        executor,
+        params.source_session_id,
+        &child_session_id,
+        parent_agent_did,
+        parent.requester_did.as_deref(),
+        &node_did,
+        cut_seq,
+        &copied_tool_results.result_doc_id_rewrites,
+    )
+    .await
+    .map_err(ForkError::ForkCopyFailed)?;
+
     let copied_compaction_entries = copy_compaction_entries(
         executor,
         params.source_session_id,
@@ -1066,7 +1385,7 @@ async fn fork_with_executor(
         session_id: child_session_id,
         copied_messages: copied_messages.len() as u32,
         copied_tool_calls: copied_tool_calls.len() as u32,
-        copied_tool_results,
+        copied_tool_results: copied_tool_results.count,
         copied_tool_approvals,
         copied_compaction_entries,
     })
@@ -1191,6 +1510,263 @@ struct ForkedMessage {
     sequence: u32,
 }
 
+fn rebind_copied_tool_evidence_projections(
+    encoded_message: &str,
+    result_doc_id_rewrites: &HashMap<String, String>,
+) -> Result<String> {
+    use crate::llm::message::{Message, ToolResultContent, UserContent};
+
+    if result_doc_id_rewrites.is_empty() {
+        return Ok(encoded_message.to_string());
+    }
+    let rebound = if let Ok(mut message) = serde_json::from_str::<Message>(encoded_message) {
+        let mut changed = false;
+        if let Message::User { content } = &mut message {
+            for item in content {
+                let UserContent::ToolResult(tool_result) = item else {
+                    continue;
+                };
+                for result_content in &mut tool_result.content {
+                    let ToolResultContent::Text(text) = result_content else {
+                        continue;
+                    };
+                    changed |= rebind_canonical_result_pointer_suffix(
+                        &mut text.text,
+                        result_doc_id_rewrites,
+                        "\n",
+                    )?;
+                }
+            }
+        }
+
+        if changed {
+            serde_json::to_string(&message)
+                .context("encoding rebound fork tool-evidence projection")?
+        } else {
+            encoded_message.to_string()
+        }
+    } else {
+        rebind_background_completion_result_projection(encoded_message, result_doc_id_rewrites)?
+    };
+
+    ensure_no_source_result_authority(&rebound, result_doc_id_rewrites)?;
+    Ok(rebound)
+}
+
+fn rebind_background_completion_result_projection(
+    encoded_message: &str,
+    result_doc_id_rewrites: &HashMap<String, String>,
+) -> Result<String> {
+    // These are the two current plain AgentMessage shapes written by the
+    // background-completion projector. `compact_summary` normalizes the
+    // canonical projection's newline to a space, so the authority token sits
+    // directly before the result/summary closing tag.
+    let closing_tag = if encoded_message.starts_with("<tool-completion ")
+        && encoded_message.contains("\n  <result>")
+    {
+        "</result>"
+    } else if encoded_message.starts_with("<subagent-notification ")
+        && encoded_message.contains("\n<summary>")
+    {
+        "</summary>"
+    } else {
+        // Arbitrary plain transcript content is opaque, even if it happens to
+        // discuss a DefraDB document using the same words.
+        return Ok(encoded_message.to_string());
+    };
+
+    let closing_tag_start = encoded_message
+        .rfind(closing_tag)
+        .with_context(|| format!("current background-completion message has no {closing_tag}"))?;
+    let mut through_projection = encoded_message[..closing_tag_start].to_string();
+    let changed = rebind_canonical_result_pointer_suffix(
+        &mut through_projection,
+        result_doc_id_rewrites,
+        "",
+    )?;
+    if !changed {
+        return Ok(encoded_message.to_string());
+    }
+    through_projection.push_str(&encoded_message[closing_tag_start..]);
+    Ok(through_projection)
+}
+
+fn ensure_no_source_result_authority(
+    encoded_message: &str,
+    result_doc_id_rewrites: &HashMap<String, String>,
+) -> Result<()> {
+    if result_doc_id_rewrites.keys().any(|source_doc_id| {
+        encoded_message.contains(&format!("[Full output: DefraDB doc {source_doc_id}]"))
+    }) {
+        anyhow::bail!(
+            "forked message retained a canonical source AgentToolResult pointer after rebinding"
+        );
+    }
+    Ok(())
+}
+
+fn rebind_canonical_result_pointer_suffix(
+    projection: &mut String,
+    result_doc_id_rewrites: &HashMap<String, String>,
+    prefix: &str,
+) -> Result<bool> {
+    let source = result_doc_id_rewrites
+        .iter()
+        .find(|(source_doc_id, _)| {
+            projection.ends_with(&format!(
+                "{prefix}[Full output: DefraDB doc {source_doc_id}]"
+            ))
+        })
+        .map(|(source_doc_id, child_doc_id)| (source_doc_id.clone(), child_doc_id.clone()));
+
+    let Some((source_doc_id, child_doc_id)) = source else {
+        return Ok(false);
+    };
+    let source_pointer = format!("{prefix}[Full output: DefraDB doc {source_doc_id}]");
+    projection.truncate(projection.len() - source_pointer.len());
+    projection.push_str(&format!(
+        "{prefix}[Full output: DefraDB doc {child_doc_id}]"
+    ));
+
+    if result_doc_id_rewrites.keys().any(|source_doc_id| {
+        projection.ends_with(&format!(
+            "{prefix}[Full output: DefraDB doc {source_doc_id}]"
+        ))
+    }) {
+        anyhow::bail!(
+            "forked message retained a canonical source AgentToolResult pointer after rebinding"
+        );
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod message_projection_tests {
+    use super::rebind_copied_tool_evidence_projections;
+    use crate::llm::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
+    use std::collections::HashMap;
+
+    #[test]
+    fn rebinds_only_the_canonical_exact_result_suffix() {
+        let encoded = serde_json::to_string(&Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                content: vec![ToolResultContent::Text(Text {
+                    text: concat!(
+                        "opaque DefraDB doc source-doc\n",
+                        "still opaque\n",
+                        "[Full output: DefraDB doc source-doc]"
+                    )
+                    .to_string(),
+                })],
+            })],
+        })
+        .unwrap();
+        let rewrites = HashMap::from([("source-doc".to_string(), "child-doc".to_string())]);
+
+        let rebound = rebind_copied_tool_evidence_projections(&encoded, &rewrites).unwrap();
+        let message: Message = serde_json::from_str(&rebound).unwrap();
+        let Message::User { content } = message else {
+            panic!("expected user message")
+        };
+        let [UserContent::ToolResult(result)] = content.as_slice() else {
+            panic!("expected one tool result")
+        };
+        let [ToolResultContent::Text(text)] = result.content.as_slice() else {
+            panic!("expected one text result")
+        };
+        assert_eq!(
+            text.text,
+            concat!(
+                "opaque DefraDB doc source-doc\n",
+                "still opaque\n",
+                "[Full output: DefraDB doc child-doc]"
+            )
+        );
+    }
+
+    #[test]
+    fn rebinds_recovered_background_tool_completion_result_suffix() {
+        let encoded = concat!(
+            "<tool-completion tool_call_id=\"call-1\" tool_name=\"bash\" status=\"completed\">\n",
+            "  <result>opaque DefraDB doc source-doc prose </result> still raw ",
+            "[Full output: DefraDB doc source-doc]</result>\n",
+            "</tool-completion>"
+        );
+        let rewrites = HashMap::from([("source-doc".to_string(), "child-doc".to_string())]);
+
+        assert_eq!(
+            rebind_copied_tool_evidence_projections(encoded, &rewrites).unwrap(),
+            concat!(
+                "<tool-completion tool_call_id=\"call-1\" tool_name=\"bash\" status=\"completed\">\n",
+                "  <result>opaque DefraDB doc source-doc prose </result> still raw ",
+                "[Full output: DefraDB doc child-doc]</result>\n",
+                "</tool-completion>"
+            )
+        );
+    }
+
+    #[test]
+    fn rebinds_background_subagent_fallback_summary_suffix() {
+        let encoded = concat!(
+            "<subagent-notification child_request_id=\"child-1\" child_session_id=\"session-1\" ",
+            "behavior_id=\"review\" parent_tool_call_id=\"call-1\" status=\"completed\">\n",
+            "<summary>summary [Full output: DefraDB doc source-doc]</summary>\n",
+            "</subagent-notification>"
+        );
+        let rewrites = HashMap::from([("source-doc".to_string(), "child-doc".to_string())]);
+
+        let rebound = rebind_copied_tool_evidence_projections(encoded, &rewrites).unwrap();
+        assert!(rebound.contains("summary [Full output: DefraDB doc child-doc]</summary>"));
+        assert!(!rebound.contains("summary [Full output: DefraDB doc source-doc]</summary>"));
+    }
+
+    #[test]
+    fn leaves_unrecognized_plain_prose_unchanged() {
+        let encoded = concat!(
+            "opaque prose mentions DefraDB doc source-doc and ",
+            "[Full output: DefraDB doc unrelated-doc]"
+        );
+        let rewrites = HashMap::from([("source-doc".to_string(), "child-doc".to_string())]);
+
+        assert_eq!(
+            rebind_copied_tool_evidence_projections(encoded, &rewrites).unwrap(),
+            encoded
+        );
+    }
+
+    #[test]
+    fn fails_closed_when_background_writer_shape_drifts() {
+        let encoded = concat!(
+            "<tool-completion tool_call_id=\"call-1\" tool_name=\"bash\" status=\"completed\">\n",
+            " <result>summary [Full output: DefraDB doc source-doc]</result>\n",
+            "</tool-completion>"
+        );
+        let rewrites = HashMap::from([("source-doc".to_string(), "child-doc".to_string())]);
+
+        let error = rebind_copied_tool_evidence_projections(encoded, &rewrites).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("retained a canonical source AgentToolResult pointer"));
+    }
+
+    #[test]
+    fn fails_closed_if_source_authority_survives_rebinding() {
+        let encoded = concat!(
+            "<tool-completion tool_call_id=\"call-1\" tool_name=\"bash\" status=\"completed\">\n",
+            "  <result>summary [Full output: DefraDB doc source-doc]</result>\n",
+            "</tool-completion>"
+        );
+        let rewrites = HashMap::from([("source-doc".to_string(), "source-doc".to_string())]);
+
+        let error = rebind_copied_tool_evidence_projections(encoded, &rewrites).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("retained a canonical source AgentToolResult pointer"));
+    }
+}
+
 async fn copy_messages(
     executor: &(impl GraphqlExecutor + ?Sized),
     source_session_id: &str,
@@ -1199,6 +1775,7 @@ async fn copy_messages(
     requester_did: Option<&str>,
     node_did: &str,
     cut_seq: u32,
+    result_doc_id_rewrites: &HashMap<String, String>,
 ) -> Result<Vec<ForkedMessage>> {
     let escaped_source = escape_graphql_string(source_session_id);
     let query = format!(
@@ -1246,6 +1823,7 @@ async fn copy_messages(
             .ok_or_else(|| anyhow::anyhow!("sequence missing"))?;
         let role = row.get("role").and_then(|v| v.as_str()).unwrap_or("");
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let content = rebind_copied_tool_evidence_projections(content, result_doc_id_rewrites)?;
         let reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
         let request_id = row.get("request_id").and_then(Value::as_str);
@@ -1275,7 +1853,7 @@ async fn copy_messages(
             request_id = nullable_string_literal(request_id),
             request_doc_id = nullable_string_literal(request_doc_id),
             role_escaped = escape_graphql_string(role),
-            content_escaped = escape_graphql_string(content),
+            content_escaped = escape_graphql_string(&content),
             reasoning_escaped = escape_graphql_string(reasoning),
             timestamp_escaped = escape_graphql_string(timestamp),
         );
@@ -1663,7 +2241,7 @@ async fn copy_tool_calls(
             executor,
             "AgentToolCall",
             &source,
-            "tool_call_key request_id session_id agent_did requester_did message_sequence tool_name tool_call_id args result result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did status lifecycle_state started_at deadline_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms await_mode cancel_policy cancel_cause child_request_id",
+            "tool_call_key request_id session_id agent_did requester_did message_sequence tool_name tool_call_id args result result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did status lifecycle_state started_at deadline_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms await_mode cancel_policy cancel_cause",
         )
         .await?;
         if row.get("session_id").and_then(Value::as_str) != Some(source_session_id) {
@@ -1701,34 +2279,41 @@ async fn copy_tool_calls(
         let latency_ms = row.get("latency_ms").and_then(json_i64);
         let await_mode = row.get("await_mode").and_then(Value::as_str);
         let cancel_policy = row.get("cancel_policy").and_then(Value::as_str);
-        let child_request_id = row.get("child_request_id").and_then(Value::as_str);
         let request_id = row.get("request_id").and_then(Value::as_str);
         let stage_phase = evidence.source_phase().map(|phase| phase.as_str());
         let staged_terminal = stage_phase.is_some();
+        let replays_approval = optional_exact_ref(
+            &row,
+            "approval_doc_id",
+            "approval_composite_commit_cid",
+            "approval_signer_did",
+            "fork source AgentToolApproval",
+        )?
+        .is_some();
         let create_result = if staged_terminal { "" } else { result };
-        let create_status = if staged_terminal {
-            "forkStaging"
+        let fork_staging = staged_terminal || replays_approval;
+        let create_status = if fork_staging { "forkStaging" } else { status };
+        // An approval attests to the exact edge-free held version. Recreate
+        // that historical parent first; copy_tool_approvals will then replay
+        // the existing Lean awaitingApproval -> running transition before any
+        // terminal result or omission is minted.
+        let create_lifecycle_state = if replays_approval {
+            Some(crate::tool_call_lifecycle::ToolCallState::AwaitingApproval.as_str())
         } else {
-            status
+            stage_phase.or(lifecycle_state)
         };
-        let create_lifecycle_state = stage_phase.or(lifecycle_state);
         let staging_deadline = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
-        let create_deadline_at = if staged_terminal {
+        let create_deadline_at = if fork_staging {
             Some(staging_deadline.as_str())
         } else {
             deadline_at
         };
-        let create_started_at = if matches!(
-            evidence.source_phase(),
-            Some(
-                crate::tool_call_lifecycle::ToolCallState::Pending
-                    | crate::tool_call_lifecycle::ToolCallState::AwaitingApproval
-            )
-        ) {
-            None
-        } else {
-            (!started_at.is_empty()).then_some(started_at)
-        };
+        let create_started_at =
+            if matches!(create_lifecycle_state, Some("pending" | "awaitingApproval")) {
+                None
+            } else {
+                (!started_at.is_empty()).then_some(started_at)
+            };
         let create_completed_at = (!staged_terminal).then_some(completed_at).flatten();
         let create_tool_failure_class = (!staged_terminal).then_some(tool_failure_class).flatten();
         let create_denial_reason = (!staged_terminal).then_some(denial_reason).flatten();
@@ -1750,6 +2335,11 @@ async fn copy_tool_calls(
             .await?;
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let source_fields = fork_source_fields(&source);
+        // A fork copies transcript evidence, not the descendant AgentRequest
+        // graph. Carrying this operational edge over would make the child
+        // session claim (and potentially act on) a source-session subagent. It
+        // stays null unless a future fork explicitly copies and rebinds that
+        // descendant request.
         let mutation = format!(
             r#"mutation {{ create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key_escaped}",
@@ -1782,7 +2372,7 @@ async fn copy_tool_calls(
                     latency_ms: {latency_ms},
                     await_mode: {await_mode},
                     cancel_policy: {cancel_policy},
-                    child_request_id: {child_request_id},
+                    child_request_id: null,
                     {source_fields}
                 }}) {{ _docID }} }}"#,
             tool_call_key_escaped = escape_graphql_string(&tool_call_key),
@@ -1813,7 +2403,6 @@ async fn copy_tool_calls(
             latency_ms = nullable_i64_literal(create_latency_ms),
             await_mode = nullable_string_literal(await_mode),
             cancel_policy = nullable_string_literal(cancel_policy),
-            child_request_id = nullable_string_literal(child_request_id),
         );
         let response =
             execute_mutation_with_retry(executor, &mutation, "fork::copy_tool_call").await?;
@@ -1871,6 +2460,7 @@ async fn terminalize_forked_tool_call(
     kind: &str,
     evidence: &crate::SignedDocumentVersionRef,
     deferred_approval: Option<&crate::SignedDocumentVersionRef>,
+    model_projection: Option<&str>,
     node_did: &str,
 ) -> Result<()> {
     let source_phase = call
@@ -1932,11 +2522,11 @@ async fn terminalize_forked_tool_call(
         doc_id = escape_graphql_string(&call.child.version.doc_id),
         source_phase = source_phase.as_str(),
         terminal_phase = terminal_phase.as_str(),
-        result = escape_graphql_string(
+        result = escape_graphql_string(model_projection.unwrap_or_else(|| {
             row.get("result")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-        ),
+        })),
         status = escape_graphql_string(
             row.get("status")
                 .and_then(Value::as_str)
@@ -2044,8 +2634,8 @@ async fn copy_tool_results(
     node_did: &str,
     calls: &[ForkedToolCall],
     deferred_approvals: &HashMap<String, crate::SignedDocumentVersionRef>,
-) -> Result<u32> {
-    let mut copied = 0u32;
+) -> Result<CopiedToolEvidence> {
+    let mut copied = CopiedToolEvidence::default();
     for call in calls {
         let (source, source_phase, _terminal_phase) = match &call.evidence {
             ForkedToolEvidence::NonTerminal => continue,
@@ -2165,10 +2755,11 @@ async fn copy_tool_results(
                     "omission",
                     &child_omission,
                     deferred_approvals.get(&call.child.version.doc_id),
+                    None,
                     node_did,
                 )
                 .await?;
-                copied += 1;
+                copied.count += 1;
                 continue;
             }
         };
@@ -2267,6 +2858,12 @@ async fn copy_tool_results(
             &doc_id,
         )
         .await?;
+        let child_projection = crate::truncation::canonical_model_projection(
+            output_text,
+            &child_result.version.doc_id,
+            truncated,
+            truncation_metadata,
+        )?;
         terminalize_forked_tool_call(
             executor,
             call,
@@ -2274,10 +2871,15 @@ async fn copy_tool_results(
             "result",
             &child_result,
             deferred_approvals.get(&call.child.version.doc_id),
+            Some(&child_projection),
             node_did,
         )
         .await?;
-        copied += 1;
+        copied.result_doc_id_rewrites.insert(
+            source.version.doc_id.clone(),
+            child_result.version.doc_id.clone(),
+        );
+        copied.count += 1;
     }
     Ok(copied)
 }
@@ -2328,14 +2930,41 @@ async fn copy_tool_approvals(
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
         );
-        exact_snapshot(
+        let source_parent_row = exact_snapshot(
             executor,
             "AgentToolCall",
             &source_parent,
-            "tool_call_key session_id lifecycle_state",
+            "tool_call_key tool_call_id session_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
         )
         .await
         .context("verifying exact historical source call for forked approval")?;
+        if source_parent_row
+            .get("tool_call_key")
+            .and_then(Value::as_str)
+            != call.source_row.get("tool_call_key").and_then(Value::as_str)
+            || source_parent_row
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                != call.source_row.get("tool_call_id").and_then(Value::as_str)
+            || source_parent_row.get("session_id").and_then(Value::as_str)
+                != call.source_row.get("session_id").and_then(Value::as_str)
+            || source_parent_row
+                .get("lifecycle_state")
+                .and_then(Value::as_str)
+                != Some("awaitingApproval")
+            || optional_exact_ref(
+                &source_parent_row,
+                "approval_doc_id",
+                "approval_composite_commit_cid",
+                "approval_signer_did",
+                "historical fork source approval edge",
+            )?
+            .is_some()
+        {
+            anyhow::bail!(
+                "source AgentToolApproval does not attest to the edge-free awaitingApproval execution"
+            );
+        }
         if let ForkedToolEvidence::Omission {
             accepted,
             reason: crate::tool_call_lifecycle::evidence::ToolOutputOmissionReason::ApprovalDenied,
@@ -2350,6 +2979,8 @@ async fn copy_tool_approvals(
             if row.get("decision").and_then(Value::as_str) != Some("denied") {
                 anyhow::bail!("approvalDenied omission does not pin a denied approval fact");
             }
+        } else if row.get("decision").and_then(Value::as_str) != Some("approved") {
+            anyhow::bail!("non-denial fork source does not pin an approved approval fact");
         }
 
         let tool_call_id = call
@@ -2358,8 +2989,12 @@ async fn copy_tool_approvals(
             .and_then(Value::as_str)
             .unwrap_or_default();
         let tool_call_key = format!("{child_session_id}:{tool_call_id}");
-        let approval_key = call.child.version.composite_commit_cid.clone();
-        let approval_id = format!("approval-{}", call.child.version.composite_commit_cid);
+        // One immutable verdict is scoped to the physical child ToolCall.
+        // The exact accepted version remains independently pinned by the
+        // composite CID field; duplicating that hash into the logical key
+        // would permit multiple verdict keys for one physical execution.
+        let approval_key = call.child.version.doc_id.clone();
+        let approval_id = format!("approval-{}", call.child.version.doc_id);
         require_child_key_absent(executor, "AgentToolApproval", "approval_key", &approval_key)
             .await?;
         let requester_did_field = crate::session::requester_did_create_field(child_requester_did);
@@ -2422,11 +3057,21 @@ async fn copy_tool_approvals(
         if call.evidence.defers_approval_binding() {
             deferred.insert(call.child.version.doc_id.clone(), child_approval);
         } else {
-            attach_child_tool_fact(
+            approve_and_start_forked_tool_call(
                 executor,
-                &call.child.version.doc_id,
-                "approval",
+                &call.child,
                 &child_approval,
+                call.source_row
+                    .get("started_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                call.source_row
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                call.source_row.get("deadline_at").and_then(Value::as_str),
+                matches!(&call.evidence, ForkedToolEvidence::NonTerminal),
+                node_did,
             )
             .await?;
         }
@@ -2743,7 +3388,6 @@ async fn execute_mutation_with_retry(
     operation: &str,
 ) -> Result<GraphqlExecuteResponse> {
     let mut last_resp = None;
-    let mut last_error = None;
     for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
         if attempt > 0 {
             let backoff = defradb_conflict_retry_backoff(attempt - 1);
@@ -2778,19 +3422,34 @@ async fn execute_mutation_with_retry(
                 }
                 anyhow::bail!("{operation} failed: {}", render_graphql_errors(&resp));
             }
-            Err(error) => {
+            Err(error) if mutation_error_is_explicit_conflict(&error) => {
                 tracing::warn!(
                     operation = %operation,
                     attempt = attempt,
                     error = %error,
                     elapsed_ms = elapsed.as_millis() as u64,
-                    "mutation transport failed"
+                    "mutation failed with an explicit transaction conflict"
                 );
                 if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
-                    last_error = Some(error);
                     continue;
                 }
-                return Err(error);
+                return Err(error).with_context(|| {
+                    format!(
+                        "{operation} exhausted {DEFRA_DB_CONFLICT_MAX_RETRIES} transaction-conflict retries"
+                    )
+                });
+            }
+            Err(error) => {
+                tracing::error!(
+                    operation = %operation,
+                    attempt = attempt,
+                    error = %error,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "mutation transport result is ambiguous; refusing to retry"
+                );
+                return Err(error).with_context(|| {
+                    format!("{operation} transport result is ambiguous; mutation was not retried")
+                });
             }
         }
     }
@@ -2801,8 +3460,7 @@ async fn execute_mutation_with_retry(
             render_graphql_errors(&resp)
         );
     }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("{operation} failed without GraphQL response")))
+    anyhow::bail!("{operation} failed without a GraphQL response")
 }
 
 fn graphql_rows(response: &GraphqlExecuteResponse, collection_name: &str) -> Vec<Value> {

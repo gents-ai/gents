@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use super::fleet::{spawn_server_with_args, wait_http, wait_runtime_ready};
 use super::util::{path_arg, run_cli_json};
 use crate::cli::args::DemoRunArgs;
-use crate::desired_state::interpolate::interpolate;
+use crate::desired_state::interpolate::interpolate_json_value;
 use crate::graphql_access::post_graphql;
 use gents::graphql::escape_graphql_string;
 
@@ -88,14 +88,48 @@ fn load_manifest(pack: &Path) -> Result<PackManifest> {
     let path = pack.join("experiment.json");
     let raw =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let expanded = interpolate(&raw).map_err(|missing| {
+    let mut value: Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    interpolate_json_value(&mut value).map_err(|missing| {
         anyhow::anyhow!(
             "{} references unset environment variable(s): {}",
             path.display(),
             missing.join(", ")
         )
     })?;
-    serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))
+    let manifest: PackManifest =
+        serde_json::from_value(value).with_context(|| format!("decoding {}", path.display()))?;
+    validate_manifest_identifiers(&manifest)
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(manifest)
+}
+
+fn is_graphql_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn validate_graphql_name(kind: &str, value: &str) -> Result<()> {
+    if !is_graphql_name(value) {
+        bail!("{kind} {value:?} is not a valid GraphQL name");
+    }
+    Ok(())
+}
+
+fn validate_manifest_identifiers(manifest: &PackManifest) -> Result<()> {
+    validate_graphql_name("seed collection", &manifest.seed.collection)?;
+    validate_graphql_name("seed job_id_field", &manifest.seed.job_id_field)?;
+    validate_graphql_name("seed prompt_field", &manifest.seed.prompt_field)?;
+    for field in manifest.seed.fields.keys() {
+        validate_graphql_name("seed field", field)?;
+    }
+    for collection in manifest.expect.collection_counts.keys() {
+        validate_graphql_name("expected collection", collection)?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn list(root: &Path) -> Result<()> {
@@ -228,7 +262,7 @@ struct StageResult {
 }
 
 async fn await_stages(
-    graphql: &str,
+    graphql: &gents::AuthenticatedGraphql,
     trigger_ids: &[String],
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
@@ -293,7 +327,7 @@ async fn await_stages(
 }
 
 /// The trigger's own `last_error`, when it recorded a failed fire.
-async fn trigger_error(graphql: &str, trigger_id: &str) -> Option<String> {
+async fn trigger_error(graphql: &gents::AuthenticatedGraphql, trigger_id: &str) -> Option<String> {
     let query = format!(
         r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
         escape_graphql_string(trigger_id)
@@ -311,7 +345,7 @@ async fn trigger_error(graphql: &str, trigger_id: &str) -> Option<String> {
     )
 }
 
-async fn count_rows(graphql: &str, collection: &str) -> u64 {
+async fn count_rows(graphql: &gents::AuthenticatedGraphql, collection: &str) -> u64 {
     let query = format!("{{ {collection} {{ _docID }} }}");
     post_graphql(graphql, &query)
         .await
@@ -324,7 +358,7 @@ async fn count_rows(graphql: &str, collection: &str) -> u64 {
         .unwrap_or(0)
 }
 
-async fn token_totals(graphql: &str) -> (u64, u64) {
+async fn token_totals(graphql: &gents::AuthenticatedGraphql) -> (u64, u64) {
     let query = "{ InferenceCall { prompt_tokens completion_tokens } }";
     let Ok(resp) = post_graphql(graphql, query).await else {
         return (0, 0);
@@ -421,13 +455,14 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
         .to_string();
 
     let port = args.http_port;
-    let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
+    let graphql_endpoint = format!("http://127.0.0.1:{port}/api/v0/graphql");
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
     let mut server = spawn_server_with_pack(&bin, &home, port, &log, &pack)?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
+        let graphql = crate::authenticated_graphql_client(&home, &graphql_endpoint).await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         println!(
             "runtime  ready; waiting for the event source to observe {}…",
@@ -595,5 +630,66 @@ mod tests {
             "gents behavior started behavior_id=exp-stage1",
             "ExperimentJob"
         ));
+    }
+
+    #[test]
+    fn graphql_name_validation_rejects_manifest_structure_injection() {
+        for invalid in [
+            "",
+            "9Collection",
+            "Collection { _docID }",
+            "field: value",
+            "field-name",
+            "field\nmutation",
+        ] {
+            assert!(
+                !is_graphql_name(invalid),
+                "hostile manifest identifier unexpectedly accepted: {invalid:?}"
+            );
+        }
+        for valid in ["Collection", "_private", "field_2"] {
+            assert!(
+                is_graphql_name(valid),
+                "valid GraphQL name rejected: {valid}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_identifier_validation_covers_seed_and_expected_collections() {
+        let mut manifest = PackManifest {
+            name: "test".to_string(),
+            description: String::new(),
+            init: PackInit {
+                inference_url: "http://127.0.0.1:8000/v1".to_string(),
+                model_name: "test".to_string(),
+                backend_preset: None,
+                openai_wire_api: None,
+            },
+            seed: PackSeed {
+                collection: "ExperimentJob".to_string(),
+                job_id_field: "job_id".to_string(),
+                prompt_field: "prompt".to_string(),
+                fields: [("status".to_string(), "pending".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            default_prompt: String::new(),
+            expect: PackExpect {
+                trigger_ids: Vec::new(),
+                collection_counts: [("ExperimentFinding".to_string(), 1)].into_iter().collect(),
+            },
+            await_timeout_secs: 1,
+        };
+        validate_manifest_identifiers(&manifest).expect("valid manifest identifiers");
+
+        manifest
+            .expect
+            .collection_counts
+            .insert("Finding } mutation {".to_string(), 1);
+        assert!(validate_manifest_identifiers(&manifest)
+            .expect_err("injected expected collection must fail")
+            .to_string()
+            .contains("expected collection"));
     }
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;
@@ -5,10 +7,17 @@ use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::ToolCallLifecycle;
-use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents::{AgentIdentity, BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
-use crate::support::{test_db, AGENT_DID};
+use crate::support::{create_request_for_agent, test_db_with_identity};
+
+async fn signed_test_db(test_name: &str) -> (crate::support::TestDb, String) {
+    let identity: Arc<dyn AgentIdentity> =
+        Arc::new(crate::support::fixtures::test_identity(test_name));
+    let agent_did = identity.did().to_string();
+    (test_db_with_identity(test_name, identity).await, agent_did)
+}
 
 struct StaticTool {
     name: &'static str,
@@ -61,13 +70,14 @@ async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
 ) -> (crate::support::TestDb, DefraSessionHook, String, String) {
-    let db = test_db(test_name).await;
+    let (db, agent_did) = signed_test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request(
+    create_request_for_agent(
         db.node.as_ref(),
         &request_id,
         &session_id,
+        &agent_did,
         "processing",
         "2026-05-14T00:00:00Z",
     )
@@ -77,7 +87,7 @@ async fn setup_hook(
         db.node.clone(),
         &session_id,
         "r4c-background-tools",
-        AGENT_DID,
+        &agent_did,
         FailurePolicy::default(),
     )
     .await
@@ -191,11 +201,15 @@ async fn create_foreground_tool_call(
     request_id: &str,
     session_id: &str,
 ) {
+    let agent_did = db
+        .node
+        .node_identity_did()
+        .expect("background-tool fixture node must have a registered identity");
     let mut lifecycle = ToolCallLifecycle::new(
         db.node.clone(),
         request_id.to_string(),
         session_id.to_string(),
-        "did:test:test".to_string(),
+        agent_did.to_string(),
         "foreground-call".to_string(),
         99,
         "foreground_tool".to_string(),
@@ -287,9 +301,10 @@ async fn list_background_tools_reports_running_live_output_bytes() {
 
 #[tokio::test]
 async fn list_background_tools_rejects_sibling_requests() {
-    let db = test_db("r4c-list-bg-sibling").await;
+    let (db, agent_did) = signed_test_db("r4c-list-bg-sibling").await;
     let (hook_1, _session_1, _request_1) = setup_hook_on_db(
         &db,
+        &agent_did,
         "parent-one",
         "session-one",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
@@ -297,6 +312,7 @@ async fn list_background_tools_rejects_sibling_requests() {
     .await;
     let (hook_2, _session_2, _request_2) = setup_hook_on_db(
         &db,
+        &agent_did,
         "parent-two",
         "session-two",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
@@ -310,14 +326,16 @@ async fn list_background_tools_rejects_sibling_requests() {
 
 async fn setup_hook_on_db(
     db: &crate::support::TestDb,
+    agent_did: &str,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    crate::support::create_request(
+    create_request_for_agent(
         db.node.as_ref(),
         request_id,
         session_id,
+        agent_did,
         "processing",
         "2026-05-14T00:00:00Z",
     )
@@ -326,7 +344,7 @@ async fn setup_hook_on_db(
         db.node.clone(),
         session_id,
         "r4c-background-tools",
-        AGENT_DID,
+        agent_did,
         FailurePolicy::default(),
     )
     .await

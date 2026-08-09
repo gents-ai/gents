@@ -9,7 +9,10 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 
-use super::{AwaitMode, CancelCause, CancelPolicy, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{
+    validate_retained_approval_edge, AwaitMode, CancelCause, CancelPolicy, ExactToolCallEdgeRef,
+    FailureClass, RetainedApprovalFact, ToolCallLifecycle, ToolCallState,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ToolCallResultRow {
@@ -20,18 +23,23 @@ struct ToolCallResultRow {
     tool_call_id: String,
     tool_name: String,
     lifecycle_state: String,
+    result: Option<String>,
     result_doc_id: Option<String>,
     result_composite_commit_cid: Option<String>,
     result_signer_did: Option<String>,
     omission_doc_id: Option<String>,
     omission_composite_commit_cid: Option<String>,
     omission_signer_did: Option<String>,
+    approval_doc_id: Option<String>,
+    approval_composite_commit_cid: Option<String>,
+    approval_signer_did: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExactToolCallOutput {
     pub(crate) tool_name: String,
     pub(crate) output_text: String,
+    pub(crate) model_projection: String,
     pub(crate) evidence: crate::SignedDocumentVersionRef,
 }
 
@@ -78,6 +86,8 @@ struct ExactToolResultRow {
     tool_call_signer_did: String,
     session_id: String,
     output_text: String,
+    model_output_truncated: bool,
+    truncation_metadata: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,12 +104,145 @@ struct ExactOmissionSummaryRow {
     detail: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+struct ExactApprovalSummaryRow {
+    approval_key: String,
+    tool_call_id: String,
+    tool_call_key: String,
+    tool_call_doc_id: String,
+    tool_call_composite_commit_cid: String,
+    tool_call_signer_did: String,
+    session_id: String,
+    decision: String,
+    approver_did: String,
+}
+
+fn validate_exact_approval_immutable_binding(
+    exact_call: &ToolCallResultRow,
+    session_id: &str,
+    tool_call_id: &str,
+    edge_signer: &str,
+    fact_signer: &str,
+    approval: &ExactApprovalSummaryRow,
+) -> Result<()> {
+    if fact_signer != edge_signer {
+        anyhow::bail!("AgentToolCall approval signer does not match exact approval fact");
+    }
+    if fact_signer != approval.approver_did
+        || approval.approval_key != approval.tool_call_doc_id
+        || approval.tool_call_doc_id != exact_call.doc_id
+        || approval.tool_call_key != exact_call.tool_call_key
+        || approval.tool_call_id != tool_call_id
+        || approval.session_id != session_id
+    {
+        anyhow::bail!("AgentToolApproval immutable binding does not match AgentToolCall");
+    }
+    Ok(())
+}
+
+fn validate_exact_approval_historical_parent(
+    exact_call: &ToolCallResultRow,
+    session_id: &str,
+    tool_call_id: &str,
+    parent_signer: &str,
+    approval: &ExactApprovalSummaryRow,
+    held: &ExactHistoricalToolCallRow,
+) -> Result<()> {
+    if parent_signer != approval.tool_call_signer_did {
+        anyhow::bail!("AgentToolApproval historical parent signer does not match pinned edge");
+    }
+    if held.tool_call_key != exact_call.tool_call_key
+        || held.session_id != session_id
+        || held.tool_call_id != tool_call_id
+        || held.lifecycle_state != "awaitingApproval"
+        || exact_historical_approval_edge(held)?.is_some()
+    {
+        anyhow::bail!("AgentToolApproval historical held execution is incoherent");
+    }
+    Ok(())
+}
+
+async fn load_exact_terminal_approval(
+    executor: &(impl crate::GraphqlExecutor + ?Sized),
+    exact_call: &ToolCallResultRow,
+    session_id: &str,
+    tool_call_id: &str,
+    edge: Option<(&str, &str, &str)>,
+) -> Result<Option<RetainedApprovalFact>> {
+    let Some((approval_doc_id, approval_cid, approval_signer)) = edge else {
+        return Ok(None);
+    };
+    let approval_version = crate::DocumentVersionRef::new(approval_doc_id, approval_cid);
+    let approval_snapshot =
+        crate::document_version::verified_exact_document_snapshot_with_executor(
+            executor,
+            "AgentToolApproval",
+            &approval_version,
+            "approval_key tool_call_id tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id decision approver_did",
+        )
+        .await?;
+    let approval: ExactApprovalSummaryRow = approval_snapshot.decode()?;
+    validate_exact_approval_immutable_binding(
+        exact_call,
+        session_id,
+        tool_call_id,
+        approval_signer,
+        &approval_snapshot.source.signer_did,
+        &approval,
+    )?;
+
+    let held_version = crate::DocumentVersionRef::new(
+        &approval.tool_call_doc_id,
+        &approval.tool_call_composite_commit_cid,
+    );
+    let held_snapshot = crate::document_version::verified_exact_document_snapshot_with_executor(
+        executor,
+        "AgentToolCall",
+        &held_version,
+        "tool_call_key session_id tool_call_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
+    )
+    .await?;
+    let held: ExactHistoricalToolCallRow = held_snapshot.decode()?;
+    validate_exact_approval_historical_parent(
+        exact_call,
+        session_id,
+        tool_call_id,
+        &held_snapshot.source.signer_did,
+        &approval,
+        &held,
+    )?;
+    Ok(Some(RetainedApprovalFact {
+        edge: ExactToolCallEdgeRef::new(approval_doc_id, approval_cid, approval_signer),
+        decision: approval.decision,
+        execution: ExactToolCallEdgeRef::new(
+            approval.tool_call_doc_id,
+            approval.tool_call_composite_commit_cid,
+            approval.tool_call_signer_did,
+        ),
+    }))
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ExactHistoricalToolCallRow {
     tool_call_key: String,
     session_id: String,
     tool_call_id: String,
     lifecycle_state: String,
+    approval_doc_id: Option<String>,
+    approval_composite_commit_cid: Option<String>,
+    approval_signer_did: Option<String>,
+}
+
+fn exact_historical_approval_edge(
+    row: &ExactHistoricalToolCallRow,
+) -> Result<Option<ExactToolCallEdgeRef>> {
+    Ok(complete_exact_edge(
+        row.approval_doc_id.as_deref(),
+        row.approval_composite_commit_cid.as_deref(),
+        row.approval_signer_did.as_deref(),
+        "historical approval",
+    )?
+    .map(|(doc_id, cid, signer)| ExactToolCallEdgeRef::new(doc_id, cid, signer)))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -195,12 +338,16 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
                 tool_call_id
                 tool_name
                 lifecycle_state
+                result
                 result_doc_id
                 result_composite_commit_cid
                 result_signer_did
                 omission_doc_id
                 omission_composite_commit_cid
                 omission_signer_did
+                approval_doc_id
+                approval_composite_commit_cid
+                approval_signer_did
             }}
         }}"#
     );
@@ -249,7 +396,7 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
         executor,
         "AgentToolCall",
         &call_version.version,
-        "tool_call_key session_id tool_call_id tool_name lifecycle_state result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did",
+        "tool_call_key session_id tool_call_id tool_name lifecycle_state result result_doc_id result_composite_commit_cid result_signer_did omission_doc_id omission_composite_commit_cid omission_signer_did approval_doc_id approval_composite_commit_cid approval_signer_did",
     )
     .await?;
     if exact_call.source.signer_did != call_version.signer_did {
@@ -285,6 +432,15 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
         exact_call.omission_signer_did.as_deref(),
         "omission",
     )?;
+    let approval = complete_exact_edge(
+        exact_call.approval_doc_id.as_deref(),
+        exact_call.approval_composite_commit_cid.as_deref(),
+        exact_call.approval_signer_did.as_deref(),
+        "approval",
+    )?;
+    let approval =
+        load_exact_terminal_approval(executor, &exact_call, session_id, tool_call_id, approval)
+            .await?;
     let (Some((result_doc_id, result_cid, result_signer)), None) = (result, omission) else {
         if let (None, Some((omission_doc_id, omission_cid, omission_signer))) = (result, omission) {
             let version = crate::DocumentVersionRef::new(omission_doc_id, omission_cid);
@@ -318,7 +474,7 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
                 executor,
                 "AgentToolCall",
                 &parent_version,
-                "tool_call_key session_id tool_call_id lifecycle_state",
+                "tool_call_key session_id tool_call_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
             )
             .await?;
             if parent.source.signer_did != omission.tool_call_signer_did {
@@ -348,6 +504,19 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
                     "AgentToolOutputOmission reason does not permit its source and terminal phases"
                 );
             }
+            let source_execution = ExactToolCallEdgeRef::new(
+                &omission.tool_call_doc_id,
+                &omission.tool_call_composite_commit_cid,
+                &omission.tool_call_signer_did,
+            );
+            let source_approval = exact_historical_approval_edge(&parent)?;
+            validate_retained_approval_edge(
+                Some(&omission.reason),
+                &omission.source_phase,
+                &source_execution,
+                source_approval.as_ref(),
+                approval.as_ref(),
+            )?;
             return Ok(ExactToolCallTerminalEvidence::Omission(
                 ExactToolCallOmission {
                     tool_name: exact_call.tool_name,
@@ -368,12 +537,18 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
             _ => unreachable!("single exact terminal edge was handled above"),
         }
     };
+    if !matches!(exact_call.lifecycle_state.as_str(), "completed" | "failed") {
+        anyhow::bail!(
+            "terminal AgentToolCall {session_id}:{tool_call_id} binds output from incompatible phase {}",
+            exact_call.lifecycle_state
+        );
+    }
     let result_version = crate::DocumentVersionRef::new(result_doc_id, result_cid);
     let result_snapshot = crate::document_version::verified_exact_document_snapshot_with_executor(
         executor,
         "AgentToolResult",
         &result_version,
-        "result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id output_text",
+        "result_key tool_call_key tool_call_doc_id tool_call_composite_commit_cid tool_call_signer_did session_id output_text model_output_truncated truncation_metadata",
     )
     .await?;
     if result_snapshot.source.signer_did != result_signer {
@@ -398,7 +573,7 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
         executor,
         "AgentToolCall",
         &parent_version,
-        "tool_call_key session_id tool_call_id lifecycle_state",
+        "tool_call_key session_id tool_call_id lifecycle_state approval_doc_id approval_composite_commit_cid approval_signer_did",
     )
     .await?;
     if parent.source.signer_did != result.tool_call_signer_did {
@@ -412,9 +587,39 @@ async fn load_exact_tool_call_terminal_evidence_with_executor(
     {
         anyhow::bail!("AgentToolResult historical execution parent is incoherent");
     }
+    let source_execution = ExactToolCallEdgeRef::new(
+        &result.tool_call_doc_id,
+        &result.tool_call_composite_commit_cid,
+        &result.tool_call_signer_did,
+    );
+    let source_approval = exact_historical_approval_edge(&parent)?;
+    validate_retained_approval_edge(
+        None,
+        &parent.lifecycle_state,
+        &source_execution,
+        source_approval.as_ref(),
+        approval.as_ref(),
+    )?;
+    let model_projection = exact_call.result.ok_or_else(|| {
+        anyhow!(
+            "terminal AgentToolCall {session_id}:{tool_call_id} with retained output has no model projection"
+        )
+    })?;
+    let canonical_projection = crate::truncation::canonical_model_projection(
+        &result.output_text,
+        &result_snapshot.source.version.doc_id,
+        result.model_output_truncated,
+        &result.truncation_metadata,
+    )?;
+    if model_projection != canonical_projection {
+        anyhow::bail!(
+            "terminal AgentToolCall {session_id}:{tool_call_id} model projection does not match its exact AgentToolResult"
+        );
+    }
     Ok(ExactToolCallTerminalEvidence::Output(ExactToolCallOutput {
         tool_name: exact_call.tool_name,
         output_text: result.output_text,
+        model_projection,
         evidence: result_snapshot.source,
     }))
 }
@@ -958,6 +1163,162 @@ mod tests {
         }
     }
 
+    fn terminal_call_row() -> ToolCallResultRow {
+        ToolCallResultRow {
+            doc_id: "tool-call-doc".to_string(),
+            tool_call_key: "session:call".to_string(),
+            session_id: "session".to_string(),
+            tool_call_id: "call".to_string(),
+            tool_name: "tool".to_string(),
+            lifecycle_state: "failed".to_string(),
+            result: None,
+            result_doc_id: None,
+            result_composite_commit_cid: None,
+            result_signer_did: None,
+            omission_doc_id: Some("omission-doc".to_string()),
+            omission_composite_commit_cid: Some("omission-cid".to_string()),
+            omission_signer_did: Some("did:key:owner".to_string()),
+            approval_doc_id: Some("approval-doc".to_string()),
+            approval_composite_commit_cid: Some("approval-cid".to_string()),
+            approval_signer_did: Some("did:key:approver".to_string()),
+        }
+    }
+
+    fn approval_row() -> ExactApprovalSummaryRow {
+        ExactApprovalSummaryRow {
+            approval_key: "tool-call-doc".to_string(),
+            tool_call_id: "call".to_string(),
+            tool_call_key: "session:call".to_string(),
+            tool_call_doc_id: "tool-call-doc".to_string(),
+            tool_call_composite_commit_cid: "held-cid".to_string(),
+            tool_call_signer_did: "did:key:owner".to_string(),
+            session_id: "session".to_string(),
+            decision: "denied".to_string(),
+            approver_did: "did:key:approver".to_string(),
+        }
+    }
+
+    fn held_row() -> ExactHistoricalToolCallRow {
+        ExactHistoricalToolCallRow {
+            tool_call_key: "session:call".to_string(),
+            session_id: "session".to_string(),
+            tool_call_id: "call".to_string(),
+            lifecycle_state: "awaitingApproval".to_string(),
+            approval_doc_id: None,
+            approval_composite_commit_cid: None,
+            approval_signer_did: None,
+        }
+    }
+
+    #[test]
+    fn query_approval_binding_fails_closed_on_key_and_signer_mismatch() {
+        let call = terminal_call_row();
+        let approval = approval_row();
+        validate_exact_approval_immutable_binding(
+            &call,
+            "session",
+            "call",
+            "did:key:approver",
+            "did:key:approver",
+            &approval,
+        )
+        .expect("exact immutable approval binding");
+
+        let mut wrong_key = approval.clone();
+        wrong_key.approval_key = "other-tool-call-doc".to_string();
+        assert!(validate_exact_approval_immutable_binding(
+            &call,
+            "session",
+            "call",
+            "did:key:approver",
+            "did:key:approver",
+            &wrong_key,
+        )
+        .is_err());
+        assert!(validate_exact_approval_immutable_binding(
+            &call,
+            "session",
+            "call",
+            "did:key:other",
+            "did:key:approver",
+            &approval,
+        )
+        .is_err());
+        assert!(validate_exact_approval_immutable_binding(
+            &call,
+            "session",
+            "call",
+            "did:key:approver",
+            "did:key:other",
+            &approval,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn query_approval_binding_fails_closed_on_historical_held_mismatch() {
+        let call = terminal_call_row();
+        let approval = approval_row();
+        validate_exact_approval_historical_parent(
+            &call,
+            "session",
+            "call",
+            "did:key:owner",
+            &approval,
+            &held_row(),
+        )
+        .expect("exact historical held source");
+
+        let mut wrong_phase = held_row();
+        wrong_phase.lifecycle_state = "running".to_string();
+        assert!(validate_exact_approval_historical_parent(
+            &call,
+            "session",
+            "call",
+            "did:key:owner",
+            &approval,
+            &wrong_phase,
+        )
+        .is_err());
+        let mut already_approved = held_row();
+        already_approved.approval_doc_id = Some("approval-doc".to_string());
+        already_approved.approval_composite_commit_cid = Some("approval-cid".to_string());
+        already_approved.approval_signer_did = Some("did:key:approver".to_string());
+        assert!(validate_exact_approval_historical_parent(
+            &call,
+            "session",
+            "call",
+            "did:key:owner",
+            &approval,
+            &already_approved,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn query_denial_fails_closed_on_source_execution_mismatch() {
+        let source =
+            ExactToolCallEdgeRef::new("tool-call-doc", "different-held-cid", "did:key:owner");
+        let approval = approval_row();
+        let retained = RetainedApprovalFact {
+            edge: ExactToolCallEdgeRef::new("approval-doc", "approval-cid", "did:key:approver"),
+            decision: approval.decision,
+            execution: ExactToolCallEdgeRef::new(
+                approval.tool_call_doc_id,
+                approval.tool_call_composite_commit_cid,
+                approval.tool_call_signer_did,
+            ),
+        };
+        assert!(validate_retained_approval_edge(
+            Some("approvalDenied"),
+            "awaitingApproval",
+            &source,
+            None,
+            Some(&retained),
+        )
+        .is_err());
+    }
+
     #[test]
     fn exact_tool_call_match_rejects_logical_twins_deterministically() {
         let error = resolve_exact_tool_call_match(
@@ -1009,8 +1370,11 @@ mod tests {
 
     #[tokio::test]
     async fn load_preserves_immutable_requester_route() {
+        let identity = crate::test_support::signed_test_identity("tool-call-query-route");
+        let agent_did = identity.did().to_string();
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(&agent_did)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -1022,7 +1386,7 @@ mod tests {
             node.clone(),
             "request-routed".to_string(),
             "session-routed".to_string(),
-            "did:test:host".to_string(),
+            agent_did,
             "tool-call-routed".to_string(),
             1,
             "test_tool".to_string(),

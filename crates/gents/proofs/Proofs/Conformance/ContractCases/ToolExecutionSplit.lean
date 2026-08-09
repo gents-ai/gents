@@ -54,6 +54,8 @@ private def outputIntent : ToolOutputIntent :=
   , invocation := invocationRef
   , execution := runningRef
   , outputHash := 202
+  , truncationContractHash := 1
+  , modelProjectionHash := 203
   , fullOutput := true }
 
 private def outputCommit : CommitObservation :=
@@ -117,6 +119,8 @@ private def approvedOutputIntent : ToolOutputIntent :=
   , invocation := invocationRef
   , execution := approvedRunningRef
   , outputHash := 404
+  , truncationContractHash := 1
+  , modelProjectionHash := 405
   , fullOutput := true }
 
 private def approvedOutputCommit : CommitObservation :=

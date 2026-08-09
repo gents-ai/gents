@@ -5,6 +5,7 @@ import Proofs.Conformance.Contracts.Json.InferenceCall
 import Proofs.Conformance.Contracts.Json.InferenceRenderedCapture
 import Proofs.Conformance.Contracts.Json.ToolFact
 import Proofs.Conformance.Contracts.Json.ToolExecutionSplit
+import Proofs.Conformance.Contracts.Json.ToolOutputProjection
 import Proofs.Conformance.Contracts.Json.ToolTerminalEvidence
 import Proofs.Conformance.Contracts.Json.ForkProvenance
 import Proofs.Conformance.Contracts.Json.CompactionSourceManifest
@@ -95,8 +96,12 @@ def snapshotJson : String :=
       ++ toolFactCasesJson ++ ","
     ++ "\"tool_execution_split_cases\":"
       ++ toolExecutionSplitCasesJson ++ ","
+    ++ "\"tool_output_projection_cases\":"
+      ++ toolOutputProjectionCasesJson ++ ","
     ++ "\"tool_terminal_evidence_cases\":"
       ++ toolTerminalEvidenceCasesJson ++ ","
+    ++ "\"omission_phase_matrix_cases\":"
+      ++ omissionPhaseMatrixCasesJson ++ ","
     ++ "\"fork_provenance_cases\":"
       ++ forkProvenanceCasesJson ++ ","
     ++ "\"compaction_source_manifest_cases\":"

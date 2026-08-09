@@ -32,13 +32,19 @@ theorem competing_output_proposal_is_admitted
     (h_running : execution.phase = .running)
     (h_full : intent.fullOutput = true)
     (h_output : intent.outputHash ≠ 0)
+    (h_contract : intent.truncationContractHash ≠ 0)
+    (h_projection : intent.modelProjectionHash ≠ 0)
+    (h_derived : intent.modelProjectionHash = canonicalModelProjectionHash
+      intent.outputHash intent.truncationContractHash)
     (h_owner : evidence.signerDid = execution.ownerDid)
     (h_evidence : evidence.authoritative = true)
     (h_absent : state.outputs evidence.version.docId = none)
     (left right : Nat) :
     (commitOutput state [left, right] intent evidence).disposition = .applied := by
+  have h_canonical := h_projection
+  rw [h_derived] at h_canonical
   simp [commitOutput, h_invocation, h_execution, h_parent, h_running, h_full,
-    h_output, h_owner, h_evidence, h_absent]
+    h_output, h_contract, h_projection, h_derived, h_canonical, h_owner, h_evidence, h_absent]
 
 theorem output_replay_idempotent
     (state : State) (intent : ToolOutputIntent) (evidence : SignedRef)
@@ -49,14 +55,59 @@ theorem output_replay_idempotent
     (h_running : execution.phase = .running)
     (h_full : intent.fullOutput = true)
     (h_output : intent.outputHash ≠ 0)
+    (h_contract : intent.truncationContractHash ≠ 0)
+    (h_projection : intent.modelProjectionHash ≠ 0)
+    (h_derived : intent.modelProjectionHash = canonicalModelProjectionHash
+      intent.outputHash intent.truncationContractHash)
     (h_owner : evidence.signerDid = execution.ownerDid)
     (h_evidence : evidence.authoritative = true)
     (h_existing : state.outputs evidence.version.docId =
       some (ToolOutputFact.forIntent intent evidence)) :
     commitOutput state [evidence.version.docId] intent evidence =
       ⟨.observedIdentical, state⟩ := by
+  have h_canonical := h_projection
+  rw [h_derived] at h_canonical
   simp [commitOutput, h_invocation, h_execution, h_parent, h_running, h_full,
-    h_output, h_owner, h_evidence, h_existing]
+    h_output, h_contract, h_projection, h_derived, h_canonical, h_owner, h_evidence, h_existing]
+
+theorem exact_model_projection_authoritative
+    {output : ToolOutputFact} {observedHash : PayloadHash}
+    (h_exact : exactModelProjection? output observedHash = some output) :
+    observedHash = output.modelProjectionHash := by
+  let derived := canonicalModelProjectionHash output.outputHash output.truncationContractHash
+  change (if output.modelProjectionHash = derived ∧ observedHash = derived then
+    some output else none) = some output at h_exact
+  split at h_exact
+  · rename_i h_valid
+    exact h_valid.2.trans h_valid.1.symm
+  · contradiction
+
+theorem model_projection_is_derived_from_exact_output
+    {output : ToolOutputFact} {observedHash : PayloadHash}
+    (h_exact : exactModelProjection? output observedHash = some output) :
+    observedHash = canonicalModelProjectionHash
+      output.outputHash output.truncationContractHash := by
+  let derived := canonicalModelProjectionHash output.outputHash output.truncationContractHash
+  change (if output.modelProjectionHash = derived ∧ observedHash = derived then
+    some output else none) = some output at h_exact
+  split at h_exact
+  · rename_i h_valid
+    exact h_valid.2
+  · contradiction
+
+theorem forged_model_projection_rejected
+    {output : ToolOutputFact} {observedHash : PayloadHash}
+    (h_forged : observedHash ≠ output.modelProjectionHash) :
+    exactModelProjection? output observedHash = none := by
+  let derived := canonicalModelProjectionHash output.outputHash output.truncationContractHash
+  change (if output.modelProjectionHash = derived ∧ observedHash = derived then
+    some output else none) = none
+  by_cases h_model : output.modelProjectionHash = derived
+  · have h_observed : observedHash ≠ derived := by
+      intro h_equal
+      exact h_forged (h_equal.trans h_model.symm)
+    simp [h_model, h_observed]
+  · simp [h_model]
 
 theorem approval_twin_rejected
     (state : State) (intent : ToolApprovalIntent) (evidence : SignedRef)
@@ -94,13 +145,12 @@ theorem competing_omission_proposal_is_admitted
     (h_parent : execution.invocation = intent.invocation)
     (h_allowed : omissionTransitionAllowed execution.phase
       intent.reason.terminalPhase intent.reason)
-    (h_approval : omissionApprovalValid state execution intent = true)
     (h_owner : evidence.signerDid = execution.ownerDid)
     (h_evidence : evidence.authoritative = true)
     (h_absent : state.omissions evidence.version.docId = none)
     (left right : Nat) :
     (commitOmission state [left, right] intent evidence).disposition = .applied := by
-  simp [commitOmission, h_invocation, h_execution, h_parent, h_allowed, h_approval,
+  simp [commitOmission, h_invocation, h_execution, h_parent, h_allowed,
     h_owner, h_evidence, h_absent]
 
 theorem omission_replay_idempotent
@@ -111,14 +161,13 @@ theorem omission_replay_idempotent
     (h_parent : execution.invocation = intent.invocation)
     (h_allowed : omissionTransitionAllowed execution.phase
       intent.reason.terminalPhase intent.reason)
-    (h_approval : omissionApprovalValid state execution intent = true)
     (h_owner : evidence.signerDid = execution.ownerDid)
     (h_evidence : evidence.authoritative = true)
     (h_existing : state.omissions evidence.version.docId =
       some (ToolOutputOmissionFact.forIntent intent evidence)) :
     commitOmission state [evidence.version.docId] intent evidence =
       ⟨.observedIdentical, state⟩ := by
-  simp [commitOmission, h_invocation, h_execution, h_parent, h_allowed, h_approval,
+  simp [commitOmission, h_invocation, h_execution, h_parent, h_allowed,
     h_owner, h_evidence, h_existing]
 
 theorem projectTerminalEvidence_valid
@@ -191,7 +240,8 @@ theorem denied_terminal_pins_exact_approval_and_omission
     (h_project : projectDeniedTerminal state terminalRef = some projection) :
     projection.evidence.output = none ∧
       projection.evidence.omission = some projection.omission ∧
-      projection.omission.approval = some projection.approval.signed ∧
+      projection.evidence.approval = some projection.approval ∧
+      projection.evidence.terminal.approval = some projection.approval.signed ∧
       projection.approval.decision = .denied ∧
       projection.approval.execution = projection.evidence.accepted.signed := by
   unfold projectDeniedTerminal at h_project
@@ -201,8 +251,9 @@ theorem denied_terminal_pins_exact_approval_and_omission
     · rename_i h_valid
       simp only [Option.some.injEq] at h_project
       subst projection
-      exact ⟨h_valid.2.1, h_valid.2.2.1, h_valid.2.2.2.2.1,
-        h_valid.2.2.2.2.2.2.1, h_valid.2.2.2.2.2.2.2.1⟩
+      exact ⟨h_valid.2.1, h_valid.2.2.1, h_valid.2.2.2.1,
+        h_valid.2.2.2.2.2.1, h_valid.2.2.2.2.2.2.1,
+        h_valid.2.2.2.2.2.2.2.1⟩
     · contradiction
   · contradiction
 

@@ -15,13 +15,20 @@
 //!   reasons unrelated to the apply error. Even if the DELETE never reaches
 //!   the server, transaction **atomicity** guarantees the apply has no
 //!   committed effect: a transaction that never sees a `commit` yields no
-//!   externally-visible mutations. The orphaned handle is bounded by
-//!   DefraDB's per-request HTTP timeout (30s default), not an active idle-GC
-//!   sweep.
+//!   externally-visible mutations. DefraDB's configured stale-transaction
+//!   cleanup owns any orphaned server handle.
 //!
-//! Both return `Result<()>` so callers can log discrepancies, but neither
-//! changes operator-facing behavior on failure: the apply error is what
-//! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
+//! A commit attempt is different: both DefraDB's embedded registry and its
+//! HTTP commit handler remove the handle and take the underlying transaction
+//! before durable finalization. A returned commit error therefore already
+//! consumes/releases that transaction, so callers must not attempt a second
+//! discard. A transport failure remains commit-ambiguous and must not be
+//! converted into a retry; callers may only recover by observing an immutable
+//! logical key outside the finalized transaction.
+//!
+//! Discard returns `Result<()>` so callers can log cleanup discrepancies while
+//! preserving the original apply error. Commit errors are surfaced or resolved
+//! by exact post-commit observation; they are never blindly retried.
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryRequest};
@@ -54,6 +61,22 @@ pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
 }
 
+fn retryable_read_options() -> GraphqlRequestOptions {
+    GraphqlRequestOptions {
+        timeout: std::time::Duration::from_secs(30),
+        max_attempts: 5,
+        retry_backoff: std::time::Duration::from_millis(100),
+    }
+}
+
+fn non_idempotent_write_options() -> GraphqlRequestOptions {
+    GraphqlRequestOptions {
+        timeout: std::time::Duration::from_secs(30),
+        max_attempts: 1,
+        retry_backoff: std::time::Duration::ZERO,
+    }
+}
+
 impl<'a> ConfigApplyTxn<'a> {
     /// Begin an embedded-node transaction, optionally executing under a
     /// specific DID identity so document ACP applies to every statement.
@@ -77,17 +100,27 @@ impl<'a> ConfigApplyTxn<'a> {
 
     /// Execute a GraphQL query within this transaction.
     pub async fn execute(&self, query: &str) -> Result<Value> {
+        self.execute_with_options(query, retryable_read_options())
+            .await
+    }
+
+    /// Execute a non-idempotent statement exactly once within this
+    /// transaction. A lost mutation response must not transparently create a
+    /// second immutable document; callers resolve commit ambiguity by reading
+    /// the logical key after the transaction has finalized.
+    pub async fn execute_once(&self, query: &str) -> Result<Value> {
+        self.execute_with_options(query, non_idempotent_write_options())
+            .await
+    }
+
+    async fn execute_with_options(
+        &self,
+        query: &str,
+        options: GraphqlRequestOptions,
+    ) -> Result<Value> {
         match &self.backend {
             TxnBackend::Graphql { access, id } => access
-                .execute_with_tx(
-                    query,
-                    GraphqlRequestOptions {
-                        timeout: std::time::Duration::from_secs(30),
-                        max_attempts: 5,
-                        retry_backoff: std::time::Duration::from_millis(100),
-                    },
-                    id,
-                )
+                .execute_with_tx(query, options, id)
                 .await
                 .map_err(|error| {
                     anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(access.endpoint()))
@@ -107,7 +140,12 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
-    /// Commit the transaction. Apply is durable after this returns Ok.
+    /// Commit the transaction. Apply is durable after this returns `Ok`.
+    ///
+    /// This consumes `self` deliberately. DefraDB removes the transaction
+    /// handle before attempting durable finalization, including on explicit
+    /// conflicts. Consequently an `Err` is already finalized from the client
+    /// perspective and cannot be followed by `discard`.
     pub async fn commit(self) -> Result<()> {
         match self.backend {
             TxnBackend::Graphql { access, id } => {
@@ -269,6 +307,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn non_idempotent_transaction_writes_are_never_retried() {
+        let options = non_idempotent_write_options();
+        assert_eq!(options.max_attempts, 1);
+        assert_eq!(options.retry_backoff, std::time::Duration::ZERO);
+    }
+
     #[tokio::test]
     async fn local_transaction_uses_the_configured_node_signer() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -318,6 +363,99 @@ mod tests {
                 .and_then(Value::as_str)
                 == Some(expected_signer.as_str())
         }));
+
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_local_commit_releases_transaction_and_staged_writes() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).unwrap();
+        let did = identity.did().to_string();
+        let node = EmbeddedNode::builder()
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .unwrap();
+        node.add_schema("type CleanupWidget { name: String }")
+            .await
+            .unwrap();
+
+        let created = node
+            .execute(r#"mutation { create_CleanupWidget(input: {name: "initial"}) { _docID } }"#)
+            .await;
+        assert!(created.errors.is_empty(), "{:?}", created.errors);
+        let doc_id = created
+            .data
+            .as_ref()
+            .and_then(|data| {
+                data.pointer("/create_CleanupWidget/0/_docID")
+                    .or_else(|| data.pointer("/add_CleanupWidget/0/_docID"))
+            })
+            .and_then(Value::as_str)
+            .expect("created cleanup widget document id")
+            .to_string();
+        let escaped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+
+        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        txn.execute(&format!(
+            r#"{{ CleanupWidget(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}) {{ name }} }}"#
+        ))
+        .await
+        .unwrap();
+        txn.execute_once(&format!(
+            r#"mutation {{ update_CleanupWidget(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, input: {{ name: "staged" }}) {{ _docID }} }}"#
+        ))
+        .await
+        .unwrap();
+
+        let concurrent = node
+            .execute(&format!(
+                r#"mutation {{ update_CleanupWidget(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, input: {{ name: "concurrent" }}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(concurrent.errors.is_empty(), "{:?}", concurrent.errors);
+
+        let conflict = txn
+            .commit()
+            .await
+            .expect_err("stale transaction must fail its commit");
+        assert!(
+            conflict
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("conflict"),
+            "unexpected commit failure: {conflict:#}"
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let replacement = ConfigApplyTxn::begin_local(&node, None).await?;
+            replacement
+                .execute_once(&format!(
+                    r#"mutation {{ update_CleanupWidget(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, input: {{ name: "replacement" }}) {{ _docID }} }}"#
+                ))
+                .await?;
+            replacement.commit().await
+        })
+        .await
+        .expect("failed commit must not leave locks or an active transaction")
+        .expect("replacement transaction should commit");
+
+        let observed = node
+            .execute(&format!(
+                r#"{{ CleanupWidget(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}) {{ name }} }}"#
+            ))
+            .await;
+        assert!(observed.errors.is_empty(), "{:?}", observed.errors);
+        assert_eq!(
+            observed
+                .data
+                .as_ref()
+                .and_then(|data| data.pointer("/CleanupWidget/0/name"))
+                .and_then(Value::as_str),
+            Some("replacement"),
+            "the failed transaction's staged value must never become visible"
+        );
 
         node.shutdown().await;
     }

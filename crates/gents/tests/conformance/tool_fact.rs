@@ -1,9 +1,11 @@
-//! Pure-Rust consumer of the exact immutable ToolFact foundation model (#1073).
-//! Production schema/writer/projection cutover is deliberately deferred.
+//! Rust consumer of the exact immutable ToolFact foundation model (#1073).
+//! The legacy model authorizes exact fact joins only; model-facing projection
+//! authority belongs to `ToolFact.ExecutionSplit` and production truncation.
 
 use crate::lean_vocab_test::{
-    lean_tool_execution_split_cases, lean_tool_fact_cases, lean_tool_terminal_evidence_cases,
-    LeanToolExecutionSplitCase, LeanToolFactCase,
+    lean_omission_phase_matrix_cases, lean_tool_execution_split_cases, lean_tool_fact_cases,
+    lean_tool_output_projection_cases, lean_tool_terminal_evidence_cases,
+    LeanToolExecutionSplitCase, LeanToolFactCase, LeanToolOutputProjectionCase,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -40,8 +42,42 @@ fn witness(
         approval_durable,
         result_pins_exact_call: result_durable,
         approval_pins_exact_call: approval_durable,
-        exact_projection: projection,
+        exact_fact_join: projection,
         immutable_noop,
+    }
+}
+
+#[test]
+fn generated_omission_phase_matrix_matches_the_production_predicate_exhaustively() {
+    fn persisted(value: &str) -> &str {
+        match value {
+            "awaiting_approval" => "awaitingApproval",
+            "timed_out" => "timedOut",
+            "pre_dispatch_failure" => "preDispatchFailure",
+            "approval_denied" => "approvalDenied",
+            "execution_lost" => "executionLost",
+            "recovery_failure" => "recoveryFailure",
+            "child_dead" => "childDead",
+            "child_superseded" => "childSuperseded",
+            other => other,
+        }
+    }
+
+    let cases = lean_omission_phase_matrix_cases();
+    assert_eq!(cases.len(), 8 * 7 * 7, "Lean matrix must be exhaustive");
+    for case in cases {
+        assert_eq!(
+            gents::tool_call_lifecycle::tool_output_omission_transition_allowed(
+                persisted(&case.reason),
+                persisted(&case.source_phase),
+                persisted(&case.terminal_phase),
+            ),
+            case.allowed,
+            "reason={} source={} terminal={}",
+            case.reason,
+            case.source_phase,
+            case.terminal_phase,
+        );
     }
 }
 
@@ -361,6 +397,34 @@ pub(super) fn generated_cases_pin_exact_execution_split() {
     assert_eq!(lean_tool_execution_split_cases(), expected);
 }
 
+pub(super) fn generated_cases_bind_model_projection_to_exact_output() {
+    let expected = [
+        LeanToolOutputProjectionCase {
+            name: "canonical_bounded_projection_is_accepted".into(),
+            observation: "canonical".into(),
+            observed_hash: 303,
+            accepted: true,
+            full_output_preserved: true,
+        },
+        LeanToolOutputProjectionCase {
+            name: "full_output_hash_is_not_a_model_projection".into(),
+            observation: "full_output".into(),
+            observed_hash: 202,
+            accepted: false,
+            full_output_preserved: true,
+        },
+        LeanToolOutputProjectionCase {
+            name: "forged_terminal_projection_is_rejected".into(),
+            observation: "forged".into(),
+            observed_hash: 999,
+            accepted: false,
+            full_output_preserved: true,
+        },
+    ];
+
+    assert_eq!(lean_tool_output_projection_cases(), expected);
+}
+
 pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
     let expected = [
         (
@@ -369,6 +433,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "output",
             "failed",
             "",
+            "absent",
             false,
             false,
         ),
@@ -378,6 +443,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "output",
             "failed",
             "",
+            "absent",
             false,
             true,
         ),
@@ -387,6 +453,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "timed_out",
             "timed_out",
+            "absent",
             false,
             false,
         ),
@@ -396,7 +463,18 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "timed_out",
             "timed_out",
+            "absent",
             false,
+            false,
+        ),
+        (
+            "approved_running_timeout_retains_call_edge",
+            "applied",
+            "omission",
+            "timed_out",
+            "timed_out",
+            "approved_running_call_edge",
+            true,
             false,
         ),
         (
@@ -405,6 +483,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "cancelled",
             "cancelled",
+            "absent",
             false,
             false,
         ),
@@ -414,6 +493,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "pre_dispatch_failure",
+            "absent",
             false,
             false,
         ),
@@ -423,6 +503,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "execution_lost",
+            "absent",
             false,
             false,
         ),
@@ -432,6 +513,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "recovery_failure",
+            "absent",
             false,
             false,
         ),
@@ -441,6 +523,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "child_dead",
+            "absent",
             false,
             false,
         ),
@@ -450,6 +533,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "child_superseded",
+            "absent",
             false,
             false,
         ),
@@ -459,6 +543,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "failed",
             "approval_denied",
+            "denial_call_edge",
             true,
             false,
         ),
@@ -468,6 +553,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "timed_out",
             "timed_out",
+            "absent",
             false,
             true,
         ),
@@ -475,6 +561,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "competing_omission_proposal_is_unbound",
             "applied",
             "none",
+            "",
             "",
             "",
             false,
@@ -486,6 +573,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "none",
             "",
             "",
+            "",
             false,
             true,
         ),
@@ -495,6 +583,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
             "omission",
             "timed_out",
             "timed_out",
+            "absent",
             false,
             true,
         ),
@@ -510,6 +599,7 @@ pub(super) fn generated_cases_close_terminal_output_or_omission_evidence() {
                 row.evidence_kind.as_str(),
                 row.terminal_phase.as_str(),
                 row.omission_reason.as_str(),
+                row.approval_edge_kind.as_str(),
                 row.exact_approval_bound,
                 row.immutable_noop,
             ),

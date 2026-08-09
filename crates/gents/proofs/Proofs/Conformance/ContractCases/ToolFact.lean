@@ -28,7 +28,7 @@ structure ToolFactCase where
   approvalDurable : Bool
   resultPinsExactCall : Bool
   approvalPinsExactCall : Bool
-  exactProjection : Bool
+  exactFactJoin : Bool
   immutableNoop : Bool
   deriving Repr
 
@@ -116,16 +116,16 @@ private def approvalReplay : CommitObservation :=
 private def approvalTwin : CommitObservation :=
   commitApproval withResult [approvalVersion.docId, 301] approvalIntent approvalRef
 
-private def exactJoin : TranscriptJoin :=
+private def exactJoin : ExactFactRefs :=
   { call := callRef, result := resultRef, approval := some approvalRef }
 
 private def wrongResultRef : SignedRef :=
   { resultRef with version := { resultVersion with compositeCommitCid := 21 } }
 
-private def wrongResultJoin : TranscriptJoin :=
+private def wrongResultJoin : ExactFactRefs :=
   { exactJoin with result := wrongResultRef }
 
-private def wrongSignerJoin : TranscriptJoin :=
+private def wrongSignerJoin : ExactFactRefs :=
   { exactJoin with call := { callRef with signerDid := 77 } }
 
 private def resultDurable (state : State) : Bool :=
@@ -162,7 +162,7 @@ private def caseOf
     (visibleLogicalTwins : Nat)
     (fullOutput : Bool)
     (state : State)
-    (join : TranscriptJoin)
+    (join : ExactFactRefs)
     (immutableNoop : Bool) : ToolFactCase :=
   { name := name
   , operation := operation
@@ -182,7 +182,7 @@ private def caseOf
   , approvalDurable := approvalDurable state
   , resultPinsExactCall := resultPinsCall state
   , approvalPinsExactCall := approvalPinsCall state
-  , exactProjection := (projectExact state join).isSome
+  , exactFactJoin := (joinExactFacts state join).isSome
   , immutableNoop := immutableNoop }
 
 def toolFactCases : List ToolFactCase :=
@@ -229,7 +229,7 @@ def toolFactCases : List ToolFactCase :=
 theorem toolFactCases_pinned :
     toolFactCases.map (fun row =>
       (row.name, row.disposition, row.resultDurable, row.approvalDurable,
-        row.exactProjection, row.immutableNoop)) =
+        row.exactFactJoin, row.immutableNoop)) =
       [ ("call_fact_applied", "applied", false, false, false, false)
       , ("identical_call_replay_is_idempotent", "observed_identical", false, false, false, true)
       , ("logical_key_call_twins_fail_closed", "rejected", false, false, false, true)

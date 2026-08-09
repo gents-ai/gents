@@ -121,7 +121,7 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     .await;
     assert_bridge_matches_case(case, &bridge, &child_request_id);
 
-    let replicated_bridge = wait_for_tool_call(
+    let replicated_bridge = wait_for_running_tool_call(
         child_agent.db.node.as_ref(),
         &parent_session_id,
         &case.parent_tool_call_id,
@@ -635,7 +635,7 @@ async fn fetch_child_request_optional(
     first_optional_row(&node.execute(&query).await, "AgentRequest")
 }
 
-async fn wait_for_tool_call(
+async fn wait_for_running_tool_call(
     node: &EmbeddedNode,
     session_id: &str,
     tool_call_id: &str,
@@ -643,11 +643,17 @@ async fn wait_for_tool_call(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(tool_call) = fetch_tool_call_optional(node, session_id, tool_call_id).await {
-            return tool_call;
+            // `start_running` intentionally publishes a signed pending genesis
+            // before its signed running update. Replication may expose that
+            // intermediate head first, so synchronize on the lifecycle boundary
+            // this conformance case asserts rather than mere row existence.
+            if tool_call.lifecycle_state.as_deref() == Some("running") {
+                return tool_call;
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             let diagnostic = agent_tool_call_diagnostic(node).await;
-            panic!("tool call {tool_call_id} was not replicated; {diagnostic}");
+            panic!("tool call {tool_call_id} did not replicate as running; {diagnostic}");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

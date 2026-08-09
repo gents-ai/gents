@@ -3,7 +3,7 @@ use support::*;
 
 use anyhow::{Context, Result};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
-use gents::ensure_runtime_schemas;
+use gents::{ensure_runtime_schemas, KeyIdentity};
 use serde_json::Value;
 
 #[tokio::test]
@@ -11,11 +11,31 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
     let data_dir = agent_home.join("data");
+    std::fs::create_dir_all(&agent_home).context("creating agent home")?;
+    let agent_home_arg = agent_home.to_str().context("agent home utf8")?;
+    let initialized = run_init_json(
+        &agent_home,
+        &[
+            "--identity-only",
+            "--home",
+            agent_home_arg,
+            "--agent-name",
+            "background-list-node",
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&initialized)?;
+    let key_path = initialized
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("identity-only init output missing key_path")?;
+    let _signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading background-list signing key {key_path}"))?;
 
     {
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_storage_backend(StorageBackend::RocksDb)
+            .with_node_identity_did(&agent_did)
             .build()
             .await
             .context("opening embedded node")?;
@@ -23,7 +43,7 @@ async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Res
         seed_background_tool_calls(&node).await?;
     }
 
-    let agent_home = agent_home.to_str().context("agent home utf8")?;
+    let agent_home = agent_home_arg;
     let output = run_cli_json(
         tempdir.path(),
         &[

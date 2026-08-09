@@ -4,6 +4,7 @@ import Proofs.Conformance.ContractCases.InferenceCallExactTarget
 import Proofs.Conformance.ContractCases.InferenceRenderedCapture
 import Proofs.Conformance.ContractCases.ToolFact
 import Proofs.Conformance.ContractCases.ToolExecutionSplit
+import Proofs.Conformance.ContractCases.ToolOutputProjection
 import Proofs.Conformance.ContractCases.ToolTerminalEvidence
 import Proofs.Conformance.ContractCases.ForkProvenance
 import Proofs.Conformance.ContractCases.CompactionSourceManifest

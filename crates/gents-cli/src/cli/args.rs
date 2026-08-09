@@ -1519,7 +1519,7 @@ pub(crate) struct ToolsApproveArgs {
     pub(crate) reason: Option<String>,
     #[arg(
         long,
-        help = "Approver DID recorded on the decision. Defaults to the home agent DID"
+        help = "Approver DID recorded on the decision. Defaults to the database mutation signer"
     )]
     pub(crate) approver_did: Option<String>,
 }
@@ -1765,6 +1765,11 @@ pub(crate) struct BehaviorDisableArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ToolSelectionUpsertArgs {
+    #[arg(
+        long,
+        help = "Agent home containing the signing identity. Defaults to ~/.gents"
+    )]
+    pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]

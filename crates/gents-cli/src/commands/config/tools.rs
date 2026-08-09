@@ -20,7 +20,8 @@ pub(super) fn subagent_target_entry_command(args: SubagentTargetEntryArgs) -> Re
 
 pub(super) async fn tool_selection_set(args: ToolSelectionUpsertArgs) -> Result<()> {
     let plan = tool_selection_command_plan(&args)?;
-    let access = crate::authenticated_default_graphql_access(&args.graphql).await?;
+    let (access, _) =
+        crate::resolve_config_access(args.home.as_deref(), Some(&args.graphql)).await?;
     let doc_id = write_tool_selection_document_with_clear_fields(
         &access,
         &plan.selection,
@@ -404,6 +405,7 @@ mod tests {
 
     fn default_args() -> ToolSelectionUpsertArgs {
         ToolSelectionUpsertArgs {
+            home: None,
             graphql: "http://127.0.0.1:9191/api/v0/graphql".to_string(),
             agent_did: "did:key:z-test".to_string(),
             selection_id: "default-tools".to_string(),

@@ -249,6 +249,7 @@ struct ToolResultIdentity {
     result_id: Option<String>,
     call_id: Option<String>,
     tool_name: Option<String>,
+    hook_owned: bool,
 }
 
 struct SessionState {
@@ -342,10 +343,18 @@ impl SessionState {
         }
     }
 
-    fn tool_result_tool_name(&self, internal_call_id: &str) -> Option<String> {
+    fn mark_hook_owned_tool_result(&mut self, internal_call_id: &str) {
+        self.tool_result_identities
+            .entry(internal_call_id.to_string())
+            .or_default()
+            .hook_owned = true;
+    }
+
+    fn tool_result_registration(&self, internal_call_id: &str) -> (Option<String>, bool) {
         self.tool_result_identities
             .get(internal_call_id)
-            .and_then(|identity| identity.tool_name.clone())
+            .map(|identity| (identity.tool_name.clone(), identity.hook_owned))
+            .unwrap_or((None, false))
     }
 
     fn tool_result_message_identity(

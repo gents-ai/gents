@@ -404,6 +404,9 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id =
         create_pending_request_for_agent(&node, &request_id, &session_id, agent_did).await;
+    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
@@ -459,7 +462,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             "discover_tools",
             tool_args,
             model_result_id,
-            model_result_id,
+            stored_call_id,
             Some(model_result_id),
         ))
         .await
@@ -495,7 +498,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             model_result_id,
             Some(model_result_id),
             tool_result,
-            model_result_id,
+            stored_call_id,
         ))
         .await
         .unwrap();
@@ -524,17 +527,15 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     assert!(matches!(
         first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text })
-            if text.starts_with(tool_result)
-                && text.contains("[Full output: DefraDB doc ")
+            if text == tool_result
     ));
     let persisted_result =
         crate::session::load_tool_call_result(&node, &session_id, stored_call_id)
             .await
             .unwrap();
-    assert!(
-        persisted_result.starts_with(tool_result)
-            && persisted_result.contains("[Full output: DefraDB doc "),
-        "tool-call result must retain its model observation and signed spill pointer"
+    assert_eq!(
+        persisted_result, tool_result,
+        "tool-call result must resolve the exact signed output fact"
     );
 
     let _ = std::fs::remove_dir_all(&data_path);
@@ -1009,46 +1010,10 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         "result message must be absent before backfill (the #442 orphan)"
     );
 
-    // The mutable projection is not terminal authority. Clear it to prove the
-    // backfill enumerates completed calls by identity and reconstructs output
-    // only through the exact AgentToolResult edge.
-    let call_row = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}:{}" }} }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&session_id),
-            crate::graphql::escape_graphql_string(call_id),
-        ))
-        .await;
-    assert!(
-        !call_row.has_errors(),
-        "loading backfill tool call failed: {:?}",
-        call_row.errors
-    );
-    let call_doc_id = call_row
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(serde_json::Value::as_str)
-        .expect("backfill tool call doc id");
-    let cleared = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{}" }} }},
-                input: {{ result: "" }}
-            ) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(call_doc_id),
-        ))
-        .await;
-    assert!(
-        !cleared.has_errors(),
-        "clearing mutable result projection failed: {:?}",
-        cleared.errors
-    );
-
-    // Backfill reconciles the completed tool call's result message.
+    // Backfill reconciles the completed tool call's result message from its
+    // exact AgentToolResult edge. The signed terminal call retains the
+    // canonical model projection written by `on_tool_result`; rewriting it
+    // would correctly fail exact-evidence validation as a forged projection.
     let reconciled = hook.backfill_completed_tool_results().await.unwrap();
     assert_eq!(
         reconciled, 1,
@@ -1111,6 +1076,8 @@ async fn post_tool_resumed_resets_response_tail() {
     let request_doc_id =
         create_pending_request_for_agent(&node, &request_id, &session_id, agent_did).await;
     hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
 
     let request = AgentRequest {
         doc_id: request_doc_id.clone(),
@@ -1162,13 +1129,30 @@ async fn post_tool_resumed_resets_response_tail() {
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
-    // Feed: Text → Text → ToolCall → ToolResult
+    // Feed text and a tool call, then drive the same durable tool execution
+    // lifecycle that the owned loop establishes before yielding ToolResult.
     processor.process_item(text_item("hello ")).await.unwrap();
     processor.process_item(text_item("world")).await.unwrap();
     processor
         .process_item(tool_call_item("search", r#"{"q":"x"}"#, "call-1"))
         .await
         .unwrap();
+    assert!(matches!(
+        hook.on_tool_call("search", None, "call-1", r#"{"q":"x"}"#)
+            .await,
+        crate::llm::ToolCallHookAction::Continue
+    ));
+    assert!(matches!(
+        hook.on_tool_result(
+            "search",
+            None,
+            "call-1",
+            r#"{"q":"x"}"#,
+            &crate::tool_call_lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.to_string()),
+        )
+        .await,
+        HookAction::Continue
+    ));
     processor
         .process_item(tool_result_item("call-1", r#"{"hit":1}"#, "call-1"))
         .await

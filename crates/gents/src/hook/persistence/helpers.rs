@@ -19,11 +19,13 @@ struct DurableToolCallIdentityRow {
     session_id: String,
     tool_call_id: String,
     tool_name: String,
+    lifecycle_state: String,
 }
 
 #[derive(Debug)]
 pub(super) struct DurableToolCallIdentity {
     pub tool_name: String,
+    pub lifecycle_state: String,
 }
 
 /// Distinguish a hook-owned meta result from a result backed by a durable
@@ -40,7 +42,7 @@ pub(super) async fn load_durable_tool_call_identity(
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}" }} }}) {{
-                _docID tool_call_key session_id tool_call_id tool_name
+                _docID tool_call_key session_id tool_call_id tool_name lifecycle_state
             }} }}"#,
             crate::graphql::escape_graphql_string(&expected_key),
         ))
@@ -81,7 +83,7 @@ pub(super) async fn load_durable_tool_call_identity(
         node,
         "AgentToolCall",
         &current.version,
-        "tool_call_key session_id tool_call_id tool_name",
+        "tool_call_key session_id tool_call_id tool_name lifecycle_state",
         None,
     )
     .await?;
@@ -95,11 +97,14 @@ pub(super) async fn load_durable_tool_call_identity(
         || exact.tool_call_id != tool_call_id
         || exact.tool_name != row.tool_name
         || exact.tool_name.trim().is_empty()
+        || exact.lifecycle_state != row.lifecycle_state
+        || exact.lifecycle_state.trim().is_empty()
     {
         anyhow::bail!("durable tool-result authority changed immutable identity");
     }
     Ok(Some(DurableToolCallIdentity {
         tool_name: exact.tool_name,
+        lifecycle_state: exact.lifecycle_state,
     }))
 }
 
@@ -248,6 +253,7 @@ pub(super) async fn load_stored_tool_call_result(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
     tool_call_id: &str,
+    allow_terminal_omission: bool,
 ) -> anyhow::Result<StoredToolCallResult> {
     let exact = crate::tool_call_lifecycle::query::load_exact_tool_call_terminal_evidence(
         node,
@@ -259,14 +265,15 @@ pub(super) async fn load_stored_tool_call_result(
         crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Output(output) => {
             Ok(StoredToolCallResult {
                 tool_name: output.tool_name,
-                result: output.output_text,
+                // Transcript recovery must reproduce the same bounded provider
+                // projection as the live path. The immutable result fact is
+                // still verified above, but its full retained bytes are only
+                // for explicit paging/export consumers.
+                result: output.model_projection,
             })
         }
         crate::tool_call_lifecycle::query::ExactToolCallTerminalEvidence::Omission(omission)
-            if matches!(
-                omission.reason.as_str(),
-                "preDispatchFailure" | "approvalDenied"
-            ) =>
+            if allow_terminal_omission =>
         {
             Ok(StoredToolCallResult {
                 tool_name: omission.tool_name,

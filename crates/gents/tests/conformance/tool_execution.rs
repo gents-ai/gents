@@ -107,7 +107,9 @@ async fn durable_output_reader_refuses_a_terminal_omission() {
         .await
         .expect_err("an omission fact must never be projected as tool output");
     assert!(
-        error.to_string().contains("has no output (timedOut)"),
+        error
+            .to_string()
+            .contains("has no output (timedOut: tool call deadline exceeded at "),
         "unexpected omission read error: {error:#}"
     );
 }
@@ -183,6 +185,43 @@ async fn publish_unbound_omission_proposal(
     assert!(
         !response.has_errors(),
         "publishing unbound omission proposal: {:?}",
+        response.errors
+    );
+}
+
+async fn force_incoherent_terminal_projection(
+    node: &gents::defra_node::EmbeddedNode,
+    call: &crate::support::snapshots::ToolCallSnapshot,
+    exact_evidence_fields: &str,
+) {
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentToolCall(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{
+                    result: "forged terminal projection"
+                    status: "completed"
+                    lifecycle_state: "completed"
+                    started_at: "{started_at}"
+                    deadline_at: "{deadline_at}"
+                    completed_at: "{completed_at}"
+                    {exact_evidence_fields}
+                }}
+            ) {{ _docID }}
+        }}"#,
+        doc_id = gents::graphql::escape_graphql_string(&call.doc_id),
+        started_at = gents::graphql::escape_graphql_string(
+            call.started_at.as_deref().expect("running start time"),
+        ),
+        deadline_at = gents::graphql::escape_graphql_string(
+            call.deadline_at.as_deref().expect("running deadline"),
+        ),
+        completed_at = chrono::Utc::now().to_rfc3339(),
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "forcing incoherent terminal projection: {:?}",
         response.errors
     );
 }
@@ -558,12 +597,41 @@ async fn startup_recovery_cancels_expired_staged_fork_rows_with_exact_omissions(
                 fork_source_composite_commit_cid: "source-active-cid"
                 fork_source_signer_did: "{agent_did}"
             }}) {{ _docID }}
+            create_AgentRequest(input: {{
+                request_id: "request-staged-active-running"
+                agent_did: "{agent_did}"
+                session_id: "{session_id}"
+                content: "terminal source request"
+                status: "complete"
+                lifecycle_state: "completed"
+                created_at: "{started}"
+            }}) {{ _docID }}
+            active_running: create_AgentToolCall(input: {{
+                tool_call_key: "{session_id}:staged-active-running"
+                request_id: "request-staged-active-running"
+                session_id: "{session_id}"
+                agent_did: "{agent_did}"
+                message_sequence: 3
+                tool_name: "test_tool"
+                tool_call_id: "staged-active-running"
+                args: "{{}}"
+                result: ""
+                status: "forkStaging"
+                lifecycle_state: "running"
+                started_at: "{started}"
+                deadline_at: "{active_lease}"
+                await_mode: "foreground"
+                cancel_policy: "cascade"
+                fork_source_doc_id: "source-active-running-doc"
+                fork_source_composite_commit_cid: "source-active-running-cid"
+                fork_source_signer_did: "{agent_did}"
+            }}) {{ _docID }}
             unleased: create_AgentToolCall(input: {{
                 tool_call_key: "{session_id}:staged-unleased"
                 request_id: "request-staged-unleased"
                 session_id: "{session_id}"
                 agent_did: "{agent_did}"
-                message_sequence: 3
+                message_sequence: 4
                 tool_name: "test_tool"
                 tool_call_id: "staged-unleased"
                 args: "{{}}"
@@ -587,6 +655,15 @@ async fn startup_recovery_cancels_expired_staged_fork_rows_with_exact_omissions(
         response.errors
     );
 
+    let live_report =
+        ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&db.node, &agent_did)
+            .await
+            .unwrap();
+    assert_eq!(
+        live_report.tool_calls_terminalized, 0,
+        "the periodic terminal-parent sweep must not race active fork staging"
+    );
+
     let report = ToolCallLifecycle::recover_all(&db.node, &agent_did)
         .await
         .unwrap();
@@ -597,7 +674,7 @@ async fn startup_recovery_cancels_expired_staged_fork_rows_with_exact_omissions(
     assert_eq!(report.notifications_repaired, 0);
 
     let rows = fetch_tool_call_snapshots_for_session(&db.node, session_id).await;
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     assert_eq!(rows[0].tool_call_id, "staged-pending");
     assert_eq!(rows[0].lifecycle_state.as_deref(), Some("cancelled"));
     assert!(rows[0].omission_doc_id.is_some());
@@ -608,9 +685,12 @@ async fn startup_recovery_cancels_expired_staged_fork_rows_with_exact_omissions(
     assert_eq!(rows[2].tool_call_id, "staged-active");
     assert_eq!(rows[2].lifecycle_state.as_deref(), Some("pending"));
     assert!(rows[2].omission_doc_id.is_none());
-    assert_eq!(rows[3].tool_call_id, "staged-unleased");
-    assert_eq!(rows[3].lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(rows[3].tool_call_id, "staged-active-running");
+    assert_eq!(rows[3].lifecycle_state.as_deref(), Some("running"));
     assert!(rows[3].omission_doc_id.is_none());
+    assert_eq!(rows[4].tool_call_id, "staged-unleased");
+    assert_eq!(rows[4].lifecycle_state.as_deref(), Some("pending"));
+    assert!(rows[4].omission_doc_id.is_none());
 }
 
 #[tokio::test]
@@ -1031,6 +1111,81 @@ async fn complete_adopts_terminal_written_before_output_publication() {
         snapshots[0].result.as_str(),
         "tool call cancelled",
         "late completion must not replace the winner's terminal payload"
+    );
+}
+
+#[tokio::test]
+async fn complete_refuses_to_adopt_moved_terminal_without_exact_evidence() {
+    let db = test_db("tc-complete-unclosed-terminal-race").await;
+    let session_id = "complete-unclosed-terminal-race-session";
+    let tool_call_id = "complete-unclosed-terminal-race-tool-call";
+    let mut late_complete = ToolCallLifecycle::new(
+        db.node.clone(),
+        "complete-unclosed-terminal-race-request".into(),
+        session_id.into(),
+        "did:test:test".to_string(),
+        tool_call_id.into(),
+        0,
+        "test_tool".into(),
+        "{}".into(),
+        test_deadline(),
+    );
+    late_complete.start_running().await.unwrap();
+    let call = fetch_tool_call_snapshots_for_session(&db.node, session_id)
+        .await
+        .remove(0);
+    force_incoherent_terminal_projection(&db.node, &call, "").await;
+
+    let error = late_complete
+        .complete("late output")
+        .await
+        .expect_err("a moved terminal without exact evidence must not be adopted");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("cannot adopt") && error.contains("binds neither result nor omission"),
+        "unexpected fail-closed adoption error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn complete_refuses_to_adopt_moved_terminal_with_mismatched_exact_evidence() {
+    let db = test_db("tc-complete-mismatched-terminal-race").await;
+    let session_id = "complete-mismatched-terminal-race-session";
+    let tool_call_id = "complete-mismatched-terminal-race-tool-call";
+    let mut late_complete = ToolCallLifecycle::new(
+        db.node.clone(),
+        "complete-mismatched-terminal-race-request".into(),
+        session_id.into(),
+        "did:test:test".to_string(),
+        tool_call_id.into(),
+        0,
+        "test_tool".into(),
+        "{}".into(),
+        test_deadline(),
+    );
+    late_complete.start_running().await.unwrap();
+    let call = fetch_tool_call_snapshots_for_session(&db.node, session_id)
+        .await
+        .remove(0);
+    force_incoherent_terminal_projection(
+        &db.node,
+        &call,
+        r#"
+            result_doc_id: "missing-result-doc"
+            result_composite_commit_cid: "missing-result-cid"
+            result_signer_did: "did:test:forged"
+        "#,
+    )
+    .await;
+
+    let error = late_complete
+        .complete("late output")
+        .await
+        .expect_err("a moved terminal with mismatched exact evidence must not be adopted");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("cannot adopt") && error.contains("without coherent terminal evidence"),
+        "unexpected fail-closed adoption error: {error}"
     );
 }
 

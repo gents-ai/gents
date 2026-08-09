@@ -1,5 +1,36 @@
 use super::*;
 
+#[derive(serde::Deserialize)]
+struct ExactOutputProjectionRow {
+    output_text: String,
+    model_output_truncated: bool,
+    truncation_metadata: String,
+}
+
+pub(super) async fn exact_output_projection(
+    node: &defra_node::EmbeddedNode,
+    output: &crate::SignedDocumentVersionRef,
+) -> Result<String> {
+    let snapshot = crate::document_version::verified_exact_document_snapshot_with_identity(
+        node,
+        "AgentToolResult",
+        &output.version,
+        "output_text model_output_truncated truncation_metadata",
+        None,
+    )
+    .await?;
+    if snapshot.source != *output {
+        anyhow::bail!("AgentToolResult projection source changed during terminalization");
+    }
+    let row: ExactOutputProjectionRow = snapshot.decode()?;
+    crate::truncation::canonical_model_projection(
+        &row.output_text,
+        &output.version.doc_id,
+        row.model_output_truncated,
+        &row.truncation_metadata,
+    )
+}
+
 impl ToolCallLifecycle {
     fn requester_did_fragment(&self) -> String {
         crate::session::requester_did_create_field(self.requester_did.as_deref())
@@ -263,7 +294,9 @@ impl ToolCallLifecycle {
         else {
             return Ok(());
         };
-        self.complete_with_result_fact(result, &output).await
+        let projection = exact_output_projection(&self.node, &output).await?;
+        self.complete_with_result_fact(&projection, &output).await?;
+        Ok(())
     }
 
     /// Complete using a canonical full-output fact that the caller already
@@ -273,7 +306,7 @@ impl ToolCallLifecycle {
         &mut self,
         result: &str,
         output: &crate::SignedDocumentVersionRef,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.ensure_state(&[ToolCallState::Running], "complete_with_result_fact")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool.into());
@@ -288,10 +321,16 @@ impl ToolCallLifecycle {
             .started_at
             .ok_or_else(|| anyhow!("complete called without started_at set"))?;
         let mut exact_output = output.clone();
+        let mut model_projection = exact_output_projection(&self.node, &exact_output).await?;
+        if model_projection != result {
+            anyhow::bail!(
+                "terminal AgentToolCall result is not the canonical exact-output projection"
+            );
+        }
         for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
             let now = Utc::now();
             let latency_ms = (now - started_at).num_milliseconds();
-            let escaped_result = escape_graphql_string(result);
+            let escaped_result = escape_graphql_string(&model_projection);
             let escaped_doc_id = escape_graphql_string(&doc_id);
             let now_str = now.to_rfc3339();
             let started_at_str = started_at.to_rfc3339();
@@ -336,11 +375,11 @@ impl ToolCallLifecycle {
             {
                 ExactEvidenceTransitionOutcome::Applied(_) => {
                     self.state = ToolCallState::Completed;
-                    return Ok(());
+                    return Ok(model_projection);
                 }
                 ExactEvidenceTransitionOutcome::Lost => {
                     self.sync_after_lost_running_compare("complete").await?;
-                    return Ok(());
+                    return self.authoritative_terminal_output_projection().await;
                 }
                 ExactEvidenceTransitionOutcome::Stale
                     if stale_retry < crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES =>
@@ -353,9 +392,10 @@ impl ToolCallLifecycle {
                         )
                         .await?
                     else {
-                        return Ok(());
+                        return self.authoritative_terminal_output_projection().await;
                     };
                     exact_output = output;
+                    model_projection = exact_output_projection(&self.node, &exact_output).await?;
                 }
                 ExactEvidenceTransitionOutcome::Stale => {
                     anyhow::bail!(
@@ -367,18 +407,24 @@ impl ToolCallLifecycle {
         unreachable!("bounded exact-output loop returns on every outcome")
     }
 
+    async fn authoritative_terminal_output_projection(&self) -> Result<String> {
+        Ok(super::super::query::load_exact_tool_call_output(
+            &self.node,
+            &self.session_id,
+            &self.tool_call_id,
+        )
+        .await?
+        .model_projection)
+    }
+
     pub(super) async fn retain_terminal_output_fact(
         &self,
         output: &str,
     ) -> Result<crate::SignedDocumentVersionRef> {
-        let metadata = serde_json::json!({
-            "truncated": false,
-            "truncated_by": null,
-            "original_lines": output.lines().count(),
-            "original_bytes": output.len(),
-            "projection": "lifecycle_terminal"
-        })
-        .to_string();
+        let mode = crate::truncation::tool_result_truncation_mode(&self.tool_name);
+        let limits = crate::truncation::TruncationLimits::default();
+        let (_, _, truncated) = crate::truncation::truncate_text(output, mode, &limits);
+        let metadata = crate::truncation::model_projection_metadata(output, mode, &limits);
         crate::truncation::DefraSpillTruncator::new(
             self.node.clone(),
             &self.agent_did,
@@ -386,7 +432,14 @@ impl ToolCallLifecycle {
         )
         .with_requester_did(self.requester_did.clone())
         .with_tool_call_id(&self.tool_call_id)
-        .retain_full_output_fact(&self.tool_name, &self.args, output, &metadata, None, false)
+        .retain_full_output_fact(
+            &self.tool_name,
+            &self.args,
+            output,
+            &metadata,
+            None,
+            truncated,
+        )
         .await
     }
 
@@ -399,10 +452,13 @@ impl ToolCallLifecycle {
         match self.retain_terminal_output_fact(output).await {
             Ok(output) => Ok(Some(output)),
             Err(error) => {
-                if self.adopt_if_source_moved(expected_source, method).await? {
-                    return Ok(None);
-                }
-                Err(error)
+                self.adopt_after_terminal_evidence_publication_error(
+                    expected_source,
+                    method,
+                    error,
+                )
+                .await?;
+                Ok(None)
             }
         }
     }
@@ -425,10 +481,13 @@ impl ToolCallLifecycle {
         match publish {
             Ok(output) => Ok(Some(output)),
             Err(error) => {
-                if self.adopt_if_source_moved(expected_source, method).await? {
-                    return Ok(None);
-                }
-                Err(error)
+                self.adopt_after_terminal_evidence_publication_error(
+                    expected_source,
+                    method,
+                    error,
+                )
+                .await?;
+                Ok(None)
             }
         }
     }
@@ -447,10 +506,13 @@ impl ToolCallLifecycle {
         {
             Ok(omission) => Ok(Some(omission)),
             Err(error) => {
-                if self.adopt_if_source_moved(expected_source, method).await? {
-                    return Ok(None);
-                }
-                Err(error)
+                self.adopt_after_terminal_evidence_publication_error(
+                    expected_source,
+                    method,
+                    error,
+                )
+                .await?;
+                Ok(None)
             }
         }
     }
@@ -467,7 +529,10 @@ impl ToolCallLifecycle {
         else {
             return Ok(());
         };
-        self.fail_with_details(result, failure, None, &output).await
+        let projection = exact_output_projection(&self.node, &output).await?;
+        self.fail_with_details(&projection, failure, None, &output)
+            .await?;
+        Ok(())
     }
 
     pub(crate) async fn fail_with_result_fact(
@@ -475,7 +540,7 @@ impl ToolCallLifecycle {
         result: &str,
         failure: super::FailureClass,
         output: &crate::SignedDocumentVersionRef,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.fail_with_details(result, failure, None, output).await
     }
 
@@ -484,7 +549,7 @@ impl ToolCallLifecycle {
         result: &str,
         denial: &CommandPolicyDenial,
         output: &crate::SignedDocumentVersionRef,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.fail_with_details(result, FailureClass::PolicyDenied, Some(denial), output)
             .await
     }
@@ -495,7 +560,7 @@ impl ToolCallLifecycle {
         failure: super::FailureClass,
         command_denial: Option<&CommandPolicyDenial>,
         output: &crate::SignedDocumentVersionRef,
-    ) -> Result<()> {
+    ) -> Result<String> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
@@ -510,10 +575,16 @@ impl ToolCallLifecycle {
             .started_at
             .ok_or_else(|| anyhow!("fail called without started_at set"))?;
         let mut exact_output = output.clone();
+        let mut model_projection = exact_output_projection(&self.node, &exact_output).await?;
+        if model_projection != result {
+            anyhow::bail!(
+                "terminal AgentToolCall result is not the canonical exact-output projection"
+            );
+        }
         for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
             let now = Utc::now();
             let latency_ms = (now - started_at).num_milliseconds();
-            let escaped_result = escape_graphql_string(result);
+            let escaped_result = escape_graphql_string(&model_projection);
             let escaped_doc_id = escape_graphql_string(&doc_id);
             let now_str = now.to_rfc3339();
             let failure_class_str = failure.as_str();
@@ -563,11 +634,11 @@ impl ToolCallLifecycle {
                 ExactEvidenceTransitionOutcome::Applied(_) => {
                     self.state = ToolCallState::Failed;
                     self.failure_class = Some(failure);
-                    return Ok(());
+                    return Ok(model_projection);
                 }
                 ExactEvidenceTransitionOutcome::Lost => {
                     self.sync_after_lost_running_compare("fail").await?;
-                    return Ok(());
+                    return self.authoritative_terminal_output_projection().await;
                 }
                 ExactEvidenceTransitionOutcome::Stale
                     if stale_retry < crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES =>
@@ -580,9 +651,10 @@ impl ToolCallLifecycle {
                         )
                         .await?
                     else {
-                        return Ok(());
+                        return self.authoritative_terminal_output_projection().await;
                     };
                     exact_output = output;
+                    model_projection = exact_output_projection(&self.node, &exact_output).await?;
                 }
                 ExactEvidenceTransitionOutcome::Stale => {
                     anyhow::bail!(
@@ -752,13 +824,14 @@ impl ToolCallLifecycle {
         for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
             let now = Utc::now();
             let omission_fields = exact_omission_fields_fragment(&omission);
+            let persistence_status = self.terminal_persistence_status(Some("deadline_exceeded"));
             let mutation = format!(
                 r#"mutation {{
                     update_AgentToolCall(
                         filter: {{ _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }} }},
                         input: {{
                             result: "{}",
-                            status: "completed",
+                            status: "{}",
                             lifecycle_state: "timedOut",
                             tool_failure_class: "{}",
                             cancel_cause: "{}",
@@ -773,6 +846,7 @@ impl ToolCallLifecycle {
                 }}"#,
                 escape_graphql_string(&doc_id),
                 escape_graphql_string(&detail),
+                escape_graphql_string(&persistence_status),
                 FailureClass::External.as_str(),
                 CancelCause::Deadline.as_str(),
                 started_at.to_rfc3339(),
@@ -1075,6 +1149,17 @@ impl ToolCallLifecycle {
                 anyhow!("approve_and_start called before hold_for_approval persisted a row")
             })?
             .clone();
+        let verified_approval =
+            super::super::approval_evidence::load_verified_exact_approval(&self.node, approval)
+                .await?;
+        verified_approval.require_binding(
+            &doc_id,
+            &self.tool_call_id,
+            &self.session_id,
+            &self.agent_did,
+        )?;
+        verified_approval
+            .require_decision(super::super::approval_evidence::ApprovalDecisionKind::Approved)?;
         let now = Utc::now();
         let escaped_doc_id = escape_graphql_string(&doc_id);
         let started_at_str = now.to_rfc3339();
@@ -1147,6 +1232,23 @@ impl ToolCallLifecycle {
                 anyhow!("deny_approval called before hold_for_approval persisted a row")
             })?
             .clone();
+        let verified_approval =
+            super::super::approval_evidence::load_verified_exact_approval(&self.node, approval)
+                .await?;
+        verified_approval.require_binding(
+            &doc_id,
+            &self.tool_call_id,
+            &self.session_id,
+            &self.agent_did,
+        )?;
+        verified_approval
+            .require_decision(super::super::approval_evidence::ApprovalDecisionKind::Denied)?;
+        let exact_denial = verified_approval.denial_message(&self.tool_name)?;
+        if reason != exact_denial {
+            anyhow::bail!(
+                "denial projection does not match the exact signed AgentToolApproval reason"
+            );
+        }
         let Some(omission) = self
             .retain_terminal_omission_fact_or_adopt(
                 ToolCallState::AwaitingApproval,

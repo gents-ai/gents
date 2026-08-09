@@ -1,5 +1,7 @@
 use super::*;
-use crate::lean_vocab_test::{lean_goal_decision_cases, lean_goal_transition_cases};
+use crate::lean_vocab_test::{
+    lean_goal_decision_cases, lean_goal_transition_cases, lean_omission_phase_matrix_cases,
+};
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
     for domain in [
@@ -172,14 +174,19 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 37);
-    assert_eq!(lean_recovery_equivalence_cases().len(), 37);
+    assert_eq!(lean_recovery_sweep_cases().len(), 38);
+    assert_eq!(lean_recovery_equivalence_cases().len(), 38);
     assert_eq!(lean_recovery_outcome_cases().len(), 4);
     assert_eq!(lean_transcript_cases().len(), 7);
     assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
     assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
     assert_eq!(lean_cancel_propagation_cases().len(), 1);
+    assert_eq!(
+        lean_omission_phase_matrix_cases().len(),
+        8 * 7 * 7,
+        "all omission reasons must cover every source/terminal phase pair"
+    );
 }
 
 #[tokio::test]

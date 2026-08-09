@@ -44,6 +44,7 @@ struct ToolCallRow {
     tool_name: Option<String>,
     args: Option<String>,
     result: Option<String>,
+    result_doc_id: Option<String>,
     lifecycle_state: Option<String>,
     await_mode: Option<String>,
     cancel_policy: Option<String>,
@@ -296,6 +297,7 @@ async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &s
                 tool_name
                 args
                 result
+                result_doc_id
                 lifecycle_state
                 await_mode
                 cancel_policy
@@ -715,6 +717,13 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
         panic!("expected Skip action, got {action:?}");
     };
     serde_json::from_str(&reason).expect("skip reason should be JSON")
+}
+
+fn skip_reason(action: ToolCallHookAction) -> String {
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("expected Skip action, got {action:?}");
+    };
+    reason
 }
 
 #[path = "r4_subagent_tools_cases/background_cancel.rs"]

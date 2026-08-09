@@ -64,6 +64,21 @@ def OmissionReason.toContract : OmissionReason → String
   | .timedOut => "timed_out"
   | .cancelled => "cancelled"
 
+/-- The approval edge is retained by the mutable call/execution document, not
+the immutable output-omission fact. A denial binds the newly created denied
+decision at the terminal call; an approved execution carries its prior
+approval edge through running and every later terminal version. -/
+inductive RetainedApprovalEdgeKind where
+  | absent
+  | denial
+  | approvedRunning
+  deriving DecidableEq, Repr
+
+def RetainedApprovalEdgeKind.toContract : RetainedApprovalEdgeKind → String
+  | .absent => "absent"
+  | .denial => "denial_call_edge"
+  | .approvedRunning => "approved_running_call_edge"
+
 structure ToolInvocationFact where
   key : LogicalKey
   signed : SignedRef
@@ -100,6 +115,10 @@ structure ToolOutputFact where
   invocation : SignedRef
   execution : SignedRef
   outputHash : PayloadHash
+  truncationContractHash : PayloadHash
+  /-- Hash of the canonical bounded provider projection derived from the full
+  output under the truncation contract committed by this signed fact. -/
+  modelProjectionHash : PayloadHash
   fullOutput : Bool
   deriving DecidableEq, Repr
 
@@ -108,6 +127,8 @@ structure ToolOutputIntent where
   invocation : SignedRef
   execution : SignedRef
   outputHash : PayloadHash
+  truncationContractHash : PayloadHash
+  modelProjectionHash : PayloadHash
   fullOutput : Bool
   deriving DecidableEq, Repr
 
@@ -134,8 +155,6 @@ structure ToolOutputOmissionFact where
   invocation : SignedRef
   execution : SignedRef
   reason : OmissionReason
-  /-- Present only for `approvalDenied`, pinning the exact denied decision. -/
-  approval : Option SignedRef := none
   deriving DecidableEq, Repr
 
 structure ToolOutputOmissionIntent where
@@ -143,7 +162,6 @@ structure ToolOutputOmissionIntent where
   invocation : SignedRef
   execution : SignedRef
   reason : OmissionReason
-  approval : Option SignedRef := none
   deriving DecidableEq, Repr
 
 abbrev InvocationStore := Store ToolInvocationFact
@@ -186,6 +204,8 @@ def ToolOutputFact.forIntent
   , invocation := intent.invocation
   , execution := intent.execution
   , outputHash := intent.outputHash
+  , truncationContractHash := intent.truncationContractHash
+  , modelProjectionHash := intent.modelProjectionHash
   , fullOutput := intent.fullOutput }
 
 def ToolApprovalFact.forIntent
@@ -203,8 +223,7 @@ def ToolOutputOmissionFact.forIntent
   , signed := signed
   , invocation := intent.invocation
   , execution := intent.execution
-  , reason := intent.reason
-  , approval := intent.approval }
+  , reason := intent.reason }
 
 def exactInvocation? (store : InvocationStore) (ref : SignedRef) : Option ToolInvocationFact :=
   match store ref.version.docId with
@@ -225,6 +244,19 @@ def exactOutput? (store : OutputStore) (ref : SignedRef) : Option ToolOutputFact
         some fact
       else none
   | none => none
+
+/-- Abstract the deterministic Rust truncation function: the exact full-output
+hash and signed truncation-contract hash jointly determine one projection. -/
+def canonicalModelProjectionHash
+    (outputHash truncationContractHash : PayloadHash) : PayloadHash :=
+  outputHash + truncationContractHash
+
+/-- A mutable terminal preview is admissible only when its hash is both
+derived from the exact output/contract pair and committed by that fact. -/
+def exactModelProjection?
+    (output : ToolOutputFact) (observedHash : PayloadHash) : Option ToolOutputFact :=
+  let derived := canonicalModelProjectionHash output.outputHash output.truncationContractHash
+  if output.modelProjectionHash = derived ∧ observedHash = derived then some output else none
 
 def exactApproval? (store : ApprovalStore) (ref : SignedRef) : Option ToolApprovalFact :=
   match store ref.version.docId with

@@ -518,6 +518,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     let worker_gen = runtime_generation(&worker.graphql_access).await;
     config_tools(
         &fleet.bin,
+        &worker.home,
         &worker.graphql,
         &worker.did,
         &[
@@ -541,6 +542,7 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     let orch_gen = runtime_generation(&fleet.graphql_access_a).await;
     config_tools(
         &fleet.bin,
+        &fleet.home_a,
         &fleet.graphql_a,
         &fleet.did_a,
         &[
@@ -572,11 +574,19 @@ pub(super) async fn delegate(fleet: &Fleet) -> Result<()> {
     Ok(())
 }
 
-async fn config_tools(bin: &Path, graphql: &str, did: &str, extra: &[&str]) -> Result<()> {
+async fn config_tools(
+    bin: &Path,
+    home: &Path,
+    graphql: &str,
+    did: &str,
+    extra: &[&str],
+) -> Result<()> {
     let mut args: Vec<String> = vec![
         "config".into(),
         "tools".into(),
         "set".into(),
+        "--home".into(),
+        path_arg(home),
         "--graphql".into(),
         graphql.into(),
         "--agent-did".into(),

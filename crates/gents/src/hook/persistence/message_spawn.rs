@@ -285,13 +285,14 @@ impl DefraSessionHook {
         tool_result: &ToolResult,
         internal_call_id: &str,
     ) -> anyhow::Result<()> {
-        let (session_id, registered_tool_name) = {
+        let (session_id, registered_tool_name, registered_hook_owned) = {
             let state = self.state.lock().await;
             let session_id = state
                 .session_id
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-            (session_id, state.tool_result_tool_name(internal_call_id))
+            let (tool_name, hook_owned) = state.tool_result_registration(internal_call_id);
+            (session_id, tool_name, hook_owned)
         };
 
         let raw_stream_result = render_tool_result_text(tool_result);
@@ -308,7 +309,9 @@ impl DefraSessionHook {
                         durable.tool_name
                     );
                 }
-                if durable.tool_name == SPAWN_SUBAGENT_TOOL_NAME {
+                if durable.tool_name == SPAWN_SUBAGENT_TOOL_NAME
+                    && durable.lifecycle_state == "running"
+                {
                     let tool_name =
                         crate::tool_call_lifecycle::query::verify_exact_subagent_receipt_authority(
                             &self.node,
@@ -323,11 +326,23 @@ impl DefraSessionHook {
                         &self.truncation_limits,
                     );
                     (tool_name, text)
-                } else {
-                    let stored =
-                        load_stored_tool_call_result(&self.node, &session_id, internal_call_id)
-                            .await?;
+                } else if matches!(
+                    durable.lifecycle_state.as_str(),
+                    "completed" | "failed" | "timedOut" | "cancelled"
+                ) {
+                    let stored = load_stored_tool_call_result(
+                        &self.node,
+                        &session_id,
+                        internal_call_id,
+                        registered_hook_owned,
+                    )
+                    .await?;
                     (stored.tool_name, stored.result)
+                } else {
+                    anyhow::bail!(
+                        "durable tool result {session_id}:{internal_call_id} arrived while {}",
+                        durable.lifecycle_state
+                    );
                 }
             }
             None => {
@@ -336,6 +351,11 @@ impl DefraSessionHook {
                 // call id. Their bounded streamed result is authoritative,
                 // but only when the hook observed and registered that exact
                 // tool identity earlier in this turn.
+                if !registered_hook_owned {
+                    anyhow::bail!(
+                        "durable tool result {internal_call_id} has no exact AgentToolCall authority"
+                    );
+                }
                 let tool_name = registered_tool_name.ok_or_else(|| {
                     anyhow::anyhow!(
                         "hook-owned tool result {internal_call_id} has no registered tool identity"

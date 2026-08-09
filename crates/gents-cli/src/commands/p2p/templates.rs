@@ -161,6 +161,7 @@ mod tests {
                 "network-control",
                 "subagent-coordinator",
                 "subagent-host",
+                "scheduler-owner",
                 "app-collections",
             ]
         );
@@ -173,8 +174,11 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 16);
+        assert_eq!(collections.len(), 19);
         assert!(collections.contains(&"AgentRequest"));
+        assert!(collections.contains(&"AgentResponseOutcome"));
+        assert!(collections.contains(&"AgentToolResult"));
+        assert!(collections.contains(&"AgentToolOutputOmission"));
         assert!(collections.contains(&"InferenceBackend"));
         assert!(collections.contains(&"DatastoreToolSurface"));
     }
@@ -186,8 +190,11 @@ mod tests {
         assert_eq!(row.delivery, "push");
         assert_eq!(row.scope, "per-collection");
         let collections = row.collections.split(',').collect::<Vec<_>>();
-        assert_eq!(collections.len(), 18);
+        assert_eq!(collections.len(), 21);
         assert!(collections.contains(&"BearerPairingReady"));
+        assert!(collections.contains(&"AgentResponseOutcome"));
+        assert!(collections.contains(&"AgentToolResult"));
+        assert!(collections.contains(&"AgentToolOutputOmission"));
         assert!(collections.contains(&"AgentDirectoryEntry"));
         assert!(collections.contains(&"PersonaConfigRequest"));
         assert!(collections.contains(&"Skill"));

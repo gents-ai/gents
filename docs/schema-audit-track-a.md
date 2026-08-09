@@ -17,11 +17,10 @@ recovery queries, Lean models, replication templates, projection/export code,
 and the pinned DefraDB implementation. Recommendations are labelled as such.
 No recommendation below is implemented merely by recording it here.
 
-The current-state evidence in this revision is refreshed through commit
-`f6d03cb6`. Several durability checkpoints described by the original audit have
-since landed; those checkpoints are called out explicitly below. They do not
-make the proposed end-state contract, ACP, fleet ownership, or retention work
-complete.
+The audit baseline was commit `f6d03cb6`; current-state evidence is refreshed
+through the working branch for PR #1065. The later durability checkpoints are
+called out explicitly below. They do not make the proposed end-state contract,
+ACP, fleet ownership, or retention work complete.
 
 Retention terms and evidence downgrades in this track are governed by the
 [shared retention and erasure lattice](schema-retention-lattice.md). Any
@@ -62,14 +61,21 @@ The highest-risk remaining defects are:
   create-only facts, but transcript order is still allocated by a local
   read-max protocol and the schema does not enforce unique
   `(session, sequence)` ordering;
-- `AgentToolResult` is now an immutable, exact-call-version fact, but remains a
-  best-effort overflow spill rather than the canonical complete output ledger;
+- terminal `AgentToolCall` versions now bind exactly one verified signed
+  `AgentToolResult` or `AgentToolOutputOmission`; the result is the canonical
+  durable full-output fact. Bounded model/live projections retain exact result
+  authority in metadata and render its DefraDB pointer only when output is
+  truncated. The remaining P0 defect is the combined
+  invocation/execution schema and its missing fleet ownership fence, not
+  terminal-output durability;
 - approvals are now immutable exact-call-version facts with signer checks and
   conflict enumeration, but ACP-backed approver authority and a declared
   concurrent/quorum policy remain absent;
 - copied messages, tool facts, approvals, and compactions now carry source
   `_docID`/CID/signer provenance, but there is no first-class `SessionFork`
-  prefix manifest or lease-fenced session owner;
+  prefix manifest or lease-fenced session owner. Copied truncated-output
+  messages are rebound to their child result evidence rather than retaining a
+  source-session pointer;
 - the standard routes now include approvals, tool results, and compactions,
   while `Goal` and `AgentMemory` still lack the target routes and none of the ten
   base schemas has a DefraDB `@policy`;
@@ -94,8 +100,10 @@ AgentSession(session_id)
   ├── AgentToolCall(session_id, request_id, tool_call_id)
   │     ├── child_request_id ..............................> AgentRequest
   │     ├── exact result _docID/CID/signer ...............> AgentToolResult
+  │     ├── exact omission _docID/CID/signer .............> AgentToolOutputOmission
   │     └── exact approval _docID/CID/signer .............> AgentToolApproval
   ├── AgentToolResult(exact AgentToolCall _docID/CID/signer)
+  ├── AgentToolOutputOmission(exact AgentToolCall _docID/CID/signer)
   ├── CompactionEntry(exact versioned source manifest)
   └── Goal(session_id, last_*_request_id) .................> AgentRequest
 
@@ -103,13 +111,14 @@ AgentToolApproval(exact AgentToolCall _docID/CID/signer) ..> AgentToolCall
 AgentMemory(agent_did, key)  [cross-session; no session edge]
 ```
 
-The tool-result and approval edges now carry exact `_docID`, composite CID, and
-verified signer DID, and compaction records carry a versioned exact-source
-manifest. Finalized messages also carry the exact request `_docID`. Session,
-conversation, goal, memory, request lineage, and several tool/subagent edges
-still use logical IDs. The implemented `AgentRequest -> RenderedRequest` edge is
-the broader useful counterexample: it carries `_docID` plus a composite commit
-CID.
+The tool-result, tool-output-omission, and approval edges now carry exact
+`_docID`, composite CID, and verified signer DID, and compaction records carry
+a versioned exact-source manifest. A terminal tool call must resolve exactly
+one result or omission edge. Finalized messages also carry the exact request
+`_docID`. Session, conversation, goal, memory, request lineage, and several
+tool/subagent edges still use logical IDs. The implemented
+`AgentRequest -> RenderedRequest` edge is the broader useful counterexample: it
+carries `_docID` plus a composite commit CID.
 
 ## Implemented checkpoints and remaining boundary
 
@@ -117,12 +126,21 @@ Implemented on the current branch:
 
 - finalized transcript rows are immutable facts; `AgentMessageDraft` contains
   mutable assembly, and idempotent replay compares the complete finalized fact;
-- `AgentToolResult` and `AgentToolApproval` pin the exact tool-call document
-  version and signer, enumerate logical conflicts, and fail closed on mismatch;
+- every terminal `AgentToolCall` pins exactly one signed, immutable
+  `AgentToolResult` or `AgentToolOutputOmission` by exact tool-call document
+  version and signer. Results retain the full output; bounded model/live
+  projections are derived from that fact, retain its exact identity in durable
+  metadata, and render its DefraDB pointer only when truncated;
+- `AgentToolApproval` pins the exact tool-call document version and signer,
+  enumerates logical conflicts, and fails closed on mismatch;
 - `CompactionEntry` is create-only and pins a versioned canonical source
   manifest, with Lean and generated conformance coverage;
-- forked messages, tool calls/results/approvals, and compactions preserve exact
-  source document-version and signer provenance; and
+- forked messages, tool calls/results/output omissions/approvals, and
+  compactions preserve exact source document-version and signer provenance.
+  Fork staging is excluded from ordinary recovery and approval sweeps; only
+  the expired staging-lease recovery path may terminalize it. Remote fork
+  mutations retry explicit transaction conflicts but never retry an ambiguous
+  transport result;
 - the requester-scoped replication profiles include the immutable tool facts,
   approvals, compactions, and response outcomes.
 
@@ -137,6 +155,9 @@ Still required before Track A completion:
 - install and test base-collection ACP, complete Goal/Memory placement, and
   make timeline/export traversal exact; and
 - implement archive/restore, retention, legal hold, sunset, and purge receipts.
+
+Encryption and key custody remain a separate later workstream; this track makes
+no confidentiality claim.
 
 ### Recommended graph
 
@@ -164,9 +185,10 @@ at API boundaries and in exports for correlation; they do not choose a row.
 ## Evidence: placement, ACP, and export today
 
 - The `conversation` and `machine` scope templates push `AgentRequest`,
-  `AgentMessage`, `AgentToolCall`, `AgentToolResult`, `AgentToolApproval`,
-  `AgentSession`, `AgentConversation`, and `CompactionEntry` using immutable
-  `requester_did` filters
+  `AgentMessage`, `AgentToolCall`, `AgentToolResult`,
+  `AgentToolOutputOmission`, `AgentToolApproval`, `AgentSession`,
+  `AgentConversation`, and `CompactionEntry` using immutable `requester_did`
+  filters
   (`crates/gents/src/agent/p2p_reconcile/templates.rs:112-293`). Those
   templates also include `AgentResponse`, `AgentResponseOutcome`, pairing
   readiness, and six
@@ -174,22 +196,24 @@ at API boundaries and in exports for correlation; they do not choose a row.
   the complete participant route as transcript-only.
 - The `subagent-host` template returns requests, responses/outcomes, messages,
   tool calls, and approvals; it deliberately omits session/conversation,
-  result spills, and compactions (`templates.rs:350-401`).
+  terminal result/omission facts, and compactions (`templates.rs:350-401`).
 - The legacy `runtime` and `chat-requests` profiles include tool results,
-  approvals, and compactions (`profiles.rs:83-136`). `Goal` and `AgentMemory`
-  occur in none of these runtime profiles or requester-filtered templates. They
-  remain in the desktop branchable bulk-sync list, however, so paired desktops
-  can backfill them without the target private-memory/goal placement policy.
-- All ten SDL files use `@branchable`; none uses `@policy`. Consequently the
-  claimed `agent_did`, `requester_did`, and `approver_did` values are routing
-  claims, not database-enforced authorship.
+  output omissions, approvals, and compactions (`profiles.rs:83-136`). `Goal`
+  and `AgentMemory` occur in none of these runtime profiles or
+  requester-filtered templates. They remain in the desktop branchable bulk-sync
+  list, however, so paired desktops can backfill them without the target
+  private-memory/goal placement policy.
+- All Track A SDL files use `@branchable`; none uses `@policy`. Consequently
+  the claimed `agent_did`, `requester_did`, and `approver_did` values are
+  routing claims, not database-enforced authorship.
 - Projection ACP in `gents trace` performs a post-query decision over already
   fetched rows (`crates/gents-cli/src/commands/trace.rs:440-559`). It is not
-  base-collection read/write ACP and does not cover tool-output spills,
-  approvals, compactions, goals, or memory.
+  base-collection read/write ACP and does not cover terminal output/omission
+  facts, approvals, compactions, goals, or memory.
 - `load_run_timeline_rows` now resolves an exact signed request root (or rejects
   logical twins), includes compaction entries, and attaches exact
-  `AgentToolResult` and `AgentToolApproval` versions to tool calls. Every
+  `AgentToolResult`, `AgentToolOutputOmission`, and `AgentToolApproval` versions
+  to tool calls. Every
   returned row is exact-reloaded and signature-verified. The manifest remains
   `PartialExact` because child-request, request/session-scoped transcript,
   response, inference, rendered-request, and compaction extents are discovered
@@ -286,7 +310,8 @@ production ownership seams and hot or correctness-sensitive reads.
 | `AgentRequest` | lifecycle materialize/claim/transition/recovery/queue; desktop submit/retry; trigger and subagent materializers | watcher pending scan and CID reload; lifecycle `_docID` reads; timeline/session/client queries | `request_id` is not unique; timeline and multiple APIs order/limit by logical ID |
 | `AgentMessage` | owned-loop hook through `session/history.rs`; fork copy; desktop projection fixtures | provider history; compaction; timeline/session projections | finalized facts are immutable and conflicts are enumerated, but max+1 allocation is not fleet-fenced |
 | `AgentToolCall` | `ToolCallLifecycle` native/bridge/mode transitions (`tool_call_lifecycle/transition/*.rs`); background recovery; fork | lifecycle load/result; held-call polling; transcript/timeline/background projections | some reads correctly use `tool_call_key`, others use `(session_id, tool_call_id)` or raw `tool_call_id` with `limit: 1` |
-| `AgentToolResult` | truncation spill (`truncation/spill.rs`); fork copy | exact attachment in timeline/session projections | immutable exact call-version fact with conflict enumeration, but spill persistence remains fail-open and is not the complete output ledger |
+| `AgentToolResult` | terminal output retention in `ToolCallLifecycle` (`tool_call_lifecycle/transition/native.rs`, `transition/bridge.rs`, `evidence.rs`); truncation projection; fork copy | exact terminal-evidence verification; timeline/session projections | immutable exact call-version fact containing full output; publish precedes terminal CAS and terminal admission fails closed; invocation/execution split, fleet fencing, chunk/blob policy, ACP, encryption, and retention remain open |
+| `AgentToolOutputOmission` | native, bridge, cancellation, timeout, and recovery terminal paths; fork copy | exact terminal-evidence verification; timeline/session projections | immutable exact call-version/signer omission fact; terminal admission requires exactly one result or omission; invocation/execution split, fleet fencing, ACP, and retention remain open |
 | `AgentToolApproval` | CLI/desktop approval client (`config_client/approval.rs`); fork copy | exact held-call watcher and timeline attachment (`hook/persistence/approval.rs`) | immutable exact call-version and signer checks landed; ACP authority and concurrent/quorum policy remain |
 | `CompactionEntry` | compaction reducer (`session/compaction_entries.rs`); fork copy | prompt assembly, context-budget tools, session UI | create-only exact source manifest landed; ordinal allocation and full fork-prefix authority remain |
 | `Goal` | goal API/CLI and trigger controller (`goal.rs:546-888`, `trigger_engine/goal_source.rs`) | canonical goal load, active-goal trigger scan, usage aggregation | canonical earliest twin is chosen, but twins can diverge and only the selected doc is CAS-updated |
@@ -490,9 +515,11 @@ contract remain provisional**.
 invocation arguments, lifecycle, output, policy decision detail, background
 coordination, and child linkage. Invocation identity, route, arguments, and fork
 source fields are now immutable, and mutable result/approval bindings can pin
-exact fact versions. The invocation and execution roles nevertheless remain in
-one document. `tool_call_key` concatenates session and provider call ID. Some
-reads use that key; lifecycle load filters session plus call ID with `limit: 1`
+exact fact versions. Every terminal call must bind exactly one verified signed
+`AgentToolResult` or `AgentToolOutputOmission`; neither and both are rejected.
+The invocation and execution roles nevertheless remain in one document.
+`tool_call_key` concatenates session and provider call ID. Some reads use that
+key; lifecycle load filters session plus call ID with `limit: 1`
 (`tool_call_lifecycle/query.rs:89-139`).
 
 **Recommended contract.** Split immutable `ToolInvocation` from mutable
@@ -530,31 +557,40 @@ ambiguous legacy mutations unverified. Status: **provisional; P0**.
 
 ### `AgentToolResult`
 
-**Evidence.** Despite its name, the only canonical writer is the truncation
-spill path, which creates a row only when model-visible output is truncated;
-failure is still logged and execution continues without a spill. The row is now
-an immutable fact with a stable result key, route fields, full tool input/output,
-the exact accepted `AgentToolCall` `_docID`/composite CID/signer, and fork-source
-provenance. Creation enumerates conflicting logical facts and requires exact
-equality for idempotency. The run timeline verifies and attaches exact result
-versions to their tool call. This makes the spill auditable, but not mandatory
-or canonical for every full tool output.
+**Evidence.** The native running-to-completed and running-to-failed writers
+publish an immutable `AgentToolResult` before the terminal compare-and-set. The
+fact contains the complete tool input/output, the exact accepted
+`AgentToolCall` `_docID`/composite CID/verified signer, projection metadata, and
+fork-source provenance. Creation enumerates conflicting logical facts and
+requires exact equality for idempotency. Bridge and recovery writers use the
+same evidence contract.
 
-**Recommended contract.** Replace with immutable `ToolOutputFact`; canonical
-for every tool output, not just truncation overflow. Creator and signer: the
-writer that actually observed the output—normally the tool execution owner,
-but the parent/bridge owner for a returned child result. Identity: `_docID`,
-linked to invocation/execution `_docID` and the exact execution CID that
-accepted it. For chunking, unique composite
+Terminal verification requires exactly one result or
+`AgentToolOutputOmission`: neither and both fail closed. It verifies the fact's
+document ID, CID, signer, execution owner, historical parent, and tool/session
+keys. For result-bearing terminals it recomputes the canonical bounded
+model/live projection from the durable full output and requires the mutable
+`AgentToolCall.result` to match. That projection carries the exact DefraDB
+result pointer. Terminal paths with no output first publish an immutable signed
+omission fact bound to the exact call version and terminal disposition.
+
+**Recommended contract.** Preserve this exact signed terminal-evidence
+guarantee while splitting the combined call row into immutable
+`ToolInvocation`, fenced `ToolExecution`, and immutable `ToolOutputFact` /
+`ToolOutputOmissionFact` entities. Creator and signer: the writer that actually
+observed the output—normally the tool execution owner, but the parent/bridge
+owner for a returned child result. Identity: `_docID`, linked to
+invocation/execution `_docID` and the exact execution CID that accepted it. For
+chunking, unique composite
 `(execution_doc_id, output_stream, chunk_sequence)` plus terminal manifest.
 
 Immutable fields: session/request/invocation/execution refs, agent/requester
 scope, MIME/encoding, complete output or encrypted blob reference, truncation
 projection metadata, chunk position, created time, discard/interruption status,
 and source refs for imports/forks. No mutable fields. Illegal: orphan output,
-multiple complete terminal manifests, truncated model observation without a
-durable full-output fact when retention policy requires it, or an interrupted
-output reported as model-consumed.
+multiple complete terminal manifests, terminal execution with neither or both
+output and omission evidence, bounded model observation without its durable
+full-output pointer, or an interrupted output reported as model-consumed.
 
 Live gossip/backfill: owner/failover always; participant only under result
 redaction grant; branchable **retain**. ACP: execution owner create, session
@@ -564,12 +600,14 @@ external object-store envelope encryption for large values.
 Retention defaults shorter for raw output (30 days hot) with policy-controlled
 archive; authorization/metadata manifests remain with request audit. Legal hold
 pins blobs and keys. Indexes: execution doc/chunk, request doc, session/time,
-participant route. Lean/conformance: extend transcript pairing to require exact
-output fact and test fail-closed durability when full output is promised.
-Breaking plan: import spills as `legacy_partial_archive`; do not claim they are
-a complete output ledger. Status: **exact immutable spill checkpoint
-implemented; complete-output durability and the broader P0 split remain
-provisional**.
+participant route. Lean/conformance: preserve exact-one terminal evidence while
+proving split-row coherence and fleet-owner fencing. Breaking plan: translate
+the current result and omission facts without weakening their exact
+parent/version/signer edges; classify older spill-only rows as
+`legacy_partial_archive`. Status: **exact signed terminal result/omission
+evidence, durable full output, and bounded pointer-bearing projections are
+implemented; the invocation/execution split, fleet fencing, chunk/blob storage,
+ACP, encryption, and retention remain provisional**.
 
 ### `AgentToolApproval`
 
@@ -812,10 +850,11 @@ coordinated purge.
 2. **P0 — Finish transcript ordering and pairing.** Append-only finalized
    messages, separate drafts, exact request links, and conflict checks are
    implemented. Add composite uniqueness and lease-fenced multi-host allocation.
-3. **P0 — Finish splitting tool invocation/execution/output and make full output
-   durable.** Exact immutable result facts and timeline attachment are
-   implemented for spills. Replace best-effort spill semantics and bind every
-   terminal execution to its complete output version.
+3. **P0 — Finish splitting tool invocation/execution/output and fleet-fence
+   terminal ownership.** Exact signed result/omission facts, durable full
+   output, bounded pointer-bearing projections, and timeline attachment are
+   implemented. Preserve those guarantees across the split and define
+   chunk/blob storage, ACP, encryption, and retention policy.
 4. **P0 — Finish approval authorization semantics.** Signed,
    exact-version-bound, replicated approval facts and conflict enumeration are
    implemented. Define concurrent/quorum behavior and add base DefraDB ACP,

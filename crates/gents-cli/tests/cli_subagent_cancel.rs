@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
-use gents::{ensure_runtime_schemas, load_tool_selection, upsert_tool_selection};
+use gents::{ensure_runtime_schemas, load_tool_selection, upsert_tool_selection, KeyIdentity};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -36,6 +36,12 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("init output missing key_path")?;
+    let _signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading subagent-cancel signing key {key_path}"))?;
     let default_behavior_id = init
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -46,8 +52,13 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?;
     mock_endpoint.set_behavior_id(default_behavior_id.clone());
-    enable_default_subagents_before_server(&home_dir, tool_selection_id, &default_behavior_id)
-        .await?;
+    enable_default_subagents_before_server(
+        &home_dir,
+        tool_selection_id,
+        &default_behavior_id,
+        &agent_did,
+    )
+    .await?;
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -143,6 +154,12 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("init output missing key_path")?;
+    let _signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading local subagent-cancel signing key {key_path}"))?;
     let behavior_id = init
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -159,7 +176,7 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
     let child_tool_call_id = format!("spawn-grandchild-{}", Uuid::new_v4().simple());
 
     {
-        let node = open_local_node(&home_dir).await?;
+        let node = open_local_node(&home_dir, &agent_did).await?;
         ensure_runtime_schemas(node.as_ref()).await?;
 
         create_local_processing_request(
@@ -251,7 +268,7 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
         "local cancel should cancel the parent bridge but not interrupt the parent request: {cancel}"
     );
 
-    let node = open_local_node(&home_dir).await?;
+    let node = open_local_node(&home_dir, &agent_did).await?;
     assert!(
         local_request_interrupt_requested_at(node.as_ref(), &child_request_id)
             .await?
@@ -293,11 +310,13 @@ async fn enable_default_subagents_before_server(
     home_dir: &std::path::Path,
     selection_id: &str,
     target_behavior_id: &str,
+    agent_did: &str,
 ) -> Result<()> {
     let data_dir = home_dir.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .with_storage_backend(StorageBackend::RocksDb)
+        .with_node_identity_did(agent_did)
         .build()
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
@@ -318,12 +337,13 @@ async fn enable_default_subagents_before_server(
     Ok(())
 }
 
-async fn open_local_node(home_dir: &std::path::Path) -> Result<Arc<EmbeddedNode>> {
+async fn open_local_node(home_dir: &std::path::Path, agent_did: &str) -> Result<Arc<EmbeddedNode>> {
     let data_dir = home_dir.join(".gents").join("data");
     Ok(Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_storage_backend(StorageBackend::RocksDb)
+            .with_node_identity_did(agent_did)
             .build()
             .await
             .with_context(|| format!("opening embedded node at {}", data_dir.display()))?,

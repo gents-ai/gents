@@ -86,6 +86,10 @@ def commitOutput
   | some _, some execution =>
       if execution.invocation = intent.invocation ∧ execution.phase = .running ∧
           intent.fullOutput = true ∧ intent.outputHash ≠ 0 ∧
+          intent.truncationContractHash ≠ 0 ∧
+          intent.modelProjectionHash ≠ 0 ∧
+          intent.modelProjectionHash = canonicalModelProjectionHash
+            intent.outputHash intent.truncationContractHash ∧
           evidence.signerDid = execution.ownerDid ∧ evidence.authoritative = true then
         let fact := ToolOutputFact.forIntent intent evidence
         if state.outputs target = none then
@@ -147,22 +151,6 @@ instance (acceptedPhase terminalPhase : ExecutionPhase) (reason : OmissionReason
     Decidable (omissionTransitionAllowed acceptedPhase terminalPhase reason) := by
   cases reason <;> unfold omissionTransitionAllowed <;> infer_instance
 
-/-- Denial omissions additionally pin the exact immutable denial. Other
-omissions must not smuggle in an unrelated approval reference. -/
-def omissionApprovalValid
-    (state : State) (execution : ToolExecutionFact)
-    (intent : ToolOutputOmissionIntent) : Bool :=
-  match intent.reason, intent.approval with
-  | .approvalDenied, some approvalRef =>
-      match exactApproval? state.approvals approvalRef with
-      | some approval =>
-          approval.decision == .denied && approval.execution == execution.signed &&
-          approval.invocation == execution.invocation
-      | none => false
-  | .approvalDenied, none => false
-  | _, none => true
-  | _, some _ => false
-
 /-- An omission is immutable typed evidence explaining why no full output can
 exist. Its reason must agree with the exact accepted execution phase. -/
 def commitOmission
@@ -177,7 +165,6 @@ def commitOmission
       if execution.invocation = intent.invocation ∧
           omissionTransitionAllowed execution.phase
             intent.reason.terminalPhase intent.reason ∧
-          omissionApprovalValid state execution intent = true ∧
           evidence.signerDid = execution.ownerDid ∧ evidence.authoritative = true then
         let fact := ToolOutputOmissionFact.forIntent intent evidence
         if state.omissions target = none then
@@ -193,6 +180,51 @@ def commitOmission
       else
         ⟨.rejected, state⟩
   | _, _ => ⟨.rejected, state⟩
+
+/-- Resolve the approval retained on a terminal call edge. Denial creates the
+edge while terminating the exact held execution. Every other terminal state
+either carries the exact approval already present on its running source or has
+no approval anywhere in the source/terminal pair. The immutable omission fact
+does not participate in this relation. -/
+def retainedApprovalEdgeKind?
+    (execution : ToolExecutionFact)
+    (reason : Option OmissionReason)
+    (terminalApproval : Option SignedRef)
+    (approval : Option ToolApprovalFact) : Option RetainedApprovalEdgeKind :=
+  match reason, terminalApproval, approval with
+  | some .approvalDenied, some approvalRef, some fact =>
+      if approvalRef = fact.signed ∧ fact.decision = .denied ∧
+          fact.execution = execution.signed ∧
+          fact.invocation = execution.invocation ∧
+          execution.phase = .awaitingApproval ∧ execution.approval = none then
+        some .denial
+      else
+        none
+  | some .approvalDenied, _, _ => none
+  | _, none, none =>
+      if execution.approval = none then some .absent else none
+  | _, some approvalRef, some fact =>
+      if approvalRef = fact.signed ∧ fact.decision = .approved ∧
+          execution.phase = .running ∧ execution.approval = some fact.signed ∧
+          execution.previous = some fact.execution ∧
+          fact.invocation = execution.invocation then
+        some .approvedRunning
+      else
+        none
+  | _, _, _ => none
+
+def exactRetainedApprovalEdgeKind?
+    (state : State)
+    (execution : ToolExecutionFact)
+    (reason : Option OmissionReason)
+    (terminalApproval : Option SignedRef) : Option RetainedApprovalEdgeKind :=
+  match terminalApproval with
+  | none => retainedApprovalEdgeKind? execution reason none none
+  | some approvalRef =>
+      match exactApproval? state.approvals approvalRef with
+      | some approval =>
+          retainedApprovalEdgeKind? execution reason (some approvalRef) (some approval)
+      | none => none
 
 /-- Advance a held execution to running only through an exact approved fact. -/
 def approveExecution
@@ -317,12 +349,15 @@ def terminalizeWithOmission
     (visibleCurrentHeads : List Nat)
     (accepted : SignedRef)
     (omissionRef : SignedRef)
+    (approvalRef : Option SignedRef)
     (terminalPhase : ExecutionPhase)
     (next : SignedRef) : CommitObservation :=
   match exactExecution? state.executions accepted, exactOmission? state.omissions omissionRef with
   | some execution, some omission =>
       if omission.execution = accepted ∧ omission.invocation = execution.invocation ∧
           omissionTransitionAllowed execution.phase terminalPhase omission.reason ∧
+          (exactRetainedApprovalEdgeKind? state execution (some omission.reason)
+            approvalRef).isSome ∧
           next.version.docId = accepted.version.docId ∧
           next.version.compositeCommitCid ≠ accepted.version.compositeCommitCid ∧
           next.signerDid = execution.ownerDid ∧ next.authoritative = true then
@@ -333,8 +368,7 @@ def terminalizeWithOmission
           , epoch := execution.epoch
           , phase := terminalPhase
           , previous := some accepted
-          , approval := if omission.reason = .approvalDenied then omission.approval
-              else execution.approval
+          , approval := approvalRef
           , omission := some omissionRef }
         let targetCid := next.version.compositeCommitCid
         if visibleCurrentHeads = [accepted.version.compositeCommitCid] ∧
@@ -418,6 +452,7 @@ structure TerminalEvidenceProjection where
   terminal : ToolExecutionFact
   output : Option ToolOutputFact
   omission : Option ToolOutputOmissionFact
+  approval : Option ToolApprovalFact
   deriving DecidableEq, Repr
 
 def TerminalEvidenceProjection.Valid (projection : TerminalEvidenceProjection) : Prop :=
@@ -426,6 +461,9 @@ def TerminalEvidenceProjection.Valid (projection : TerminalEvidenceProjection) :
   projection.invocation.signed = projection.terminal.invocation ∧
   projection.accepted.ownerDid = projection.terminal.ownerDid ∧
   projection.accepted.epoch = projection.terminal.epoch ∧
+  (retainedApprovalEdgeKind? projection.accepted
+    (projection.omission.map (fun omission => omission.reason))
+    projection.terminal.approval projection.approval).isSome ∧
   match projection.output, projection.omission with
   | some output, none =>
       projection.terminal.output = some output.signed ∧
@@ -439,13 +477,7 @@ def TerminalEvidenceProjection.Valid (projection : TerminalEvidenceProjection) :
       projection.terminal.omission = some omission.signed ∧
       omission.execution = projection.accepted.signed ∧
       omission.invocation = projection.terminal.invocation ∧
-      omissionTransitionAllowed projection.accepted.phase projection.terminal.phase omission.reason ∧
-      match omission.reason with
-      | .approvalDenied =>
-          omission.approval.isSome ∧ projection.terminal.approval = omission.approval
-      | _ =>
-          omission.approval = none ∧
-          projection.terminal.approval = projection.accepted.approval
+      omissionTransitionAllowed projection.accepted.phase projection.terminal.phase omission.reason
   | _, _ => False
 
 instance (projection : TerminalEvidenceProjection) : Decidable projection.Valid := by
@@ -470,16 +502,27 @@ def terminalEvidenceCandidate?
           match exactInvocation? state.invocations terminal.invocation,
               exactExecution? state.executions acceptedRef with
           | some invocation, some accepted =>
-              match terminal.output, terminal.omission with
-              | some outputRef, none =>
-                  match exactOutput? state.outputs outputRef with
-                  | some output => some ⟨invocation, accepted, terminal, some output, none⟩
-                  | none => none
-              | none, some omissionRef =>
-                  match exactOmission? state.omissions omissionRef with
-                  | some omission => some ⟨invocation, accepted, terminal, none, some omission⟩
-                  | none => none
-              | _, _ => none
+              let approval := match terminal.approval with
+                | none => some none
+                | some approvalRef =>
+                    match exactApproval? state.approvals approvalRef with
+                    | some fact => some (some fact)
+                    | none => none
+              match approval with
+              | none => none
+              | some approval =>
+                  match terminal.output, terminal.omission with
+                  | some outputRef, none =>
+                      match exactOutput? state.outputs outputRef with
+                      | some output =>
+                          some ⟨invocation, accepted, terminal, some output, none, approval⟩
+                      | none => none
+                  | none, some omissionRef =>
+                      match exactOmission? state.omissions omissionRef with
+                      | some omission =>
+                          some ⟨invocation, accepted, terminal, none, some omission, approval⟩
+                      | none => none
+                  | _, _ => none
           | _, _ => none
       | none => none
   | none => none
@@ -502,8 +545,8 @@ def DeniedTerminalProjection.Valid (projection : DeniedTerminalProjection) : Pro
   projection.evidence.Valid ∧
   projection.evidence.output = none ∧
   projection.evidence.omission = some projection.omission ∧
+  projection.evidence.approval = some projection.approval ∧
   projection.omission.reason = .approvalDenied ∧
-  projection.omission.approval = some projection.approval.signed ∧
   projection.evidence.terminal.approval = some projection.approval.signed ∧
   projection.approval.decision = .denied ∧
   projection.approval.execution = projection.evidence.accepted.signed ∧
@@ -519,11 +562,8 @@ def deniedTerminalCandidate?
   | some evidence =>
       match evidence.omission with
       | some omission =>
-          match omission.approval with
-          | some approvalRef =>
-              match exactApproval? state.approvals approvalRef with
-              | some approval => some ⟨evidence, omission, approval⟩
-              | none => none
+          match evidence.approval with
+          | some approval => some ⟨evidence, omission, approval⟩
           | none => none
       | none => none
   | none => none

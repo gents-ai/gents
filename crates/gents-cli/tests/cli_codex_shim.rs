@@ -517,6 +517,7 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
                 AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
                     agent_did
+                    requester_did
                     behavior_id
                     status
                     started
@@ -534,6 +535,11 @@ async fn codex_shim_protocol_turn_streams_gents_response() -> Result<()> {
     assert_eq!(
         session.get("agent_did").and_then(Value::as_str),
         Some(agent_did.as_str())
+    );
+    assert_eq!(
+        session.get("requester_did").and_then(Value::as_str),
+        Some(agent_did.as_str()),
+        "Codex session ingest must bind the node principal used by its requests"
     );
     let expected_behavior_id = format!("{agent_did}:default");
     assert_eq!(
@@ -1105,6 +1111,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         format!(
             r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}", started: "2026-01-01T00:00:00Z", status: "active"
             }}) {{ _docID }} }}"#,
             s = escape_graphql_string(&turned_session_id),
@@ -1114,6 +1121,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         format!(
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "{r}", agent_did: "{agent_did}", behavior_id: "{behavior_id}",
+                requester_did: "{agent_did}",
                 session_id: "{s}", metadata: "{{\"codex_shim\":{{}}}}",
                 execution_origin: "interactive", created_at: "2026-01-01T00:00:00Z"
             }}) {{ _docID }} }}"#,
@@ -1125,6 +1133,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         format!(
             r#"mutation {{ create_AgentConversation(input: {{
                 session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}", title: "Earlier Codex thread", title_source: "user",
                 status: "active", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z"
             }}) {{ _docID }} }}"#,
@@ -1143,6 +1152,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &format!(
                 r#"mutation {{ create_AgentSession(input: {{
                 session_id: "{s}", agent_name: "{behavior_id}", agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}", started: "2026-01-01T00:00:00Z", status: "active"
             }}) {{ _docID }} }}"#,
                 s = escape_graphql_string(&zero_turn_session_id),
@@ -1459,6 +1469,7 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
                     session_id: "{session}",
                     agent_name: "{agent_name}",
                     agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
                     started: "2026-01-01T00:00:00Z",
                     status: "active"
@@ -1479,6 +1490,7 @@ async fn codex_shim_thread_list_excludes_non_codex_sessions() -> Result<()> {
                 create_AgentRequest(input: {{
                     request_id: "{request}",
                     agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
                     session_id: "{session}",
                     metadata: "{{}}",
@@ -1744,6 +1756,32 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
     assert_eq!(forked.thread.turns.len(), 1);
     assert_turn_has_user_text(&forked.thread.turns[0], &prompt);
     assert_turn_has_agent_text(&forked.thread.turns[0], &expected_reply);
+
+    let forked_session = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
+                AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    session_id
+                    agent_did
+                    requester_did
+                }}
+            }}"#,
+                escape_graphql_string(&forked_id),
+            ),
+        ))
+        .await?;
+    let forked_session = first_graphql_row(&forked_session, "AgentSession")?;
+    assert_eq!(
+        forked_session.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        forked_session.get("requester_did").and_then(Value::as_str),
+        Some(agent_did.as_str()),
+        "forked Codex sessions must retain the node requester principal"
+    );
 
     let forked_conversation = serve
         .capturing(graphql_query(
@@ -4823,10 +4861,13 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
                     agent_name: "preexisting",
+                    agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{default_behavior_id}",
                     status: "active"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+                agent_did = escape_graphql_string(&agent_did),
             ),
         ))
         .await?;
@@ -4956,10 +4997,14 @@ async fn codex_shim_rejects_resume_with_mismatched_behavior() -> Result<()> {
                 create_AgentSession(input: {{
                     session_id: "{session_id}",
                     agent_name: "foreign",
+                    agent_did: "{agent_did}",
+                    requester_did: "{agent_did}",
                     behavior_id: "{foreign_behavior_id}",
+                    started: "2026-01-01T00:00:00Z",
                     status: "active"
                 }}) {{ _docID }}
-            }}"#
+            }}"#,
+                agent_did = escape_graphql_string(&agent_did),
             ),
         ))
         .await?;

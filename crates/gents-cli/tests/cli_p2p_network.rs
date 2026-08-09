@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
-use gents::{load_tool_selection, subagent_target_entry, upsert_tool_selection};
+use gents::{load_tool_selection, subagent_target_entry, upsert_tool_selection, KeyIdentity};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -783,6 +783,12 @@ async fn run_cross_deployment_dispatch(allow: bool) -> Result<ToolCallObservatio
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
+    let key_path = init
+        .get("key_path")
+        .and_then(Value::as_str)
+        .context("init output missing key_path")?;
+    let _signing_identity = KeyIdentity::load_or_create(key_path, None)
+        .with_context(|| format!("loading cross-deployment signing key {key_path}"))?;
     let tool_selection_id = init
         .get("tool_selection_id")
         .and_then(Value::as_str)
@@ -796,6 +802,7 @@ async fn run_cross_deployment_dispatch(allow: bool) -> Result<ToolCallObservatio
         &remote_did,
         "remote-research-behavior",
         allow,
+        &agent_did,
     )
     .await?;
 
@@ -840,11 +847,13 @@ async fn configure_remote_subagent_target(
     target_did: &str,
     target_behavior_id: &str,
     allow: bool,
+    agent_did: &str,
 ) -> Result<()> {
     let data_dir = home.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
         .with_storage_backend(StorageBackend::RocksDb)
+        .with_node_identity_did(agent_did)
         .build()
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;

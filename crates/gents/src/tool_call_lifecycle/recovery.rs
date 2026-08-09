@@ -113,6 +113,8 @@ struct RunningToolCallRow {
     #[serde(default)]
     result: Option<String>,
     #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
     completion_notification_delivered_at: Option<String>,
@@ -1570,6 +1572,7 @@ async fn load_running_tool_call_rows_with_filter(
             cancel_policy
             cancel_cause
             result
+            status
             lifecycle_state
             completion_notification_delivered_at
             child_request_id
@@ -1594,7 +1597,8 @@ async fn load_running_tool_call_rows_with_filter(
     let mut rows = Vec::with_capacity(values.len());
     for value in values {
         match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
-            Ok(row) => rows.push(row),
+            Ok(row) if row.status.as_deref() != Some("forkStaging") => rows.push(row),
+            Ok(_) => {}
             Err(error) => {
                 tracing::warn!(
                     doc_id = value
@@ -2499,15 +2503,14 @@ async fn recover_bridge_completed_row(
     let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
     let latency_ms = (now - started_at).num_milliseconds().max(0);
     let escaped_doc_id = escape_graphql_string(&row.doc_id);
-    let escaped_result = escape_graphql_string(child_result);
     super::evidence::terminalize_with_output(
         node,
         &row.doc_id,
         child_result,
-        "bridge_recovery",
         "recover_bridge_completed_with_exact_output",
-        |output| {
+        |output, projection| {
             let output_fields = super::evidence::result_fields_fragment(output);
+            let escaped_result = escape_graphql_string(projection);
             format!(
                 r#"mutation {{
                     update_AgentToolCall(
@@ -2591,21 +2594,20 @@ async fn recover_bridge_failed_row(
             reason,
             failure_class,
         } if !reason.trim().is_empty() => {
-            let failure_fields = format!(
-                r#"result: "{}", tool_failure_class: "{}","#,
-                escape_graphql_string(reason),
-                failure_class.as_str(),
-            );
             super::evidence::terminalize_with_output(
                 node,
                 &row.doc_id,
                 reason,
-                "bridge_failure_recovery",
                 "recover_bridge_failure_with_exact_output",
-                |output| {
+                |output, projection| {
+                    let failure_fields = format!(
+                        r#"result: "{}", tool_failure_class: "{}","#,
+                        escape_graphql_string(projection),
+                        failure_class.as_str(),
+                    );
                     build_mutation(
                         super::evidence::result_fields_fragment(output),
-                        failure_fields.clone(),
+                        failure_fields,
                     )
                 },
             )

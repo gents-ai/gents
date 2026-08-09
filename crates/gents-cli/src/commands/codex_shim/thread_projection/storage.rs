@@ -24,12 +24,13 @@ pub(in crate::commands::codex_shim) async fn ensure_agent_session(
 ) -> Result<()> {
     let agent_name = agent_name(state);
     let behavior_id = behavior_id(state);
-    gents::session::ensure_session_with_behavior_id(
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         state.node.as_ref(),
         session_id,
         &agent_name,
         state.agent_did.as_ref(),
         &behavior_id,
+        Some(state.agent_did.as_ref()),
     )
     .await
     .context("ensuring exact AgentSession document")
@@ -45,18 +46,19 @@ pub(super) async fn load_scoped_session(
     else {
         return Ok(None);
     };
-    if session.agent_did.as_deref() != Some(state.agent_did.as_ref()) {
-        anyhow::bail!(
-            "session {session_id:?} belongs to agent {:?}, not shim agent {:?}",
-            session.agent_did,
-            state.agent_did
-        );
+    // This loader selects Codex roots only. A different owner or behavior may
+    // still be an authorized subagent thread, which `load_codex_thread` checks
+    // through the exact bridge graph after this returns `None`.
+    if session.agent_did.as_deref() != Some(state.agent_did.as_ref())
+        || session.behavior_id.as_deref() != Some(state.behavior_id.as_ref())
+    {
+        return Ok(None);
     }
-    if session.behavior_id.as_deref() != Some(state.behavior_id.as_ref()) {
+    if session.requester_did.as_deref() != Some(state.agent_did.as_ref()) {
         anyhow::bail!(
-            "session {session_id:?} is pinned to behavior {:?}, not shim behavior {:?}",
-            session.behavior_id,
-            state.behavior_id
+            "session {session_id:?} has immutable requester {:?}, not shim principal {:?}",
+            session.requester_did,
+            state.agent_did
         );
     }
     Ok(Some(SessionRow {
@@ -73,7 +75,8 @@ pub(super) async fn list_scoped_sessions(state: &ShimState) -> Result<Vec<Sessio
             AgentSession(
                 filter: {{
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
+                    behavior_id: {{ _eq: "{escaped_behavior_id}" }},
+                    requester_did: {{ _eq: "{escaped_agent_did}" }}
                 }},
                 order: {{ started: DESC }}
             ) {{

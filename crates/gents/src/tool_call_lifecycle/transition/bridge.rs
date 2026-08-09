@@ -40,6 +40,8 @@ impl ToolCallLifecycle {
         let started_at = self
             .started_at
             .ok_or_else(|| anyhow!("bridge_complete called without started_at set"))?;
+        let mut model_projection =
+            super::native::exact_output_projection(&self.node, &output).await?;
         for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
             let now = Utc::now();
             let output_fields = exact_result_fields_fragment(&output);
@@ -61,7 +63,7 @@ impl ToolCallLifecycle {
                     ) {{ _docID }}
                 }}"#,
                 escape_graphql_string(&doc_id),
-                escape_graphql_string(&child_result),
+                escape_graphql_string(&model_projection),
                 self.terminal_persistence_status(None),
                 started_at.to_rfc3339(),
                 self.deadline_at.to_rfc3339(),
@@ -107,6 +109,8 @@ impl ToolCallLifecycle {
                         return Ok(false);
                     };
                     output = next_output;
+                    model_projection =
+                        super::native::exact_output_projection(&self.node, &output).await?;
                 }
                 ExactEvidenceTransitionOutcome::Stale => anyhow::bail!(
                     "AgentToolCall {doc_id} kept changing while binding bridge output"
@@ -213,6 +217,12 @@ impl ToolCallLifecycle {
                 BridgeTerminalEvidence::Output(output)
             }
         };
+        let mut model_projection = match &evidence {
+            BridgeTerminalEvidence::Output(output) => {
+                Some(super::native::exact_output_projection(&self.node, output).await?)
+            }
+            BridgeTerminalEvidence::Omission(_) => None,
+        };
 
         for stale_retry in 0..=crate::retry::DEFRA_DB_CONFLICT_MAX_RETRIES {
             let now = Utc::now();
@@ -222,13 +232,22 @@ impl ToolCallLifecycle {
                     exact_omission_fields_fragment(omission)
                 }
             };
-            let result_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
-                (Some(failure), Some(reason)) if !reason.trim().is_empty() => format!(
+            let result_fields = match (
+                failure_class_for_persist,
+                reason_for_persist.as_deref(),
+                model_projection.as_deref(),
+            ) {
+                (Some(failure), _, Some(projection)) => format!(
+                    r#"result: "{}", tool_failure_class: "{}","#,
+                    escape_graphql_string(projection),
+                    failure.as_str(),
+                ),
+                (Some(failure), Some(reason), None) if !reason.trim().is_empty() => format!(
                     r#"result: "{}", tool_failure_class: "{}","#,
                     escape_graphql_string(reason),
                     failure.as_str(),
                 ),
-                (Some(failure), _) => {
+                (Some(failure), _, None) => {
                     format!(r#"tool_failure_class: "{}","#, failure.as_str())
                 }
                 _ => String::new(),
@@ -330,6 +349,12 @@ impl ToolCallLifecycle {
                             };
                             BridgeTerminalEvidence::Output(output)
                         }
+                    };
+                    model_projection = match &evidence {
+                        BridgeTerminalEvidence::Output(output) => {
+                            Some(super::native::exact_output_projection(&self.node, output).await?)
+                        }
+                        BridgeTerminalEvidence::Omission(_) => None,
                     };
                 }
                 ExactEvidenceTransitionOutcome::Stale => anyhow::bail!(

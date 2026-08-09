@@ -205,7 +205,7 @@ impl DefraSessionHook {
         )
         .await?;
         match evidence {
-            ExactToolCallTerminalEvidence::Output(output) => Ok(output.output_text),
+            ExactToolCallTerminalEvidence::Output(output) => Ok(output.model_projection),
             ExactToolCallTerminalEvidence::Omission(omission) => Ok(omission.detail),
         }
     }
@@ -969,6 +969,85 @@ fn workflow_task_id(index: usize, spec: &WorkflowSpawnSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn oversized_composite_returns_canonical_projection_and_retains_full_output() {
+        let data_path = std::env::temp_dir().join(format!(
+            "gents-oversized-composite-projection-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let signing_identity =
+            crate::test_support::signed_test_identity("gents-oversized-composite-projection");
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(signing_identity.did())
+                .data_path(&data_path)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        crate::ensure_schemas(&node).await.expect("install schemas");
+        let hook = DefraSessionHook::with_identity(
+            node.clone(),
+            "general",
+            signing_identity.did(),
+            crate::hook::FailurePolicy::default(),
+        );
+        let prompt = Message::User {
+            content: vec![UserContent::Text(Text {
+                text: "run oversized composite".to_string(),
+            })],
+        };
+        assert!(matches!(
+            hook.on_completion_call(&prompt, &[]).await,
+            HookAction::Continue
+        ));
+        let session_id = hook.session_id().await.expect("session id");
+        let tool_call_id = "oversized-composite";
+        let mut lifecycle = ToolCallLifecycle::new(
+            node.clone(),
+            "oversized-composite-request".to_string(),
+            session_id.clone(),
+            signing_identity.did().to_string(),
+            tool_call_id.to_string(),
+            1,
+            FAN_OUT_AND_SYNTHESIZE_TOOL_NAME.to_string(),
+            "{}".to_string(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+        );
+        lifecycle.start_running().await.expect("start composite");
+        hook.in_flight_lifecycles
+            .lock()
+            .await
+            .insert(tool_call_id.to_string(), lifecycle);
+
+        let full_output = (0..2_500)
+            .map(|index| format!("workflow-result-{index:04}-{}\n", "x".repeat(32)))
+            .collect::<String>();
+        let live_projection = hook
+            .terminalize_fan_out_composite(&session_id, tool_call_id, Ok(full_output.clone()))
+            .await
+            .expect("terminalize oversized composite");
+        let exact = crate::tool_call_lifecycle::query::load_exact_tool_call_output(
+            &node,
+            &session_id,
+            tool_call_id,
+        )
+        .await
+        .expect("load exact composite output");
+
+        assert_eq!(exact.output_text, full_output);
+        assert_eq!(live_projection, exact.model_projection);
+        assert!(live_projection.len() < exact.output_text.len());
+        assert!(live_projection.starts_with("workflow-result-0000-"));
+        assert!(live_projection.contains(&format!(
+            "[Full output: DefraDB doc {}]",
+            exact.evidence.version.doc_id
+        )));
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(&data_path);
+    }
 
     /// Regression for the spawn-time local-behavior guard: a missing local target
     /// at spawn time must persist `serviceUnavailable` (matching the invocation

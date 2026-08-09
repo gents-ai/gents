@@ -14,6 +14,15 @@ pub(crate) struct LeanToolTerminalEvidenceCase {
     pub(crate) mutually_exclusive: bool,
     pub(crate) owner_preserved: bool,
     pub(crate) phase_reason_valid: bool,
+    pub(crate) approval_edge_kind: String,
     pub(crate) exact_approval_bound: bool,
     pub(crate) immutable_noop: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanOmissionPhaseMatrixCase {
+    pub(crate) reason: String,
+    pub(crate) source_phase: String,
+    pub(crate) terminal_phase: String,
+    pub(crate) allowed: bool,
 }

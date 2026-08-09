@@ -48,15 +48,17 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
         .await
         .expect("foreground wait should complete")
         .expect("foreground task should not panic");
-    let result = skip_reason_json(action);
-    assert_eq!(result["ok"], true);
-    assert_eq!(result["await_mode"], "foreground");
-    assert_eq!(result["status"], "completed");
-    assert_eq!(result["final_response"], "foreground final answer");
-
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg").await;
+    let result = skip_reason(action);
     assert_eq!(tool.lifecycle_state.as_deref(), Some("completed"));
-    assert_eq!(tool.result.as_deref(), Some("foreground final answer"));
+    assert_eq!(Some(result.as_str()), tool.result.as_deref());
+    super::super::assert_exact_result_projection(
+        &result,
+        "foreground final answer",
+        tool.result_doc_id
+            .as_deref()
+            .expect("foreground child exact result document"),
+    );
 }
 
 /// Parent-deadline expiry takes the licensed deadline transition on the
@@ -92,16 +94,12 @@ async fn foreground_spawn_subagent_parent_deadline_times_out_bridge() {
             &args,
         )
         .await;
-    let result = skip_reason_json(action);
-    assert_eq!(result["ok"], false);
-    assert_eq!(result["await_mode"], "foreground");
-    assert_eq!(result["status"], "dead");
-    assert!(result["error"]["reason"]
-        .as_str()
-        .is_some_and(|reason| reason.contains("parent request deadline exceeded")));
-
+    let result = skip_reason(action);
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg-deadline").await;
     assert_eq!(tool.lifecycle_state.as_deref(), Some("timedOut"));
+    assert_eq!(Some(result.as_str()), tool.result.as_deref());
+    assert!(result.contains("tool call deadline exceeded"));
+    assert!(tool.result_doc_id.is_none());
 }
 
 #[tokio::test]
@@ -154,13 +152,12 @@ async fn foreground_spawn_subagent_cancellation_cascades_to_child_and_unblocks_w
         .await
         .expect("foreground wait should unblock after cancellation")
         .expect("foreground task should not panic");
-    let result = skip_reason_json(action);
-    assert_eq!(result["ok"], false);
-    assert_eq!(result["await_mode"], "foreground");
-    assert_eq!(result["status"], "interrupted");
-
+    let result = skip_reason(action);
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-fg-cancel").await;
     assert_eq!(tool.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(Some(result.as_str()), tool.result.as_deref());
+    assert_eq!(result, "tool call cancelled");
+    assert!(tool.result_doc_id.is_none());
     let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child.request_id)
         .await
         .unwrap();
@@ -243,7 +240,7 @@ async fn foreground_spawn_subagent_maps_child_terminal_failures() {
         ("superseded", "superseded", "failed", None),
     ];
 
-    for (child_state, expected_status, expected_tool_state, failure_reason) in cases {
+    for (child_state, _expected_status, expected_tool_state, failure_reason) in cases {
         let test_name = format!("foreground_spawn_terminal_{child_state}");
         let internal_call_id = format!("internal-spawn-terminal-{child_state}");
         let fixture = setup_spawn_fixture(&test_name, vec![CHILD_BEHAVIOR_ID], 0, true).await;
@@ -283,24 +280,38 @@ async fn foreground_spawn_subagent_maps_child_terminal_failures() {
             .await
             .expect("foreground wait should complete after child terminal")
             .expect("foreground task should not panic");
-        let result = skip_reason_json(action);
-        assert_eq!(result["ok"], false);
-        assert_eq!(result["await_mode"], "foreground");
-        assert_eq!(result["status"], expected_status);
-        if let Some(reason) = failure_reason {
-            assert_eq!(result["error"]["reason"], reason);
-            assert_eq!(result["error"]["failure_class"], "external");
-        }
-
+        let result = skip_reason(action);
         let tool = fetch_tool_call(db.node.as_ref(), &session_id, &internal_call_id).await;
         assert_eq!(
             tool.lifecycle_state.as_deref(),
             Some(expected_tool_state),
             "unexpected tool state for child terminal {child_state}"
         );
-        if let Some(reason) = failure_reason {
-            assert_eq!(tool.result.as_deref(), Some(reason));
-            assert_eq!(tool.tool_failure_class.as_deref(), Some("external"));
+        match (child_state, failure_reason) {
+            ("failed", Some(reason)) => {
+                super::super::assert_exact_result_projection(
+                    &result,
+                    reason,
+                    tool.result_doc_id
+                        .as_deref()
+                        .expect("failed child exact result document"),
+                );
+                assert_eq!(Some(result.as_str()), tool.result.as_deref());
+                assert_eq!(tool.tool_failure_class.as_deref(), Some("external"));
+            }
+            ("dead", _) => {
+                assert_eq!(result, "child request reached the dead terminal state");
+                assert!(tool.result_doc_id.is_none());
+            }
+            ("interrupted", _) => {
+                assert_eq!(result, "child request was interrupted");
+                assert!(tool.result_doc_id.is_none());
+            }
+            ("superseded", _) => {
+                assert_eq!(result, "child request was superseded");
+                assert!(tool.result_doc_id.is_none());
+            }
+            other => panic!("unhandled child terminal case: {other:?}"),
         }
     }
 }

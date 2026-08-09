@@ -56,11 +56,13 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
     let held = gents::config_client::list_held_tool_calls(&access, scope_did.as_deref())
         .await
         .context("listing held tool calls")?;
-    let target = held
+    let matching = held
         .iter()
-        .find(|call| call.tool_call_id == args.tool_call_id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
+        .filter(|call| call.tool_call_id == args.tool_call_id)
+        .collect::<Vec<_>>();
+    let [target] = matching.as_slice() else {
+        if matching.is_empty() {
+            return Err(anyhow::anyhow!(
                 "tool call {:?} is not awaiting approval ({} call(s) currently held{})",
                 args.tool_call_id,
                 held.len(),
@@ -68,8 +70,14 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
                     .as_deref()
                     .map(|did| format!(" for {did}"))
                     .unwrap_or_default()
-            )
-        })?;
+            ));
+        }
+        anyhow::bail!(
+            "tool call {:?} matches {} physical held rows; scope the command to a unique agent or session",
+            args.tool_call_id,
+            matching.len()
+        );
+    };
     let agent_did = target
         .agent_did
         .clone()
@@ -77,10 +85,13 @@ async fn approve(args: ToolsApproveArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("held row is missing agent_did; pass --agent-did"))?;
     let approver_did = match args.approver_did.as_deref() {
         Some(did) => did.to_string(),
-        None => resolve_agent_did(args.home.as_deref(), None)
-            .context("no --approver-did given and no home agent identity to default to")?,
+        None => access
+            .known_mutation_signer_did()
+            .await
+            .context("resolving the database signer for the approval fact")?,
     };
     let verdict = gents::config_client::ToolApprovalVerdict {
+        tool_call_doc_id: target.doc_id.clone(),
         tool_call_id: args.tool_call_id.clone(),
         agent_did: agent_did.clone(),
         request_id: target.request_id.clone(),

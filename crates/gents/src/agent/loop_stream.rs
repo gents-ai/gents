@@ -698,9 +698,9 @@ where
                                 )
                                 .await;
 
-                                if let Some(hook) = hook.as_ref() {
-                                    let result_action = hook
-                                        .on_tool_result(
+                                let persisted_projection = if let Some(hook) = hook.as_ref() {
+                                    let (result_action, model_projection) = hook
+                                        .on_tool_result_with_projection(
                                             &tool_name,
                                             tool_call.call_id.clone(),
                                             &internal_call_id,
@@ -719,15 +719,35 @@ where
                                             },
                                         )))?;
                                     }
+                                    Some(model_projection.ok_or_else(|| {
+                                        StreamingError::Prompt(Box::new(
+                                            PromptError::PromptCancelled {
+                                                chat_history: rig_compat::to_rig_messages(
+                                                    &error_chat_history(&history, &new_messages),
+                                                ),
+                                                reason: "persisted tool result did not return its exact model projection".to_string(),
+                                            },
+                                        ))
+                                    })?)
+                                } else {
+                                    None
+                                };
+
+                                match persisted_projection {
+                                    Some(model_projection) => model_projection,
+                                    None => {
+                                        // A loop without a durable hook still
+                                        // bounds the typed model-facing text.
+                                        // Durable loops must use the projection
+                                        // derived from their exact signed fact.
+                                        let (bounded, _, _) = truncate_text(
+                                            outcome.model_facing_text(),
+                                            tool_result_truncation_mode(&tool_name),
+                                            &TruncationLimits::default(),
+                                        );
+                                        bounded
+                                    }
                                 }
-                                // The typed outcome's model-facing accessor is
-                                // the only text that may thread to the model.
-                                let (bounded, _, _) = truncate_text(
-                                    outcome.model_facing_text(),
-                                    tool_result_truncation_mode(&tool_name),
-                                    &TruncationLimits::default(),
-                                );
-                                bounded
                             }
                         };
 

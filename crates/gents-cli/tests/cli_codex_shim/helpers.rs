@@ -718,6 +718,7 @@ pub(super) async fn seed_authorized_subagent_link(
                 session_id: "{child_session_id}",
                 agent_name: "reviewer",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{child_behavior_id}",
                 started: "{now}",
                 status: "active"
@@ -725,6 +726,7 @@ pub(super) async fn seed_authorized_subagent_link(
             create_AgentRequest(input: {{
                 request_id: "{child_request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{child_behavior_id}",
                 session_id: "{child_session_id}",
                 content: "Inspect the parent change",

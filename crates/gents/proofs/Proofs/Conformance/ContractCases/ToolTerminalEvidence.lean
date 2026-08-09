@@ -18,9 +18,33 @@ structure ToolTerminalEvidenceCase where
   mutuallyExclusive : Bool
   ownerPreserved : Bool
   phaseReasonValid : Bool
+  approvalEdgeKind : String
   exactApprovalBound : Bool
   immutableNoop : Bool
   deriving Repr
+
+structure OmissionPhaseMatrixCase where
+  reason : String
+  sourcePhase : String
+  terminalPhase : String
+  allowed : Bool
+  deriving Repr
+
+private def executionPhases : List ExecutionPhase :=
+  [.pending, .awaitingApproval, .running, .completed, .failed, .timedOut, .cancelled]
+
+private def omissionReasons : List OmissionReason :=
+  [.preDispatchFailure, .approvalDenied, .executionLost, .recoveryFailure,
+   .childDead, .childSuperseded, .timedOut, .cancelled]
+
+def omissionPhaseMatrixCases : List OmissionPhaseMatrixCase :=
+  omissionReasons.flatMap fun reason =>
+    executionPhases.flatMap fun sourcePhase =>
+      executionPhases.map fun terminalPhase =>
+        { reason := reason.toContract
+        , sourcePhase := sourcePhase.toContract
+        , terminalPhase := terminalPhase.toContract
+        , allowed := decide (omissionTransitionAllowed sourcePhase terminalPhase reason) }
 
 private def signed (docId cid signer : Nat) : ToolFact.SignedRef :=
   { version := { docId := docId, compositeCommitCid := cid }
@@ -39,21 +63,20 @@ private def acceptedState (accepted : ToolFact.SignedRef) (phase : ExecutionPhas
 
 private def omissionCommit
     (state : State) (accepted omission : ToolFact.SignedRef)
-    (reason : OmissionReason) (approval : Option ToolFact.SignedRef := none) :
+    (reason : OmissionReason) :
     CommitObservation :=
   commitOmission state []
     { key := omission.version.docId
     , invocation := invocationRef
     , execution := accepted
-    , reason := reason
-    , approval := approval }
+    , reason := reason }
     omission
 
 private def terminalCommit
     (state : State) (accepted omission terminal : ToolFact.SignedRef)
-    (phase : ExecutionPhase) : CommitObservation :=
+    (phase : ExecutionPhase) (approval : Option ToolFact.SignedRef := none) : CommitObservation :=
   terminalizeWithOmission state [accepted.version.compositeCommitCid]
-    accepted omission phase terminal
+    accepted omission approval phase terminal
 
 private def runningRef : ToolFact.SignedRef := signed 200 20 8
 private def outputRef : ToolFact.SignedRef := signed 300 30 8
@@ -65,6 +88,8 @@ private def outputState : State :=
     , invocation := invocationRef
     , execution := runningRef
     , outputHash := 202
+    , truncationContractHash := 1
+    , modelProjectionHash := 203
     , fullOutput := true }
     outputRef).state
 private def failedOutputCommit : CommitObservation :=
@@ -94,7 +119,7 @@ private def timeoutOmissionReplay : CommitObservation :=
     timeoutOmission
 private def timeoutTerminalReplay : CommitObservation :=
   terminalizeWithOmission timeoutState [timeoutTerminal.version.compositeCommitCid]
-    timeoutAccepted timeoutOmission .timedOut timeoutTerminal
+    timeoutAccepted timeoutOmission none .timedOut timeoutTerminal
 private def competingTimeoutOmissionProposal : CommitObservation :=
   commitOmission timeoutAcceptedState [401, 402]
     { key := timeoutOmission.version.docId
@@ -112,6 +137,29 @@ private def heldTimeoutOmissionCommit : CommitObservation :=
 private def heldTimeoutCommit : CommitObservation :=
   terminalCommit heldTimeoutOmissionCommit.state heldTimeoutAccepted heldTimeoutOmission
     heldTimeoutTerminal .timedOut
+
+private def approvedHeld : ToolFact.SignedRef := signed 210 52 8
+private def approvedDecision : ToolFact.SignedRef := signed 501 53 9
+private def approvedRunning : ToolFact.SignedRef := signed 210 54 8
+private def approvedOmission : ToolFact.SignedRef := signed 410 55 8
+private def approvedTerminal : ToolFact.SignedRef := signed 210 56 8
+private def approvedHeldState : State := acceptedState approvedHeld .awaitingApproval
+private def approvedDecisionCommit : CommitObservation :=
+  commitApproval approvedHeldState []
+    { key := 501
+    , invocation := invocationRef
+    , execution := approvedHeld
+    , decision := .approved
+    , reasonHash := 506 }
+    approvedDecision
+private def approvedRunningCommit : CommitObservation :=
+  approveExecution approvedDecisionCommit.state [approvedHeld.version.compositeCommitCid]
+    approvedHeld approvedDecision approvedRunning
+private def approvedOmissionCommit : CommitObservation :=
+  omissionCommit approvedRunningCommit.state approvedRunning approvedOmission .timedOut
+private def approvedTerminalCommit : CommitObservation :=
+  terminalCommit approvedOmissionCommit.state approvedRunning approvedOmission approvedTerminal
+    .timedOut (some approvedDecision)
 
 private def cancellationAccepted : ToolFact.SignedRef := signed 202 24 8
 private def cancellationOmission : ToolFact.SignedRef := signed 402 42 8
@@ -170,19 +218,31 @@ private def deniedApprovalCommit : CommitObservation :=
     deniedApproval
 private def deniedOmissionCommit : CommitObservation :=
   omissionCommit deniedApprovalCommit.state deniedAccepted deniedOmission .approvalDenied
-    (some deniedApproval)
 private def deniedCommit : CommitObservation :=
   terminalCommit deniedOmissionCommit.state deniedAccepted deniedOmission deniedTerminal .failed
+    (some deniedApproval)
 private def deniedState : State := deniedCommit.state
 
 private def wrongPhaseReason : CommitObservation :=
   omissionCommit timeoutAcceptedState timeoutAccepted timeoutOmission .preDispatchFailure
 
+private structure ProjectionFlags where
+  evidenceKind : String
+  terminalPhase : String
+  omissionReason : String
+  exactProjection : Bool
+  evidenceClosed : Bool
+  mutuallyExclusive : Bool
+  ownerPreserved : Bool
+  phaseReasonValid : Bool
+  approvalEdgeKind : String
+  exactApprovalBound : Bool
+
 private def projectionFlags
-    (state : State) (terminal : ToolFact.SignedRef) :
-    String × String × String × Bool × Bool × Bool × Bool × Bool × Bool :=
+    (state : State) (terminal : ToolFact.SignedRef) : ProjectionFlags :=
   match projectTerminalEvidence state terminal with
-  | none => ("none", "", "", false, false, false, false, false, false)
+  | none =>
+      ⟨"none", "", "", false, false, false, false, false, "", false⟩
   | some projection =>
       let evidenceKind := if projection.output.isSome then "output" else "omission"
       let reason := match projection.omission with
@@ -196,17 +256,24 @@ private def projectionFlags
             decide (omissionTransitionAllowed projection.accepted.phase
               projection.terminal.phase omission.reason)
         | _, _ => false
-      ( evidenceKind
-      , projection.terminal.phase.toContract
-      , reason
-      , true
-      , (projection.output.isSome && projection.omission.isNone) ||
+      let approvalKind :=
+        match retainedApprovalEdgeKind? projection.accepted
+            (projection.omission.map (fun omission => omission.reason))
+            projection.terminal.approval projection.approval with
+        | some kind => kind.toContract
+        | none => ""
+      { evidenceKind := evidenceKind
+      , terminalPhase := projection.terminal.phase.toContract
+      , omissionReason := reason
+      , exactProjection := true
+      , evidenceClosed := (projection.output.isSome && projection.omission.isNone) ||
           (projection.output.isNone && projection.omission.isSome)
-      , !(projection.output.isSome && projection.omission.isSome)
-      , projection.terminal.ownerDid == projection.accepted.ownerDid &&
+      , mutuallyExclusive := !(projection.output.isSome && projection.omission.isSome)
+      , ownerPreserved := projection.terminal.ownerDid == projection.accepted.ownerDid &&
           projection.terminal.epoch == projection.accepted.epoch
-      , phaseReasonValid
-      , (projectDeniedTerminal state terminal).isSome )
+      , phaseReasonValid := phaseReasonValid
+      , approvalEdgeKind := approvalKind
+      , exactApprovalBound := projection.approval.isSome }
 
 private def caseOf
     (name operation : String) (observation : CommitObservation)
@@ -216,15 +283,16 @@ private def caseOf
   { name := name
   , operation := operation
   , disposition := observation.disposition.toContract
-  , evidenceKind := flags.1
-  , terminalPhase := flags.2.1
-  , omissionReason := flags.2.2.1
-  , exactProjection := flags.2.2.2.1
-  , evidenceClosed := flags.2.2.2.2.1
-  , mutuallyExclusive := flags.2.2.2.2.2.1
-  , ownerPreserved := flags.2.2.2.2.2.2.1
-  , phaseReasonValid := flags.2.2.2.2.2.2.2.1
-  , exactApprovalBound := flags.2.2.2.2.2.2.2.2
+  , evidenceKind := flags.evidenceKind
+  , terminalPhase := flags.terminalPhase
+  , omissionReason := flags.omissionReason
+  , exactProjection := flags.exactProjection
+  , evidenceClosed := flags.evidenceClosed
+  , mutuallyExclusive := flags.mutuallyExclusive
+  , ownerPreserved := flags.ownerPreserved
+  , phaseReasonValid := flags.phaseReasonValid
+  , approvalEdgeKind := flags.approvalEdgeKind
+  , exactApprovalBound := flags.exactApprovalBound
   , immutableNoop := immutableNoop }
 
 def toolTerminalEvidenceCases : List ToolTerminalEvidenceCase :=
@@ -236,6 +304,8 @@ def toolTerminalEvidenceCases : List ToolTerminalEvidenceCase :=
       timeoutCommit timeoutState timeoutTerminal false
   , caseOf "held_timeout_has_typed_omission_without_verdict" "terminalize_with_omission"
       heldTimeoutCommit heldTimeoutCommit.state heldTimeoutTerminal false
+  , caseOf "approved_running_timeout_retains_call_edge" "terminalize_with_omission"
+      approvedTerminalCommit approvedTerminalCommit.state approvedTerminal false
   , caseOf "cancellation_has_typed_omission" "terminalize_with_omission"
       cancellationCommit cancellationCommit.state cancellationTerminal false
   , caseOf "predispatch_failure_has_typed_omission" "terminalize_with_omission"
@@ -267,6 +337,7 @@ theorem toolTerminalEvidenceCases_evidence_pinned :
       , ("failed_output_terminal_replay_is_idempotent", "observed_identical", "output", "failed", "")
       , ("timeout_has_typed_omission", "applied", "omission", "timed_out", "timed_out")
       , ("held_timeout_has_typed_omission_without_verdict", "applied", "omission", "timed_out", "timed_out")
+      , ("approved_running_timeout_retains_call_edge", "applied", "omission", "timed_out", "timed_out")
       , ("cancellation_has_typed_omission", "applied", "omission", "cancelled", "cancelled")
       , ("predispatch_failure_has_typed_omission", "applied", "omission", "failed", "pre_dispatch_failure")
       , ("execution_loss_has_typed_omission", "applied", "omission", "failed", "execution_lost")
@@ -296,17 +367,23 @@ theorem toolTerminalEvidenceCases_invariants_pinned :
       , (true, true, true, true, true)
       , (true, true, true, true, true)
       , (true, true, true, true, true)
+      , (true, true, true, true, true)
       , (false, false, false, false, false)
       , (false, false, false, false, false)
       , (true, true, true, true, true) ] := by
   native_decide
 
 theorem toolTerminalEvidenceCases_binding_pinned :
-    toolTerminalEvidenceCases.map (fun row => (row.exactApprovalBound, row.immutableNoop)) =
-      [ (false, false), (false, true), (false, false), (false, false)
-      , (false, false), (false, false), (false, false), (false, false)
-      , (false, false), (false, false), (true, false), (false, true)
-      , (false, false), (false, true), (false, true) ] := by
+    toolTerminalEvidenceCases.map (fun row =>
+      (row.approvalEdgeKind, row.exactApprovalBound, row.immutableNoop)) =
+      [ ("absent", false, false), ("absent", false, true)
+      , ("absent", false, false), ("absent", false, false)
+      , ("approved_running_call_edge", true, false)
+      , ("absent", false, false), ("absent", false, false)
+      , ("absent", false, false), ("absent", false, false)
+      , ("absent", false, false), ("absent", false, false)
+      , ("denial_call_edge", true, false), ("absent", false, true)
+      , ("", false, false), ("", false, true), ("absent", false, true) ] := by
   native_decide
 
 end Conformance.ContractCases

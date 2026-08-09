@@ -16,6 +16,12 @@ where
     }
 }
 
+async fn terminalize_background_native_timeout(
+    lifecycle: &mut ToolCallLifecycle,
+) -> anyhow::Result<bool> {
+    lifecycle.timeout().await
+}
+
 impl DefraSessionHook {
     pub(super) async fn persist_background_tool_call(
         &self,
@@ -181,7 +187,7 @@ impl DefraSessionHook {
                 Ok(outcome) => match outcome {
                     crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
                         let won_terminal_compare =
-                            match lifecycle.bridge_failure(ChildTerminal::Dead).await {
+                            match terminalize_background_native_timeout(&mut lifecycle).await {
                                 Ok(updated) => updated,
                                 Err(error) => {
                                     tracing::warn!(
@@ -719,7 +725,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod ownership_projection_tests {
-    use super::project_background_completion_if_owned;
+    use super::{project_background_completion_if_owned, terminalize_background_native_timeout};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -753,5 +759,122 @@ mod ownership_projection_tests {
 
         assert!(matches!(output, Some(Ok(()))));
         assert!(projected.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn background_native_timeout_persists_exact_timed_out_omission() {
+        use crate::tool_call_lifecycle::{DurableToolCallTerminalEvidence, ToolCallLifecycle};
+
+        let data_path = std::env::temp_dir().join(format!(
+            "gents-background-native-timeout-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let identity = crate::test_support::signed_test_identity("background-native-timeout");
+        let agent_did = identity.did().to_string();
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
+                .with_node_identity_did(&agent_did)
+                .build()
+                .await
+                .expect("build signed timeout test node"),
+        );
+        crate::ensure_schemas(&node).await.expect("install schemas");
+
+        let session_id = "background-native-timeout-session";
+        let tool_call_id = "background-native-timeout-call";
+        let deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+        let mut lifecycle = ToolCallLifecycle::new_background_tool(
+            node.clone(),
+            "background-native-timeout-request".to_string(),
+            session_id.to_string(),
+            agent_did.clone(),
+            tool_call_id.to_string(),
+            1,
+            "bash".to_string(),
+            "{}".to_string(),
+            deadline,
+        );
+        lifecycle
+            .start_running()
+            .await
+            .expect("start background native execution");
+
+        assert!(
+            terminalize_background_native_timeout(&mut lifecycle)
+                .await
+                .expect("terminalize background native timeout"),
+            "timeout writer must win the running-state compare"
+        );
+
+        let response = node
+            .execute(&format!(
+                r#"{{
+                    AgentToolCall(
+                        filter: {{
+                            session_id: {{ _eq: "{session_id}" }},
+                            tool_call_id: {{ _eq: "{tool_call_id}" }}
+                        }},
+                        limit: 1
+                    ) {{
+                        lifecycle_state status cancel_cause child_request_id
+                        omission_doc_id omission_composite_commit_cid omission_signer_did
+                    }}
+                }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .expect("timed-out background tool row");
+        assert_eq!(row["lifecycle_state"], "timedOut");
+        assert_eq!(row["status"], "completionPending:deadline_exceeded");
+        assert_eq!(row["cancel_cause"], "deadline");
+        assert!(row["child_request_id"].is_null());
+
+        let evidence = crate::tool_call_lifecycle::load_durable_tool_call_terminal_evidence(
+            node.as_ref(),
+            session_id,
+            tool_call_id,
+        )
+        .await
+        .expect("load verified terminal timeout evidence");
+        let DurableToolCallTerminalEvidence::Omission {
+            terminal_phase,
+            reason,
+            evidence,
+            ..
+        } = evidence
+        else {
+            panic!("background native timeout must bind an omission fact");
+        };
+        assert_eq!(terminal_phase, "timedOut");
+        assert_eq!(reason, "timedOut");
+        assert_ne!(reason, "childDead");
+        assert_eq!(
+            row["omission_doc_id"].as_str(),
+            Some(evidence.version.doc_id.as_str())
+        );
+        assert_eq!(
+            row["omission_composite_commit_cid"].as_str(),
+            Some(evidence.version.composite_commit_cid.as_str())
+        );
+        assert_eq!(
+            row["omission_signer_did"].as_str(),
+            Some(evidence.signer_did.as_str())
+        );
+        assert_eq!(
+            node.verified_block_signer_did(&evidence.version.composite_commit_cid)
+                .await
+                .expect("verify omission signer"),
+            evidence.signer_did
+        );
+
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(data_path);
     }
 }

@@ -4,9 +4,26 @@ use serde::Deserialize;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 use crate::truncation::{
-    truncate_text, DefraSpillTruncator, TruncationLimits, TruncationMode, TruncationResult,
-    TruncationTrigger, Truncator,
+    truncate_text, validate_model_projection_limits, validate_model_projection_metadata,
+    DefraSpillTruncator, TruncationLimits, TruncationMode, TruncationResult, Truncator,
 };
+
+pub(super) fn resolve_exact_replay<T>(
+    mut rows: Vec<T>,
+    doc_id: impl Fn(&T) -> &str,
+    matches: impl Fn(&T) -> bool,
+) -> Result<Option<T>> {
+    rows.sort_by(|left, right| doc_id(left).cmp(doc_id(right)));
+    match rows.len() {
+        0 => Ok(None),
+        1 if matches(&rows[0]) => Ok(rows.pop()),
+        1 => anyhow::bail!(
+            "AgentToolResult result_key conflicts with existing physical fact {}",
+            doc_id(&rows[0])
+        ),
+        count => anyhow::bail!("AgentToolResult result_key resolves to {count} physical facts"),
+    }
+}
 
 #[derive(Deserialize)]
 struct ExistingToolResultFact {
@@ -250,6 +267,7 @@ impl DefraSpillTruncator {
         conversation_doc_id: Option<&str>,
         model_output_truncated: bool,
     ) -> Result<crate::SignedDocumentVersionRef> {
+        validate_model_projection_metadata(output, model_output_truncated, metadata)?;
         let (tool_call_key, call) = self.exact_tool_call().await?;
         // The exact accepted execution version is the idempotency scope. A
         // mutable execution document may gain another live commit (for
@@ -292,11 +310,6 @@ impl DefraSpillTruncator {
                 && row.truncation_metadata == metadata
                 && row.conversation_doc_id == conversation_doc_id.unwrap_or_default()
         };
-        let matching = |rows: Vec<ExistingToolResultFact>| -> Option<ExistingToolResultFact> {
-            let mut rows = rows.into_iter().filter(&matches).collect::<Vec<_>>();
-            rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
-            rows.into_iter().next()
-        };
         let load_existing = || async {
             let response = self.node.execute(&lookup).await;
             if response.has_errors() {
@@ -316,7 +329,9 @@ impl DefraSpillTruncator {
                     .unwrap_or_default(),
             )
         };
-        if let Some(existing) = matching(load_existing().await?) {
+        if let Some(existing) =
+            resolve_exact_replay(load_existing().await?, |row| &row.doc_id, &matches)?
+        {
             return verify_existing_result_fact(&self.node, existing).await;
         }
         let mutation = format!(
@@ -345,7 +360,9 @@ impl DefraSpillTruncator {
             match execute_mutation_with_retry(&self.node, &mutation, "spill_tool_output").await {
                 Ok(response) => response,
                 Err(create_error) => {
-                    if let Some(existing) = matching(load_existing().await?) {
+                    if let Some(existing) =
+                        resolve_exact_replay(load_existing().await?, |row| &row.doc_id, &matches)?
+                    {
                         return verify_existing_result_fact(&self.node, existing).await;
                     }
                     return Err(create_error);
@@ -366,15 +383,12 @@ impl DefraSpillTruncator {
             "spilled full tool output to DefraDB"
         );
 
-        let rows = load_existing().await?;
-        let existing = rows
-            .into_iter()
-            .find(|row| row.doc_id == doc_id)
+        let existing = resolve_exact_replay(load_existing().await?, |row| &row.doc_id, &matches)?
             .ok_or_else(|| {
-                anyhow::anyhow!("created AgentToolResult disappeared during verification")
-            })?;
-        if !matches(&existing) {
-            anyhow::bail!("created AgentToolResult payload changed during verification");
+            anyhow::anyhow!("created AgentToolResult disappeared during verification")
+        })?;
+        if existing.doc_id != doc_id {
+            anyhow::bail!("created AgentToolResult changed physical identity during verification");
         }
         let exact = verify_existing_result_fact(&self.node, existing).await?;
         if exact.version.doc_id != doc_id {
@@ -394,27 +408,13 @@ impl Truncator for DefraSpillTruncator {
         limits: &TruncationLimits,
         conversation_doc_id: Option<&str>,
     ) -> Result<TruncationResult> {
+        validate_model_projection_limits(limits)?;
         let original_lines = output.lines().count();
         let original_bytes = output.len();
 
         let (text, trigger, truncated) = truncate_text(output, mode, limits);
 
-        let metadata = serde_json::json!({
-            "truncated": truncated,
-            "truncated_by": trigger.map(|value| match value {
-                TruncationTrigger::Lines => "lines",
-                TruncationTrigger::Bytes => "bytes",
-            }),
-            "mode": match mode {
-                TruncationMode::Head => "head",
-                TruncationMode::Tail => "tail",
-            },
-            "original_lines": original_lines,
-            "original_bytes": original_bytes,
-            "max_lines": limits.max_lines,
-            "max_bytes": limits.max_bytes,
-        })
-        .to_string();
+        let metadata = crate::truncation::model_projection_metadata(output, mode, limits);
         let spill_ref = self
             .spill(
                 tool_name,
@@ -427,7 +427,10 @@ impl Truncator for DefraSpillTruncator {
             .await?;
         let spill_doc_id = Some(spill_ref.version.doc_id.clone());
 
-        let text = if let Some(ref doc_id) = spill_doc_id {
+        let text = if truncated {
+            let doc_id = spill_doc_id
+                .as_deref()
+                .expect("successful full-output retention returns an exact document ID");
             format!("{}\n[Full output: DefraDB doc {}]", text, doc_id)
         } else {
             text

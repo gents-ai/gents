@@ -621,8 +621,9 @@ pub(crate) async fn authenticated_graphql_client(
 ) -> Result<AuthenticatedGraphql> {
     let identity = load_config_identity(home_dir).with_context(|| {
         format!(
-            "remote GraphQL access requires an initialized local identity in {}; semantic DID fields do not authenticate DefraDB",
-            home_dir.display()
+            "remote GraphQL access requires an initialized local identity in {}; semantic DID fields do not authenticate DefraDB\n{}",
+            home_dir.display(),
+            graphql_diagnostic_hint(graphql)
         )
     })?;
     AuthenticatedGraphql::new(graphql.to_string(), identity).await

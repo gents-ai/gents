@@ -57,18 +57,18 @@ def conversationTranscriptCollections : List String :=
 
 def agentConfigCollections : List String :=
   ["AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
 
 def conversationCollections : List String :=
   conversationTranscriptCollections ++ agentConfigCollections
 
 def machineCollections : List String :=
-  conversationCollections ++ ["AgentDirectoryEntry"]
+  conversationCollections ++ ["PersonaConfigRequest", "AgentDirectoryEntry"]
 
 def discoveryCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest",
    "AgentBehavior", "ToolSelection", "InferenceBackend", "InferenceProfile",
-   "ToolServiceRegistry", "Skill"]
+   "ToolServiceRegistry", "Skill", "DatastoreToolSurface"]
 
 def networkControlCollections : List String :=
   ["AgentNetwork", "NetworkMembership", "PeerEndpoint", "NetworkJoinRequest"]
@@ -96,7 +96,8 @@ def conversationRules : List CollectionRule :=
 
 def machineRules : List CollectionRule :=
   conversationRules ++
-    [ { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
+    [ { collection := "PersonaConfigRequest", field := "requester_did", source := .peerDid }
+    , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def subagentCoordinatorRules : List CollectionRule :=
   [ { collection := "AgentToolCall", field := "spawn_target_did", source := .peerDid } ]

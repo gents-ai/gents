@@ -61,11 +61,12 @@ pub use retry::count_active_sessions;
 pub(crate) use retry::{execute_mutation_with_retry, retry_operation};
 pub use rows::AgentSessionDocument;
 pub use sessions::{close_session, create_session};
-pub use sessions::{create_session_with_behavior_id, ensure_session_with_behavior_id};
-#[allow(unused_imports)]
-pub(crate) use sessions::{
-    create_session_with_id, ensure_session_with_behavior_id_and_requester_did, max_sequence,
+pub use sessions::{
+    create_session_with_behavior_id, ensure_session_with_behavior_id,
+    ensure_session_with_behavior_id_and_requester_did,
 };
+#[allow(unused_imports)]
+pub(crate) use sessions::{create_session_with_id, max_sequence};
 
 /// Render an immutable requester route key for a document create branch.
 /// Ordinary local lineage leaves the field null by omitting it; remote child

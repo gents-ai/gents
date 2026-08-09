@@ -30,6 +30,111 @@ pub enum ToolCallState {
     Cancelled,
 }
 
+/// Single production predicate for the persisted omission reason/phase
+/// contract. The generated Lean matrix exercises every combination.
+pub fn tool_output_omission_transition_allowed(
+    reason: &str,
+    source_phase: &str,
+    terminal_phase: &str,
+) -> bool {
+    let Some(reason) = evidence::ToolOutputOmissionReason::from_persisted(reason) else {
+        return false;
+    };
+    let Some(source) = ToolCallState::from_persisted(source_phase) else {
+        return false;
+    };
+    let Some(terminal) = ToolCallState::from_persisted(terminal_phase) else {
+        return false;
+    };
+    reason.allows(source, terminal)
+}
+
+/// Exact signed edge carried by an `AgentToolCall` version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExactToolCallEdgeRef {
+    pub(crate) doc_id: String,
+    pub(crate) composite_commit_cid: String,
+    pub(crate) signer_did: String,
+}
+
+impl ExactToolCallEdgeRef {
+    pub(crate) fn new(
+        doc_id: impl Into<String>,
+        composite_commit_cid: impl Into<String>,
+        signer_did: impl Into<String>,
+    ) -> Self {
+        Self {
+            doc_id: doc_id.into(),
+            composite_commit_cid: composite_commit_cid.into(),
+            signer_did: signer_did.into(),
+        }
+    }
+}
+
+/// Exact immutable approval and the historical held execution it signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetainedApprovalFact {
+    pub(crate) edge: ExactToolCallEdgeRef,
+    pub(crate) decision: String,
+    pub(crate) execution: ExactToolCallEdgeRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetainedApprovalEdgeKind {
+    Absent,
+    DenialCallEdge,
+    ApprovedRunningCallEdge,
+}
+
+/// Single production predicate for retaining an approval edge across terminal
+/// evidence. Approval is a mutable call edge: a denial binds it while
+/// terminalizing the exact held source, while an approved running source must
+/// already carry the identical edge. The immutable omission never owns it.
+pub(crate) fn validate_retained_approval_edge(
+    omission_reason: Option<&str>,
+    source_phase: &str,
+    source_execution: &ExactToolCallEdgeRef,
+    source_approval: Option<&ExactToolCallEdgeRef>,
+    terminal_approval: Option<&RetainedApprovalFact>,
+) -> anyhow::Result<RetainedApprovalEdgeKind> {
+    match (omission_reason, terminal_approval) {
+        (Some("approvalDenied"), Some(approval)) => {
+            if source_phase != "awaitingApproval"
+                || source_approval.is_some()
+                || approval.decision != "denied"
+                || approval.execution != *source_execution
+            {
+                anyhow::bail!(
+                    "approvalDenied terminal does not bind an exact denied approval for its held source execution"
+                );
+            }
+            Ok(RetainedApprovalEdgeKind::DenialCallEdge)
+        }
+        (Some("approvalDenied"), None) => {
+            anyhow::bail!("approvalDenied terminal has no exact approval call edge")
+        }
+        (_, Some(approval)) => {
+            if source_phase != "running"
+                || approval.decision != "approved"
+                || source_approval != Some(&approval.edge)
+            {
+                anyhow::bail!(
+                    "terminal approval edge is not retained by the exact approved running source"
+                );
+            }
+            Ok(RetainedApprovalEdgeKind::ApprovedRunningCallEdge)
+        }
+        (_, None) => {
+            if source_approval.is_some() {
+                anyhow::bail!(
+                    "source execution approval edge was not retained by the terminal call"
+                );
+            }
+            Ok(RetainedApprovalEdgeKind::Absent)
+        }
+    }
+}
+
 impl ToolCallState {
     #[cfg(test)]
     pub(crate) const ALL: [Self; 7] = [
@@ -264,6 +369,7 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
+pub(crate) mod approval_evidence;
 pub(crate) mod evidence;
 pub(crate) mod query;
 pub use query::{load_durable_tool_call_terminal_evidence, DurableToolCallTerminalEvidence};

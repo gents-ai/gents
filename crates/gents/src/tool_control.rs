@@ -69,9 +69,12 @@ mod tests {
             "agent-tool-control-cancel-{}",
             uuid::Uuid::new_v4()
         ));
+        let identity = crate::test_support::signed_test_identity("agent-tool-control-cancel");
+        let agent_did = identity.did().to_string();
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
                 .data_path(&data_path)
+                .with_node_identity_did(&agent_did)
                 .build()
                 .await
                 .unwrap(),
@@ -88,7 +91,7 @@ mod tests {
             node.clone(),
             "request-1".to_string(),
             "session-1".to_string(),
-            "did:test:test".to_string(),
+            agent_did.clone(),
             "tool-1".to_string(),
             1,
             "bash_unrestricted".to_string(),
@@ -97,15 +100,10 @@ mod tests {
         );
         lifecycle.start_running().await.unwrap();
 
-        let outcome = cancel_background_tool_call(
-            node.clone(),
-            &registry,
-            "did:test:test",
-            "session-1",
-            "tool-1",
-        )
-        .await
-        .unwrap();
+        let outcome =
+            cancel_background_tool_call(node.clone(), &registry, &agent_did, "session-1", "tool-1")
+                .await
+                .unwrap();
 
         assert_eq!(
             outcome,
@@ -130,9 +128,13 @@ mod tests {
             "agent-tool-control-custom-cancel-{}",
             uuid::Uuid::new_v4()
         ));
+        let identity =
+            crate::test_support::signed_test_identity("agent-tool-control-custom-cancel");
+        let agent_did = identity.did().to_string();
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
                 .data_path(&data_path)
+                .with_node_identity_did(&agent_did)
                 .build()
                 .await
                 .unwrap(),
@@ -143,7 +145,7 @@ mod tests {
             node.clone(),
             "request-custom".to_string(),
             "session-custom".to_string(),
-            "did:test:test".to_string(),
+            agent_did,
             "tool-custom".to_string(),
             1,
             "bash_unrestricted".to_string(),

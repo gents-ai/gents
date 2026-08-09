@@ -425,6 +425,10 @@ fn p2p_pairings_manage_desired_rows_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home = tempdir.path().join("pairings-agent");
     fs::create_dir_all(&home)?;
+    run_init_json(
+        &home,
+        &["--identity-only", "--agent-name", "pairings-local-writer"],
+    )?;
 
     let set = run_cli_json(
         &home,

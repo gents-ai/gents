@@ -55,15 +55,21 @@ async fn main() -> Result<()> {
     );
 
     let http_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), http_port);
+    let signed_block_http = gents::signed_block_http::SignedBlockHttpBridge::new();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_node_identity_did(identity.did())
-            .with_http(HttpConfig::with_addr(http_addr))
+            .with_http(
+                HttpConfig::with_addr(http_addr).with_extra_routes(signed_block_http.router()),
+            )
             .build()
             .await
             .context("building embedded DefraDB node")?,
     );
+    signed_block_http
+        .bind(&node)
+        .context("binding authenticated signed-block HTTP export")?;
     ensure_runtime_schemas(node.as_ref()).await?;
     seed_demo_documents(
         node.as_ref(),

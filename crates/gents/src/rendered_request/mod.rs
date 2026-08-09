@@ -159,7 +159,7 @@ impl RenderedRequestSource {
 /// Which of the owned loop's two request builders produced the captured
 /// `CompletionRequest`.
 ///
-/// This is one of the four unrecoverable inputs. `build_budgeted_request`
+/// This is one of the three unrecoverable inputs. `build_budgeted_request`
 /// applies `clamp_request_output_budget` before returning
 /// (`agent/loop_stream.rs`), but the completion-retry `Repair` directive calls
 /// `build_request` directly (`agent/loop_stream.rs:353,447`) and never clamps.
@@ -192,7 +192,7 @@ impl AssemblyBuildPath {
 /// A provider-assigned assistant message id, positioned in the effective
 /// message list.
 ///
-/// One of the four unrecoverable inputs. `close_streaming_turn` stamps the
+/// One of the three unrecoverable inputs. `close_streaming_turn` stamps the
 /// provider's `MessageId` event onto the threaded assistant message
 /// (`agent/loop_stream.rs:802-806`) because OpenAI Responses and ChatGPT Codex
 /// follow-up requests reference prior `msg_` ids. The persistence path builds
@@ -209,15 +209,10 @@ pub struct AssistantMessageId {
 /// The exact tool-result content threaded back into provider history for one
 /// tool call.
 ///
-/// One of the four unrecoverable inputs. The loop threads
-/// `truncate_text(outcome.model_facing_text(), tool_result_truncation_mode(name),
-/// &TruncationLimits::default())` (`agent/loop_stream.rs:655-658`). Persistence
-/// re-derives its text from the stored `AgentToolCall.result` with
-/// `TruncationMode::Head`, the hook's own `truncation_limits`, and
-/// `model_observation_for_tool_result`
-/// (`hook/persistence/message_spawn.rs:296-324`). Those are different functions
-/// over different inputs, so replaying from the transcript does not reproduce
-/// the bytes the model actually saw.
+/// The owned loop receives this projection from the same persistence call that
+/// creates the signed `AgentToolResult` and binds `AgentToolCall.result`; it
+/// never performs a second truncation. The overlay is retained as a capture
+/// witness, while the exact result fact remains its reconstructible authority.
 ///
 /// `content` is the full threaded `Vec<ToolResultContent>`, not a flattened
 /// string: `ToolResultContent::from_tool_output` can split a JSON payload into
@@ -237,12 +232,10 @@ pub struct ThreadedToolResult {
 ///
 /// Everything else that shapes a request is either durable (transcript rows,
 /// behavior/profile/backend/skill documents) or a pure function of durable data.
-/// These four are not:
+/// These three are not:
 ///
 /// 1. `assistant_message_ids` — provider-assigned, persisted as `None`.
-/// 2. `threaded_tool_results` — the loop and the persistence path derive
-///    different text from different sources.
-/// 3. `effective_messages` — when a rendered request-context message or
+/// 2. `effective_messages` — when a rendered request-context message or
 ///    per-turn compaction adds ephemeral content. Compaction is a *sticky*
 ///    mutation
 ///    (`*history = compacted; *new_messages = vec![compacted_prompt]`,
@@ -250,7 +243,7 @@ pub struct ThreadedToolResult {
 ///    governs every later turn of the same request, and that summary is never
 ///    written as an `AgentCompactionEntry`. Re-running the summarizer does not
 ///    produce the same words.
-/// 4. `build_path` — see `AssemblyBuildPath`.
+/// 3. `build_path` — see `AssemblyBuildPath`.
 ///
 /// `assistant_message_ids` and `threaded_tool_results` are projections of the
 /// effective message list, derived by the same constructor so they cannot drift
@@ -261,7 +254,7 @@ pub struct ThreadedToolResult {
 /// against. `effective_messages` is present only when that list contains a
 /// rendered request-context message, a model-generated per-turn compaction
 /// summary, or the result of a repair rewrite. Otherwise the durable transcript
-/// plus these overlays reconstructs it exactly.
+/// and exact tool-result facts plus these overlays reconstruct it exactly.
 ///
 /// ## Size
 ///

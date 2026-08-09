@@ -36,6 +36,7 @@ struct BackgroundTheoremToolCallRow {
     child_request_id: Option<String>,
     lifecycle_state: Option<String>,
     result: Option<String>,
+    result_doc_id: Option<String>,
     cancel_cause: Option<String>,
     cancel_cascade_intent_at: Option<String>,
 }
@@ -346,6 +347,7 @@ async fn fetch_background_theorem_tool_call(
                 child_request_id
                 lifecycle_state
                 result
+                result_doc_id
                 cancel_cause
                 cancel_cascade_intent_at
             }}
@@ -883,7 +885,7 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
 }
 
 async fn drive_r6_native_lifecycle_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
-    let db = test_db(&format!("r6-native-lifecycle-{}", case.name)).await;
+    let db = signed_materializer_test_db(&format!("r6-native-lifecycle-{}", case.name)).await;
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
     let tool_call_id = format!("{}-tool", case.name);
@@ -970,7 +972,15 @@ async fn drive_r6_native_lifecycle_case(case: &lean_vocab_test::LeanR6Background
         case.name
     );
     if let Some(expected) = case.result.as_deref() {
-        assert_eq!(row.result.as_deref(), Some(expected), "{}", case.name);
+        assert_exact_result_projection(
+            row.result
+                .as_deref()
+                .expect("completed tool result projection"),
+            expected,
+            row.result_doc_id
+                .as_deref()
+                .expect("completed tool result exact document"),
+        );
     }
     if case.action == "bridge_failure" {
         assert_eq!(

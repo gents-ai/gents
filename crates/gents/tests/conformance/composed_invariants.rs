@@ -5,8 +5,9 @@ use crate::lean_vocab_test::{
     lean_composed_invariant_witness, lean_composed_invariant_witness_by_scenario,
     lean_composed_invariant_witnesses, LeanComposedInvariantWitness,
 };
+use crate::signed_materializer_test_db;
 use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
-use crate::support::{create_request, test_db, AGENT_DID};
+use crate::support::{create_request, AGENT_DID};
 
 const C1: &str = "ComposedState.deadline_exceeded_request_timesOut_running_tools_from_initial";
 const C1_PRIME: &str = "ComposedState.deadline_exceeded_request_cancels_pending_tools_from_initial";
@@ -37,7 +38,7 @@ async fn drive_running_deadline_witness(witness: &LeanComposedInvariantWitness) 
     assert_eq!(witness.tool_post_state, "timedOut");
     assert!(witness.pre_tool_persisted);
 
-    let db = test_db("composed-c1-running-deadline").await;
+    let db = signed_materializer_test_db("composed-c1-running-deadline").await;
     let request_id = format!("composed-c1-request-{}", witness.request_id);
     let session_id = "composed-c1-session";
     let tool_call_id = format!("composed-c1-tool-{}", witness.tool_call_id);
@@ -96,7 +97,7 @@ async fn drive_pending_deadline_witness(witness: &LeanComposedInvariantWitness) 
     assert_eq!(witness.tool_post_state, "cancelled");
     assert!(!witness.pre_tool_persisted);
 
-    let db = test_db("composed-c1-prime-pending-deadline").await;
+    let db = signed_materializer_test_db("composed-c1-prime-pending-deadline").await;
     let request_id = format!("composed-c1-prime-request-{}", witness.request_id);
     let session_id = "composed-c1-prime-session";
     let tool_call_id = format!("composed-c1-prime-tool-{}", witness.tool_call_id);
@@ -166,7 +167,7 @@ async fn drive_interrupted_pending_witness(witness: &LeanComposedInvariantWitnes
         witness.theorem_name
     );
 
-    let db = test_db("composed-c2-interrupted-pending").await;
+    let db = signed_materializer_test_db("composed-c2-interrupted-pending").await;
     let request_id = format!("composed-c2-request-{}", witness.request_id);
     let session_id = "composed-c2-session";
     let tool_call_id = format!("composed-c2-tool-{}", witness.tool_call_id);
@@ -233,7 +234,7 @@ async fn drive_interrupted_running_witness(witness: &LeanComposedInvariantWitnes
         witness.theorem_name
     );
 
-    let db = test_db("composed-c2-interrupted-running").await;
+    let db = signed_materializer_test_db("composed-c2-interrupted-running").await;
     let request_id = format!("composed-c2r-request-{}", witness.request_id);
     let session_id = "composed-c2r-session";
     let tool_call_id = format!("composed-c2r-tool-{}", witness.tool_call_id);

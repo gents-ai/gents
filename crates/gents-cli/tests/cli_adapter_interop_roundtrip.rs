@@ -394,13 +394,17 @@ fn langgraph_capture_without_history() -> Value {
 fn langgraph_envelope_value() -> Value {
     json!({
         "projection_id": "langgraph_state_history",
-        "projection_version": "v1",
+        "projection_version": "v3",
         "source_request_id": "req-root",
         "redaction_mode": "full",
         "provenance": {
             "runtime": "gents",
+            "runtime_version": env!("CARGO_PKG_VERSION"),
             "source_projection_id": "run_timeline",
-            "source_projection_version": "v1"
+            "source_projection_version": "v3",
+            "built_at": "1970-01-01T00:00:00Z",
+            "redaction_algorithm_version": gents::PROJECTION_REDACTION_ALGORITHM_VERSION,
+            "source_manifest_status": "unavailable"
         },
         "output": {
             "adapter": "langgraph_state_history",

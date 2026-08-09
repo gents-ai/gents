@@ -2,28 +2,50 @@ use std::collections::HashSet;
 use std::net::TcpListener;
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
-static ALLOCATED_PORTS: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+const TEST_PORT_FIRST: u16 = 20_000;
+const TEST_PORT_COUNT: u16 = 10_000;
+
+struct PortRegistry {
+    allocated: HashSet<u16>,
+    next: u16,
+}
+
+static PORT_REGISTRY: OnceLock<Mutex<PortRegistry>> = OnceLock::new();
 
 pub fn allocate_port() -> Result<u16> {
-    let allocated_ports = ALLOCATED_PORTS.get_or_init(|| Mutex::new(HashSet::new()));
-    for _ in 0..128 {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).context("binding ephemeral port")?;
-        let port = listener
-            .local_addr()
-            .context("reading ephemeral port")?
-            .port();
-        let mut allocated_ports = allocated_ports
-            .lock()
-            .expect("allocated port registry poisoned");
-        if allocated_ports.insert(port) {
+    let registry = PORT_REGISTRY.get_or_init(|| {
+        let process_offset = (std::process::id() % u32::from(TEST_PORT_COUNT)) as u16;
+        Mutex::new(PortRegistry {
+            allocated: HashSet::new(),
+            next: TEST_PORT_FIRST + process_offset,
+        })
+    });
+    let mut registry = registry.lock().expect("allocated port registry poisoned");
+
+    // Do not ask the OS for port 0 here. These ports remain unbound while a
+    // CLI child initializes, and another concurrently starting DefraDB node
+    // may otherwise receive the dropped ephemeral port for an internal
+    // listener before the intended HTTP or shim server binds it.
+    for _ in 0..TEST_PORT_COUNT {
+        let port = registry.next;
+        let offset = (port - TEST_PORT_FIRST + 1) % TEST_PORT_COUNT;
+        registry.next = TEST_PORT_FIRST + offset;
+        if registry.allocated.contains(&port) {
+            continue;
+        }
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+            registry.allocated.insert(port);
             drop(listener);
             return Ok(port);
         }
     }
 
-    bail!("failed to allocate a fresh test port after 128 attempts")
+    bail!(
+        "failed to allocate a fresh test port in {TEST_PORT_FIRST}..{}",
+        TEST_PORT_FIRST + TEST_PORT_COUNT
+    )
 }
 
 pub fn graphql_url(port: u16) -> String {

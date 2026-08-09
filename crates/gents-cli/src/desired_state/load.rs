@@ -232,9 +232,11 @@ fn load_agent_principal(root: &Path, errors: &mut Vec<String>) -> Option<Desired
     }
 }
 
-/// Read a document JSON file and expand `${VAR}` references. Interpolation is
-/// scoped to document JSON: `.md` sidecars carry runtime `{{ }}` templates and
-/// are hydrated separately, untouched.
+/// Read a document JSON file, parse it, and then expand `${VAR}` references in
+/// string values. Parsing first keeps environment values out of the JSON
+/// grammar, so quotes, backslashes, and object-like text remain string data.
+/// `.md` sidecars carry runtime `{{ }}` templates and are hydrated separately,
+/// untouched.
 fn read_document_json(path: &Path, errors: &mut Vec<String>) -> Option<Vec<u8>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -254,8 +256,21 @@ fn read_document_json(path: &Path, errors: &mut Vec<String>) -> Option<Vec<u8>> 
             return None;
         }
     };
-    match super::interpolate::interpolate(&text) {
-        Ok(expanded) => Some(expanded.into_bytes()),
+    let mut value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(format!("invalid {}: {error}", path.display()));
+            return None;
+        }
+    };
+    match super::interpolate::interpolate_json_value(&mut value) {
+        Ok(()) => match serde_json::to_vec(&value) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                errors.push(format!("serializing {} failed: {error}", path.display()));
+                None
+            }
+        },
         Err(missing) => {
             errors.push(format!(
                 "{} references unset environment variable(s): {}. Set them, or give each a \

@@ -59,8 +59,8 @@ actual node signer separately from requester attribution and target agent
 identity; atomic claim verifies the exact source and claim commits; and
 provider capture re-verifies the durable chain.
 
-The following bounded checkpoints are layered onto that foundation at
-`f6d03cb6`:
+The following bounded checkpoints began at `f6d03cb6` and are extended by the
+current PR #1065 branch:
 
 - finalized transcript facts are immutable create-and-compare records, mutable
   in-flight text lives in `AgentMessageDraft`, and the
@@ -75,6 +75,10 @@ The following bounded checkpoints are layered onto that foundation at
 - terminal response repair converges on immutable, signer-verified
   `AgentResponseOutcome` facts bound to exact request and final-message
   versions; and
+- every terminal `AgentToolCall` binds exactly one verified signed
+  `AgentToolResult` or `AgentToolOutputOmission`. Results retain the full tool
+  output, while bounded model/live projections are derived from that fact and
+  carry its exact DefraDB document/version pointer; and
 - tool/subagent transitions, compaction and fork source manifests, event
   activation/delivery admission, and restart recovery use the same
   exact-document, exact-version, conflict-visible discipline in their bounded
@@ -140,9 +144,22 @@ matching commit row, fetches the ACP-authorized canonical commit and detached
 signature bytes from DefraDB, verifies both content-addressed CIDs and the
 signature locally, then derives the signer DID from the verified public key. A
 failed, missing, rebound, tampered, or unsupported signature blocks the fork.
-The HTTP endpoint remains the authorization boundary for releasing block
-material; it is not the authorship verifier. P2P ingestion independently
-verifies signed blocks before they enter a local store.
+Gents first fetches those bytes from DefraDB's canonical
+`/api/v0/block/signed` route. Because the pinned DefraDB `NodeBuilder` does not
+attach its existing block operations to the embedded HTTP server, Gents falls
+back only when that route is absent or reports its adapter unavailable to the
+temporary authenticated `/api/v0/gents/block/signed` bridge. Authentication,
+ACP, or NAC denial never triggers fallback. The bridge accepts only the node
+bearer identity and delegates release to DefraDB's document-ACP-aware block
+reader, but it does not traverse the native signed-block route's private
+`SignatureVerify` NAC gate. It is a node-only compatibility bridge, not a
+policy-complete or general operator surface. The target is native `NodeBuilder`
+wiring through `Server::with_block_arc`, restoring the canonical
+`/api/v0/block/signed` route, its NAC gate, and ordinary Defra clients. In
+either form, the endpoint is the authorization boundary for releasing block
+material, not the authorship verifier. P2P ingestion independently verifies
+signed blocks before they enter a local store.
+
 The transcript checkpoint now records every consumed message
 `(_docID, composite CID, verified signer DID)`, and the bounded config
 checkpoint records the selected core config facts in the same form. Full config
@@ -150,6 +167,14 @@ reconstruction additionally needs immutable evidence for the candidate and
 availability sets that influenced selection. A node signature proves
 authorship of each named commit; future ACP policy decides whether that author
 was authorized.
+
+Fork-copy staging is a private transaction state: ordinary live/startup
+recovery and operator approval discovery exclude `forkStaging`, while the
+dedicated expired-lease path remains its sole recovery owner. Remote mutation
+transport is single-attempt and fails closed after ambiguous errors; only an
+explicit DefraDB transaction conflict is eligible for a fresh transaction
+attempt. Copied truncated-output messages rebind their canonical full-output
+suffix to the child result fact, without rewriting opaque output text.
 
 This milestone does not claim cross-host single-executor safety. Two hosts can
 independently extend the same replicated pending head before convergence; the
@@ -168,10 +193,13 @@ requires the deployment assignment and lease epoch in Slice 7.
   ingress and Gents construction fail closed on absent or mismatched node
   signers. Embedded, offline, remote HTTP, transaction, CLI, runtime-router,
   and desktop document access now carry cryptographic identity; remote fork
-  commit evidence is fetched through DefraDB's authenticated, document-ACP
-  authorized signed-block endpoint and verified locally by Gents. This proves
-  an attached actor and a verified commit signer, not that future ACP policy
-  will authorize that actor.
+  commit evidence is fetched through the temporary authenticated, node-only
+  Gents signed-block bridge described above, delegates release to DefraDB's
+  document ACP check, and is verified locally by Gents. Native
+  `NodeBuilder`/`with_block_arc` integration is still required to recover the
+  canonical signed-block route and its NAC gate. This proves an attached actor
+  and a verified commit signer, not that future ACP policy will authorize that
+  actor.
 - `RenderedRequest` consumer work is tracked by Gents #1066. The audit tightens
   its proposed inference join from an ordinal/logical value to an exact
   `InferenceCall` document-version edge.
@@ -257,16 +285,27 @@ only answer a conservative boolean are likewise not physical-identity defects.
 
 ## Partially implemented fact graph foundation
 
-### Slice 3: append-only transcript and full tool output (partial)
+### Slice 3: append-only transcript and exact terminal tool evidence (implemented core)
 
-**Guarantee:** a committed transcript fact is never rewritten and promised
-full tool output is either durable or explicitly reported missing.
+**Guarantee:** a committed transcript fact is never rewritten, and every
+terminal tool call has exactly one signed, exact-version result or omission
+fact.
 
 The immutable finalized-message/draft split, exact transcript references,
 compaction source manifests, fork lineage, and several tool/subagent edges are
-implemented at `f6d03cb6`. Full tool-output retention/failure semantics,
-multi-writer ordering and late-backfill coverage, and draft lifecycle/retention
-remain under #1073.
+implemented on the current PR #1065 branch. Terminal completion and failure paths durably retain
+the full output in an immutable `AgentToolResult`; terminal paths without an
+output publish `AgentToolOutputOmission`. The terminal call binds exactly one
+of those signed facts by `_docID`, composite CID, and verified signer, and
+admission fails closed when neither or both are present. Bounded model/live
+output is a canonical projection of the full result. The exact result document
+remains mandatory durable projection metadata; its pointer is rendered into
+provider-visible text only when truncation makes that recovery path useful.
+
+This does not finish #1073. Multi-writer transcript ordering, late-backfill
+coverage, draft lifecycle/retention, the tool invocation/execution schema
+split, fleet ownership, large-output chunk/blob policy, ACP, encryption, and
+enterprise retention remain open.
 
 ### Slice 4: exact provider-attempt edge (implemented core; consumer follow-up open)
 
@@ -299,16 +338,18 @@ work is:
 - **Slice 7:** add deployment assignment and lease-epoch fencing (#1079);
 - **Slice 8:** build stable, regenerable timeline/adapter projections from a
   frozen exact source manifest and central `RenderedRequest` reader (#1066);
-- **Slice 9:** make approvals exact-version-bound authorization facts;
+- **Slice 9:** finish approval authority, expiry, concurrency/quorum, and ACP
+  policy semantics on top of the implemented exact-version-bound signed facts;
 - **Slice 10:** install and test DefraDB ACP policies/history access, with
   encryption and key custody remaining their own deferred workstream; and
 - **Slice 11:** implement archive/restore, legal hold, evidence downgrade, and
   coordinated purge receipts (#1078).
 
 The open Track A-D issues and their child issues remain authoritative for work
-not named in this summary, including full tool-output, automation, network,
-placement, retention, and lower-priority normalization contracts. All
-unresolved collection decisions remain `Provisional` in the ledger.
+not named in this summary, including the tool invocation/execution split and
+output lifecycle, automation, network, placement, retention, and lower-priority
+normalization contracts. All unresolved collection decisions remain
+`Provisional` in the ledger.
 
 ### Slice 5: request intent and execution authority
 
@@ -372,9 +413,11 @@ ACP omission receipts, and archive replay remains part of this slice.
 approval, and each accepted decision binds the exact held tool execution and
 policy version.
 
-Model decision selection, expiry, signer authorization, concurrency/quorum,
-and replay in Lean. Persist immutable approval facts on the execution route;
-do not rely on first client timestamp.
+Immutable signed approval facts already bind the exact held tool-call version,
+enumerate conflicts, and fail closed on signer or edge mismatch. The remaining
+work is to model policy version and authority, expiry, concurrency/quorum, and
+replay in Lean, then enforce those semantics with DefraDB ACP. Do not rely on
+first client timestamp.
 
 ## Deferred policy, encryption, and enterprise lifecycle
 

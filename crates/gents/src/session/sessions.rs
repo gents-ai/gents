@@ -80,9 +80,6 @@ async fn create_session_with_behavior_id_and_requester_did(
                         update_AgentSession(
                             filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                             input: {{
-                                agent_name: "{escaped_agent_name}",
-                                behavior_id: "{escaped_behavior_id}",
-                                started: "{escaped_started}",
                                 status: "active"
                             }}
                         ) {{ _docID }}
@@ -167,7 +164,12 @@ pub async fn ensure_session_with_behavior_id(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn ensure_session_with_behavior_id_and_requester_did(
+/// Ensure a session exists with immutable owner, behavior, and requester bindings.
+///
+/// Callers that create requests with a non-null `requester_did` must use the
+/// same requester here so the session spine and every request attributed to it
+/// carry one consistent principal boundary.
+pub async fn ensure_session_with_behavior_id_and_requester_did(
     node: &EmbeddedNode,
     session_id: &str,
     agent_name: &str,

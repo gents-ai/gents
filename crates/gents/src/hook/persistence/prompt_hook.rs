@@ -1,6 +1,102 @@
 use super::*;
 
 impl DefraSessionHook {
+    async fn authoritative_skip_projection(
+        &self,
+        internal_call_id: &str,
+        streamed_projection: &str,
+    ) -> anyhow::Result<String> {
+        let (session_id, registered_tool_name) = {
+            let state = self.state.lock().await;
+            (
+                state
+                    .session_id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?,
+                state.tool_result_registration(internal_call_id).0,
+            )
+        };
+        let Some(durable) =
+            load_durable_tool_call_identity(&self.node, &session_id, internal_call_id).await?
+        else {
+            return Ok(streamed_projection.to_string());
+        };
+        if registered_tool_name
+            .as_deref()
+            .is_some_and(|registered| registered != durable.tool_name)
+        {
+            anyhow::bail!(
+                "hook-owned tool-result identity for {internal_call_id} disagrees with durable tool name {}",
+                durable.tool_name
+            );
+        }
+
+        if matches!(
+            durable.lifecycle_state.as_str(),
+            "completed" | "failed" | "timedOut" | "cancelled"
+        ) {
+            return Ok(load_stored_tool_call_result(
+                &self.node,
+                &session_id,
+                internal_call_id,
+                true,
+            )
+            .await?
+            .result);
+        }
+        if durable.tool_name == SPAWN_SUBAGENT_TOOL_NAME && durable.lifecycle_state == "running" {
+            crate::tool_call_lifecycle::query::verify_exact_subagent_receipt_authority(
+                &self.node,
+                &session_id,
+                internal_call_id,
+                streamed_projection,
+            )
+            .await?;
+            let (projection, _, _) = truncate_text(
+                streamed_projection,
+                TruncationMode::Head,
+                &self.truncation_limits,
+            );
+            return Ok(projection);
+        }
+        anyhow::bail!(
+            "hook-owned durable tool call {session_id}:{internal_call_id} returned Skip while {}",
+            durable.lifecycle_state
+        )
+    }
+
+    async fn record_successful_tool_call_action(
+        &self,
+        internal_call_id: &str,
+        action: ToolCallHookAction,
+    ) -> ToolCallHookAction {
+        let action = match action {
+            ToolCallHookAction::Skip { reason } => {
+                match self
+                    .authoritative_skip_projection(internal_call_id, &reason)
+                    .await
+                {
+                    Ok(reason) => ToolCallHookAction::Skip { reason },
+                    Err(error) => {
+                        return self.on_tool_persistence_error(
+                            "load authoritative hook-owned tool result",
+                            &error,
+                        );
+                    }
+                }
+            }
+            action => action,
+        };
+        if matches!(action, ToolCallHookAction::Skip { .. }) {
+            self.state
+                .lock()
+                .await
+                .mark_hook_owned_tool_result(internal_call_id);
+        }
+        self.record_success();
+        action
+    }
+
     pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
         self.on_completion_call_with_context(prompt, _history, None)
             .await
@@ -64,8 +160,8 @@ impl DefraSessionHook {
                 .await;
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(error) => self.on_tool_persistence_error("persist get_goal tool call", &error),
             };
@@ -81,8 +177,8 @@ impl DefraSessionHook {
                 .await;
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(error) => {
                     self.on_tool_persistence_error("persist update_goal tool call", &error)
@@ -101,8 +197,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => {
                     self.on_tool_persistence_error("persist fan_out_and_synthesize tool call", &e)
@@ -121,8 +217,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist spawn_subagent tool call", &e),
             };
@@ -139,8 +235,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist wait_subagent tool call", &e),
             };
@@ -157,8 +253,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist list_subagents tool call", &e),
             };
@@ -175,8 +271,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist read_subagent tool call", &e),
             };
@@ -193,8 +289,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist steer_subagent tool call", &e),
             };
@@ -211,8 +307,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist cancel_subagent tool call", &e),
             };
@@ -229,8 +325,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist spawn_process tool call", &e),
             };
@@ -247,8 +343,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist wait_process tool call", &e),
             };
@@ -265,8 +361,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist list_processes tool call", &e),
             };
@@ -283,8 +379,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist read_process tool call", &e),
             };
@@ -301,8 +397,8 @@ impl DefraSessionHook {
 
             return match result {
                 Ok(action) => {
-                    self.record_success();
-                    action
+                    self.record_successful_tool_call_action(internal_call_id, action)
+                        .await
                 }
                 Err(e) => self.on_tool_persistence_error("persist cancel_process tool call", &e),
             };
@@ -374,18 +470,18 @@ impl DefraSessionHook {
         }
     }
 
-    pub async fn on_tool_result(
+    async fn persist_tool_result_action(
         &self,
         tool_name: &str,
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
         outcome: &crate::tool_call_lifecycle::ToolOutcome,
-    ) -> HookAction {
+    ) -> (HookAction, Option<String>) {
         use crate::tool_call_lifecycle::ToolOutcome;
 
         self.release_live_output(internal_call_id).await;
-        let persist_result: anyhow::Result<HookAction> = async {
+        let persist_result: anyhow::Result<(HookAction, Option<String>)> = async {
             // Managed terminals terminate the turn; they carry no model-facing
             // text and never thread back to the provider.
             if matches!(
@@ -419,9 +515,12 @@ impl DefraSessionHook {
                     ToolOutcome::TimedOut { .. } => "tool call deadline exceeded",
                     _ => "tool call cancelled",
                 };
-                return Ok(HookAction::Terminate {
-                    reason: reason.to_string(),
-                });
+                return Ok((
+                    HookAction::Terminate {
+                        reason: reason.to_string(),
+                    },
+                    None,
+                ));
             }
 
             // The outcome arrives as data, so there is nothing to classify or
@@ -480,7 +579,7 @@ impl DefraSessionHook {
                 anyhow::anyhow!("full tool output was not retained as an exact signed fact")
             })?;
 
-            match outcome {
+            let authoritative_projection = match outcome {
                 ToolOutcome::Completed(_) => {
                     lc.complete_with_result_fact(&truncated.text, result_fact)
                         .await?
@@ -492,20 +591,20 @@ impl DefraSessionHook {
                             denial,
                             result_fact,
                         )
-                        .await?;
+                        .await?
                     } else {
                         lc.fail_with_result_fact(&truncated.text, *class, result_fact)
-                            .await?;
+                            .await?
                     }
                 }
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled => {
                     unreachable!("managed terminals returned above")
                 }
-            }
+            };
 
             if should_persist_message {
                 let model_observation =
-                    model_observation_for_tool_result(tool_name, &truncated.text);
+                    model_observation_for_tool_result(tool_name, &authoritative_projection);
                 let tool_result_message = Message::User {
                     content: vec![UserContent::ToolResult(ToolResult {
                         id: persisted_result_id,
@@ -518,7 +617,7 @@ impl DefraSessionHook {
                 self.persist_message(&tool_result_message).await?;
             }
 
-            Ok(HookAction::Continue)
+            Ok((HookAction::Continue, Some(authoritative_projection)))
         }
         .instrument(tracing::info_span!(
             "tool.result",
@@ -532,7 +631,38 @@ impl DefraSessionHook {
                 self.record_success();
                 action
             }
-            Err(e) => self.on_persistence_error("persist tool result", &e),
+            Err(e) => (self.on_persistence_error("persist tool result", &e), None),
         }
+    }
+
+    /// Persist a tool result and return the ordinary hook action.
+    ///
+    /// Non-loop callers use this compatibility surface when they only need
+    /// lifecycle side effects. The owned provider loop calls
+    /// [`Self::on_tool_result_with_projection`] so it can thread the exact
+    /// projection derived from the signed `AgentToolResult` fact.
+    pub async fn on_tool_result(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &crate::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        self.persist_tool_result_action(tool_name, tool_call_id, internal_call_id, args, outcome)
+            .await
+            .0
+    }
+
+    pub(crate) async fn on_tool_result_with_projection(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &crate::tool_call_lifecycle::ToolOutcome,
+    ) -> (HookAction, Option<String>) {
+        self.persist_tool_result_action(tool_name, tool_call_id, internal_call_id, args, outcome)
+            .await
     }
 }

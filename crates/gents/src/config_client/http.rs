@@ -4,10 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use gents_protocol::graphql::{
-    execute_graphql_async_authenticated, execute_graphql_async_authenticated_with_tx,
-    GraphqlRequestOptions,
-};
+use gents_protocol::graphql::{execute_graphql_async_authenticated_with_tx, GraphqlRequestOptions};
 use reqwest::{Method, Response, Url};
 use serde_json::Value;
 
@@ -32,6 +29,7 @@ pub struct AuthenticatedGraphql {
     endpoint: String,
     origin: Arc<str>,
     audience: Arc<str>,
+    authenticated_did: Arc<str>,
     credential: GraphqlCredential,
     client: reqwest::Client,
 }
@@ -66,6 +64,7 @@ impl AuthenticatedGraphql {
         identity: Arc<dyn AgentIdentity>,
     ) -> Result<Self> {
         let endpoint = endpoint.into();
+        let authenticated_did: Arc<str> = Arc::from(identity.did());
         let audience = defradb_http_audience(&endpoint)?;
         let token = tokio::time::timeout(
             BEARER_MINT_TIMEOUT,
@@ -98,6 +97,7 @@ impl AuthenticatedGraphql {
             endpoint,
             origin: Arc::from(endpoint_url.origin().ascii_serialization()),
             audience: Arc::from(audience),
+            authenticated_did,
             credential: GraphqlCredential::Local {
                 identity,
                 cached: Arc::new(tokio::sync::Mutex::new(CachedBearer {
@@ -134,6 +134,7 @@ impl AuthenticatedGraphql {
             endpoint,
             origin: Arc::from(origin),
             audience: Arc::from(audience),
+            authenticated_did: Arc::from(expected_did),
             credential: GraphqlCredential::Static(Arc::from(token)),
             client,
         })
@@ -143,9 +144,14 @@ impl AuthenticatedGraphql {
         &self.endpoint
     }
 
+    pub fn authenticated_did(&self) -> &str {
+        &self.authenticated_did
+    }
+
     pub async fn execute(&self, query: &str, options: GraphqlRequestOptions) -> Result<Value> {
         let bearer_token = self.bearer_token().await?;
-        execute_graphql_async_authenticated(&self.endpoint, query, options, &bearer_token).await
+        self.execute_graphql_fail_closed(query, options, &bearer_token, None)
+            .await
     }
 
     pub async fn execute_with_tx(
@@ -155,14 +161,8 @@ impl AuthenticatedGraphql {
         txn_id: &str,
     ) -> Result<Value> {
         let bearer_token = self.bearer_token().await?;
-        execute_graphql_async_authenticated_with_tx(
-            &self.endpoint,
-            query,
-            options,
-            &bearer_token,
-            Some(txn_id),
-        )
-        .await
+        self.execute_graphql_fail_closed(query, options, &bearer_token, Some(txn_id))
+            .await
     }
 
     pub async fn get(&self, url: impl reqwest::IntoUrl) -> Result<Response> {
@@ -280,6 +280,126 @@ impl AuthenticatedGraphql {
             }
         }
     }
+
+    async fn execute_graphql_fail_closed(
+        &self,
+        document: &str,
+        configured: GraphqlRequestOptions,
+        bearer_token: &str,
+        txn_id: Option<&str>,
+    ) -> Result<Value> {
+        if graphql_document_definitely_read_only(document) {
+            return execute_graphql_async_authenticated_with_tx(
+                &self.endpoint,
+                document,
+                configured,
+                bearer_token,
+                txn_id,
+            )
+            .await;
+        }
+
+        let transport_options = fail_closed_graphql_request_options(configured, document);
+        for attempt in 0..configured.max_attempts.max(1) {
+            match execute_graphql_async_authenticated_with_tx(
+                &self.endpoint,
+                document,
+                transport_options,
+                bearer_token,
+                txn_id,
+            )
+            .await
+            {
+                Err(error)
+                    if txn_id.is_none()
+                        && explicit_graphql_conflict(&error)
+                        && attempt + 1 < configured.max_attempts =>
+                {
+                    tracing::warn!(
+                        attempt,
+                        endpoint = %self.endpoint,
+                        error = %error,
+                        "retrying authenticated GraphQL mutation after explicit conflict"
+                    );
+                    tokio::time::sleep(
+                        configured
+                            .retry_backoff
+                            .saturating_mul(attempt.saturating_add(1) as u32),
+                    )
+                    .await;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("bounded authenticated GraphQL retry loop returns")
+    }
+}
+
+/// Restrict transparent HTTP retries to documents that are definitely reads.
+///
+/// Once a mutation reaches DefraDB, a timeout, retryable status, or malformed
+/// response is commit-ambiguous: replaying it can mint a second physical
+/// document. The boundary may issue a fresh attempt only after DefraDB returns
+/// a parsed, explicit conflict response proving that attempt did not apply,
+/// and never within the same still-open transaction.
+/// Unknown GraphQL document shapes fail closed to one transport attempt as
+/// well.
+fn fail_closed_graphql_request_options(
+    configured: GraphqlRequestOptions,
+    document: &str,
+) -> GraphqlRequestOptions {
+    if graphql_document_definitely_read_only(document) {
+        configured
+    } else {
+        GraphqlRequestOptions {
+            max_attempts: 1,
+            retry_backoff: Duration::ZERO,
+            ..configured
+        }
+    }
+}
+
+fn graphql_document_definitely_read_only(document: &str) -> bool {
+    let significant = graphql_significant_prefix(document);
+    significant.starts_with('{') || graphql_operation_keyword(significant) == Some("query")
+}
+
+fn explicit_graphql_conflict(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.starts_with("graphql returned errors from ")
+        && crate::retry::is_defradb_transaction_conflict_text(&message)
+}
+
+/// Return the first GraphQL operation keyword after ignored tokens. This is a
+/// deliberately conservative classifier, not a full parser: comments, commas,
+/// a UTF-8 BOM, and compact `mutation{...}` syntax are recognized, while a
+/// fragment-first or otherwise unknown document is treated as a possible write.
+fn graphql_operation_keyword(document: &str) -> Option<&str> {
+    let remaining = graphql_significant_prefix(document);
+    let keyword_len = remaining
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_alphanumeric() || *character == '_')
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    Some(&remaining[..keyword_len])
+}
+
+fn graphql_significant_prefix(document: &str) -> &str {
+    let mut remaining = document;
+    loop {
+        remaining = remaining.trim_start_matches(|character: char| {
+            character.is_whitespace() || character == ',' || character == '\u{feff}'
+        });
+        if let Some(comment) = remaining.strip_prefix('#') {
+            remaining = comment
+                .find(['\n', '\r'])
+                .map(|end| &comment[end + 1..])
+                .unwrap_or_default();
+            continue;
+        }
+        break;
+    }
+    remaining
 }
 
 fn verify_token_for_audience(token: &str, audience: &str) -> Result<()> {
@@ -377,7 +497,7 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::extract::State;
-    use axum::http::{HeaderMap, StatusCode};
+    use axum::http::{header, HeaderMap, StatusCode};
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::json;
@@ -385,6 +505,190 @@ mod tests {
     use crate::identity::{AgentIdentity, KeyIdentity};
 
     use super::*;
+
+    #[test]
+    fn authenticated_transport_classifies_mutations_fail_closed() {
+        let configured = GraphqlRequestOptions {
+            timeout: Duration::from_secs(17),
+            max_attempts: 5,
+            retry_backoff: Duration::from_millis(100),
+        };
+        for document in [
+            "mutation { create_Widget(input: {}) { _docID } }",
+            "mutation{create_Widget(input:{}){_docID}}",
+            "# generated request\nmutation NamedMutation { create_Widget(input: {}) { _docID } }",
+            "\u{feff}, # first comment\r\n # second comment\n mutation{create_Widget(input:{}){_docID}}",
+            "fragment WidgetFields on Widget { _docID } mutation Named { create_Widget(input: {}) { ...WidgetFields } }",
+        ] {
+            let options = fail_closed_graphql_request_options(configured, document);
+            assert_eq!(options.timeout, configured.timeout, "{document:?}");
+            assert_eq!(options.max_attempts, 1, "{document:?}");
+            assert_eq!(options.retry_backoff, Duration::ZERO, "{document:?}");
+        }
+
+        for document in [
+            "{ Widget { _docID } }",
+            "query NamedQuery { Widget { _docID } }",
+            "# mutation in a comment\n\u{feff}, query{Widget{_docID}}",
+        ] {
+            let options = fail_closed_graphql_request_options(configured, document);
+            assert_eq!(
+                options.max_attempts, configured.max_attempts,
+                "{document:?}"
+            );
+            assert_eq!(
+                options.retry_backoff, configured.retry_backoff,
+                "{document:?}"
+            );
+        }
+    }
+
+    async fn count_invalid_json(
+        State(attempts): State<Arc<AtomicUsize>>,
+    ) -> ([(header::HeaderName, &'static str); 1], &'static str) {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        ([(header::CONTENT_TYPE, "application/json")], "{")
+    }
+
+    #[tokio::test]
+    async fn authenticated_transport_never_retries_ambiguous_mutations() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/api/v0/graphql", post(count_invalid_json))
+            .with_state(attempts.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let key_dir = tempfile::tempdir().unwrap();
+        let identity = Arc::new(
+            KeyIdentity::load_or_create(key_dir.path().join("identity.key"), None).unwrap(),
+        );
+        let access =
+            AuthenticatedGraphql::new(format!("http://{address}/api/v0/graphql"), identity)
+                .await
+                .unwrap();
+        let configured = GraphqlRequestOptions {
+            timeout: Duration::from_secs(5),
+            max_attempts: 3,
+            retry_backoff: Duration::ZERO,
+        };
+
+        for document in [
+            "mutation{create_Widget(input:{}){_docID}}",
+            "# generated\nmutation Named { update_Widget(input:{}){_docID}}",
+            "\u{feff}, # comment\r\nmutation{delete_Widget(filter:{}){_docID}}",
+        ] {
+            attempts.store(0, Ordering::SeqCst);
+            access.execute(document, configured).await.unwrap_err();
+            assert_eq!(attempts.load(Ordering::SeqCst), 1, "{document:?}");
+        }
+
+        attempts.store(0, Ordering::SeqCst);
+        access
+            .execute_with_tx("mutation{create_Widget(input:{}){_docID}}", configured, "7")
+            .await
+            .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+        attempts.store(0, Ordering::SeqCst);
+        access
+            .execute("query{Widget{_docID}}", configured)
+            .await
+            .unwrap_err();
+        assert_eq!(attempts.load(Ordering::SeqCst), configured.max_attempts);
+    }
+
+    #[derive(Clone)]
+    struct MutationErrorState {
+        attempts: Arc<AtomicUsize>,
+        first_error_message: Arc<str>,
+    }
+
+    async fn mutation_error_once_then_succeed(
+        State(state): State<MutationErrorState>,
+    ) -> Json<Value> {
+        let attempt = state.attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt == 0 {
+            Json(json!({
+                "errors": [{"message": state.first_error_message.as_ref()}]
+            }))
+        } else {
+            Json(json!({"data": {"create_Widget": {"_docID": "widget-doc"}}}))
+        }
+    }
+
+    async fn probe_authenticated_mutation_error(
+        first_error_message: &str,
+        txn_id: Option<&str>,
+    ) -> (Result<Value>, usize) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/api/v0/graphql", post(mutation_error_once_then_succeed))
+            .with_state(MutationErrorState {
+                attempts: attempts.clone(),
+                first_error_message: Arc::from(first_error_message),
+            });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let key_dir = tempfile::tempdir().unwrap();
+        let identity = Arc::new(
+            KeyIdentity::load_or_create(key_dir.path().join("identity.key"), None).unwrap(),
+        );
+        let access =
+            AuthenticatedGraphql::new(format!("http://{address}/api/v0/graphql"), identity)
+                .await
+                .unwrap();
+        let document = "mutation{create_Widget(input:{}){_docID}}";
+        let options = GraphqlRequestOptions {
+            timeout: Duration::from_secs(5),
+            max_attempts: 3,
+            retry_backoff: Duration::ZERO,
+        };
+        let result = match txn_id {
+            Some(txn_id) => access.execute_with_tx(document, options, txn_id).await,
+            None => access.execute(document, options).await,
+        };
+
+        (result, attempts.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn authenticated_transport_preserves_explicit_mutation_conflict_retries() {
+        let (response, attempts) =
+            probe_authenticated_mutation_error("DefraDB transaction conflict; please retry", None)
+                .await;
+        let response = response.unwrap();
+
+        assert_eq!(attempts, 2);
+        assert_eq!(
+            response.pointer("/data/create_Widget/_docID"),
+            Some(&Value::String("widget-doc".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_transport_does_not_retry_conflict_on_open_transaction() {
+        let message = "DefraDB transaction conflict; please retry";
+        let (result, attempts) = probe_authenticated_mutation_error(message, Some("7")).await;
+        let error = result.unwrap_err();
+
+        assert_eq!(attempts, 1);
+        assert!(error.to_string().contains(message), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn authenticated_transport_does_not_retry_advisory_mutation_errors() {
+        for message in ["please retry", "database is locked"] {
+            let (result, attempts) = probe_authenticated_mutation_error(message, None).await;
+            let error = result.unwrap_err();
+
+            assert_eq!(attempts, 1, "{message:?}");
+            assert!(error.to_string().contains(message), "{error:#}");
+        }
+    }
 
     #[test]
     fn audience_matches_http_host_rules() {

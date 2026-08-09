@@ -3,6 +3,8 @@ use support::*;
 
 use std::fs;
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -73,6 +75,7 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provision_accepts_initialized_home_did_without_file_key_path() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -88,21 +91,33 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
     fs::create_dir_all(&home)?;
 
     let placeholder_did = "did:test:mini-2-steward";
-    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    write_json_file(
-        &home.join("init.json"),
-        &serde_json::json!({
-            "home": home.to_string_lossy(),
-            "agent_name": "mini-2-steward",
-            "agent_did": agent_did,
-            "key_path": null,
-            "tool_ceiling": "Readonly",
-            "tool_root": tempdir.path().to_string_lossy()
-        }),
+    let keychain_label = format!("gents-cli-provision-test-{}", Uuid::new_v4().simple());
+    let _keychain_identity = MacosKeychainIdentityGuard::new(&keychain_label);
+    let init = run_cli_json_with_host_keychain(
+        &home_env,
+        &[
+            "init",
+            "--identity-only",
+            "--home",
+            home.to_str().expect("utf-8 home"),
+            "--agent-name",
+            "mini-2-steward",
+            "--identity-backend",
+            "macos-keychain",
+            "--keychain-label",
+            &keychain_label,
+        ],
     )?;
+    let agent_did = agent_did_from_init(&init)?;
+    assert_eq!(init.get("key_path"), Some(&Value::Null));
+    assert_eq!(
+        init.pointer("/identity/identity_backend")
+            .and_then(Value::as_str),
+        Some("macos-keychain")
+    );
     write_portable_manifest_root(tempdir.path(), &root, placeholder_did)?;
 
-    let report = run_cli_json(
+    let report = run_cli_json_with_host_keychain(
         &home_env,
         &[
             "provision",
@@ -134,6 +149,55 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
     );
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn run_cli_json_with_host_keychain(current_dir: &Path, args: &[&str]) -> Result<Value> {
+    let output = Command::new(cli_bin())
+        .env("RUST_LOG", "error")
+        .current_dir(current_dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running gents {}", args.join(" ")))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
+}
+
+#[cfg(target_os = "macos")]
+struct MacosKeychainIdentityGuard {
+    label: String,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosKeychainIdentityGuard {
+    fn new(label: &str) -> Self {
+        Self {
+            label: label.to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosKeychainIdentityGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("security")
+            .args([
+                "delete-generic-password",
+                "-s",
+                "com.source-inc.gents.identity",
+                "-a",
+                &self.label,
+            ])
+            .output();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

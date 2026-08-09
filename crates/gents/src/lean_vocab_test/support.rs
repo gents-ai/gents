@@ -60,7 +60,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) inference_rendered_capture_cases: Vec<LeanInferenceRenderedCaptureCase>,
     pub(crate) tool_fact_cases: Vec<LeanToolFactCase>,
     pub(crate) tool_execution_split_cases: Vec<LeanToolExecutionSplitCase>,
+    pub(crate) tool_output_projection_cases: Vec<LeanToolOutputProjectionCase>,
     pub(crate) tool_terminal_evidence_cases: Vec<LeanToolTerminalEvidenceCase>,
+    pub(crate) omission_phase_matrix_cases: Vec<LeanOmissionPhaseMatrixCase>,
     pub(crate) fork_provenance_cases: Vec<LeanForkProvenanceCase>,
     pub(crate) compaction_source_manifest_cases: Vec<LeanCompactionSourceManifestCase>,
     pub(crate) response_outcome_cases: Vec<LeanResponseOutcomeCase>,
@@ -417,6 +419,8 @@ mod subagent_bridge_admission;
 mod tool_execution_split;
 #[path = "tool_fact.rs"]
 mod tool_fact;
+#[path = "tool_output_projection.rs"]
+mod tool_output_projection;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "tool_terminal_evidence.rs"]
@@ -443,6 +447,7 @@ pub(crate) use slot_persistence_health::*;
 pub(crate) use subagent_bridge_admission::*;
 pub(crate) use tool_execution_split::*;
 pub(crate) use tool_fact::*;
+pub(crate) use tool_output_projection::*;
 pub(crate) use tool_policy::*;
 pub(crate) use tool_terminal_evidence::*;
 pub(crate) use triggers_runtime_apply::*;
@@ -604,8 +609,16 @@ pub(crate) fn lean_tool_execution_split_cases() -> &'static [LeanToolExecutionSp
     &lean_contract_snapshot().tool_execution_split_cases
 }
 
+pub(crate) fn lean_tool_output_projection_cases() -> &'static [LeanToolOutputProjectionCase] {
+    &lean_contract_snapshot().tool_output_projection_cases
+}
+
 pub(crate) fn lean_tool_terminal_evidence_cases() -> &'static [LeanToolTerminalEvidenceCase] {
     &lean_contract_snapshot().tool_terminal_evidence_cases
+}
+
+pub(crate) fn lean_omission_phase_matrix_cases() -> &'static [LeanOmissionPhaseMatrixCase] {
+    &lean_contract_snapshot().omission_phase_matrix_cases
 }
 
 pub(crate) fn lean_fork_provenance_cases() -> &'static [LeanForkProvenanceCase] {
