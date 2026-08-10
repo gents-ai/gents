@@ -2462,7 +2462,12 @@ async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
+    let response = execute_graphql_with_conflict_retry(
+        node,
+        &mutation,
+        "mark interrupted request in subagent conformance",
+    )
+    .await;
     assert!(
         !response.has_errors(),
         "mark_request_interrupted failed: {:?}",
