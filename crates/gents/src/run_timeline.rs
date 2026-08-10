@@ -834,7 +834,10 @@ pub fn rendered_request_event(row: &TimelineRenderedRequestRow) -> TimelineRende
                         .admission
                         .as_ref()
                         .map(|admission| admission.call_id.clone()),
-                    manifest.admission.as_ref().map(|admission| admission.call_seq),
+                    manifest
+                        .admission
+                        .as_ref()
+                        .map(|admission| admission.call_seq),
                 ),
                 Ok(ParsedProvenance::Unsupported { manifest_version }) => (
                     "unsupported_manifest".to_string(),
@@ -1192,8 +1195,7 @@ mod tests {
             }
         });
         if let Some((call_id, call_seq)) = call_id {
-            manifest["admission"] =
-                serde_json::json!({ "call_id": call_id, "call_seq": call_seq });
+            manifest["admission"] = serde_json::json!({ "call_id": call_id, "call_seq": call_seq });
         }
         manifest.to_string()
     }

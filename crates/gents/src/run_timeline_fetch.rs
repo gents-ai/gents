@@ -63,8 +63,9 @@ pub async fn load_run_timeline_rows(
             .extend(load_timeline_rendered_requests_for_session(access, session_id).await?);
     }
     if session_ids.is_empty() || root_session_id.is_none() {
-        rendered_requests
-            .extend(load_timeline_rendered_requests_for_request(access, &request.request_id).await?);
+        rendered_requests.extend(
+            load_timeline_rendered_requests_for_request(access, &request.request_id).await?,
+        );
     }
 
     let session = match root_session_id.as_deref() {

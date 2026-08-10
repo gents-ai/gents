@@ -66,9 +66,7 @@ fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<Req
                 height: commit.get("height").and_then(serde_json::Value::as_i64)?,
             })
         })
-        .max_by(|left, right| {
-            (left.height, &left.cid).cmp(&(right.height, &right.cid))
-        }))
+        .max_by(|left, right| (left.height, &left.cid).cmp(&(right.height, &right.cid))))
 }
 
 #[cfg(test)]

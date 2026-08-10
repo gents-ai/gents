@@ -561,7 +561,13 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
-            "trace", "capture", "--home", home, "--request-id", "req-cap", "--list",
+            "trace",
+            "capture",
+            "--home",
+            home,
+            "--request-id",
+            "req-cap",
+            "--list",
         ],
     )?;
     let listing = serde_json::from_str::<Value>(&output).context("parsing capture list")?;
@@ -576,7 +582,9 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         "identity order: attempt 0 first"
     );
     assert!(
-        captures.iter().all(|capture| capture.get("request_json").is_none()),
+        captures
+            .iter()
+            .all(|capture| capture.get("request_json").is_none()),
         "list output must not carry bodies: {listing:#}"
     );
     assert_eq!(
@@ -646,7 +654,14 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     // Ambiguity without --list fails with a narrowing hint.
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
-        &["trace", "capture", "--home", home, "--request-id", "req-cap"],
+        &[
+            "trace",
+            "capture",
+            "--home",
+            home,
+            "--request-id",
+            "req-cap",
+        ],
     )?;
     assert!(
         stderr.contains("narrow with --scope/--turn/--attempt"),
@@ -657,7 +672,12 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let output = run_cli_text(
         tempdir.path(),
         &[
-            "trace", "timeline", "--home", home, "--request-id", "req-cap",
+            "trace",
+            "timeline",
+            "--home",
+            home,
+            "--request-id",
+            "req-cap",
         ],
     )?;
     let timeline = serde_json::from_str::<Value>(&output).context("parsing timeline")?;

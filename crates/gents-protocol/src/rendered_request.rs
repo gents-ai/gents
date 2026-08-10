@@ -226,11 +226,7 @@ impl CaptureOrderKey {
     pub fn padded(&self) -> String {
         format!(
             "{:02}.{}.{:010}.{:06}.{:06}",
-            self.scope.kind as u8,
-            self.scope.kind,
-            self.scope.seq,
-            self.turn_index,
-            self.attempt
+            self.scope.kind as u8, self.scope.kind, self.scope.seq, self.turn_index, self.attempt
         )
     }
 }
@@ -277,7 +273,9 @@ pub enum ParsedProvenance {
     Manifest(ProvenanceManifest),
     /// The row was written by a runtime this reader does not understand. The
     /// row is still real and still listed; only its provenance is opaque.
-    Unsupported { manifest_version: u32 },
+    Unsupported {
+        manifest_version: u32,
+    },
 }
 
 /// Why a `provenance_json` column failed to read. Distinct from
@@ -303,7 +301,10 @@ impl std::fmt::Display for ProvenanceParseError {
                 write!(f, "provenance_json carries no numeric manifest_version")
             }
             Self::InvalidManifest(err) => {
-                write!(f, "provenance_json does not match its declared version: {err}")
+                write!(
+                    f,
+                    "provenance_json does not match its declared version: {err}"
+                )
             }
         }
     }
@@ -831,7 +832,10 @@ mod tests {
             "mystery.1",
             "inference.1.2",
         ] {
-            assert!(bad.parse::<CaptureScope>().is_err(), "{bad:?} must not parse");
+            assert!(
+                bad.parse::<CaptureScope>().is_err(),
+                "{bad:?} must not parse"
+            );
         }
     }
 

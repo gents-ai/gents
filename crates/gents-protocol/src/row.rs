@@ -558,8 +558,10 @@ impl RenderedRequestRow {
     /// a real first-turn capture.
     pub fn order_key(
         &self,
-    ) -> Result<crate::rendered_request::CaptureOrderKey, crate::rendered_request::CaptureOrderKeyError>
-    {
+    ) -> Result<
+        crate::rendered_request::CaptureOrderKey,
+        crate::rendered_request::CaptureOrderKeyError,
+    > {
         use crate::rendered_request::{CaptureOrderKey, CaptureOrderKeyError, CaptureScope};
 
         let scope: CaptureScope = self
@@ -582,8 +584,10 @@ impl RenderedRequestRow {
     /// Read the row's provenance manifest through the versioned reader.
     pub fn provenance(
         &self,
-    ) -> Result<crate::rendered_request::ParsedProvenance, crate::rendered_request::ProvenanceParseError>
-    {
+    ) -> Result<
+        crate::rendered_request::ParsedProvenance,
+        crate::rendered_request::ProvenanceParseError,
+    > {
         crate::rendered_request::ProvenanceManifest::parse(
             self.provenance_json
                 .as_deref()

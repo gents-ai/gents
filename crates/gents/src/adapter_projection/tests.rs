@@ -80,7 +80,10 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
                 "rendered:v1:two",
                 1,
                 "2026-08-07T12:00:03Z",
-                format!(r#"{{"manifest_version":99,"body":{body:?}}}"#, body = BODY_SENTINEL),
+                format!(
+                    r#"{{"manifest_version":99,"body":{body:?}}}"#,
+                    body = BODY_SENTINEL
+                ),
             ),
         ],
         ..Default::default()
@@ -145,11 +148,7 @@ fn open_extension_surfaces_carry_capture_metadata() {
     let timeline = timeline_with_captures();
     let context = ProjectionContext::default();
 
-    let atif = build_adapter_projection(
-        AdapterProjectionKind::AtifTrajectory,
-        &timeline,
-        &context,
-    );
+    let atif = build_adapter_projection(AdapterProjectionKind::AtifTrajectory, &timeline, &context);
     let AdapterProjection::AtifTrajectory(trajectory) = &atif.output else {
         panic!("expected ATIF output");
     };

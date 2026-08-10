@@ -47,7 +47,9 @@ describe("request trace panel", () => {
 
     await waitFor(() => expect(screen.getByText("user: hi")).toBeInTheDocument());
     expect(
-      screen.getByText("captured inference.1 — turn 0 attempt 1 — gpt-5 — captured_only"),
+      screen.getByText(
+        "captured inference.1 — turn 0 attempt 1 — gpt-5 — captured_only",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("gents_exec — Completed")).toBeInTheDocument();
     expect(screen.getByText("materialized")).toBeInTheDocument();
