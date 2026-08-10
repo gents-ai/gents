@@ -475,24 +475,35 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
 fn request_budget_construction_fails_closed_on_non_positive_values() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
     for invalid in [-1, 0] {
-        let mut request = request();
-        request.max_total_tokens = Some(invalid);
-        let error = aggregate_token_budget_for_request(&request)
+        let error = parse_aggregate_token_limit(Some(invalid))
             .err()
             .expect("non-positive aggregate budget must be rejected");
         assert!(error.to_string().contains("must be a positive integer"));
     }
 
+    assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);
+    assert_eq!(
+        parse_aggregate_token_limit(Some(4_096)).unwrap(),
+        Some(4_096)
+    );
+
     let mut request = request();
     request.max_total_tokens = Some(4_096);
-    let budget = aggregate_token_budget_for_request(&request).unwrap();
-    assert!(budget.is_some());
+    let budget = Some(AggregateTokenBudget::new(4_096));
     assert!(
         loop_config_for_request(&behavior, "system".to_string(), &request, budget, 0)
             .unwrap()
             .aggregate_token_budget
             .is_some()
     );
+}
+
+#[test]
+fn prior_usage_blocks_dispatch_when_already_at_limit() {
+    let budget = AggregateTokenBudget::with_prior_usage(1_000, 1_000);
+    let ledger = budget.snapshot().expect("ledger lock");
+    assert_eq!(ledger.remaining(), 0);
+    assert!(!ledger.can_dispatch(1, 100));
 }
 
 /// #649: every sampling knob a profile can pin must reach the provider body.

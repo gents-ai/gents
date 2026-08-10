@@ -39,6 +39,39 @@ pub(crate) fn persisted_usage_counts(usage: Usage) -> (u64, u64, u64) {
     )
 }
 
+/// Reconstruct the charged total from durable `InferenceCall` columns.
+///
+/// [`persisted_usage_counts`] writes `prompt_tokens` and `completion_tokens`
+/// so they sum to [`charged_usage_total`]. Rehydrate uses that inverse: when
+/// either column is present the missing side is treated as zero (fail-closed
+/// toward more spent, never less). Both absent means the call never reported
+/// usage and contributes nothing.
+pub(crate) fn charged_from_persisted_parts(
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+) -> Option<u64> {
+    if prompt_tokens.is_none() && completion_tokens.is_none() {
+        return None;
+    }
+    let prompt = nonnegative_tokens(prompt_tokens).unwrap_or(0);
+    let completion = nonnegative_tokens(completion_tokens).unwrap_or(0);
+    Some(prompt.saturating_add(completion))
+}
+
+/// Sum charged totals across durable usage rows for one physical request.
+pub(crate) fn sum_charged_from_persisted_parts<I>(rows: I) -> u64
+where
+    I: IntoIterator<Item = (Option<i64>, Option<i64>)>,
+{
+    rows.into_iter()
+        .filter_map(|(prompt, completion)| charged_from_persisted_parts(prompt, completion))
+        .fold(0u64, u64::saturating_add)
+}
+
+fn nonnegative_tokens(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +132,26 @@ mod tests {
                 charged,
                 "durable columns must reconstruct the ledger charge: {usage:?}"
             );
+            assert_eq!(
+                charged_from_persisted_parts(Some(prompt as i64), Some(completion as i64)),
+                Some(charged),
+                "rehydrate inverse of persist: {usage:?}"
+            );
         }
+    }
+
+    #[test]
+    fn rehydrate_skips_rows_without_usage_and_sums_the_rest() {
+        assert_eq!(charged_from_persisted_parts(None, None), None);
+        assert_eq!(charged_from_persisted_parts(Some(100), None), Some(100));
+        assert_eq!(charged_from_persisted_parts(None, Some(50)), Some(50));
+        assert_eq!(
+            sum_charged_from_persisted_parts([
+                (None, None),
+                (Some(100), Some(50)),
+                (Some(200), Some(10)),
+            ]),
+            360
+        );
     }
 }

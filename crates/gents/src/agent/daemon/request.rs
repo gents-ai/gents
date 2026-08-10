@@ -19,8 +19,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let aggregate_token_budget =
-            crate::completion_factory::aggregate_token_budget_for_request(&request)?;
+        let aggregate_token_budget = crate::completion_factory::aggregate_token_budget_for_request(
+            self.node.as_ref(),
+            &request,
+        )
+        .await?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let behavior_name = self.behavior.behavior_id.clone();
         let admission_context = AdmissionCallContext::for_request(

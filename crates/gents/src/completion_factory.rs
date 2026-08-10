@@ -1,15 +1,19 @@
 use crate::llm::ToolChoice;
 use chrono::{DateTime, Utc};
+use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
+use serde::Deserialize;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, ReasoningEffort, SamplingConfig};
+use crate::graphql::escape_graphql_string;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
+use crate::provider_usage;
 use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
@@ -105,24 +109,91 @@ pub(crate) fn loop_config_for_request(
     Ok(config)
 }
 
-/// Mint the single monotone provider-usage ledger for one durable request.
-/// Callers must construct it before any request-scoped provider work so
-/// session compaction and the owned inference loop cannot receive independent
-/// allowances.
-pub(crate) fn aggregate_token_budget_for_request(
-    request: &AgentRequest,
-) -> anyhow::Result<Option<AggregateTokenBudget>> {
-    request
-        .max_total_tokens
+/// Parse `AgentRequest.max_total_tokens` into a positive ledger limit.
+pub(crate) fn parse_aggregate_token_limit(
+    max_total_tokens: Option<i64>,
+) -> anyhow::Result<Option<u64>> {
+    max_total_tokens
         .map(|limit| {
             let limit = u64::try_from(limit)
                 .map_err(|_| anyhow::anyhow!("max_total_tokens must be a positive integer"))?;
             if limit == 0 {
                 anyhow::bail!("max_total_tokens must be a positive integer");
             }
-            Ok(AggregateTokenBudget::new(limit))
+            Ok(limit)
         })
         .transpose()
+}
+
+/// Mint the single monotone provider-usage ledger for one durable request.
+///
+/// `used` is rehydrated from durable `InferenceCall` rows for this physical
+/// `request_doc_id` so crash redrive and process restart cannot mint a fresh
+/// allowance. Callers must construct it before any request-scoped provider
+/// work so session compaction and the owned inference loop share one handle.
+pub(crate) async fn aggregate_token_budget_for_request(
+    node: &EmbeddedNode,
+    request: &AgentRequest,
+) -> anyhow::Result<Option<AggregateTokenBudget>> {
+    let Some(limit) = parse_aggregate_token_limit(request.max_total_tokens)? else {
+        return Ok(None);
+    };
+    let used = load_prior_charged_tokens(node, &request.doc_id).await?;
+    if used == 0 {
+        return Ok(Some(AggregateTokenBudget::new(limit)));
+    }
+    tracing::info!(
+        request_id = %request.request_id,
+        request_doc_id = %request.doc_id,
+        used,
+        limit,
+        "rehydrated aggregate token budget from durable InferenceCall rows"
+    );
+    Ok(Some(AggregateTokenBudget::with_prior_usage(limit, used)))
+}
+
+#[derive(Debug, Deserialize)]
+struct PriorUsageRow {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+}
+
+/// Sum charged tokens already persisted for this physical request.
+async fn load_prior_charged_tokens(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> anyhow::Result<u64> {
+    if request_doc_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }}
+            ) {{
+                prompt_tokens
+                completion_tokens
+            }}
+        }}"#,
+        escape_graphql_string(request_doc_id)
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading prior InferenceCall usage for request_doc_id={request_doc_id}: {:?}",
+            resp.errors
+        );
+    }
+    let rows: Vec<PriorUsageRow> = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Ok(provider_usage::sum_charged_from_persisted_parts(
+        rows.into_iter()
+            .map(|row| (row.prompt_tokens, row.completion_tokens)),
+    ))
 }
 
 fn completion_retry_origin(value: Option<&str>) -> ExecutionOrigin {
