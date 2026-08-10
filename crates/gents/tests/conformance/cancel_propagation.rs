@@ -30,6 +30,8 @@ struct RunningAgent {
 
 #[derive(Debug, Deserialize)]
 struct RequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     agent_did: String,
     lifecycle_state: Option<String>,
     interrupt_requested_at: Option<String>,
@@ -148,6 +150,10 @@ async fn drive_declarative_cancel_propagation() {
         None,
     )
     .await;
+    let parent_request_doc_id = fetch_request(coord_node.as_ref(), parent_request_id)
+        .await
+        .expect("created parent AgentRequest")
+        .doc_id;
 
     create_processing_request(
         host.db.node.as_ref(),
@@ -183,7 +189,8 @@ async fn drive_declarative_cancel_propagation() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         host_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     bridge.start_running().await.expect("persist bridge");
 
     let replicated_bridge = replay_and_wait_for_bridge(
@@ -596,6 +603,7 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestR
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                _docID
                 agent_did
                 lifecycle_state
                 interrupt_requested_at

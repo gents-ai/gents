@@ -41,7 +41,7 @@ pub(crate) async fn enqueue_background_completion_with_message(
     )?;
 
     let mut retry_index = 0;
-    loop {
+    let mut enqueued = loop {
         let txn = ConfigApplyTxn::begin_local(node, None).await?;
         let attempt = background_completion_transaction_attempt(
             &txn,
@@ -66,7 +66,7 @@ pub(crate) async fn enqueue_background_completion_with_message(
             }
         };
         match result {
-            Ok(enqueued) => return Ok(enqueued),
+            Ok(enqueued) => break enqueued,
             Err(error)
                 if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
                     && steering_transaction_error_is_retryable(&error) =>
@@ -84,7 +84,46 @@ pub(crate) async fn enqueue_background_completion_with_message(
             }
             Err(error) => return Err(error),
         }
+    };
+
+    if enqueued.created_request {
+        let created_request_doc_id = enqueued.request.doc_id.clone();
+        let active_request = reconcile_coalesced_pending_request(
+            node,
+            &parent.session_id,
+            &parent.agent_did,
+            QueueSource::BackgroundCompletion,
+            &queue_key,
+        )
+        .await?
+        .unwrap_or_else(|| enqueued.request.clone());
+        enqueued.created_request = active_request.doc_id == created_request_doc_id;
+
+        if let Err(error) =
+            session::upsert_conversation_from_request_with_identity_and_requester_did(
+                node,
+                &parent.session_id,
+                &behavior_id,
+                &parent.agent_did,
+                &behavior_id,
+                &active_request.request_id,
+                wake_content,
+                "pending",
+                parent.requester_did.as_deref(),
+            )
+            .await
+        {
+            tracing::warn!(
+                request_id = %active_request.request_id,
+                session_id = %parent.session_id,
+                error = %error,
+                "failed to update conversation for background-completion request"
+            );
+        }
+        enqueued.request = active_request;
     }
+
+    Ok(enqueued)
 }
 
 async fn background_completion_transaction_attempt(

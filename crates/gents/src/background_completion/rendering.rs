@@ -85,13 +85,6 @@ pub(super) fn xml_escape_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
 pub(super) fn non_empty(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();

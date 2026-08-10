@@ -513,6 +513,8 @@ async fn request_terminal_fields(
                 status
                 lifecycle_state
                 failure_reason
+                terminalized_at
+                terminal_redrive_attempts
             }}
         }}"#
     );
@@ -706,8 +708,10 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
         "an incoherent row must not poison or queue-block coherent work"
     );
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-pending").await;
-    assert_eq!(terminal["status"], "failed");
+    assert_eq!(terminal["status"], "error");
     assert_eq!(terminal["lifecycle_state"], "failed");
+    assert!(terminal["terminalized_at"].is_string());
+    assert_eq!(terminal["terminal_redrive_attempts"], 0);
     assert!(terminal["failure_reason"]
         .as_str()
         .is_some_and(|reason| reason.contains("incoherent durable lineage")));
@@ -750,6 +754,8 @@ async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
     let result = watcher.try_fetch_request(&doc_id).await.unwrap();
     assert!(result.is_none());
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-fetch").await;
-    assert_eq!(terminal["status"], "failed");
+    assert_eq!(terminal["status"], "error");
     assert_eq!(terminal["lifecycle_state"], "failed");
+    assert!(terminal["terminalized_at"].is_string());
+    assert_eq!(terminal["terminal_redrive_attempts"], 0);
 }

@@ -137,6 +137,13 @@ pub async fn load_run_timeline_rows(
                 in_scope_ids.contains(row.request_id.as_str())
                     && nonempty(row.request_doc_id.as_deref()).is_none()
             })
+            .count()
+        + rendered_requests
+            .iter()
+            .filter(|row| {
+                nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
+                    && nonempty(row.request_doc_id.as_deref()).is_none()
+            })
             .count();
     if legacy_logical_only_rows > 0 {
         tracing::warn!(
@@ -180,6 +187,13 @@ pub async fn load_run_timeline_rows(
             row.request_doc_id.as_deref(),
         )
     });
+    rendered_requests.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            row.request_id.as_deref(),
+            row.request_doc_id.as_deref(),
+        )
+    });
     validate_request_scoped_rows(
         &request_bindings,
         &messages,
@@ -187,6 +201,7 @@ pub async fn load_run_timeline_rows(
         &responses,
         &inference_calls,
         &compactions,
+        &rendered_requests,
     )?;
     validate_child_tool_bridges(&request, &requests, &tool_calls)?;
 

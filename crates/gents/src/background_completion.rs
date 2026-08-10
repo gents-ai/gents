@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use serde::Deserialize;
@@ -29,7 +29,6 @@ use crate::lifecycle::queue::{
 use crate::lifecycle::ExecutionOrigin;
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCallLifecycle};
-use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
@@ -112,14 +111,11 @@ use datetime_fields::{
     agent_tool_call_datetime_update_fragment, clear_cancel_pending_ack, set_stuck_since,
 };
 use notification_delivery::SideEffects;
-use queries::{
-    load_agent_request_for_queue, load_child_linkage, load_request_id_by_doc_id,
-    load_terminal_child_request_ids,
-};
+use queries::{load_child_linkage, load_request_id_by_doc_id, load_terminal_child_request_ids};
 use reconciliation::request_is_locally_owned;
 use rendering::{
     child_terminal_status, child_terminal_summary, compact_summary, first_row, non_empty,
-    normalize_optional_string, render_notification, render_tool_completion, xml_escape_attr,
+    render_notification, render_tool_completion, xml_escape_attr,
 };
 use side_effects::{
     bound_background_wake_request, bridge_state_is_terminal, ensure_projection_side_effects,

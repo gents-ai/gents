@@ -276,7 +276,20 @@ pub(super) fn request_only_parent_linkage_graphql_fields(parent: &AgentRequest) 
                 escape_graphql_string(parent_request_doc_id),
             ))
         }
-        (None, None, None, None) => Ok(String::new()),
+        (None, None, None, None)
+            if !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty() =>
+        {
+            Ok(format!(
+                r#",
+                caused_by_parent_request_id: "{}",
+                caused_by_parent_request_doc_id: "{}""#,
+                escape_graphql_string(&parent.request_id),
+                escape_graphql_string(&parent.doc_id),
+            ))
+        }
+        (None, None, None, None) => {
+            anyhow::bail!("cannot enqueue control continuation from an unbound parent request")
+        }
         _ => anyhow::bail!("cannot enqueue control continuation from incoherent parent linkage"),
     }
 }

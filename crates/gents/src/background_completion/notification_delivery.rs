@@ -19,7 +19,7 @@ pub(crate) async fn append_background_tool_completion(
 ) -> Result<()> {
     // Load the parent request up front so the completion notification is stamped
     // with the parent session's owning agent_did.
-    let parent_request = load_agent_request_for_queue(node, parent_request_id)
+    let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 

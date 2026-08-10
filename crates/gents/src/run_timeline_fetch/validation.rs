@@ -96,6 +96,7 @@ pub(super) fn validate_request_scoped_rows(
     responses: &[TimelineResponseRow],
     inference_calls: &[TimelineInferenceCallRow],
     compactions: &[TimelineCompactionRow],
+    rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
         validate_optional_request_binding(
@@ -143,6 +144,15 @@ pub(super) fn validate_request_scoped_rows(
             "CompactionEntry",
             row.doc_id.as_deref().unwrap_or(&row.compaction_key),
             Some(&row.request_id),
+            row.request_doc_id.as_deref(),
+        )?;
+    }
+    for row in rendered_requests {
+        validate_optional_request_binding(
+            bindings,
+            "RenderedRequest",
+            row.doc_id.as_deref().unwrap_or(&row.capture_key),
+            row.request_id.as_deref(),
             row.request_doc_id.as_deref(),
         )?;
     }

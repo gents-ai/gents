@@ -130,28 +130,39 @@ impl DefraWatcher {
         let failure_reason = crate::graphql::escape_graphql_string(&format!(
             "request rejected at ingest: incoherent durable lineage ({error})"
         ));
+        let agent_did = crate::graphql::escape_graphql_string(&self.agent_did);
+        let terminalized_at =
+            crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
+                        agent_did: {{ _eq: "{agent_did}" }},
                         status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "failed",
+                        status: "error",
                         lifecycle_state: "failed",
-                        failure_reason: "{failure_reason}"
+                        failure_reason: "{failure_reason}",
+                        terminalized_at: "{terminalized_at}",
+                        terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&mutation).await;
-        if response.has_errors() {
+        if let Err(persist_error) = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            self.node.as_ref(),
+            &mutation,
+            "terminalize_incoherent_pending_request",
+        )
+        .await
+        {
             tracing::error!(
                 doc_id = %row.doc_id,
                 request_id = %row.request_id,
-                ?response.errors,
+                error = %persist_error,
                 "failed to terminalize incoherent AgentRequest",
             );
             return;

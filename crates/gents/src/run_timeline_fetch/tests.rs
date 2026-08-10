@@ -44,6 +44,28 @@ fn genuinely_unbound_context_row_is_permitted_but_half_binding_is_not() {
 }
 
 #[test]
+fn rendered_request_requires_the_same_physical_binding_as_other_timeline_rows() {
+    let rendered = TimelineRenderedRequestRow {
+        doc_id: Some("rendered-1".to_string()),
+        capture_key: "capture-1".to_string(),
+        request_id: Some("req-root".to_string()),
+        request_doc_id: Some("doc-child".to_string()),
+        ..Default::default()
+    };
+    let error = validate_request_scoped_rows(
+        &bindings(),
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[rendered],
+    )
+    .expect_err("rendered request must not forge a logical/physical request pair");
+    assert!(error.to_string().contains("RenderedRequest rendered-1"));
+}
+
+#[test]
 fn session_rows_for_nested_requests_are_out_of_scope_without_hiding_forged_root_edges() {
     let bindings = bindings();
     assert!(!request_scoped_row_is_in_timeline(

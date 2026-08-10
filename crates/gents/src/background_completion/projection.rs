@@ -34,13 +34,16 @@ async fn project_background_subagent_completion_inner(
     let Some(parent_request_id) = non_empty(linkage.caused_by_parent_request_id.as_deref()) else {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     };
-    if non_empty(linkage.caused_by_parent_request_doc_id.as_deref()).is_none()
-        || non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none()
+    let Some(parent_request_doc_id) = non_empty(linkage.caused_by_parent_request_doc_id.as_deref())
+    else {
+        return Ok(BackgroundCompletionOutcome::Unlinked);
+    };
+    if non_empty(linkage.caused_by_parent_tool_call_id.as_deref()).is_none()
         || non_empty(linkage.caused_by_parent_tool_call_doc_id.as_deref()).is_none()
     {
         return Ok(BackgroundCompletionOutcome::Unlinked);
     }
-    if !request_is_locally_owned(node, parent_request_id, local_did).await? {
+    if !request_is_locally_owned(node, parent_request_id, parent_request_doc_id, local_did).await? {
         return Ok(BackgroundCompletionOutcome::NotLocalOwner);
     }
 

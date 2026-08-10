@@ -5,6 +5,7 @@ struct UnclaimedBridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
+    request_doc_id: Option<String>,
     tool_call_id: String,
     child_request_id: String,
     started_at: Option<String>,
@@ -16,6 +17,7 @@ struct CancelPendingBridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
+    request_doc_id: Option<String>,
     tool_call_id: String,
     child_request_id: String,
     cancel_cascade_intent_at: Option<String>,
@@ -59,6 +61,7 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
             ) {{
                 _docID
                 request_id
+                request_doc_id
                 tool_call_id
                 child_request_id
                 started_at
@@ -82,7 +85,17 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
 
     let mut outcomes = Vec::with_capacity(rows.len());
     for row in rows {
-        if !request_is_locally_owned(node.as_ref(), &row.request_id, local_did).await? {
+        let Some(request_doc_id) = non_empty(row.request_doc_id.as_deref()) else {
+            tracing::warn!(
+                tool_call_doc_id = %row.doc_id,
+                request_id = %row.request_id,
+                "skipping unclaimed bridge without physical request provenance"
+            );
+            continue;
+        };
+        if !request_is_locally_owned(node.as_ref(), &row.request_id, request_doc_id, local_did)
+            .await?
+        {
             continue;
         }
 
@@ -128,6 +141,7 @@ pub async fn observe_cancel_cascade_ack(
         AgentToolCall(filter: { cancel_pending_remote_ack: { _eq: true } }) {
             _docID
             request_id
+            request_doc_id
             tool_call_id
             child_request_id
             cancel_cascade_intent_at
@@ -147,7 +161,17 @@ pub async fn observe_cancel_cascade_ack(
 
     let mut outcomes = Vec::with_capacity(rows.len());
     for row in rows {
-        if !request_is_locally_owned(node.as_ref(), &row.request_id, local_did).await? {
+        let Some(request_doc_id) = non_empty(row.request_doc_id.as_deref()) else {
+            tracing::warn!(
+                tool_call_doc_id = %row.doc_id,
+                request_id = %row.request_id,
+                "skipping cancel bridge without physical request provenance"
+            );
+            continue;
+        };
+        if !request_is_locally_owned(node.as_ref(), &row.request_id, request_doc_id, local_did)
+            .await?
+        {
             continue;
         }
 
@@ -189,25 +213,11 @@ pub async fn observe_cancel_cascade_ack(
 }
 
 async fn child_request_exists_locally(node: &EmbeddedNode, child_request_id: &str) -> Result<bool> {
-    let escaped = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("child existence probe failed: {:?}", response.errors);
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .is_some_and(|rows| !rows.is_empty()))
+    Ok(
+        crate::request_binding::resolve_request_doc_id(node, child_request_id)
+            .await?
+            .is_some(),
+    )
 }
 
 async fn clear_unclaimed_deadline_at(node: &EmbeddedNode, doc_id: &str) -> Result<()> {
@@ -233,11 +243,16 @@ async fn load_child_ack_probe(
     node: &EmbeddedNode,
     child_request_id: &str,
 ) -> Result<Option<ChildAckProbeRow>> {
-    let escaped = escape_graphql_string(child_request_id);
+    let Some(child_request_doc_id) =
+        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
+    else {
+        return Ok(None);
+    };
+    let escaped = escape_graphql_string(&child_request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
                 status
@@ -272,15 +287,16 @@ fn request_terminal_or_interrupted(row: &ChildAckProbeRow) -> bool {
 pub(super) async fn request_is_locally_owned(
     node: &EmbeddedNode,
     request_id: &str,
+    request_doc_id: &str,
     local_did: &str,
 ) -> Result<bool> {
-    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_request_doc_id = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                 limit: 1
-            ) {{ agent_did }}
+            ) {{ request_id agent_did }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -290,13 +306,15 @@ pub(super) async fn request_is_locally_owned(
             response.errors
         );
     }
-    Ok(response
+    let row = response
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|rows| rows.first())
-        .and_then(|row| row.get("agent_did"))
-        .and_then(|v| v.as_str())
-        == Some(local_did))
+        .context("physical parent AgentRequest not found")?;
+    Ok(
+        row.get("request_id").and_then(|v| v.as_str()) == Some(request_id)
+            && row.get("agent_did").and_then(|v| v.as_str()) == Some(local_did),
+    )
 }

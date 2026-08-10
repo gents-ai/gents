@@ -22,7 +22,6 @@ use crate::lifecycle::queue::{
 };
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
-use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
 
 pub(crate) use self::buffer::{
     LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
@@ -174,6 +173,7 @@ impl<'de> Deserialize<'de> for AwaitModeArg {
 pub(crate) struct ParentSubagentContext {
     pub session_id: String,
     pub request_id: String,
+    pub request_doc_id: String,
     pub behavior_id: String,
     pub subagent_depth: u32,
     pub request_deadline_at: DateTime<Utc>,
@@ -294,6 +294,8 @@ pub struct ChildEdge {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     request_id: String,
     session_id: String,
     behavior_id: Option<String>,
@@ -391,31 +393,6 @@ struct ReadToolOutputRow {
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
     result: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentRequestQueueRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    requester_did: Option<String>,
-    behavior_id: Option<String>,
-    session_id: String,
-    content: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    max_tokens: Option<i64>,
-    metadata: Option<String>,
-    execution_origin: Option<String>,
-    created_at: String,
-    deadline: Option<String>,
-    subagent_depth: Option<u32>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1276,10 +1253,16 @@ pub(crate) async fn append_steering_request(
     // Load the child request first so the steering message is stamped with the
     // child session's owning agent_did (the message belongs to the child agent's
     // conversation slice, not the steering caller's).
-    let mut child_request = load_agent_request_for_queue(node, &edge.child_request_id)
-        .await?
-        .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
-    if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id) {
+    let mut child_request =
+        crate::request_binding::load_agent_request(node, &edge.child_request_id)
+            .await?
+            .ok_or_else(|| anyhow!("child AgentRequest {} not found", edge.child_request_id))?;
+    let caller_request_doc_id =
+        crate::request_binding::require_request_doc_id(node, caller_request_id).await?;
+    if child_request.caused_by_parent_request_id.as_deref() != Some(caller_request_id)
+        || child_request.caused_by_parent_request_doc_id.as_deref()
+            != Some(caller_request_doc_id.as_str())
+    {
         anyhow::bail!(
             "child AgentRequest {} no longer links to caller request {caller_request_id}",
             edge.child_request_id
@@ -1287,6 +1270,7 @@ pub(crate) async fn append_steering_request(
     }
 
     child_request.caused_by_parent_request_id = Some(caller_request_id.to_string());
+    child_request.caused_by_parent_request_doc_id = Some(caller_request_doc_id);
     child_request.caused_by_parent_tool_call_id = None;
     child_request.caused_by_parent_tool_call_doc_id = None;
     let enqueued = enqueue_steering_request_with_message(
@@ -1393,81 +1377,6 @@ pub(crate) async fn pending_automated_wakeup_request_ids(
         })
         .filter_map(|row| non_empty_string(row.request_id.as_deref()))
         .collect())
-}
-
-async fn load_agent_request_for_queue(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Result<Option<AgentRequest>> {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                request_id
-                agent_did
-                requester_did
-                behavior_id
-                session_id
-                content
-                temperature
-                top_p
-                top_k
-                max_tokens
-                metadata
-                execution_origin
-                created_at
-                deadline
-                subagent_depth
-                caused_by_parent_request_id
-                caused_by_parent_request_doc_id
-                caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query AgentRequest {request_id} for steering queue failed: {:?}",
-            response.errors
-        );
-    }
-    let Some(row) = first_row::<AgentRequestQueueRow>(response.data.as_ref(), "AgentRequest")
-    else {
-        return Ok(None);
-    };
-    let request = AgentRequest {
-        doc_id: row.doc_id,
-        request_id: row.request_id,
-        agent_did: row.agent_did,
-        requester_did: normalize_optional_string(row.requester_did),
-        behavior_id: normalize_optional_string(row.behavior_id),
-        session_id: row.session_id,
-        content: row.content,
-        temperature: row.temperature,
-        top_p: row.top_p,
-        top_k: row.top_k,
-        max_tokens: row.max_tokens,
-        metadata: row.metadata,
-        execution_origin: normalize_optional_string(row.execution_origin),
-        created_at: row.created_at,
-        deadline: normalize_optional_string(row.deadline),
-        subagent_depth: row.subagent_depth.unwrap_or(0),
-        caused_by_parent_request_id: normalize_optional_string(row.caused_by_parent_request_id),
-        caused_by_parent_request_doc_id: normalize_optional_string(
-            row.caused_by_parent_request_doc_id,
-        ),
-        caused_by_parent_tool_call_id: normalize_optional_string(row.caused_by_parent_tool_call_id),
-        caused_by_parent_tool_call_doc_id: normalize_optional_string(
-            row.caused_by_parent_tool_call_doc_id,
-        ),
-    };
-    validate_agent_request_subagent_coherence(&request)?;
-    Ok(Some(request))
 }
 
 fn child_terminal_state_name(row: &ChildRequestTerminalRow) -> Option<String> {
@@ -1605,13 +1514,16 @@ pub(crate) async fn load_parent_subagent_context(
     node: &EmbeddedNode,
     parent_request_id: &str,
 ) -> Result<ParentSubagentContext> {
-    let escaped_request_id = escape_graphql_string(parent_request_id);
+    let request_doc_id =
+        crate::request_binding::require_request_doc_id(node, parent_request_id).await?;
+    let escaped_request_doc_id = escape_graphql_string(&request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                 limit: 1
             ) {{
+                _docID
                 request_id
                 session_id
                 behavior_id
@@ -1630,6 +1542,10 @@ pub(crate) async fn load_parent_subagent_context(
 
     let row: ParentRequestRow = first_row(response.data.as_ref(), "AgentRequest")
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+    anyhow::ensure!(
+        row.request_id == parent_request_id && row.doc_id == request_doc_id,
+        "parent AgentRequest binding changed while loading {parent_request_id}"
+    );
     let behavior_id = row
         .behavior_id
         .filter(|value| !value.trim().is_empty())
@@ -1645,6 +1561,7 @@ pub(crate) async fn load_parent_subagent_context(
     Ok(ParentSubagentContext {
         session_id: row.session_id,
         request_id: row.request_id,
+        request_doc_id: row.doc_id,
         behavior_id,
         subagent_depth: row.subagent_depth.unwrap_or_default(),
         request_deadline_at: deadline,
@@ -1672,11 +1589,13 @@ pub(crate) async fn load_parent_subagent_authorization(
     node: &EmbeddedNode,
     parent_request_id: &str,
 ) -> Result<ParentSubagentAuthorization> {
-    let escaped_request_id = escape_graphql_string(parent_request_id);
+    let request_doc_id =
+        crate::request_binding::require_request_doc_id(node, parent_request_id).await?;
+    let escaped_request_doc_id = escape_graphql_string(&request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                 limit: 1
             ) {{
                 behavior_id
@@ -2093,18 +2012,25 @@ mod cross_deployment_timeout_tests {
 
 #[derive(Debug, Deserialize)]
 struct ChildRequestEdgeRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     request_id: String,
     session_id: String,
     agent_did: Option<String>,
     behavior_id: Option<String>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ParentToolCallEdgeRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_call_id: String,
     request_id: Option<String>,
+    request_doc_id: Option<String>,
     lifecycle_state: Option<String>,
     await_mode: Option<String>,
     child_request_id: Option<String>,
@@ -2229,19 +2155,27 @@ pub(crate) async fn load_authorized_child_edge(
     parent_context: &ParentSubagentContext,
     child_request_id: &str,
 ) -> Result<ChildEdge> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let Some(child_request_doc_id) =
+        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
+    else {
+        anyhow::bail!("child AgentRequest {child_request_id} not found");
+    };
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
     let child_query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_child_request_doc_id}" }} }},
                 limit: 1
             ) {{
+                _docID
                 request_id
                 session_id
                 agent_did
                 behavior_id
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -2254,18 +2188,15 @@ pub(crate) async fn load_authorized_child_edge(
     }
     let child: ChildRequestEdgeRow = first_row(child_response.data.as_ref(), "AgentRequest")
         .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} not found"))?;
+    if child.request_id != child_request_id || child.doc_id != child_request_doc_id {
+        anyhow::bail!("child AgentRequest binding changed while loading {child_request_id}");
+    }
     if child.caused_by_parent_request_id.as_deref() != Some(parent_context.request_id.as_str()) {
         anyhow::bail!(
             "child AgentRequest {child_request_id} is not linked to parent request {}",
             parent_context.request_id
         );
     }
-    let parent_tool_call_id = child
-        .caused_by_parent_tool_call_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!("child AgentRequest {child_request_id} has no parent tool-call link")
-        })?;
     let behavior_id = child
         .behavior_id
         .filter(|value| !value.trim().is_empty())
@@ -2274,21 +2205,36 @@ pub(crate) async fn load_authorized_child_edge(
         .agent_did
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("child AgentRequest {child_request_id} has no agent_did"))?;
-    let escaped_parent_session_id = escape_graphql_string(&parent_context.session_id);
-    let escaped_parent_request_id = escape_graphql_string(&parent_context.request_id);
-    let escaped_parent_tool_call_id = escape_graphql_string(&parent_tool_call_id);
+    if child.caused_by_parent_request_doc_id.as_deref()
+        != Some(parent_context.request_doc_id.as_str())
+    {
+        anyhow::bail!(
+            "child AgentRequest {child_request_id} has incoherent physical parent request provenance"
+        );
+    }
+    let parent_tool_call_id = child
+        .caused_by_parent_tool_call_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow!("child AgentRequest {child_request_id} has no parent tool-call link")
+        })?;
+    let parent_tool_call_doc_id = child
+        .caused_by_parent_tool_call_doc_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow!("child AgentRequest {child_request_id} has no parent tool-call document link")
+        })?;
+    let escaped_parent_tool_call_doc_id = escape_graphql_string(&parent_tool_call_doc_id);
     let tool_call_query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_parent_session_id}" }},
-                    request_id: {{ _eq: "{escaped_parent_request_id}" }},
-                    tool_call_id: {{ _eq: "{escaped_parent_tool_call_id}" }}
-                }},
+                filter: {{ _docID: {{ _eq: "{escaped_parent_tool_call_doc_id}" }} }},
                 limit: 1
             ) {{
+                _docID
                 tool_call_id
                 request_id
+                request_doc_id
                 lifecycle_state
                 await_mode
                 child_request_id
@@ -2308,7 +2254,11 @@ pub(crate) async fn load_authorized_child_edge(
                 "parent AgentToolCall {parent_tool_call_id} not found for child {child_request_id}"
             )
         })?;
-    if tool_call.request_id.as_deref() != Some(parent_context.request_id.as_str()) {
+    if tool_call.doc_id != parent_tool_call_doc_id
+        || tool_call.tool_call_id != parent_tool_call_id
+        || tool_call.request_id.as_deref() != Some(parent_context.request_id.as_str())
+        || tool_call.request_doc_id.as_deref() != Some(parent_context.request_doc_id.as_str())
+    {
         anyhow::bail!(
             "parent AgentToolCall {parent_tool_call_id} is not linked to parent request {}",
             parent_context.request_id
@@ -2423,11 +2373,16 @@ pub(crate) async fn load_child_terminal_row(
     node: &EmbeddedNode,
     child_request_id: &str,
 ) -> Result<Option<ChildRequestTerminalRow>> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let Some(child_request_doc_id) =
+        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
+    else {
+        return Ok(None);
+    };
+    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
+                filter: {{ _docID: {{ _eq: "{escaped_child_request_doc_id}" }} }},
                 limit: 1
             ) {{
                 status
