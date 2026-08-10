@@ -68,6 +68,55 @@ where
         .fold(0u64, u64::saturating_add)
 }
 
+/// Sum durable usage columns across rows for observation (ATIF / Harbor).
+///
+/// Each column stays `None` until at least one row supplies a non-negative
+/// value for it — the same rule the ledger's rehydrate path uses per field.
+/// Callers that need the request-wide charged total should use
+/// [`charged_from_column_totals`] on the prompt/completion results (or
+/// [`sum_charged_from_persisted_parts`] over the raw rows).
+pub(crate) fn sum_persisted_usage_columns<I>(rows: I) -> (Option<u64>, Option<u64>, Option<u64>)
+where
+    I: IntoIterator<Item = (Option<i64>, Option<i64>, Option<i64>)>,
+{
+    let mut prompt = None::<u64>;
+    let mut completion = None::<u64>;
+    let mut cached = None::<u64>;
+    for (prompt_tokens, completion_tokens, cached_input_tokens) in rows {
+        add_column_total(&mut prompt, prompt_tokens);
+        add_column_total(&mut completion, completion_tokens);
+        add_column_total(&mut cached, cached_input_tokens);
+    }
+    (prompt, completion, cached)
+}
+
+/// Charged total from already-summed durable columns.
+pub(crate) fn charged_from_column_totals(
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+) -> Option<u64> {
+    if prompt_tokens.is_none() && completion_tokens.is_none() {
+        return None;
+    }
+    Some(
+        prompt_tokens
+            .unwrap_or(0)
+            .saturating_add(completion_tokens.unwrap_or(0)),
+    )
+}
+
+/// Remaining request-wide budget after durable spend, when a ceiling is set.
+pub(crate) fn remaining_budget(limit: u64, used: u64) -> u64 {
+    limit.saturating_sub(used)
+}
+
+fn add_column_total(total: &mut Option<u64>, value: Option<i64>) {
+    let Some(value) = nonnegative_tokens(value) else {
+        return;
+    };
+    *total = Some(total.unwrap_or_default().saturating_add(value));
+}
+
 fn nonnegative_tokens(value: Option<i64>) -> Option<u64> {
     value.and_then(|value| u64::try_from(value).ok())
 }
@@ -153,5 +202,25 @@ mod tests {
             ]),
             360
         );
+    }
+
+    #[test]
+    fn column_totals_and_charged_observation_agree_with_rehydrate() {
+        let rows = [
+            (None, None, None),
+            (Some(100), Some(50), Some(20)),
+            (Some(200), Some(10), Some(5)),
+        ];
+        let (prompt, completion, cached) = sum_persisted_usage_columns(rows);
+        assert_eq!(prompt, Some(300));
+        assert_eq!(completion, Some(60));
+        assert_eq!(cached, Some(25));
+        assert_eq!(charged_from_column_totals(prompt, completion), Some(360));
+        assert_eq!(
+            sum_charged_from_persisted_parts(rows.map(|(p, c, _)| (p, c))),
+            360
+        );
+        assert_eq!(remaining_budget(1_000, 360), 640);
+        assert_eq!(remaining_budget(300, 360), 0);
     }
 }

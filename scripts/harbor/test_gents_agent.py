@@ -87,6 +87,11 @@ _TRAJECTORY = {
         "total_prompt_tokens": 300,
         "total_cached_tokens": 60,
         "total_completion_tokens": 100,
+        "extra": {
+            "aggregate_token_budget_limit": 1_000_000,
+            "aggregate_token_budget_used": 400,
+            "aggregate_token_budget_remaining": 999_600,
+        },
     },
 }
 _MAX_TURN_ERROR = (
@@ -130,6 +135,9 @@ class PopulateContextPostRunTest(unittest.TestCase):
         self.assertEqual(self.last_context.n_input_tokens, 300)
         self.assertEqual(self.last_context.n_cache_tokens, 60)
         self.assertEqual(self.last_context.n_output_tokens, 100)
+        self.assertEqual(gents.get("max_total_tokens"), 1_000_000)
+        self.assertEqual(gents.get("aggregate_token_budget_used"), 400)
+        self.assertEqual(gents.get("aggregate_token_budget_remaining"), 999_600)
 
     def test_token_exhaustion_is_identified(self) -> None:
         gents = self._run(
@@ -294,7 +302,11 @@ class PersistedRequestContractTest(unittest.TestCase):
         self.assertEqual(gents.get("outcome"), "token_budget_exhausted")
         self.assertEqual(gents.get("model"), "d4f")
         self.assertEqual(gents.get("seed"), 1)
-        self.assertEqual(gents.get("max_total_tokens"), 1000000)
+        # ATIF durable budget observation wins over re-reading only the
+        # submit-time request payload when both are present.
+        self.assertEqual(gents.get("max_total_tokens"), 1_000_000)
+        self.assertEqual(gents.get("aggregate_token_budget_used"), 400)
+        self.assertEqual(gents.get("aggregate_token_budget_remaining"), 999_600)
         self.assertIn(
             f"cat {GentsAgent._REMOTE_PERSISTED_REQUEST}", environment.commands
         )
@@ -311,6 +323,16 @@ class PersistedRequestContractTest(unittest.TestCase):
         self.assertIsNone(context.n_input_tokens)
         self.assertIsNone(context.n_cache_tokens)
         self.assertIsNone(context.n_output_tokens)
+
+    def test_atif_budget_observation_is_read_from_final_metrics_extra(self) -> None:
+        observation = GentsAgent._atif_budget_observation(_TRAJECTORY)
+        self.assertEqual(observation["limit"], 1_000_000)
+        self.assertEqual(observation["used"], 400)
+        self.assertEqual(observation["remaining"], 999_600)
+        self.assertEqual(
+            GentsAgent._atif_budget_observation({"final_metrics": {}}),
+            {"limit": None, "used": None, "remaining": None},
+        )
 
 
 class JackBenchRuntimeAttestationTest(unittest.TestCase):

@@ -272,6 +272,18 @@ pub(super) fn build_atif_trajectory(
         .count();
     let (total_prompt_tokens, total_completion_tokens, total_cached_tokens) =
         inference_usage_totals(timeline);
+    let aggregate_token_budget_used = crate::provider_usage::charged_from_column_totals(
+        total_prompt_tokens,
+        total_completion_tokens,
+    );
+    let aggregate_token_budget_limit = timeline
+        .request
+        .max_total_tokens
+        .and_then(|limit| u64::try_from(limit).ok())
+        .filter(|limit| *limit > 0);
+    let aggregate_token_budget_remaining = aggregate_token_budget_limit
+        .zip(aggregate_token_budget_used)
+        .map(|(limit, used)| crate::provider_usage::remaining_budget(limit, used));
 
     AtifTrajectory {
         schema_version: ATIF_SCHEMA_VERSION.to_string(),
@@ -336,11 +348,25 @@ pub(super) fn build_atif_trajectory(
                 ("tool_call_count", Some(json!(tool_call_count))),
                 ("compaction_count", Some(json!(compaction_count))),
                 ("child_request_ids", Some(json!(timeline.child_request_ids))),
+                // Durable request-wide budget observation (same charge rule as
+                // loop_stream rehydrate / InferenceCall persist).
+                (
+                    "aggregate_token_budget_limit",
+                    aggregate_token_budget_limit.map(|limit| json!(limit)),
+                ),
+                (
+                    "aggregate_token_budget_used",
+                    aggregate_token_budget_used.map(|used| json!(used)),
+                ),
+                (
+                    "aggregate_token_budget_remaining",
+                    aggregate_token_budget_remaining.map(|remaining| json!(remaining)),
+                ),
             ]),
         }),
         steps,
         notes: Some(
-            "Projected from Gents' persisted run timeline; token metrics are omitted when the durable trace does not distinguish prompt and completion usage."
+            "Projected from Gents' persisted run timeline; token metrics and request-wide budget used/remaining come from durable InferenceCall rows under the same charge rule as live enforcement."
                 .to_string(),
         ),
         extra: optional_extra([
@@ -922,26 +948,23 @@ fn optional_nonnegative_integer_schema() -> Value {
 }
 
 fn inference_usage_totals(timeline: &RunTimeline) -> (Option<u64>, Option<u64>, Option<u64>) {
-    let mut prompt = None::<u64>;
-    let mut completion = None::<u64>;
-    let mut cached = None::<u64>;
-    for call in timeline
-        .inference_calls
-        .iter()
-        .filter(|call| call.request_id == timeline.request_id)
-    {
-        add_nonnegative_usage(&mut prompt, call.prompt_tokens);
-        add_nonnegative_usage(&mut completion, call.completion_tokens);
-        add_nonnegative_usage(&mut cached, call.cached_input_tokens);
-    }
-    (prompt, completion, cached)
-}
-
-fn add_nonnegative_usage(total: &mut Option<u64>, value: Option<i64>) {
-    let Some(value) = value.and_then(|value| u64::try_from(value).ok()) else {
-        return;
-    };
-    *total = Some(total.unwrap_or_default().saturating_add(value));
+    // Prefer the physical request edge when present so ATIF, rehydrate, and
+    // InferenceCall persistence all attribute the same durable rows.
+    let root_calls =
+        timeline
+            .inference_calls
+            .iter()
+            .filter(|call| match timeline.request_doc_id.as_deref() {
+                Some(request_doc_id) => call.request_doc_id.as_deref() == Some(request_doc_id),
+                None => call.request_id == timeline.request_id,
+            });
+    crate::provider_usage::sum_persisted_usage_columns(root_calls.map(|call| {
+        (
+            call.prompt_tokens,
+            call.completion_tokens,
+            call.cached_input_tokens,
+        )
+    }))
 }
 
 fn require_nonempty(violations: &mut Vec<String>, path: &str, value: &str) {
@@ -967,10 +990,13 @@ mod tests {
         build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-atif".to_string(),
+                doc_id: Some("req-atif-doc".to_string()),
                 agent_did: Some("did:test:gents".to_string()),
                 behavior_id: Some("terminal-bench".to_string()),
                 session_id: Some("session-atif".to_string()),
                 content: Some("Fix the project.".to_string()),
+                seed: Some(7),
+                max_total_tokens: Some(10_000),
                 status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: Some("d4f".to_string()),
@@ -1012,6 +1038,7 @@ mod tests {
                 TimelineInferenceCallRow {
                     call_id: "inference-1".to_string(),
                     request_id: "req-atif".to_string(),
+                    request_doc_id: Some("req-atif-doc".to_string()),
                     call_seq: 1,
                     call_state: "completed".to_string(),
                     call_kind: "inference".to_string(),
@@ -1023,6 +1050,7 @@ mod tests {
                 TimelineInferenceCallRow {
                     call_id: "inference-2".to_string(),
                     request_id: "req-atif".to_string(),
+                    request_doc_id: Some("req-atif-doc".to_string()),
                     call_seq: 2,
                     call_state: "completed".to_string(),
                     call_kind: "inference".to_string(),
@@ -1034,6 +1062,7 @@ mod tests {
                 TimelineInferenceCallRow {
                     call_id: "compaction-1".to_string(),
                     request_id: "req-atif".to_string(),
+                    request_doc_id: Some("req-atif-doc".to_string()),
                     call_seq: 3,
                     call_state: "completed".to_string(),
                     call_kind: "compaction".to_string(),
@@ -1060,19 +1089,34 @@ mod tests {
         assert_eq!(metrics.total_completion_tokens, Some(110));
         assert_eq!(metrics.total_cached_tokens, Some(65));
         assert_eq!(metrics.total_cost_usd, None);
+        let extra = metrics.extra.as_ref().expect("final_metrics.extra");
         assert_eq!(
-            metrics
-                .extra
-                .as_ref()
-                .and_then(|extra| extra.get("inference_call_pending_count"))
+            extra
+                .get("aggregate_token_budget_limit")
+                .and_then(Value::as_u64),
+            Some(10_000)
+        );
+        assert_eq!(
+            extra
+                .get("aggregate_token_budget_used")
+                .and_then(Value::as_u64),
+            Some(460)
+        );
+        assert_eq!(
+            extra
+                .get("aggregate_token_budget_remaining")
+                .and_then(Value::as_u64),
+            Some(9_540)
+        );
+        assert_eq!(
+            extra
+                .get("inference_call_pending_count")
                 .and_then(Value::as_u64),
             Some(0)
         );
         assert_eq!(
-            metrics
-                .extra
-                .as_ref()
-                .and_then(|extra| extra.get("inference_call_usage_count"))
+            extra
+                .get("inference_call_usage_count")
                 .and_then(Value::as_u64),
             Some(3)
         );

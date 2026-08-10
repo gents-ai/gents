@@ -124,23 +124,59 @@ class GentsAgent(BaseAgent):
         )
 
     @staticmethod
-    def _populate_token_usage(
-        context: AgentContext, trajectory: dict[str, Any]
-    ) -> bool:
+    def _nonnegative_int(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    @classmethod
+    def _atif_final_metrics(cls, trajectory: dict[str, Any]) -> dict[str, Any]:
         final_metrics = trajectory.get("final_metrics") or {}
-        if not isinstance(final_metrics, dict):
-            return False
+        return final_metrics if isinstance(final_metrics, dict) else {}
+
+    @classmethod
+    def _atif_budget_observation(
+        cls, trajectory: dict[str, Any]
+    ) -> dict[str, int | None]:
+        """Read request-wide budget fields Gents projects into ATIF extra.
+
+        These are the durable observation path: limit from AgentRequest,
+        used/remaining from InferenceCall rows under the same charge rule as
+        live enforcement. Harbor must not re-sum tokens itself.
+        """
+        final_metrics = cls._atif_final_metrics(trajectory)
+        extra = final_metrics.get("extra") or {}
+        if not isinstance(extra, dict):
+            extra = {}
+        return {
+            "limit": cls._nonnegative_int(extra.get("aggregate_token_budget_limit")),
+            "used": cls._nonnegative_int(extra.get("aggregate_token_budget_used")),
+            "remaining": cls._nonnegative_int(
+                extra.get("aggregate_token_budget_remaining")
+            ),
+        }
+
+    @classmethod
+    def _populate_token_usage(
+        cls, context: AgentContext, trajectory: dict[str, Any]
+    ) -> bool:
+        """Copy ATIF final_metrics token columns into Harbor context.
+
+        Incomplete metrics fail closed (no partial fill). Usage is never
+        reconstructed from logs or InferenceCall rows here — Gents already
+        projected the durable charge into ATIF.
+        """
+        final_metrics = cls._atif_final_metrics(trajectory)
         values: dict[str, int] = {}
         for attribute, key in (
             ("n_input_tokens", "total_prompt_tokens"),
             ("n_cache_tokens", "total_cached_tokens"),
             ("n_output_tokens", "total_completion_tokens"),
         ):
-            value = final_metrics.get(key)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                values[attribute] = value
-            else:
+            value = cls._nonnegative_int(final_metrics.get(key))
+            if value is None:
                 return False
+            values[attribute] = value
         for attribute, value in values.items():
             setattr(context, attribute, value)
         return True
@@ -160,14 +196,25 @@ class GentsAgent(BaseAgent):
         init: dict[str, Any],
     ) -> None:
         self._populate_token_usage(context, trajectory)
-        final_metrics = trajectory.get("final_metrics") or {}
+        final_metrics = self._atif_final_metrics(trajectory)
+        budget = self._atif_budget_observation(trajectory)
         persisted_request = persisted_snapshot.get("request") or {}
+        if not isinstance(persisted_request, dict):
+            persisted_request = {}
         init_contract = init.get("init") or {}
+        if not isinstance(init_contract, dict):
+            init_contract = {}
         failure_origin = None
         if diagnostic.get("reason") == "server_lost_during_request":
             failure_origin = "gents_server"
         elif outcome.get("outcome") == "compaction_provider_error":
             failure_origin = "compaction_provider"
+
+        # Prefer ATIF's durable budget projection when present; fall back to the
+        # persisted AgentRequest row (already validated against GENTS_* env).
+        max_total_tokens = budget["limit"]
+        if max_total_tokens is None:
+            max_total_tokens = persisted_request.get("max_total_tokens")
 
         context.metadata = {
             **(context.metadata or {}),
@@ -181,16 +228,16 @@ class GentsAgent(BaseAgent):
                 "reasoning_effort": profile.get("reasoning_effort"),
                 "context_window": profile.get("context_window"),
                 "max_output_tokens": request.get("max_tokens"),
-                "max_total_tokens": persisted_request.get("max_total_tokens"),
+                "max_total_tokens": max_total_tokens,
+                "aggregate_token_budget_used": budget["used"],
+                "aggregate_token_budget_remaining": budget["remaining"],
                 "max_turns": profile.get("max_turns"),
                 "request_timeout_secs": profile.get("deadline_duration_secs"),
                 "retry_max_transport": profile.get("retry_max_transport"),
                 "request_id": request.get("request_id"),
                 "session_id": trajectory.get("session_id"),
                 "trajectory_id": trajectory.get("trajectory_id"),
-                "total_steps": final_metrics.get("total_steps")
-                if isinstance(final_metrics, dict)
-                else None,
+                "total_steps": final_metrics.get("total_steps"),
                 "outcome": outcome.get("outcome"),
                 "budget_exhausted": outcome.get("outcome")
                 in {"max_turns_exhausted", "token_budget_exhausted"},
