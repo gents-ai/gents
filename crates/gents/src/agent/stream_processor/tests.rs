@@ -52,8 +52,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
 
     let session_id = hook.session_id().await.expect("session id");
     let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
     let request = AgentRequest {
-        doc_id: "request-doc".to_string(),
+        doc_id: request_doc_id,
         request_id: request_id.clone(),
         agent_did: "did:test:test".to_string(),
         requester_did: None,

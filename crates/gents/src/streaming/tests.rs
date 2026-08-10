@@ -930,12 +930,11 @@ async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
     let mut streams = Vec::with_capacity(STREAM_COUNT);
     for index in 0..STREAM_COUNT {
         let writer = Arc::clone(&writers[index % WRITER_COUNT]);
+        let session_id = format!("parallel-session-{index}");
+        let request_id = format!("parallel-request-{index}");
+        create_processing_request(&node, &request_id, &session_id).await;
         let doc_id = writer
-            .begin(
-                &format!("parallel-session-{index}"),
-                &format!("parallel-request-{index}"),
-                "general",
-            )
+            .begin(&session_id, &request_id, "general")
             .await
             .expect("begin parallel stream");
         streams.push((writer, doc_id));
