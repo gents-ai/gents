@@ -1,4 +1,113 @@
 @layer config {
+  .provider-accounts-panel {
+    align-content: start;
+    display: grid;
+    gap: 1.25rem;
+  }
+
+  .provider-account-card h3 {
+    margin: 0;
+  }
+
+  .provider-account-grid {
+    align-content: start;
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-account-card {
+    align-content: start;
+    align-items: center;
+    background: var(--color-surface-raised, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 0.75rem;
+    display: grid;
+    gap: 0.5rem 1.5rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 1rem;
+  }
+
+  .provider-account-card-heading {
+    align-items: flex-start;
+    align-self: stretch;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .provider-account-card .status-pill {
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    flex: none;
+    font-size: 0.75rem;
+    justify-self: start;
+    padding: 0.2rem 0.55rem;
+  }
+
+  .provider-account-card .status-pill.green {
+    color: var(--color-status-success, #4ade80);
+  }
+
+  .provider-account-card .status-pill.yellow {
+    color: var(--color-status-warning, #facc15);
+  }
+
+  .provider-account-details {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: max-content minmax(0, 1fr);
+    margin: 0;
+    gap: 0.35rem 0.75rem;
+  }
+
+  .provider-account-card > .muted.small {
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin: 0;
+    text-align: left;
+  }
+
+  .provider-account-card > .config-actions {
+    align-self: start;
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end;
+    margin: 0;
+  }
+
+  .provider-account-card > .config-actions button {
+    white-space: nowrap;
+  }
+
+  .provider-account-auth {
+    grid-column: 1 / -1;
+  }
+
+  .provider-account-details dt {
+    color: var(--color-text-muted);
+  }
+
+  .provider-account-details dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 900px) {
+    .provider-account-card {
+      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .provider-account-card > .config-actions {
+      grid-column: auto;
+      grid-row: auto;
+      justify-content: flex-start;
+    }
+
+    .provider-account-auth {
+      grid-column: auto;
+    }
+  }
   .config-workspace {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);

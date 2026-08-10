@@ -155,6 +155,27 @@ export function cancelGrokLogin(api?: DesktopApiAdapter) {
   return getDesktopApiAdapter(api).cancelGrokLogin();
 }
 
+export function listProviderAccounts(
+  agentDid: string,
+  api?: DesktopApiAdapter,
+) {
+  const action = getDesktopApiAdapter(api).listProviderAccounts;
+  if (!action)
+    throw new Error("Provider accounts are not supported by this build");
+  return action(agentDid);
+}
+
+export function disconnectProviderAccount(
+  agentDid: string,
+  credentialId: string,
+  api?: DesktopApiAdapter,
+) {
+  const action = getDesktopApiAdapter(api).disconnectProviderAccount;
+  if (!action)
+    throw new Error("Provider accounts are not supported by this build");
+  return action(agentDid, credentialId);
+}
+
 export function saveInferenceProfileConfig(
   request: InferenceProfileSaveRequest,
   api?: DesktopApiAdapter,

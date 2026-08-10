@@ -130,3 +130,6 @@ export type {
   BackendHealth,
   InferenceCallSummary,
 } from "./types/backendHealth.js";
+export type { ProviderAccountView } from "./generated/ProviderAccountView.js";
+export type { ProviderAccountsRequest } from "./generated/ProviderAccountsRequest.js";
+export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccountDisconnectRequest.js";

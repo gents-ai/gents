@@ -1,5 +1,6 @@
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type {
   AgentConfigSaveRequest,
   BackendDeleteRequest,
@@ -167,6 +168,11 @@ export type DesktopApiAdapter = {
     provider?: string | null,
   ) => Promise<GrokLoginResult>;
   cancelGrokLogin: () => Promise<void>;
+  listProviderAccounts?: (agentDid: string) => Promise<ProviderAccountView[]>;
+  disconnectProviderAccount?: (
+    agentDid: string,
+    credentialId: string,
+  ) => Promise<void>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

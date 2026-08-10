@@ -1168,6 +1168,58 @@ Denies the desktop_probe_mcp_service command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-account-disconnect`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_disconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-disconnect`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_disconnect command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-provider-accounts-list`
+
+</td>
+<td>
+
+Enables the desktop_provider_accounts_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-accounts-list`
+
+</td>
+<td>
+
+Denies the desktop_provider_accounts_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-request-resend`
 
 </td>
@@ -1954,6 +2006,19 @@ Local runtime provisioning and managed server lifecycle
 <td>
 
 Config save/delete/test mutations
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:provider-accounts-read`
+
+</td>
+<td>
+
+Read redacted provider account metadata
 
 </td>
 </tr>
