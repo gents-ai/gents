@@ -10,6 +10,20 @@ import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 
 type Provider = "chatgpt-codex" | "xai-oauth";
 
+type TauriEventWindow = Window & {
+  __TAURI_INTERNALS__?: {
+    transformCallback?: unknown;
+  };
+};
+
+function hasTauriEventBridge(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as TauriEventWindow).__TAURI_INTERNALS__?.transformCallback ===
+      "function"
+  );
+}
+
 const PROVIDERS: Array<{ id: Provider; title: string; description: string }> = [
   {
     id: "chatgpt-codex",
@@ -58,6 +72,7 @@ export function ProviderAccountsPanel({
   }, [refresh]);
 
   useEffect(() => {
+    if (!hasTauriEventBridge()) return;
     let unlisten: (() => void) | undefined;
     void listen("desktop://client-updated", () => void refresh()).then(
       (stop) => (unlisten = stop),
@@ -75,9 +90,11 @@ export function ProviderAccountsPanel({
         provider === "chatgpt-codex"
           ? "desktop://codex-login-url"
           : "desktop://grok-login-url";
-      unlisten = await listen<{ url?: string | null }>(eventName, (event) =>
-        setAuthUrl(event.payload?.url ?? null),
-      );
+      if (hasTauriEventBridge()) {
+        unlisten = await listen<{ url?: string | null }>(eventName, (event) =>
+          setAuthUrl(event.payload?.url ?? null),
+        );
+      }
       if (provider === "chatgpt-codex") {
         await api.codexLogin(deployment.agentDid);
       } else {

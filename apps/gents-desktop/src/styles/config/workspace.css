@@ -39,7 +39,7 @@
     border: 1px solid currentColor;
     border-radius: 999px;
     flex: none;
-    font-size: 0.75rem;
+    font-size: var(--text-sm);
     justify-self: start;
     padding: 0.2rem 0.55rem;
   }
