@@ -20,8 +20,8 @@ fn message_is_runtime_control(
     message: &AgentMessageRow,
     requests_by_id: &HashMap<&str, &AgentRequestRow>,
 ) -> bool {
-    gents::background_completion::is_background_completion_notification_request_id(
-        message.request_id.as_deref(),
+    gents::background_completion::is_background_completion_notification_message_key(
+        &message.message_key,
     ) || message
         .request_id
         .as_deref()

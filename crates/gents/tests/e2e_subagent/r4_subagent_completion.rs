@@ -43,6 +43,8 @@ struct MessageRow {
     sequence: u32,
     role: String,
     content: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -515,7 +517,7 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role content }}
+            ) {{ sequence role content request_id request_doc_id }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -798,6 +800,16 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert!(messages[1].content.contains("child_request_id"));
     assert_eq!(messages[2].sequence, 3);
     assert!(messages[2].content.contains("<subagent-notification"));
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &parent_request_id).await;
+    assert_eq!(
+        messages[2].request_id.as_deref(),
+        Some(parent_request_id.as_str())
+    );
+    assert_eq!(
+        messages[2].request_doc_id.as_deref(),
+        Some(parent_request_doc_id.as_str())
+    );
 }
 
 #[tokio::test]

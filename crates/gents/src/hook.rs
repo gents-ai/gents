@@ -567,10 +567,16 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        let mut state = self.state.lock().await;
-        state.current_request_id = request_id;
-        state.current_request_doc_id = None;
-        state.current_requester_did = None;
+        if let Err(error) = self.set_active_request_lineage(request_id, None).await {
+            let mut state = self.state.lock().await;
+            state.current_request_id = None;
+            state.current_request_doc_id = None;
+            state.current_requester_did = None;
+            tracing::warn!(
+                %error,
+                "failed to bind active request id; hook remains unbound",
+            );
+        }
     }
 
     pub async fn set_active_request_lineage(
@@ -597,6 +603,18 @@ impl DefraSessionHook {
         request_doc_id: Option<String>,
         requester_did: Option<String>,
     ) {
+        if request_id.is_some() != request_doc_id.is_some() {
+            tracing::warn!(
+                has_request_id = request_id.is_some(),
+                has_request_doc_id = request_doc_id.is_some(),
+                "rejected half-bound active request lineage",
+            );
+            let mut state = self.state.lock().await;
+            state.current_request_id = None;
+            state.current_request_doc_id = None;
+            state.current_requester_did = None;
+            return;
+        }
         let mut state = self.state.lock().await;
         state.current_request_id = request_id;
         state.current_request_doc_id = request_doc_id;

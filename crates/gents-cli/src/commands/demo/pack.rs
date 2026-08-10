@@ -111,7 +111,17 @@ fn load_manifest(pack: &Path) -> Result<PackManifest> {
             missing.join(", ")
         )
     })?;
-    serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))
+    let manifest =
+        serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))?;
+    validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
+    Ok(manifest)
+}
+
+fn validate_manifest(manifest: &PackManifest) -> Result<()> {
+    if !manifest.expect.source_edges.is_empty() && !manifest.expect.signed_provenance {
+        bail!("expect.source_edges requires expect.signed_provenance=true");
+    }
+    Ok(())
 }
 
 pub(crate) async fn list(root: &Path) -> Result<()> {
@@ -1234,6 +1244,46 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("bafy-unsigned"), "{error}");
+    }
+
+    #[test]
+    fn source_edge_expectations_require_signed_provenance() {
+        let manifest = PackManifest {
+            name: "invalid-source-edge".to_string(),
+            description: String::new(),
+            init: PackInit {
+                inference_url: "http://127.0.0.1:8080".to_string(),
+                model_name: "test".to_string(),
+                backend_preset: None,
+                openai_wire_api: None,
+            },
+            seed: PackSeed {
+                collection: "Source".to_string(),
+                job_id_field: "job_id".to_string(),
+                prompt_field: "prompt".to_string(),
+                fields: BTreeMap::new(),
+            },
+            default_prompt: String::new(),
+            expect: PackExpect {
+                trigger_ids: Vec::new(),
+                collection_counts: BTreeMap::new(),
+                projections: Vec::new(),
+                signed_provenance: false,
+                required_tool_call_trigger_ids: Vec::new(),
+                source_edges: vec![SourceEdgeExpectation {
+                    producer_trigger_id: "producer".to_string(),
+                    producer_tool_name: "create_Source".to_string(),
+                    consumer_trigger_id: "consumer".to_string(),
+                    source_collection: "Source".to_string(),
+                }],
+            },
+            await_timeout_secs: 1,
+        };
+
+        let error = validate_manifest(&manifest).expect_err("unsigned source edges must fail");
+        assert!(error
+            .to_string()
+            .contains("source_edges requires expect.signed_provenance=true"));
     }
 
     #[test]

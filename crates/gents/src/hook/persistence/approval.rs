@@ -43,6 +43,9 @@ async fn first_approval_decision(
     tool_call_doc_id: &str,
     tool_call_id: &str,
 ) -> anyhow::Result<Option<ApprovalDecision>> {
+    // Physical tool-call identity is the authorization boundary. A legacy
+    // logical-only approval must not authorize a different document that
+    // happens to reuse the same tool_call_id.
     let escaped_tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let escaped_tool_call_id = escape_graphql_string(tool_call_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
@@ -226,5 +229,58 @@ impl DefraSessionHook {
 
             tokio::time::sleep(APPROVAL_POLL_INTERVAL).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn legacy_logical_only_approval_cannot_authorize_a_physical_tool_call() {
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_schemas(&node).await.unwrap();
+        let mutation = r#"mutation {
+            legacy: create_AgentToolApproval(input: {
+                approval_id: "approval-legacy",
+                tool_call_id: "call-shared",
+                agent_did: "did:test:agent",
+                decision: "approved",
+                approver_did: "did:test:legacy-operator",
+                created_at: "2026-08-10T00:00:00Z"
+            }) { _docID }
+            exact: create_AgentToolApproval(input: {
+                approval_id: "approval-exact",
+                tool_call_doc_id: "tool-doc-exact",
+                tool_call_id: "call-shared",
+                agent_did: "did:test:agent",
+                decision: "denied",
+                approver_did: "did:test:exact-operator",
+                created_at: "2026-08-10T00:00:01Z"
+            }) { _docID }
+        }"#;
+        let response = node.execute(mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed approvals: {:?}",
+            response.errors
+        );
+
+        assert!(first_approval_decision(
+            &node,
+            "did:test:agent",
+            "different-tool-doc",
+            "call-shared",
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(matches!(
+            first_approval_decision(&node, "did:test:agent", "tool-doc-exact", "call-shared",)
+                .await
+                .unwrap(),
+            Some(ApprovalDecision::Denied { .. })
+        ));
+        node.shutdown().await;
     }
 }

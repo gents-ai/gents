@@ -155,6 +155,8 @@ struct ToolCallRow {
 #[derive(Debug, Deserialize)]
 struct MessageRow {
     content: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 async fn setup_hook(
@@ -196,7 +198,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ content }}
+            ) {{ content request_id request_doc_id }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -333,7 +335,7 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 
 #[tokio::test]
 async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_envelope() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let (db, hook, session_id, request_id) = setup_hook(
         "r6-background-success",
         registry(
             vec![Box::new(StaticTool {
@@ -385,6 +387,12 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert!(message.content.contains(r#"tool_name="test_tool""#));
     assert!(message.content.contains(r#"status="completed""#));
     assert!(message.content.contains("<result>done</result>"));
+    let request_doc_id = crate::support::exact_request_doc_id(db.node.as_ref(), &request_id).await;
+    assert_eq!(message.request_id.as_deref(), Some(request_id.as_str()));
+    assert_eq!(
+        message.request_doc_id.as_deref(),
+        Some(request_doc_id.as_str())
+    );
 
     assert_eq!(
         fetch_background_wakes(db.node.as_ref(), &session_id)

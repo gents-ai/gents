@@ -39,6 +39,7 @@ pub struct SubagentSource {
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     processed_tool_calls: HashSet<String>,
+    warned_incoherent_tool_calls: HashSet<String>,
     rescan_tick: tokio::time::Interval,
 }
 
@@ -175,6 +176,7 @@ impl SubagentSource {
             cancel,
             collection_id_to_name: HashMap::new(),
             processed_tool_calls: HashSet::new(),
+            warned_incoherent_tool_calls: HashSet::new(),
             rescan_tick: subagent_source_rescan_tick(SUBAGENT_SOURCE_RESCAN_INTERVAL),
         }
     }
@@ -473,7 +475,18 @@ impl SubagentSource {
         let parent_request_doc_id = match non_empty(row.request_doc_id.as_deref()) {
             Some(value) => value.to_string(),
             None => {
-                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+                if self
+                    .warned_incoherent_tool_calls
+                    .insert(processed_key.clone())
+                {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        parent_request_id = %parent_request_id,
+                        tool_call_id = %row.tool_call_id,
+                        "subagent source quarantined unbound AgentToolCall row",
+                    );
+                }
+                return Ok(None);
             }
         };
         let parent_tool_call_id = match non_empty(Some(&row.tool_call_id)) {

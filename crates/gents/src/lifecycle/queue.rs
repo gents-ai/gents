@@ -3,8 +3,13 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::config_client::ConfigApplyTxn;
+use crate::graphql::{
+    defradb_conflict_retry_backoff, escape_graphql_string, is_defradb_transaction_conflict_text,
+    response_has_documents, DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 use crate::session;
 use crate::watcher::AgentRequest;
 
@@ -176,44 +181,20 @@ pub(crate) async fn enqueue_session_request(
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let metadata = queue_metadata_json(&queue_hints);
-    let parent_linkage_fields = parent_linkage_graphql_fields(parent);
-
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
-    let requester_did_field = session::requester_did_create_field(parent.requester_did.as_deref());
-    let escaped_behavior_id = escape_graphql_string(&behavior_id);
-    let escaped_session_id = escape_graphql_string(&parent.session_id);
-    let escaped_content = escape_graphql_string(content);
-    let escaped_metadata = escape_graphql_string(&metadata);
-    let escaped_created_at = escape_graphql_string(&now);
-    let execution_origin = execution_origin.as_str();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{escaped_request_id}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                session_id: "{escaped_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{escaped_request_id}",
-                superseded_by_request: "",
-                content: "{escaped_content}",
-                metadata: "{escaped_metadata}",
-                status: "pending",
-                lifecycle_state: "pending",
-                backend_id: "",
-                execution_origin: "{execution_origin}",
-                failure_reason: "",
-                created_at: "{escaped_created_at}",
-                retry_count: 0,
-                max_retries: {max_retries},
-                subagent_depth: {subagent_depth}{parent_linkage_fields}
-            }}) {{ _docID }}
-        }}"#,
-        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
-        subagent_depth = parent.subagent_depth,
+    let request_only_control = matches!(
+        queue_hints.source,
+        QueueSource::Steering | QueueSource::BackgroundCompletion
     );
+    let mutation = session_request_create_mutation(
+        parent,
+        &behavior_id,
+        content,
+        execution_origin,
+        &metadata,
+        &request_id,
+        &now,
+        request_only_control,
+    )?;
 
     let response =
         session::execute_mutation_with_retry(node, &mutation, "enqueue_session_request").await?;
@@ -266,6 +247,268 @@ pub(crate) async fn enqueue_session_request(
     }
 
     Ok(enqueued)
+}
+
+/// Atomically persist a steering input and the continuation that consumes it.
+///
+/// The request is created first inside the private transaction so its exact
+/// DefraDB document ID can be stamped on the message.  Neither document is
+/// externally visible until both writes commit, so a watcher can never claim
+/// the continuation before its input is durable.
+pub(crate) async fn enqueue_steering_request_with_message(
+    node: &EmbeddedNode,
+    parent: &AgentRequest,
+    content: &str,
+    queue_hints: QueueHints,
+) -> Result<EnqueuedAgentRequest> {
+    anyhow::ensure!(
+        queue_hints.source == QueueSource::Steering
+            && queue_hints.policy == QueuePolicy::Append
+            && queue_hints.key.is_none(),
+        "atomic steering enqueue requires an unkeyed append"
+    );
+
+    let behavior_id = parent_behavior_id(node, parent).await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let metadata = queue_metadata_json(&queue_hints);
+    let request_mutation = session_request_create_mutation(
+        parent,
+        &behavior_id,
+        content,
+        ExecutionOrigin::Interactive,
+        &metadata,
+        &request_id,
+        &now,
+        true,
+    )?;
+
+    let mut retry_index = 0;
+    let enqueued = loop {
+        let txn = ConfigApplyTxn::begin_local(node, None).await?;
+        let attempt =
+            steering_transaction_attempt(&txn, parent, content, &request_id, &request_mutation)
+                .await;
+
+        let result = match attempt {
+            Ok(enqueued) => match txn.commit().await {
+                Ok(()) => Ok(enqueued),
+                Err(error) => Err(error),
+            },
+            Err(error) => {
+                if let Err(discard_error) = txn.discard().await {
+                    tracing::warn!(
+                        error = %discard_error,
+                        "discarding failed steering transaction also failed"
+                    );
+                }
+                Err(error)
+            }
+        };
+
+        match result {
+            Ok(enqueued) => break enqueued,
+            Err(error)
+                if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
+                    && steering_transaction_error_is_retryable(&error) =>
+            {
+                let backoff = defradb_conflict_retry_backoff(retry_index);
+                retry_index += 1;
+                tracing::warn!(
+                    request_id,
+                    attempt = retry_index,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %error,
+                    "retrying atomic steering persistence"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+
+    if let Err(error) = session::upsert_conversation_from_request_with_identity_and_requester_did(
+        node,
+        &parent.session_id,
+        &behavior_id,
+        &parent.agent_did,
+        &behavior_id,
+        &enqueued.request_id,
+        content,
+        "pending",
+        parent.requester_did.as_deref(),
+    )
+    .await
+    {
+        tracing::warn!(
+            request_id = %enqueued.request_id,
+            session_id = %parent.session_id,
+            error = %error,
+            "failed to update conversation for steering request"
+        );
+    }
+
+    Ok(enqueued)
+}
+
+async fn steering_transaction_attempt(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    content: &str,
+    request_id: &str,
+    request_mutation: &str,
+) -> Result<EnqueuedAgentRequest> {
+    let request_response = txn.execute(request_mutation).await?;
+    let request_doc_id = transaction_created_doc_id(&request_response, "AgentRequest")?;
+    let sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+    let message_mutation = session::create_message_mutation(
+        &parent.session_id,
+        &parent.agent_did,
+        parent.requester_did.as_deref(),
+        sequence,
+        "user",
+        content,
+        None,
+        Some(request_id),
+        Some(&request_doc_id),
+        None,
+    );
+    txn.execute(&message_mutation).await?;
+
+    Ok(EnqueuedAgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.to_string(),
+        session_id: parent.session_id.clone(),
+    })
+}
+
+async fn next_append_sequence_in_transaction(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+) -> Result<u32> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                    order: {{ sequence: DESC }},
+                    limit: 1
+                ) {{ sequence }}
+                AgentToolCall(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        await_mode: {{ _eq: "background" }}
+                    }}
+                ) {{ message_sequence }}
+            }}"#
+        ))
+        .await?;
+    let message_max = response["data"]["AgentMessage"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["sequence"].as_u64())
+        .unwrap_or(0) as u32;
+    let mut reserved_counts = std::collections::BTreeMap::<u32, u32>::new();
+    if let Some(rows) = response["data"]["AgentToolCall"].as_array() {
+        for row in rows {
+            if let Some(sequence) = row["message_sequence"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+            {
+                *reserved_counts.entry(sequence).or_default() += 1;
+            }
+        }
+    }
+    let reserved_max = reserved_counts
+        .into_iter()
+        .map(|(sequence, count)| sequence + count)
+        .max()
+        .unwrap_or(0);
+    Ok(message_max.max(reserved_max) + 1)
+}
+
+fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
+    let create_field = format!("create_{collection}");
+    let add_field = format!("add_{collection}");
+    let value = response
+        .get("data")
+        .and_then(|data| data.get(&create_field).or_else(|| data.get(&add_field)))
+        .with_context(|| {
+            format!("transaction create returned neither {create_field} nor {add_field}")
+        })?;
+    value
+        .get("_docID")
+        .or_else(|| {
+            value
+                .as_array()
+                .and_then(|rows| rows.first())?
+                .get("_docID")
+        })
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("transaction create {collection} returned no _docID"))
+}
+
+fn steering_transaction_error_is_retryable(error: &anyhow::Error) -> bool {
+    let text = error.to_string();
+    let lower = text.to_ascii_lowercase();
+    is_defradb_transaction_conflict_text(&text)
+        || lower.contains("unique")
+        || lower.contains("duplicate")
+}
+
+fn session_request_create_mutation(
+    parent: &AgentRequest,
+    behavior_id: &str,
+    content: &str,
+    execution_origin: ExecutionOrigin,
+    metadata: &str,
+    request_id: &str,
+    created_at: &str,
+    request_only_control: bool,
+) -> Result<String> {
+    let parent_linkage_fields = if request_only_control {
+        request_only_parent_linkage_graphql_fields(parent)?
+    } else {
+        parent_linkage_graphql_fields(parent)?
+    };
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
+    let requester_did_field = session::requester_did_create_field(parent.requester_did.as_deref());
+    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_session_id = escape_graphql_string(&parent.session_id);
+    let escaped_content = escape_graphql_string(content);
+    let escaped_metadata = escape_graphql_string(metadata);
+    let escaped_created_at = escape_graphql_string(created_at);
+    let execution_origin = execution_origin.as_str();
+    Ok(format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                {requester_did_field}
+                behavior_id: "{escaped_behavior_id}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "{escaped_content}",
+                metadata: "{escaped_metadata}",
+                status: "pending",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "{execution_origin}",
+                failure_reason: "",
+                created_at: "{escaped_created_at}",
+                retry_count: 0,
+                max_retries: {max_retries},
+                subagent_depth: {subagent_depth}{parent_linkage_fields}
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = DEFAULT_REQUEST_MAX_RETRIES,
+        subagent_depth = parent.subagent_depth,
+    ))
 }
 
 pub(crate) async fn enqueue_goal_continuation(
@@ -551,7 +794,7 @@ async fn parent_behavior_id(node: &EmbeddedNode, parent: &AgentRequest) -> Resul
         })
 }
 
-fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
+fn parent_linkage_graphql_fields(parent: &AgentRequest) -> Result<String> {
     match (
         parent.caused_by_parent_request_id.as_deref(),
         parent.caused_by_parent_request_doc_id.as_deref(),
@@ -563,8 +806,12 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
             Some(parent_request_doc_id),
             Some(parent_tool_call_id),
             Some(parent_tool_call_doc_id),
-        ) if !parent_request_id.trim().is_empty() && !parent_tool_call_id.trim().is_empty() => {
-            format!(
+        ) if !parent_request_id.trim().is_empty()
+            && !parent_request_doc_id.trim().is_empty()
+            && !parent_tool_call_id.trim().is_empty()
+            && !parent_tool_call_doc_id.trim().is_empty() =>
+        {
+            Ok(format!(
                 r#",
                 caused_by_parent_request_id: "{}",
                 caused_by_parent_request_doc_id: "{}",
@@ -574,20 +821,62 @@ fn parent_linkage_graphql_fields(parent: &AgentRequest) -> String {
                 escape_graphql_string(parent_request_doc_id),
                 escape_graphql_string(parent_tool_call_id),
                 escape_graphql_string(parent_tool_call_doc_id),
-            )
+            ))
         }
         (Some(parent_request_id), Some(parent_request_doc_id), None, None)
-            if !parent_request_id.trim().is_empty() =>
+            if !parent_request_id.trim().is_empty() && !parent_request_doc_id.trim().is_empty() =>
         {
-            format!(
+            Ok(format!(
                 r#",
                 caused_by_parent_request_id: "{}",
                 caused_by_parent_request_doc_id: "{}""#,
                 escape_graphql_string(parent_request_id),
                 escape_graphql_string(parent_request_doc_id),
-            )
+            ))
         }
-        _ => String::new(),
+        (None, None, None, None) => Ok(String::new()),
+        _ => anyhow::bail!("cannot enqueue request from incoherent parent linkage"),
+    }
+}
+
+fn request_only_parent_linkage_graphql_fields(parent: &AgentRequest) -> Result<String> {
+    match (
+        parent.caused_by_parent_request_id.as_deref(),
+        parent.caused_by_parent_request_doc_id.as_deref(),
+        parent.caused_by_parent_tool_call_id.as_deref(),
+        parent.caused_by_parent_tool_call_doc_id.as_deref(),
+    ) {
+        (
+            Some(parent_request_id),
+            Some(parent_request_doc_id),
+            Some(parent_tool_call_id),
+            Some(parent_tool_call_doc_id),
+        ) if !parent_request_id.trim().is_empty()
+            && !parent_request_doc_id.trim().is_empty()
+            && !parent_tool_call_id.trim().is_empty()
+            && !parent_tool_call_doc_id.trim().is_empty() =>
+        {
+            Ok(format!(
+                r#",
+                caused_by_parent_request_id: "{}",
+                caused_by_parent_request_doc_id: "{}""#,
+                escape_graphql_string(parent_request_id),
+                escape_graphql_string(parent_request_doc_id),
+            ))
+        }
+        (Some(parent_request_id), Some(parent_request_doc_id), None, None)
+            if !parent_request_id.trim().is_empty() && !parent_request_doc_id.trim().is_empty() =>
+        {
+            Ok(format!(
+                r#",
+                caused_by_parent_request_id: "{}",
+                caused_by_parent_request_doc_id: "{}""#,
+                escape_graphql_string(parent_request_id),
+                escape_graphql_string(parent_request_doc_id),
+            ))
+        }
+        (None, None, None, None) => Ok(String::new()),
+        _ => anyhow::bail!("cannot enqueue control continuation from incoherent parent linkage"),
     }
 }
 
@@ -843,6 +1132,38 @@ mod tests {
             caused_by_parent_tool_call_id: Some("root-parent-tool-call".to_string()),
             caused_by_parent_tool_call_doc_id: Some("root-parent-tool-call-doc".to_string()),
         }
+    }
+
+    #[test]
+    fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
+        for response in [
+            serde_json::json!({
+                "data": { "create_AgentRequest": { "_docID": "doc-object" } }
+            }),
+            serde_json::json!({
+                "data": { "add_AgentRequest": [{ "_docID": "doc-array" }] }
+            }),
+        ] {
+            let doc_id = transaction_created_doc_id(&response, "AgentRequest").unwrap();
+            assert!(doc_id == "doc-object" || doc_id == "doc-array");
+        }
+    }
+
+    #[test]
+    fn request_mutation_rejects_a_half_bound_parent_edge() {
+        let mut parent = parent_request("session-half-bound");
+        parent.caused_by_parent_tool_call_id = None;
+        let result = session_request_create_mutation(
+            &parent,
+            TEST_BEHAVIOR_ID,
+            "continue",
+            ExecutionOrigin::Scheduled,
+            "{}",
+            "request-next",
+            "2026-08-10T00:00:00Z",
+            false,
+        );
+        assert!(result.is_err());
     }
 
     async fn test_db(name: &str) -> TestDb {
@@ -1172,14 +1493,8 @@ mod tests {
             row.caused_by_parent_request_doc_id.as_deref(),
             Some("root-parent-request-doc")
         );
-        assert_eq!(
-            row.caused_by_parent_tool_call_id.as_deref(),
-            Some("root-parent-tool-call")
-        );
-        assert_eq!(
-            row.caused_by_parent_tool_call_doc_id.as_deref(),
-            Some("root-parent-tool-call-doc")
-        );
+        assert_eq!(row.caused_by_parent_tool_call_id.as_deref(), None);
+        assert_eq!(row.caused_by_parent_tool_call_doc_id.as_deref(), None);
         assert!(is_automated_wakeup(row.metadata.as_deref()));
     }
 

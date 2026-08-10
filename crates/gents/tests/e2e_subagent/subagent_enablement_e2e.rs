@@ -161,6 +161,8 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         "parent prompt for list test",
     )
     .await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
         "behavior_id": running.behavior_id.clone(),
@@ -182,7 +184,8 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;

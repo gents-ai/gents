@@ -1426,9 +1426,16 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
     match lean_r4c_background_work_case("r4c.steer_subagent.append_preserves_lineage") {
         LeanR4cBackgroundWorkCase::SteerAppendPreservesLineage {
             caller_request_id,
+            caller_request_doc_id,
             child_session_id,
             queued_request_id,
             caused_by_parent_request_id,
+            caused_by_parent_request_doc_id,
+            caused_by_parent_tool_call_id_present,
+            caused_by_parent_tool_call_doc_id_present,
+            lineage_admissible,
+            request_visible_before_message_allowed,
+            message_then_request_allowed,
             queue_source,
             queue_policy,
         } => {
@@ -1436,6 +1443,12 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             assert_eq!(child_session_id, "r4c-w5-child-session");
             assert_eq!(queued_request_id, "r4c-w5-queued");
             assert_eq!(caused_by_parent_request_id, caller_request_id);
+            assert_eq!(caused_by_parent_request_doc_id, caller_request_doc_id);
+            assert!(!caused_by_parent_tool_call_id_present);
+            assert!(!caused_by_parent_tool_call_doc_id_present);
+            assert!(*lineage_admissible);
+            assert!(!*request_visible_before_message_allowed);
+            assert!(*message_then_request_allowed);
             assert_eq!(queue_source, "steering");
             assert_eq!(queue_policy, "append");
         }

@@ -184,12 +184,29 @@ fn claimable_pending_rows(
     data: Option<&serde_json::Value>,
 ) -> anyhow::Result<Vec<AgentRequestRow>> {
     let rows = active_runtime_rows(data)?;
+    // Quarantine malformed pending work without allowing a second claim next
+    // to malformed live work in the same session.
     let blocked_sessions = rows
         .iter()
         .filter(|row| !row.is_deprecated_background_completion_wakeup())
         .filter(|row| row.is_active_non_pending())
         .map(|row| row.session_id.clone())
         .collect::<HashSet<_>>();
+    let rows = rows
+        .into_iter()
+        .filter_map(|row| match row.clone().into_agent_request() {
+            Ok(_) => Some(row),
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %row.request_id,
+                    %error,
+                    "watcher quarantined incoherent AgentRequest row during pending scan",
+                );
+                None
+            }
+        })
+        .collect::<Vec<_>>();
     let mut seen_pending_sessions = HashSet::new();
     let mut claimable = Vec::new();
 

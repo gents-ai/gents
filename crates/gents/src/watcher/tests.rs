@@ -60,6 +60,23 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
 }
 
 #[test]
+fn validate_accepts_background_completion_lineage_without_tool_call_link() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        metadata: Some(
+            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"child-1"},"background_completion_wake_version":1}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
 fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
     let req = AgentRequest {
         subagent_depth: 1,
@@ -374,6 +391,24 @@ async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id:
     );
 }
 
+async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ status: "processing", lifecycle_state: "processing" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update AgentRequest processing failed: {:?}",
+        response.errors
+    );
+}
+
 async fn set_request_interrupt_requested_at(
     node: &defra_node::EmbeddedNode,
     doc_id: &str,
@@ -611,20 +646,57 @@ async fn next_request_ignores_legacy_completion_wake_without_mutating_it() {
 }
 
 #[tokio::test]
-async fn pending_requests_rejects_incoherent_subagent_linkage() {
+async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let agent_did = "did:key:z-watcher-coherence-pending";
     insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-pending").await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-valid-pending",
+        "sess-incoherent",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
 
     let watcher = DefraWatcher::new(node.clone(), agent_did);
-    let result = watcher.pending_requests().await;
-    assert!(
-        result.is_err(),
-        "pending_requests must fail for incoherent subagent linkage, got: {:?}",
-        result
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-valid-pending"],
+        "an incoherent row must not poison or queue-block coherent work"
     );
+}
+
+#[tokio::test]
+async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-coherence-active";
+    let incoherent_doc_id =
+        insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-active").await;
+    set_request_processing(node.as_ref(), &incoherent_doc_id).await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-valid-pending",
+        "sess-incoherent",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+
+    let watcher = DefraWatcher::new(node, agent_did);
+    assert!(watcher.pending_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -49,13 +49,14 @@ fn hook_counters_for_test() -> HookCounters {
 }
 
 #[tokio::test]
-async fn legacy_request_id_setter_clears_requester_lineage() {
+async fn request_id_setter_leaves_hook_wholly_unbound_when_request_is_missing() {
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .build()
             .await
             .expect("embedded node"),
     );
+    ensure_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
@@ -73,7 +74,38 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
         .await;
 
     let state = hook.state.lock().await;
-    assert_eq!(state.current_request_id.as_deref(), Some("request-b"));
+    assert_eq!(state.current_request_id, None);
+    assert_eq!(state.current_request_doc_id, None);
+    assert_eq!(state.current_requester_did, None);
+    drop(state);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn active_request_binding_rejects_a_half_bound_pair() {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:host",
+        FailurePolicy::default(),
+    );
+
+    hook.set_active_request_binding(
+        Some("request-a".to_string()),
+        None,
+        Some("did:test:coordinator".to_string()),
+    )
+    .await;
+
+    let state = hook.state.lock().await;
+    assert_eq!(state.current_request_id, None);
+    assert_eq!(state.current_request_doc_id, None);
     assert_eq!(state.current_requester_did, None);
     drop(state);
     node.shutdown().await;

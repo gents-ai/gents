@@ -17,11 +17,9 @@ use serde_json::{json, Value};
 use crate::document_config::SubagentTarget;
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::lifecycle::queue::{
-    drain_automated_wakeups, enqueue_session_request, is_automated_wakeup, QueueHints, QueuePolicy,
-    QueueSource,
+    drain_automated_wakeups, enqueue_steering_request_with_message, is_automated_wakeup,
+    QueueHints, QueuePolicy, QueueSource,
 };
-use crate::lifecycle::ExecutionOrigin;
-use crate::session;
 use crate::session::execute_mutation_with_retry;
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 use crate::watcher::{validate_agent_request_subagent_coherence, AgentRequest};
@@ -1287,13 +1285,14 @@ pub(crate) async fn append_steering_request(
             edge.child_request_id
         );
     }
+
     child_request.caused_by_parent_request_id = Some(caller_request_id.to_string());
     child_request.caused_by_parent_tool_call_id = None;
-    let enqueued = enqueue_session_request(
+    child_request.caused_by_parent_tool_call_doc_id = None;
+    let enqueued = enqueue_steering_request_with_message(
         node,
         &child_request,
         message,
-        ExecutionOrigin::Interactive,
         QueueHints {
             source: QueueSource::Steering,
             policy: QueuePolicy::Append,
@@ -1301,18 +1300,6 @@ pub(crate) async fn append_steering_request(
             queued_after_request_id: None,
             interrupted_request_id: interrupted_request_id.clone(),
         },
-    )
-    .await?;
-    session::append_message_with_requester_did(
-        node,
-        &edge.child_session_id,
-        &child_request.agent_did,
-        child_request.requester_did.as_deref(),
-        "user",
-        message,
-        None,
-        Some(&enqueued.request_id),
-        Some(&enqueued.doc_id),
     )
     .await?;
 

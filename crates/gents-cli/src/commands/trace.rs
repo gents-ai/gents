@@ -18,8 +18,8 @@ use gents::run_timeline::{
 };
 #[cfg(test)]
 use gents::run_timeline::{
-    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineResponseRow,
-    TimelineSessionRow, TimelineToolCallRow,
+    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
+    TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::trace_export::{
@@ -372,6 +372,7 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "CompactionEntry",
     "AgentSession",
     "AgentConversation",
+    "RenderedRequest",
 ];
 
 async fn projection_acp_read_scope(
@@ -751,6 +752,37 @@ async fn apply_projection_acp_read_filter(
         }
         None => None,
     };
+    let mut filtered_rendered_request_refs = Vec::new();
+    for rendered_request_ref in rows.rendered_request_refs {
+        let doc_id = rendered_request_ref.doc_id.trim();
+        if doc_id.is_empty() {
+            anyhow::bail!(
+                "DefraDB ACP projection decisions require _docID for RenderedRequest {}",
+                rendered_request_ref.request_commit_cid
+            );
+        }
+        if decider
+            .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
+            .await?
+        {
+            filtered_rendered_request_refs.push(rendered_request_ref);
+        }
+    }
+
+    let mut filtered_rendered_requests = Vec::new();
+    for rendered_request in rows.rendered_requests {
+        let doc_id = required_doc_id(
+            "RenderedRequest",
+            rendered_request.capture_key.as_str(),
+            &rendered_request.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
+            .await?
+        {
+            filtered_rendered_requests.push(rendered_request);
+        }
+    }
 
     Ok(RunTimelineRows {
         request: rows.request,
@@ -762,15 +794,8 @@ async fn apply_projection_acp_read_filter(
         inference_calls: filtered_inference_calls,
         compactions: filtered_compactions,
         responses: filtered_responses,
-        // Passed through unfiltered: ACP enforcement is DefraDB's, not this
-        // filter's. Reads executed under a requester identity return only the
-        // rows that identity may see, and an unpoliced collection is public by
-        // DefraDB's own rules. When `RenderedRequest` gains its `@policy`,
-        // rows are excluded at the database read — with nothing to change
-        // here. (This per-row decider exists only for the actor-on-behalf
-        // GraphQL path the seven families above already use.)
-        rendered_requests: rows.rendered_requests,
-        rendered_request_refs: rows.rendered_request_refs,
+        rendered_requests: filtered_rendered_requests,
+        rendered_request_refs: filtered_rendered_request_refs,
     })
 }
 
@@ -2159,6 +2184,7 @@ mod tests {
             ("AgentResponse", "doc-response-allowed"),
             ("InferenceCall", "doc-inference-allowed"),
             ("AgentConversation", "doc-conversation"),
+            ("RenderedRequest", "doc-rendered-allowed"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
         }
@@ -2214,6 +2240,11 @@ mod tests {
             filtered.conversation.is_some(),
             "conversation row should remain when ACP allows it"
         );
+        assert_eq!(filtered.rendered_request_refs.len(), 1);
+        assert_eq!(
+            filtered.rendered_request_refs[0].doc_id,
+            "doc-rendered-allowed"
+        );
         Ok(())
     }
 
@@ -2227,6 +2258,7 @@ mod tests {
             ("runtime_response", "doc-response-allowed"),
             ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_conversation", "doc-conversation"),
+            ("runtime_rendered_request", "doc-rendered-allowed"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
         }
@@ -2244,6 +2276,10 @@ mod tests {
                 "AgentConversation".to_string(),
                 "runtime_conversation".to_string(),
             ),
+            (
+                "RenderedRequest".to_string(),
+                "runtime_rendered_request".to_string(),
+            ),
         ]);
 
         let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
@@ -2254,6 +2290,7 @@ mod tests {
         assert_eq!(filtered.inference_calls.len(), 1);
         assert_eq!(filtered.responses.len(), 1);
         assert!(filtered.conversation.is_some());
+        assert_eq!(filtered.rendered_request_refs.len(), 1);
         assert!(filtered.session.is_none());
         Ok(())
     }
@@ -2392,7 +2429,18 @@ mod tests {
             ],
             rendered_requests: Vec::new(),
             compactions: Vec::new(),
-            rendered_request_refs: Vec::new(),
+            rendered_request_refs: vec![
+                TimelineRenderedRequestRef {
+                    doc_id: "doc-rendered-allowed".to_string(),
+                    request_doc_id: "doc-request-root".to_string(),
+                    request_commit_cid: "bafy-allowed".to_string(),
+                },
+                TimelineRenderedRequestRef {
+                    doc_id: "doc-rendered-denied".to_string(),
+                    request_doc_id: "doc-request-root".to_string(),
+                    request_commit_cid: "bafy-denied".to_string(),
+                },
+            ],
         }
     }
 

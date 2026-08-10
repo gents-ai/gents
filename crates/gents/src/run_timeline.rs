@@ -462,10 +462,6 @@ pub struct TimelineRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub caused_by_trigger_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub caused_by_trigger_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "RetrySummary::is_empty")]
     pub retry_summary: RetrySummary,
@@ -828,27 +824,38 @@ fn child_bridge_is_corroborated(
     child_request: &TimelineRequestRow,
     tool_calls: &[TimelineToolCallRow],
 ) -> bool {
-    let Some(root_doc_id) = nonempty(root_request.doc_id.as_deref()) else {
-        return false;
-    };
     if nonempty(child_request.caused_by_parent_request_id.as_deref())
         != Some(root_request.request_id.as_str())
-        || nonempty(child_request.caused_by_parent_request_doc_id.as_deref()) != Some(root_doc_id)
     {
         return false;
     }
+    let root_doc_id = nonempty(root_request.doc_id.as_deref());
+    let child_parent_doc_id = nonempty(child_request.caused_by_parent_request_doc_id.as_deref());
+    let physical_bridge = match (root_doc_id, child_parent_doc_id) {
+        (Some(root_doc_id), Some(parent_doc_id)) if root_doc_id == parent_doc_id => true,
+        (None, None) if nonempty(child_request.doc_id.as_deref()).is_none() => false,
+        _ => return false,
+    };
     if request_only_control_link_is_corroborated(child_request) {
         return true;
     }
-    let (Some(parent_tool_doc_id), Some(parent_tool_call_id)) = (
-        nonempty(child_request.caused_by_parent_tool_call_doc_id.as_deref()),
-        nonempty(child_request.caused_by_parent_tool_call_id.as_deref()),
-    ) else {
+    let Some(parent_tool_call_id) =
+        nonempty(child_request.caused_by_parent_tool_call_id.as_deref())
+    else {
         return false;
     };
+    let parent_tool_doc_id = nonempty(child_request.caused_by_parent_tool_call_doc_id.as_deref());
     tool_calls.iter().any(|tool_call| {
-        nonempty(tool_call.doc_id.as_deref()) == Some(parent_tool_doc_id)
-            && nonempty(tool_call.request_doc_id.as_deref()) == Some(root_doc_id)
+        let physical_ids_match = if physical_bridge {
+            parent_tool_doc_id.is_some()
+                && nonempty(tool_call.doc_id.as_deref()) == parent_tool_doc_id
+                && nonempty(tool_call.request_doc_id.as_deref()) == root_doc_id
+        } else {
+            parent_tool_doc_id.is_none()
+                && nonempty(tool_call.doc_id.as_deref()).is_none()
+                && nonempty(tool_call.request_doc_id.as_deref()).is_none()
+        };
+        physical_ids_match
             && nonempty(tool_call.request_id.as_deref()) == Some(root_request.request_id.as_str())
             && tool_call.tool_call_id == parent_tool_call_id
             && nonempty(tool_call.child_request_id.as_deref())
@@ -861,6 +868,9 @@ fn request_only_control_link_is_corroborated(request: &TimelineRequestRow) -> bo
         || nonempty(request.caused_by_parent_tool_call_doc_id.as_deref()).is_some()
     {
         return false;
+    }
+    if crate::lifecycle::is_background_completion_request(request.metadata.as_deref()) {
+        return true;
     }
     crate::lifecycle::queue::parse_queue_hints(request.metadata.as_deref()).is_some_and(|hints| {
         matches!(
@@ -957,8 +967,6 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         content: request.content.clone(),
         metadata: request.metadata.clone(),
         execution_origin: request.execution_origin.clone(),
-        caused_by_trigger_id: request.caused_by_trigger_id.clone(),
-        caused_by_trigger_kind: request.caused_by_trigger_kind.clone(),
         timestamp: request.created_at.clone(),
         retry_summary: request.retry_summary.clone(),
     }));
@@ -1798,6 +1806,82 @@ mod tests {
         assert!(!timeline.events.iter().any(|event| {
             matches!(event, RunTimelineEvent::ToolCall(tool) if tool.child_request_id.is_some())
         }));
+    }
+
+    #[test]
+    fn external_logical_child_bridge_without_document_ids_is_emitted() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-root".to_string(),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                request_id: "req-child".to_string(),
+                caused_by_parent_request_id: Some("req-root".to_string()),
+                caused_by_parent_tool_call_id: Some("call-delegate".to_string()),
+                ..Default::default()
+            }],
+            tool_calls: vec![TimelineToolCallRow {
+                request_id: Some("req-root".to_string()),
+                tool_call_id: "call-delegate".to_string(),
+                child_request_id: Some("req-child".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert_eq!(timeline.child_request_ids, vec!["req-child"]);
+    }
+
+    #[test]
+    fn external_logical_child_bridge_rejects_partial_physical_ids() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-root".to_string(),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                request_id: "req-child".to_string(),
+                caused_by_parent_request_id: Some("req-root".to_string()),
+                caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+                caused_by_parent_tool_call_id: Some("call-delegate".to_string()),
+                ..Default::default()
+            }],
+            tool_calls: vec![TimelineToolCallRow {
+                request_id: Some("req-root".to_string()),
+                tool_call_id: "call-delegate".to_string(),
+                child_request_id: Some("req-child".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert!(timeline.child_request_ids.is_empty());
+    }
+
+    #[test]
+    fn background_completion_is_a_corroborated_request_only_continuation() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                doc_id: Some("doc-root".to_string()),
+                request_id: "req-root".to_string(),
+                ..Default::default()
+            },
+            requests: vec![TimelineRequestRow {
+                doc_id: Some("doc-wake".to_string()),
+                request_id: "req-wake".to_string(),
+                caused_by_parent_request_id: Some("req-root".to_string()),
+                caused_by_parent_request_doc_id: Some("doc-root".to_string()),
+                metadata: Some(
+                    r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"wake:1","queued_after_request_id":"req-root"},"background_completion_wake_version":1}"#
+                        .to_string(),
+                ),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert_eq!(timeline.child_request_ids, vec!["req-wake"]);
     }
 
     fn inference_call(

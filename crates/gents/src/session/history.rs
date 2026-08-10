@@ -464,6 +464,39 @@ async fn create_message(
     request_doc_id: Option<&str>,
     message_key: Option<&str>,
 ) -> Result<()> {
+    let mutation = create_message_mutation(
+        session_id,
+        agent_did,
+        requester_did,
+        sequence,
+        role,
+        content,
+        reasoning,
+        request_id,
+        request_doc_id,
+        message_key,
+    );
+
+    let resp = node.execute(&mutation).await;
+    if resp.has_errors() {
+        anyhow::bail!("append AgentMessage failed: {:?}", resp.errors);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_message_mutation(
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    reasoning: Option<&str>,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
+    message_key: Option<&str>,
+) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let escaped = escape_graphql_string(content);
     let escaped_session_id = escape_graphql_string(session_id);
@@ -482,7 +515,7 @@ async fn create_message(
         .map(escape_graphql_string)
         .unwrap_or_else(|| format!("{escaped_session_id}:{sequence}"));
 
-    let mutation = format!(
+    format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{message_key}",
@@ -498,13 +531,7 @@ async fn create_message(
                 timestamp: "{now}"
             }}) {{ _docID }}
         }}"#
-    );
-
-    let resp = node.execute(&mutation).await;
-    if resp.has_errors() {
-        anyhow::bail!("append AgentMessage failed: {:?}", resp.errors);
-    }
-    Ok(())
+    )
 }
 
 pub(crate) async fn mark_response_materialized(

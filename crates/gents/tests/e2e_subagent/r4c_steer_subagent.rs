@@ -27,14 +27,17 @@ struct RequestRow {
     metadata: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct MessageRow {
     role: String,
     content: String,
-    request_id: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 async fn setup_db(
@@ -280,7 +283,9 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> RequestRow {
                 metadata
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -300,6 +305,7 @@ async fn latest_user_message(node: &EmbeddedNode, session_id: &str) -> MessageRo
                 role
                 content
                 request_id
+                request_doc_id
             }}
         }}"#
     );
@@ -457,11 +463,18 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     assert_eq!(queued.session_id, child_session_id);
     assert_eq!(queued.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
     assert_eq!(queued.subagent_depth, Some(1));
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), "parent-append").await;
     assert_eq!(
         queued.caused_by_parent_request_id.as_deref(),
         Some("parent-append")
     );
+    assert_eq!(
+        queued.caused_by_parent_request_doc_id.as_deref(),
+        Some(parent_request_doc_id.as_str())
+    );
     assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
+    assert_eq!(queued.caused_by_parent_tool_call_doc_id.as_deref(), None);
     assert_eq!(queued.status.as_deref(), Some("pending"));
     assert_eq!(queued.lifecycle_state.as_deref(), Some("pending"));
     let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
@@ -490,9 +503,13 @@ async fn steer_subagent_append_writes_user_message() {
     let message = latest_user_message(db.node.as_ref(), child_session_id).await;
     assert_eq!(message.role, "user");
     assert!(message.content.contains("also check the staging config"));
+    let queued_request_id = result["queued_request_id"].as_str().unwrap();
+    let queued_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), queued_request_id).await;
+    assert_eq!(message.request_id.as_deref(), Some(queued_request_id));
     assert_eq!(
-        message.request_id,
-        result["queued_request_id"].as_str().unwrap()
+        message.request_doc_id.as_deref(),
+        Some(queued_request_doc_id.as_str())
     );
 }
 

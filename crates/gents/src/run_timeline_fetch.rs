@@ -93,6 +93,46 @@ pub async fn load_run_timeline_rows(
     }
 
     let request_bindings = timeline_request_bindings(&requests, &request)?;
+    // Direct children may have their own sessions.  Session-wide queries also
+    // return rows for grandchildren (and later continuation requests) that are
+    // not part of this root + direct-child timeline.  Ignore those unrelated
+    // rows, while retaining any row that claims an in-scope logical or physical
+    // request so forged/partial bindings still fail closed below.
+    messages.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            row.request_id.as_deref(),
+            row.request_doc_id.as_deref(),
+        )
+    });
+    tool_calls.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            row.request_id.as_deref(),
+            row.request_doc_id.as_deref(),
+        )
+    });
+    responses.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            Some(row.request_id.as_str()),
+            row.request_doc_id.as_deref(),
+        )
+    });
+    inference_calls.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            Some(row.request_id.as_str()),
+            row.request_doc_id.as_deref(),
+        )
+    });
+    compactions.retain(|row| {
+        request_scoped_row_is_in_timeline(
+            &request_bindings,
+            Some(row.request_id.as_str()),
+            row.request_doc_id.as_deref(),
+        )
+    });
     validate_request_scoped_rows(
         &request_bindings,
         &messages,
@@ -756,6 +796,20 @@ fn validate_request_scoped_rows(
     Ok(())
 }
 
+fn request_scoped_row_is_in_timeline(
+    bindings: &BTreeMap<String, String>,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
+) -> bool {
+    let request_id = nonempty(request_id);
+    let request_doc_id = nonempty(request_doc_id);
+    if request_id.is_none() && request_doc_id.is_none() {
+        return true;
+    }
+    request_doc_id.is_some_and(|doc_id| bindings.contains_key(doc_id))
+        || request_id.is_some_and(|request_id| bindings.values().any(|id| id == request_id))
+}
+
 fn validate_optional_request_binding(
     bindings: &BTreeMap<String, String>,
     collection: &str,
@@ -946,6 +1000,37 @@ mod tests {
         )
         .expect_err("partial binding must fail closed");
         assert!(error.to_string().contains("incomplete request lineage"));
+    }
+
+    #[test]
+    fn session_rows_for_nested_requests_are_out_of_scope_without_hiding_forged_root_edges() {
+        let bindings = bindings();
+        assert!(!request_scoped_row_is_in_timeline(
+            &bindings,
+            Some("req-grandchild"),
+            Some("doc-grandchild")
+        ));
+        assert!(request_scoped_row_is_in_timeline(
+            &bindings,
+            Some("req-root"),
+            Some("doc-grandchild")
+        ));
+        assert!(request_scoped_row_is_in_timeline(
+            &bindings,
+            Some("req-root"),
+            None
+        ));
+        assert!(request_scoped_row_is_in_timeline(
+            &bindings,
+            None,
+            Some("doc-root")
+        ));
+        assert!(!request_scoped_row_is_in_timeline(
+            &bindings,
+            Some("req-grandchild"),
+            None
+        ));
+        assert!(request_scoped_row_is_in_timeline(&bindings, None, None));
     }
 
     #[test]

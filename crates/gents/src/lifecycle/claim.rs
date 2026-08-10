@@ -284,6 +284,10 @@ impl RequestLifecycle {
         let resp =
             session::execute_mutation_with_retry(&self.node, &mutation, "claim_request").await?;
 
+        // The mutation response is the only response that can carry the exact
+        // commit produced by this claim. Do not fall back to a post-update
+        // query: another branchable write may win that read and falsely bind
+        // this lifecycle to a commit it did not author.
         let claimed_request =
             crate::watcher::agent_request_from_mutation_response(&resp, "update_AgentRequest")?
                 .ok_or_else(|| {

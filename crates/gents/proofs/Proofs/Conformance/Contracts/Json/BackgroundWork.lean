@@ -1,5 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
+import Proofs.DurableLineage
 
 /-!
 # Background Work JSON
@@ -77,10 +78,22 @@ def r4cSteerAppendPreservesLineageJson
     ++ "\"witness\":"
       ++ jsonString "r4c.steer_subagent.append_preserves_lineage" ++ ","
     ++ "\"caller_request_id\":" ++ jsonString witness.callerRequestId ++ ","
+    ++ "\"caller_request_doc_id\":" ++ jsonString witness.callerRequestDocId ++ ","
     ++ "\"child_session_id\":" ++ jsonString witness.childSessionId ++ ","
     ++ "\"queued_request_id\":" ++ jsonString witness.queuedRequestId ++ ","
     ++ "\"caused_by_parent_request_id\":"
       ++ jsonString witness.causedByParentRequestId ++ ","
+    ++ "\"caused_by_parent_request_doc_id\":"
+      ++ jsonString witness.causedByParentRequestDocId ++ ","
+    ++ "\"caused_by_parent_tool_call_id_present\":"
+      ++ boolString witness.causedByParentToolCallIdPresent ++ ","
+    ++ "\"caused_by_parent_tool_call_doc_id_present\":"
+      ++ boolString witness.causedByParentToolCallDocIdPresent ++ ","
+    ++ "\"lineage_admissible\":" ++ boolString witness.lineageAdmissible ++ ","
+    ++ "\"request_visible_before_message_allowed\":"
+      ++ boolString witness.requestVisibleBeforeMessageAllowed ++ ","
+    ++ "\"message_then_request_allowed\":"
+      ++ boolString witness.messageThenRequestAllowed ++ ","
     ++ "\"queue_source\":" ++ jsonString witness.queueSource ++ ","
     ++ "\"queue_policy\":" ++ jsonString witness.queuePolicy
     ++ "}"
@@ -207,10 +220,20 @@ def r4cUnmaterializedChildVisible :
 
 def r4cSteerAppendPreservesLineage :
     R4cWitnesses.SteerAppendPreservesLineage :=
+  let steering := DurableLineage.steeringContinuation 1
   { callerRequestId := "r4c-w5-caller"
+  , callerRequestDocId := "bae-r4c-w5-caller"
   , childSessionId := "r4c-w5-child-session"
   , queuedRequestId := "r4c-w5-queued"
   , causedByParentRequestId := "r4c-w5-caller"
+  , causedByParentRequestDocId := "bae-r4c-w5-caller"
+  , causedByParentToolCallIdPresent := steering.hasParentToolCallId
+  , causedByParentToolCallDocIdPresent := steering.hasParentToolCallDocId
+  , lineageAdmissible := DurableLineage.admissible steering
+  , requestVisibleBeforeMessageAllowed :=
+      DurableLineage.SteeringPersistence.requestVisibleBeforeMessageAllowed
+  , messageThenRequestAllowed :=
+      DurableLineage.SteeringPersistence.messageThenRequestAllowed
   , queueSource := "steering"
   , queuePolicy := "append"
   }

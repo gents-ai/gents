@@ -37,10 +37,13 @@ pub async fn cancel_background_tool_call(
         });
     }
 
-    let live_execution_cancelled = background_executions.cancel(tool_call_id).await;
     let dispatch = lifecycle
         .cancel_during_run_with_cascade_dispatch(CancelCause::UserCancelled, agent_did)
         .await?;
+    // Persist the operator-authored terminal cause before signalling the live
+    // worker. Otherwise the worker can observe cancellation first and win the
+    // terminal write with the less-specific `interrupted` cause.
+    let live_execution_cancelled = background_executions.cancel(tool_call_id).await;
 
     if let Some(CascadeDispatch::Local(intent)) = dispatch {
         interrupt_request(node.as_ref(), &intent.child_request_id).await?;

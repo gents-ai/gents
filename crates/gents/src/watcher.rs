@@ -49,8 +49,11 @@ pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<(
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
     let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
-    let request_only_control_link =
-        has_parent_req && !has_parent_tc && (is_steering_queue(req) || is_goal_queue(req));
+    let request_only_control_link = has_parent_req
+        && !has_parent_tc
+        && (is_steering_queue(req)
+            || is_goal_queue(req)
+            || crate::lifecycle::is_background_completion_request(req.metadata.as_deref()));
     if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
