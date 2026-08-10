@@ -295,7 +295,7 @@ impl AggregateTokenLedger {
         let Some(usage) = usage else {
             return AggregateTokenCharge::Missing;
         };
-        let charged = charged_usage_total(usage);
+        let charged = crate::provider_usage::charged_usage_total(usage);
         if charged == 0 {
             return AggregateTokenCharge::Missing;
         }
@@ -306,12 +306,6 @@ impl AggregateTokenLedger {
             std::cmp::Ordering::Greater => AggregateTokenCharge::Overrun,
         }
     }
-}
-
-fn charged_usage_total(usage: Usage) -> u64 {
-    usage
-        .total_tokens
-        .max(usage.input_tokens.saturating_add(usage.output_tokens))
 }
 
 fn add_usage_saturating(aggregate: &mut Usage, usage: Usage) {

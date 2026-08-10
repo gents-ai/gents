@@ -908,7 +908,9 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
             cache_creation_input_tokens: 0,
         });
         assert_eq!(
-            usage.map(charged_usage_total).unwrap_or_default(),
+            usage
+                .map(crate::provider_usage::charged_usage_total)
+                .unwrap_or_default(),
             case.charged_tokens,
             "{}: charged total drifted from Lean",
             case.name
