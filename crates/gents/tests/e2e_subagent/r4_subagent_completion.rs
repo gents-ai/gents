@@ -545,6 +545,7 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<ser
                 }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 content
                 status
@@ -800,15 +801,15 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert!(messages[1].content.contains("child_request_id"));
     assert_eq!(messages[2].sequence, 3);
     assert!(messages[2].content.contains("<subagent-notification"));
-    let parent_request_doc_id =
-        crate::support::exact_request_doc_id(db.node.as_ref(), &parent_request_id).await;
+    let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
+    assert_eq!(wakes.len(), 1);
     assert_eq!(
         messages[2].request_id.as_deref(),
-        Some(parent_request_id.as_str())
+        wakes[0]["request_id"].as_str()
     );
     assert_eq!(
         messages[2].request_doc_id.as_deref(),
-        Some(parent_request_doc_id.as_str())
+        wakes[0]["_docID"].as_str()
     );
 }
 
