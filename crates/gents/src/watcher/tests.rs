@@ -173,6 +173,21 @@ fn validate_rejects_negative_sampling_seed() {
 }
 
 #[test]
+fn validate_rejects_non_positive_max_total_tokens() {
+    for invalid in [0, -1] {
+        let req = AgentRequest {
+            max_total_tokens: Some(invalid),
+            ..base_request()
+        };
+        assert_eq!(
+            validate_agent_request(&req).unwrap_err().to_string(),
+            "agent request max_total_tokens must be positive",
+            "max_total_tokens={invalid}"
+        );
+    }
+}
+
+#[test]
 fn validate_accepts_subagent_request() {
     let req = AgentRequest {
         subagent_depth: 1,

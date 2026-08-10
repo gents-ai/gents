@@ -536,7 +536,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         let queued = tokio::spawn(async move {
             scope_request(queued_context, async move {
                 let mut queued_permit = queued_registry.acquire_current_call().await.unwrap();
-                queued_permit.finish_success(None).await;
+                queued_permit.finish_success(None).await.unwrap();
             })
             .await;
         });
@@ -545,7 +545,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
                 .await;
         assert_fleet_case_matches_call_row(waiting, &queued_row);
 
-        running_permit.finish_success(None).await;
+        running_permit.finish_success(None).await.unwrap();
         drop(running_permit);
         queued.await.unwrap();
     })
@@ -573,7 +573,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     );
     scope_request(completed_context, async {
         let mut permit = bounded_registry.acquire_current_call().await.unwrap();
-        permit.finish_success(None).await;
+        permit.finish_success(None).await.unwrap();
         drop(permit);
     })
     .await;
@@ -606,7 +606,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     let queued = tokio::spawn(async move {
         scope_request(queued_context, async move {
             let mut permit = queued_registry.acquire_current_call().await.unwrap();
-            permit.finish_success(None).await;
+            permit.finish_success(None).await.unwrap();
         })
         .await;
     });
@@ -629,10 +629,10 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         "generated fleet bounded projection must match the real admission row states"
     );
 
-    first.finish_success(None).await;
+    first.finish_success(None).await.unwrap();
     drop(first);
     queued.await.unwrap();
-    second.finish_success(None).await;
+    second.finish_success(None).await.unwrap();
     drop(second);
 }
 
@@ -684,7 +684,7 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
         assert_eq!(rows[1]["call_state"], "failed");
         assert_eq!(rows[1]["failure_reason"], "QueueFull");
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
-        first.finish_success(None).await;
+        first.finish_success(None).await.unwrap();
     })
     .await;
 
@@ -734,7 +734,7 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
                     .send(idx)
                     .expect("test acquired receiver must stay open");
                 let _ = release_rx.await;
-                permit.finish_success(None).await;
+                permit.finish_success(None).await.unwrap();
             })
             .await;
         }));
@@ -809,7 +809,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
         let second = tokio::spawn(async move {
             scope_request(second_context, async move {
                 let mut permit = second_registry.acquire_current_call().await.unwrap();
-                permit.finish_success(None).await;
+                permit.finish_success(None).await.unwrap();
             })
             .await;
         });
@@ -825,7 +825,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
             "the aggregate slot count is reconstructed from running InferenceCall rows; queued rows do not hold slots"
         );
 
-        first.finish_success(None).await;
+        first.finish_success(None).await.unwrap();
         drop(first);
         second.await.unwrap();
     })
@@ -879,7 +879,7 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
         assert_eq!(state_count_for_backend(&rows, "backend-a", "cancelled"), 1);
 
-        first.finish_success(None).await;
+        first.finish_success(None).await.unwrap();
     })
     .await;
 
@@ -905,7 +905,7 @@ async fn explicit_failure_releases_reconstructed_slot() {
         let mut permit = registry.acquire_current_call().await.unwrap();
         let rows = call_rows(node.as_ref()).await;
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
-        permit.finish_failure("provider failed").await;
+        permit.finish_failure("provider failed").await.unwrap();
     })
     .await;
 
@@ -931,17 +931,17 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
     scope_request(context, async {
         scope_call(CallKind::Inference, 1, async {
             let mut permit = registry.acquire_current_call().await.unwrap();
-            permit.finish_failure("transient one").await;
+            permit.finish_failure("transient one").await.unwrap();
         })
         .await;
         scope_call(CallKind::Inference, 1, async {
             let mut permit = registry.acquire_current_call().await.unwrap();
-            permit.finish_failure("transient two").await;
+            permit.finish_failure("transient two").await.unwrap();
         })
         .await;
         scope_call(CallKind::Inference, 1, async {
             let mut permit = registry.acquire_current_call().await.unwrap();
-            permit.finish_success(None).await;
+            permit.finish_success(None).await.unwrap();
         })
         .await;
     })
@@ -984,7 +984,7 @@ async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
     scope_request(context, async {
         scope_call(CallKind::Scheduled, 1, async {
             let mut permit = registry.acquire_current_call().await.unwrap();
-            permit.finish_success(None).await;
+            permit.finish_success(None).await.unwrap();
         })
         .await;
     })
@@ -1017,7 +1017,7 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
             scope_request(compaction_context, async move {
                 scope_call(CallKind::Compaction, 1, async {
                     let mut permit = compaction_registry.acquire_current_call().await.unwrap();
-                    permit.finish_success(None).await;
+                    permit.finish_success(None).await.unwrap();
                 })
                 .await;
             })
@@ -1033,7 +1033,7 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
         assert_eq!(rows[1]["call_state"], "queued");
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
 
-        inference.finish_success(None).await;
+        inference.finish_success(None).await.unwrap();
         drop(inference);
         compaction.await.unwrap();
     })
@@ -1061,7 +1061,7 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
     scope_request(context, async {
         scope_call(CallKind::OneOff, 1, async {
             let mut permit = registry.acquire_current_call().await.unwrap();
-            permit.finish_success(None).await;
+            permit.finish_success(None).await.unwrap();
         })
         .await;
     })

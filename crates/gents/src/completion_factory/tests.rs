@@ -506,6 +506,111 @@ fn prior_usage_blocks_dispatch_when_already_at_limit() {
     assert!(!ledger.can_dispatch(1, 100));
 }
 
+#[test]
+fn prior_usage_decode_fails_closed_on_malformed_payload() {
+    let err = super::prior_usage_rows_from_response(Some(&serde_json::json!({"not": "an-array"})))
+        .expect_err("object payload must not decode as empty usage");
+    assert!(
+        err.to_string().contains("not a row array"),
+        "unexpected error: {err}"
+    );
+    assert!(super::prior_usage_rows_from_response(None)
+        .unwrap()
+        .is_empty());
+    assert!(
+        super::prior_usage_rows_from_response(Some(&serde_json::Value::Null))
+            .unwrap()
+            .is_empty()
+    );
+    let rows = super::prior_usage_rows_from_response(Some(&serde_json::json!([
+        {"prompt_tokens": 100, "completion_tokens": 50},
+        {"prompt_tokens": 200, "completion_tokens": 10},
+    ])))
+    .unwrap();
+    assert_eq!(
+        crate::provider_usage::sum_charged_from_persisted_parts(
+            rows.into_iter()
+                .map(|row| (row.prompt_tokens, row.completion_tokens))
+        ),
+        360
+    );
+}
+
+#[tokio::test]
+async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
+    use crate::schema::ensure_schemas;
+    use defra_node::EmbeddedNode;
+
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    let request_doc_id = "doc-budget-rehydrate";
+    let seed = r#"mutation {
+        create_InferenceCall(input: {
+            call_id: "call-1"
+            runtime_instance_id: "runtime-1"
+            request_id: "req-budget"
+            request_doc_id: "doc-budget-rehydrate"
+            call_seq: 1
+            backend_id: "backend-1"
+            behavior_id: "behavior-1"
+            agent_did: "did:test:agent"
+            call_kind: "inference"
+            attempt: 1
+            call_state: "completed"
+            prompt_tokens: 100
+            completion_tokens: 50
+            queue_depth_at_enqueue: 0
+            controller_generation: 1
+            backend_config_fingerprint: "fp"
+        }) { _docID }
+        create_InferenceCall(input: {
+            call_id: "call-2"
+            runtime_instance_id: "runtime-1"
+            request_id: "req-budget"
+            request_doc_id: "doc-budget-rehydrate"
+            call_seq: 2
+            backend_id: "backend-1"
+            behavior_id: "behavior-1"
+            agent_did: "did:test:agent"
+            call_kind: "compaction"
+            attempt: 1
+            call_state: "completed"
+            prompt_tokens: 200
+            completion_tokens: 10
+            queue_depth_at_enqueue: 0
+            controller_generation: 1
+            backend_config_fingerprint: "fp"
+        }) { _docID }
+    }"#;
+    let response = node.execute(seed).await;
+    assert!(
+        !response.has_errors(),
+        "seed InferenceCall rows: {:?}",
+        response.errors
+    );
+
+    let mut request = request();
+    request.doc_id = request_doc_id.to_string();
+    request.request_id = "req-budget".to_string();
+    request.max_total_tokens = Some(1_000);
+
+    let budget = aggregate_token_budget_for_request(&node, &request)
+        .await
+        .expect("rehydrate")
+        .expect("budget present");
+    let ledger = budget.snapshot().expect("ledger");
+    assert_eq!(ledger.used, 360, "100+50 + 200+10 charged totals");
+    assert_eq!(ledger.limit, 1_000);
+    assert!(
+        !ledger.can_dispatch(700, 100),
+        "remaining 640 cannot cover 700 input"
+    );
+    assert!(ledger.can_dispatch(100, 100));
+
+    node.shutdown().await;
+}
+
 /// #649: every sampling knob a profile can pin must reach the provider body.
 ///
 /// rig's `CompletionRequest` models only `temperature`/`max_tokens`, so the

@@ -195,7 +195,13 @@ class GentsAgent(BaseAgent):
         profile: dict[str, Any],
         init: dict[str, Any],
     ) -> None:
-        self._populate_token_usage(context, trajectory)
+        if not self._populate_token_usage(context, trajectory):
+            final_metrics_probe = self._atif_final_metrics(trajectory)
+            if final_metrics_probe:
+                self.logger.warning(
+                    "Gents ATIF final_metrics present but token columns incomplete; "
+                    "leaving Harbor usage counters unset (fail-closed)"
+                )
         final_metrics = self._atif_final_metrics(trajectory)
         budget = self._atif_budget_observation(trajectory)
         persisted_request = persisted_snapshot.get("request") or {}

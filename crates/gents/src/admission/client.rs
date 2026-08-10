@@ -75,11 +75,11 @@ where
                     }
                     result = self.inner.completion(request) => match result {
                         Ok(response) => {
-                            permit.finish_success(Some(response.usage)).await;
+                            permit.finish_success(Some(response.usage)).await?;
                             Ok(response)
                         }
                         Err(error) => {
-                            permit.finish_failure(&error.to_string()).await;
+                            let _ = permit.finish_failure(&error.to_string()).await;
                             Err(error)
                         }
                     }
@@ -87,11 +87,11 @@ where
             }
             None => match self.inner.completion(request).await {
                 Ok(response) => {
-                    permit.finish_success(Some(response.usage)).await;
+                    permit.finish_success(Some(response.usage)).await?;
                     Ok(response)
                 }
                 Err(error) => {
-                    permit.finish_failure(&error.to_string()).await;
+                    let _ = permit.finish_failure(&error.to_string()).await;
                     Err(error)
                 }
             },
@@ -115,7 +115,7 @@ where
                     result = self.inner.stream(request) => match result {
                         Ok(stream) => Ok(hold_stream_guard(stream, permit)),
                         Err(error) => {
-                            permit.finish_failure(&error.to_string()).await;
+                            let _ = permit.finish_failure(&error.to_string()).await;
                             Err(error)
                         }
                     }
@@ -124,7 +124,7 @@ where
             None => match self.inner.stream(request).await {
                 Ok(stream) => Ok(hold_stream_guard(stream, permit)),
                 Err(error) => {
-                    permit.finish_failure(&error.to_string()).await;
+                    let _ = permit.finish_failure(&error.to_string()).await;
                     Err(error)
                 }
             },

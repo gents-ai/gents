@@ -184,16 +184,31 @@ async fn load_prior_charged_tokens(
             resp.errors
         );
     }
-    let rows: Vec<PriorUsageRow> = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows = prior_usage_rows_from_response(
+        resp.data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall")),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
+    })?;
     Ok(provider_usage::sum_charged_from_persisted_parts(
         rows.into_iter()
             .map(|row| (row.prompt_tokens, row.completion_tokens)),
     ))
+}
+
+/// Decode the `InferenceCall` array from a GraphQL data payload.
+/// Missing/null → empty (no prior usage). Present but malformed → error.
+fn prior_usage_rows_from_response(
+    value: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<PriorUsageRow>> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            anyhow::anyhow!("InferenceCall usage payload is not a row array: {error}")
+        }),
+    }
 }
 
 fn completion_retry_origin(value: Option<&str>) -> ExecutionOrigin {

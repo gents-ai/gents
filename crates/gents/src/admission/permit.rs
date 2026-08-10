@@ -51,22 +51,25 @@ impl AdmissionPermit {
         }
     }
 
-    pub(crate) async fn finish_success(&mut self, usage: Option<Usage>) {
+    pub(crate) async fn finish_success(
+        &mut self,
+        usage: Option<Usage>,
+    ) -> Result<(), CompletionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "completed",
             failure_reason: None,
             usage,
         });
-        self.finish().await;
+        self.finish().await
     }
 
-    pub(crate) async fn finish_failure(&mut self, reason: &str) {
+    pub(crate) async fn finish_failure(&mut self, reason: &str) -> Result<(), CompletionError> {
         self.terminal = Some(PermitTerminal {
             call_state: "failed",
             failure_reason: Some(reason.to_string()),
             usage: None,
         });
-        self.finish().await;
+        self.finish().await
     }
 
     /// Mark this permit as cancelled due to user-initiated interrupt.
@@ -86,9 +89,9 @@ impl AdmissionPermit {
         });
     }
 
-    async fn finish(&mut self) {
+    async fn finish(&mut self) -> Result<(), CompletionError> {
         if self.finished {
-            return;
+            return Ok(());
         }
         self.finished = true;
         let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
@@ -105,8 +108,19 @@ impl AdmissionPermit {
         )
         .await
         {
+            // Charged usage must land durably before the request continues:
+            // live ledger charge already happened, and rehydrate reads only
+            // InferenceCall rows. Silent warn would mint a fresh allowance on
+            // crash redrive.
+            if terminal.usage.is_some() {
+                return Err(CompletionError::ProviderError(format!(
+                    "persisting terminal InferenceCall usage failed for call {}: {error:#}",
+                    self.call.call_id
+                )));
+            }
             tracing::warn!(call_id = %self.call.call_id, error = %error, "failed to persist terminal inference call state");
         }
+        Ok(())
     }
 }
 
@@ -179,6 +193,32 @@ impl Drop for AdmissionPermit {
         let node = self.node.clone();
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
+        let charged_usage = terminal.usage;
+        // Streaming completions only reach terminal persistence via Drop. When
+        // usage was charged on Final, await the durable write on the runtime
+        // so crash redrive can rehydrate the same spend.
+        if charged_usage.is_some() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let persist_result = tokio::task::block_in_place(|| {
+                    handle.block_on(persist_existing_call_terminal(
+                        node,
+                        &call,
+                        terminal.call_state,
+                        terminal.failure_reason.as_deref(),
+                        charged_usage,
+                    ))
+                });
+                if let Err(error) = persist_result {
+                    tracing::error!(
+                        call_id = %call_id,
+                        error = %error,
+                        "failed to persist terminal InferenceCall usage on stream drop; \
+                         aggregate budget rehydrate may undercount until the row is repaired"
+                    );
+                }
+                return;
+            }
+        }
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
@@ -189,7 +229,19 @@ impl Drop for AdmissionPermit {
             )
             .await
             {
-                tracing::warn!(call_id = %call_id, error = %error, "failed to persist dropped inference call state");
+                if charged_usage.is_some() {
+                    tracing::error!(
+                        call_id = %call_id,
+                        error = %error,
+                        "failed to persist terminal InferenceCall usage on stream drop"
+                    );
+                } else {
+                    tracing::warn!(
+                        call_id = %call_id,
+                        error = %error,
+                        "failed to persist dropped inference call state"
+                    );
+                }
             }
         });
     }
