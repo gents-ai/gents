@@ -579,7 +579,8 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
         patch: AGENT_REQUEST_ADD_SEED_PATCH,
         lens: None,
-        expected_version: Some("bafyreibraouw4tfoncf3hvqvjmlauvv66l4xnupofwiw5liielbb75ofdu"),
+        // Authored against the 1087 AgentRequest baseline (physical doc_id edges).
+        expected_version: Some("bafyreiad77dcqzv325ooveypjj32l7qrkpltizvqtsphhdgehoz5igwwye"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["seed"]),
     },
@@ -588,7 +589,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
         patch: AGENT_REQUEST_ADD_MAX_TOTAL_TOKENS_PATCH,
         lens: None,
-        expected_version: Some("bafyreibusca7yt6dos527ku5ezkcyim77xd3zv52532r2pdzi7tg3g75tq"),
+        expected_version: Some("bafyreic32bvie4zcjcaeqycfxcwxls6qgv5o6xivkd7tksz4rlb4xvnfqe"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["seed", "max_total_tokens"]),
     },
