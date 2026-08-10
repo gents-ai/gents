@@ -536,6 +536,8 @@ structure SteerAppendPreservesLineage where
   causedByParentToolCallIdPresent : Bool
   causedByParentToolCallDocIdPresent : Bool
   lineageAdmissible : Bool
+  depthZeroLineageAdmissible : Bool
+  backgroundCompletionDepthZeroAdmissible : Bool
   requestVisibleBeforeMessageAllowed : Bool
   messageThenRequestAllowed : Bool
   queueSource : String

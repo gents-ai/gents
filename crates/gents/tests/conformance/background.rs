@@ -1434,6 +1434,8 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             caused_by_parent_tool_call_id_present,
             caused_by_parent_tool_call_doc_id_present,
             lineage_admissible,
+            depth_zero_lineage_admissible,
+            background_completion_depth_zero_admissible,
             request_visible_before_message_allowed,
             message_then_request_allowed,
             queue_source,
@@ -1447,6 +1449,8 @@ pub(super) fn generated_r4c_background_work_cases_pin_observable_shapes() {
             assert!(!caused_by_parent_tool_call_id_present);
             assert!(!caused_by_parent_tool_call_doc_id_present);
             assert!(*lineage_admissible);
+            assert!(*depth_zero_lineage_admissible);
+            assert!(*background_completion_depth_zero_admissible);
             assert!(!*request_visible_before_message_allowed);
             assert!(*message_then_request_allowed);
             assert_eq!(queue_source, "steering");

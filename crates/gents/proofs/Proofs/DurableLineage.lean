@@ -69,17 +69,36 @@ def steeringContinuation (subagentDepth : Nat) : RawLineage :=
   , hasParentToolCallDocId := false
   , subagentDepth
   , requestOnlyControl := true
+  , controlAllowedAtDepthZero := true
   }
 
 /-- Steering is request-linked, not a new child spawn.  Normalization keeps
     both halves of the parent request edge and clears both halves of the old
     tool-call bridge. -/
 theorem steering_continuation_is_admissible
-    (depth : Nat)
-    (hDepth : depth > 0) :
+    (depth : Nat) :
     admissible (steeringContinuation depth) = true := by
   simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
-    depthCoherent, steeringContinuation, hDepth]
+    depthCoherent, steeringContinuation]
+
+def backgroundCompletionContinuation (subagentDepth : Nat) : RawLineage :=
+  { hasParentRequestId := true
+  , hasParentRequestDocId := true
+  , hasParentToolCallId := false
+  , hasParentToolCallDocId := false
+  , subagentDepth
+  , requestOnlyControl := true
+  , controlAllowedAtDepthZero := true
+  }
+
+/-- A background-completion wake is a control continuation, not a new
+    subagent generation.  It therefore preserves the parent's depth, including
+    depth zero for a top-level or goal-continuation session. -/
+theorem background_completion_continuation_is_admissible
+    (depth : Nat) :
+    admissible (backgroundCompletionContinuation depth) = true := by
+  simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
+    depthCoherent, backgroundCompletionContinuation]
 
 namespace SteeringPersistence
 

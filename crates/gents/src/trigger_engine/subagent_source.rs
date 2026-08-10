@@ -474,20 +474,52 @@ impl SubagentSource {
         };
         let parent_request_doc_id = match non_empty(row.request_doc_id.as_deref()) {
             Some(value) => value.to_string(),
-            None => {
-                if self
-                    .warned_incoherent_tool_calls
-                    .insert(processed_key.clone())
-                {
+            None => match crate::request_binding::resolve_request_doc_id(
+                self.node.as_ref(),
+                &parent_request_id,
+            )
+            .await
+            {
+                Ok(Some(doc_id)) => {
                     tracing::warn!(
                         doc_id = %row.doc_id,
                         parent_request_id = %parent_request_id,
+                        parent_request_doc_id = %doc_id,
                         tool_call_id = %row.tool_call_id,
-                        "subagent source quarantined unbound AgentToolCall row",
+                        "subagent source recovered legacy logical-only request binding",
                     );
+                    doc_id
                 }
-                return Ok(None);
-            }
+                Ok(None) => {
+                    if self
+                        .warned_incoherent_tool_calls
+                        .insert(processed_key.clone())
+                    {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            parent_request_id = %parent_request_id,
+                            tool_call_id = %row.tool_call_id,
+                            "subagent source quarantined AgentToolCall whose parent request is not visible",
+                        );
+                    }
+                    return Ok(None);
+                }
+                Err(error) => {
+                    if self
+                        .warned_incoherent_tool_calls
+                        .insert(processed_key.clone())
+                    {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            parent_request_id = %parent_request_id,
+                            tool_call_id = %row.tool_call_id,
+                            %error,
+                            "subagent source could not resolve legacy logical-only request binding",
+                        );
+                    }
+                    return Ok(None);
+                }
+            },
         };
         let parent_tool_call_id = match non_empty(Some(&row.tool_call_id)) {
             Some(value) => value.to_string(),

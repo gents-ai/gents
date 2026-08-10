@@ -652,6 +652,18 @@ pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Ve
         .unwrap_or_default()
 }
 
+/// Returns true only when GraphQL reports that the collection's root field is
+/// absent. A missing column on an existing collection must remain an error;
+/// treating every `Cannot query field` mentioning the collection type as a
+/// missing collection hides schema/query drift.
+pub fn is_collection_missing_error_message(collection_name: &str, message: &str) -> bool {
+    let missing_root_double_quoted = format!(r#"Cannot query field \"{collection_name}\""#);
+    let missing_root_single_quoted = format!("Cannot query field '{collection_name}'");
+    (message.contains(collection_name) && message.contains("collection not found"))
+        || message.contains(&missing_root_double_quoted)
+        || message.contains(&missing_root_single_quoted)
+}
+
 pub fn graphql_string_list_literal(values: &[String]) -> String {
     format!(
         "[{}]",
@@ -1072,6 +1084,18 @@ mod tests {
             }
         });
         assert_eq!(graphql_rows_from_response(&value, "Thing").len(), 2);
+    }
+
+    #[test]
+    fn collection_missing_classifier_does_not_hide_missing_columns() {
+        assert!(is_collection_missing_error_message(
+            "RenderedRequest",
+            r#"Cannot query field \"RenderedRequest\" on type \"Query\"."#,
+        ));
+        assert!(!is_collection_missing_error_message(
+            "RenderedRequest",
+            r#"Cannot query field \"prompt_hash\" on type \"RenderedRequest\"."#,
+        ));
     }
 
     #[test]

@@ -49,7 +49,7 @@ fn hook_counters_for_test() -> HookCounters {
 }
 
 #[tokio::test]
-async fn request_id_setter_leaves_hook_wholly_unbound_when_request_is_missing() {
+async fn request_id_setter_preserves_previous_binding_when_request_is_missing() {
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .build()
@@ -74,9 +74,15 @@ async fn request_id_setter_leaves_hook_wholly_unbound_when_request_is_missing() 
         .await;
 
     let state = hook.state.lock().await;
-    assert_eq!(state.current_request_id, None);
-    assert_eq!(state.current_request_doc_id, None);
-    assert_eq!(state.current_requester_did, None);
+    assert_eq!(state.current_request_id.as_deref(), Some("request-a"));
+    assert_eq!(
+        state.current_request_doc_id.as_deref(),
+        Some("request-doc-a")
+    );
+    assert_eq!(
+        state.current_requester_did.as_deref(),
+        Some("did:test:coordinator")
+    );
     drop(state);
     node.shutdown().await;
 }

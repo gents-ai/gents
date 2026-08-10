@@ -246,7 +246,7 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ metadata }}
+            ) {{ _docID request_id metadata }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -387,20 +387,17 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert!(message.content.contains(r#"tool_name="test_tool""#));
     assert!(message.content.contains(r#"status="completed""#));
     assert!(message.content.contains("<result>done</result>"));
-    let request_doc_id = crate::support::exact_request_doc_id(db.node.as_ref(), &request_id).await;
-    assert_eq!(message.request_id.as_deref(), Some(request_id.as_str()));
+    let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(
-        message.request_doc_id.as_deref(),
-        Some(request_doc_id.as_str())
-    );
-
-    assert_eq!(
-        fetch_background_wakes(db.node.as_ref(), &session_id)
-            .await
-            .len(),
+        wakes.len(),
         1,
         "tool completion notification should enqueue one resumable agent turn"
     );
+    let wake_request_id = wakes[0]["request_id"].as_str().unwrap();
+    let wake_doc_id = wakes[0]["_docID"].as_str().unwrap();
+    assert_ne!(wake_request_id, request_id);
+    assert_eq!(message.request_id.as_deref(), Some(wake_request_id));
+    assert_eq!(message.request_doc_id.as_deref(), Some(wake_doc_id));
 }
 
 // #985: a backgrounded bash run's lifetime budget is decoupled from both the

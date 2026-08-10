@@ -80,6 +80,7 @@ pub mod periodic_recovery;
 pub mod prompt;
 pub(crate) mod registry;
 pub mod rendered_request;
+pub(crate) mod request_binding;
 pub mod retry;
 pub mod run_timeline;
 pub mod run_timeline_fetch;

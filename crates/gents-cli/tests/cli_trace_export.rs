@@ -512,8 +512,6 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         model_name: "test-model",
                         source: "openai_chat_completions",
                         request_json: "{request_json}",
-                        prompt_hash: "aa",
-                        tools_hash: "bb",
                         provenance_json: "{provenance}",
                         created_at: "{created_at}"
                     }}) {{ _docID }}

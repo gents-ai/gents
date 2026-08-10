@@ -110,8 +110,6 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                 capture_version
                 model_name
                 source
-                prompt_hash
-                tools_hash
                 provenance_json
                 created_at{body_fields}
             }}

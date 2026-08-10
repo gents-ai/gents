@@ -50,9 +50,10 @@ pub(crate) async fn graphql_rows_or_empty_if_collection_missing(
 }
 
 pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow::Error) -> bool {
-    let message = error.to_string();
-    message.contains(collection_name)
-        && (message.contains("collection not found") || message.contains("Cannot query field"))
+    gents_protocol::graphql::is_collection_missing_error_message(
+        collection_name,
+        &error.to_string(),
+    )
 }
 
 pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {

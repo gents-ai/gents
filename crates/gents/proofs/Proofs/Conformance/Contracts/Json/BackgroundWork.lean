@@ -88,8 +88,12 @@ def r4cSteerAppendPreservesLineageJson
     ++ "\"caused_by_parent_tool_call_id_present\":"
       ++ boolString witness.causedByParentToolCallIdPresent ++ ","
     ++ "\"caused_by_parent_tool_call_doc_id_present\":"
-      ++ boolString witness.causedByParentToolCallDocIdPresent ++ ","
+    ++ boolString witness.causedByParentToolCallDocIdPresent ++ ","
     ++ "\"lineage_admissible\":" ++ boolString witness.lineageAdmissible ++ ","
+    ++ "\"depth_zero_lineage_admissible\":"
+      ++ boolString witness.depthZeroLineageAdmissible ++ ","
+    ++ "\"background_completion_depth_zero_admissible\":"
+      ++ boolString witness.backgroundCompletionDepthZeroAdmissible ++ ","
     ++ "\"request_visible_before_message_allowed\":"
       ++ boolString witness.requestVisibleBeforeMessageAllowed ++ ","
     ++ "\"message_then_request_allowed\":"
@@ -230,6 +234,11 @@ def r4cSteerAppendPreservesLineage :
   , causedByParentToolCallIdPresent := steering.hasParentToolCallId
   , causedByParentToolCallDocIdPresent := steering.hasParentToolCallDocId
   , lineageAdmissible := DurableLineage.admissible steering
+  , depthZeroLineageAdmissible :=
+      DurableLineage.admissible (DurableLineage.steeringContinuation 0)
+  , backgroundCompletionDepthZeroAdmissible :=
+      DurableLineage.admissible
+        (DurableLineage.backgroundCompletionContinuation 0)
   , requestVisibleBeforeMessageAllowed :=
       DurableLineage.SteeringPersistence.requestVisibleBeforeMessageAllowed
   , messageThenRequestAllowed :=

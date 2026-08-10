@@ -6,7 +6,6 @@ use crate::llm::tool::ToolDyn;
 use crate::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -227,12 +226,6 @@ struct SessionState {
     persisted_tool_result_message_sequences: HashMap<String, u32>,
     tool_result_identities: HashMap<String, ToolResultIdentity>,
     initialized: bool,
-}
-
-#[derive(Deserialize)]
-struct ActiveRequestDocRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
 }
 
 impl SessionState {
@@ -568,13 +561,12 @@ impl DefraSessionHook {
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
         if let Err(error) = self.set_active_request_lineage(request_id, None).await {
-            let mut state = self.state.lock().await;
-            state.current_request_id = None;
-            state.current_request_doc_id = None;
-            state.current_requester_did = None;
-            tracing::warn!(
+            // Resolution happens before the binding mutation, so preserve the
+            // last coherent binding rather than silently clearing provenance
+            // on a transient/missing/ambiguous lookup.
+            tracing::error!(
                 %error,
-                "failed to bind active request id; hook remains unbound",
+                "failed to bind active request id; preserving previous coherent binding",
             );
         }
     }
@@ -663,29 +655,7 @@ impl DefraSessionHook {
     }
 
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
-        let request_id = crate::graphql::escape_graphql_string(request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                    limit: 2
-                ) {{ _docID }}
-            }}"#
-        );
-        let response = crate::graphql::graphql_with_transaction_retry(
-            self.node.as_ref(),
-            &query,
-            "resolve_active_request_doc_id",
-        )
-        .await?;
-        let mut rows = crate::graphql::rows::<ActiveRequestDocRow>(&response, "AgentRequest")?;
-        match rows.len() {
-            0 => Ok(None),
-            1 => Ok(rows.pop().map(|row| row.doc_id)),
-            count => anyhow::bail!(
-                "active request id resolved to {count} AgentRequest documents; expected one"
-            ),
-        }
+        crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
     }
 
     pub(crate) async fn register_stream_tool_call_identity(

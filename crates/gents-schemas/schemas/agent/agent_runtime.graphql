@@ -1,4 +1,4 @@
-type AgentRuntime {
+type AgentRuntime @branchable {
     agent_did: String @index(unique: true)
     process_state: String @index
     reconcile_phase: String @index

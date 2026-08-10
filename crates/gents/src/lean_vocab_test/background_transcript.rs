@@ -52,6 +52,8 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         caused_by_parent_tool_call_id_present: bool,
         caused_by_parent_tool_call_doc_id_present: bool,
         lineage_admissible: bool,
+        depth_zero_lineage_admissible: bool,
+        background_completion_depth_zero_admissible: bool,
         request_visible_before_message_allowed: bool,
         message_then_request_allowed: bool,
         queue_source: String,

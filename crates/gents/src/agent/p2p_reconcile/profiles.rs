@@ -83,6 +83,7 @@ pub fn expand_p2p_collection_profile_ids<'a>(
 const RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentRuntime",
     "ToolSelection",
     "InferenceProfile",
     "InferenceBackend",
@@ -103,6 +104,7 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
 const AGENT_COLLECTIONS: &[&str] = &[
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentRuntime",
     "ToolSelection",
     "InferenceBackend",
     "InferenceProfile",
@@ -136,6 +138,7 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "PeerRegistry",
     "AgentPrincipal",
     "AgentBehavior",
+    "AgentRuntime",
     "ToolSelection",
     "InferenceBackend",
     "InferenceProfile",
@@ -181,13 +184,13 @@ mod tests {
     }
 
     #[test]
-    fn profiles_exclude_deployment_local_agent_runtime_state() {
+    fn profiles_replicate_agent_runtime_for_fleet_visibility() {
         for profile in [
             P2pCollectionProfile::Runtime,
             P2pCollectionProfile::Agent,
             P2pCollectionProfile::Discovery,
         ] {
-            assert!(!profile.collection_names().contains(&"AgentRuntime"));
+            assert!(profile.collection_names().contains(&"AgentRuntime"));
         }
     }
 }

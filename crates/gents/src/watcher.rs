@@ -70,7 +70,7 @@ pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<(
     if is_top_level && req.subagent_depth != 0 {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    if !is_top_level && req.subagent_depth == 0 && !is_goal_queue(req) {
+    if !is_top_level && req.subagent_depth == 0 && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())
