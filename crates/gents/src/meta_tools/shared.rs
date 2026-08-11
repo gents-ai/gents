@@ -8,6 +8,7 @@ use crate::graphql::escape_graphql_string;
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::resolve_mcp_url;
 use crate::mcp_pool::McpPool;
+use crate::tool_call_lifecycle::FailureClass;
 
 #[derive(Clone)]
 pub struct MetaToolContext {
@@ -48,23 +49,53 @@ pub(super) fn mcp_service_allowed(allowed_mcp_service_ids: &[String], service_id
 }
 
 #[derive(Debug)]
-pub struct MetaToolError(anyhow::Error);
+pub struct MetaToolError(MetaToolErrorKind);
+
+#[derive(Debug)]
+enum MetaToolErrorKind {
+    Other(anyhow::Error),
+    Structured(StructuredToolError),
+}
+
+impl MetaToolError {
+    pub(super) fn structured(error: StructuredToolError) -> Self {
+        Self(MetaToolErrorKind::Structured(error))
+    }
+
+    pub(super) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
+        match self.0 {
+            MetaToolErrorKind::Structured(error) => crate::llm::tool::ToolError::ReportedFailure {
+                class: error.lifecycle_failure_class(),
+                text: error.to_result_text(),
+            },
+            MetaToolErrorKind::Other(error) => crate::llm::tool::ToolError::ToolCallError(
+                Box::new(MetaToolError(MetaToolErrorKind::Other(error))),
+            ),
+        }
+    }
+}
 
 impl std::fmt::Display for MetaToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:#}", self.0)
+        match &self.0 {
+            MetaToolErrorKind::Other(error) => write!(f, "{error:#}"),
+            MetaToolErrorKind::Structured(error) => f.write_str(&error.to_result_text()),
+        }
     }
 }
 
 impl std::error::Error for MetaToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
+        match &self.0 {
+            MetaToolErrorKind::Other(error) => Some(error.root_cause()),
+            MetaToolErrorKind::Structured(_) => None,
+        }
     }
 }
 
 impl From<anyhow::Error> for MetaToolError {
     fn from(error: anyhow::Error) -> Self {
-        Self(error)
+        Self(MetaToolErrorKind::Other(error))
     }
 }
 
@@ -86,6 +117,21 @@ pub(super) struct StructuredToolError {
 }
 
 impl StructuredToolError {
+    fn lifecycle_failure_class(&self) -> FailureClass {
+        match self.failure_class {
+            "invalid_tool_arguments" | "invalid_json_arguments" | "arguments_not_object" => {
+                FailureClass::ArgumentInvalid
+            }
+            "tool_not_allowed" => FailureClass::PolicyDenied,
+            "service_unavailable"
+            | "tool_not_found"
+            | "resource_not_found"
+            | "service_schema_drift" => FailureClass::ServiceUnavailable,
+            "tool_timeout" | "deadline_or_inference_failure" => FailureClass::External,
+            _ => FailureClass::ToolReturnedError,
+        }
+    }
+
     pub(super) fn invalid_tool_arguments(
         service_id: &str,
         tool_name: &str,

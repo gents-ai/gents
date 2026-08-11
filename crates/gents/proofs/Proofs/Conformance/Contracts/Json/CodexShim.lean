@@ -35,184 +35,79 @@ def codexShimProjectionCaseJson (witness : CodexShimProjectionCase) : String :=
       ++ boolString witness.interruptibleRequestState
     ++ "}"
 
+def responseStatusName : ResponseStatus → String
+  | .streaming => "streaming"
+  | .complete => "complete"
+  | .error => "error"
+
+def genericClientProjectionTheorems : List String :=
+  [ "deriveAttempt_total"
+  , "lifecycle_transition_monotonic"
+  , "terminal_coherence"
+  , "CodexShim.projectClientTurnState_terminal"
+  , "CodexShim.projection_without_local_interrupt"
+  , "CodexShim.codex_turn_terminates_precisely"
+  ]
+
+def localInterruptProjectionTheorems : List String :=
+  [ "CodexShim.local_interrupt_projects_interrupted"
+  , "CodexShim.local_interrupt_never_projects_in_progress"
+  , "CodexShim.codex_turn_terminates_precisely"
+  , "CodexShim.local_interrupt_requires_interruptible"
+  , "CodexShim.local_interrupt_shortcut_sound"
+  ]
+
+def codexShimProjectionCase
+    (witness : String)
+    (requestState : RequestState)
+    (responseStatus : Option ResponseStatus)
+    (localInterruptAcked : Bool) : CodexShimProjectionCase :=
+  let observation : CodexShim.ProjectionObservation :=
+    { requestState := requestState
+    , responseStatus := responseStatus
+    , localInterruptAcked := localInterruptAcked
+    }
+  let phase := CodexShim.projectObservation observation
+  { witness := witness
+  , leanTheorems :=
+      if localInterruptAcked then
+        localInterruptProjectionTheorems
+      else
+        genericClientProjectionTheorems
+  , requestState := requestState.toDefraDB
+  , responseStatus := responseStatus.map responseStatusName
+  , localInterruptAcked := localInterruptAcked
+  , projectedPhase := phase.toProtocol
+  , terminal := decide (CodexShim.TurnPhase.terminal phase)
+  , effectivelyTerminal := decide (CodexShim.turnEffectivelyTerminal observation)
+  , interruptibleRequestState := decide (CodexShim.interruptibleRequestState requestState)
+  }
+
 def codexShimProjectionCases : List CodexShimProjectionCase :=
-  [ { witness := "codex_shim.projection.pending_no_response"
-    , leanTheorems :=
-        [ "CodexShim.project_pending_is_in_progress"
-        , "CodexShim.nonterminal_without_response_projects_in_progress"
-        , "CodexShim.request_transition_projection_monotonic"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "pending"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "inProgress"
-    , terminal := false
-    , effectivelyTerminal := false
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.claimed_no_response"
-    , leanTheorems :=
-        [ "CodexShim.project_claimed_is_in_progress"
-        , "CodexShim.nonterminal_without_response_projects_in_progress"
-        , "CodexShim.request_transition_projection_monotonic"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "claimed"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "inProgress"
-    , terminal := false
-    , effectivelyTerminal := false
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.processing_streaming_response"
-    , leanTheorems :=
-        [ "CodexShim.project_processing_is_in_progress"
-        , "CodexShim.request_transition_projection_monotonic"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "processing"
-    , responseStatus := some "streaming"
-    , localInterruptAcked := false
-    , projectedPhase := "inProgress"
-    , terminal := false
-    , effectivelyTerminal := false
-    , interruptibleRequestState := true
-    }
-  , { witness := "codex_shim.projection.nonterminal_complete_response"
-    , leanTheorems :=
-        [ "CodexShim.response_complete_advances_nonterminal_to_completed"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "processing"
-    , responseStatus := some "complete"
-    , localInterruptAcked := false
-    , projectedPhase := "completed"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := true
-    }
-  , { witness := "codex_shim.projection.nonterminal_error_response"
-    , leanTheorems :=
-        [ "CodexShim.response_error_advances_nonterminal_to_failed"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "processing"
-    , responseStatus := some "error"
-    , localInterruptAcked := false
-    , projectedPhase := "failed"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := true
-    }
-  , { witness := "codex_shim.projection.completed_request"
-    , leanTheorems :=
-        [ "CodexShim.project_completed_is_completed"
-        , "CodexShim.terminal_request_overrides_response"
-        , "CodexShim.terminal_request_projects_terminal"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "completed"
-    , responseStatus := some "error"
-    , localInterruptAcked := false
-    , projectedPhase := "completed"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.failed_request"
-    , leanTheorems :=
-        [ "CodexShim.project_failed_is_failed"
-        , "CodexShim.terminal_request_overrides_response"
-        , "CodexShim.terminal_request_projects_terminal"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "failed"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "failed"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.dead_request"
-    , leanTheorems :=
-        [ "CodexShim.project_dead_is_failed"
-        , "CodexShim.terminal_request_overrides_response"
-        , "CodexShim.terminal_request_projects_terminal"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "dead"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "failed"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.superseded_request"
-    , leanTheorems :=
-        [ "CodexShim.project_superseded_is_interrupted"
-        , "CodexShim.terminal_request_overrides_response"
-        , "CodexShim.terminal_request_projects_terminal"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "superseded"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "interrupted"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.interrupted_request"
-    , leanTheorems :=
-        [ "CodexShim.project_interrupted_is_interrupted"
-        , "CodexShim.terminal_request_overrides_response"
-        , "CodexShim.terminal_request_projects_terminal"
-        , "CodexShim.codex_turn_terminates_precisely"
-        ]
-    , requestState := "interrupted"
-    , responseStatus := none
-    , localInterruptAcked := false
-    , projectedPhase := "interrupted"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := false
-    }
-  , { witness := "codex_shim.projection.local_interrupt_preempts_core_state"
-    , leanTheorems :=
-        [ "CodexShim.local_interrupt_projects_interrupted"
-        , "CodexShim.local_interrupt_never_projects_in_progress"
-        , "CodexShim.codex_turn_terminates_precisely"
-        , "CodexShim.local_interrupt_requires_interruptible"
-        , "CodexShim.local_interrupt_shortcut_sound"
-        ]
-    , requestState := "processing"
-    , responseStatus := some "streaming"
-    , localInterruptAcked := true
-    , projectedPhase := "interrupted"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := true
-    }
-  , { witness := "codex_shim.projection.local_interrupt_input_required"
-    , leanTheorems :=
-        [ "CodexShim.local_interrupt_projects_interrupted"
-        , "CodexShim.local_interrupt_never_projects_in_progress"
-        , "CodexShim.codex_turn_terminates_precisely"
-        , "CodexShim.local_interrupt_requires_interruptible"
-        , "CodexShim.local_interrupt_shortcut_sound"
-        ]
-    , requestState := "inputRequired"
-    , responseStatus := none
-    , localInterruptAcked := true
-    , projectedPhase := "interrupted"
-    , terminal := true
-    , effectivelyTerminal := true
-    , interruptibleRequestState := true
-    }
+  [ codexShimProjectionCase "codex_shim.projection.pending_no_response"
+      .pending none false
+  , codexShimProjectionCase "codex_shim.projection.claimed_no_response"
+      .claimed none false
+  , codexShimProjectionCase "codex_shim.projection.processing_streaming_response"
+      .processing (some .streaming) false
+  , codexShimProjectionCase "codex_shim.projection.nonterminal_complete_response"
+      .processing (some .complete) false
+  , codexShimProjectionCase "codex_shim.projection.nonterminal_error_response"
+      .processing (some .error) false
+  , codexShimProjectionCase "codex_shim.projection.completed_request"
+      .completed (some .error) false
+  , codexShimProjectionCase "codex_shim.projection.failed_request"
+      .failed none false
+  , codexShimProjectionCase "codex_shim.projection.dead_request"
+      .dead none false
+  , codexShimProjectionCase "codex_shim.projection.superseded_request"
+      .superseded none false
+  , codexShimProjectionCase "codex_shim.projection.interrupted_request"
+      .interrupted none false
+  , codexShimProjectionCase "codex_shim.projection.local_interrupt_preempts_core_state"
+      .processing (some .streaming) true
+  , codexShimProjectionCase "codex_shim.projection.local_interrupt_input_required"
+      .inputRequired none true
   ]
 
 def codexShimProjectionCasesJson : String :=
@@ -351,8 +246,44 @@ structure CodexShimSubagentStatusCase where
   witness : String
   leanTheorems : List String
   requestState : String
+  responseStatus : Option String
   projectedAgentStatus : String
   terminal : Bool
+
+def clientHeadProjection
+    (requestState : RequestState)
+    (responseStatus : Option ResponseStatus) : ClientHeadProjection :=
+  projectHead
+    { request :=
+        { lifecycleState := requestState
+        , isSuperseded := false
+        }
+    , response := responseStatus.map fun status =>
+        { status := status
+        , tailEmpty := true
+        }
+    }
+
+def collabAgentPhaseName : CodexShim.CollabAgentPhase → String
+  | .pendingInit => "pendingInit"
+  | .running => "running"
+  | .completed => "completed"
+  | .errored => "errored"
+  | .interrupted => "interrupted"
+
+def codexShimSubagentStatusCase
+    (witness : String)
+    (requestState : RequestState)
+    (responseStatus : Option ResponseStatus) : CodexShimSubagentStatusCase :=
+  let head := clientHeadProjection requestState responseStatus
+  let phase := CodexShim.projectSubagentState head
+  { witness
+  , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
+  , requestState := requestState.toDefraDB
+  , responseStatus := responseStatus.map responseStatusName
+  , projectedAgentStatus := collabAgentPhaseName phase
+  , terminal := head.isTerminal
+  }
 
 def codexShimSubagentStatusCaseJson
     (witness : CodexShimSubagentStatusCase) : String :=
@@ -360,39 +291,28 @@ def codexShimSubagentStatusCaseJson
     ++ "\"witness\":" ++ jsonString witness.witness ++ ","
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"request_state\":" ++ jsonString witness.requestState ++ ","
+    ++ "\"response_status\":" ++ jsonOptionalString witness.responseStatus ++ ","
     ++ "\"projected_agent_status\":"
       ++ jsonString witness.projectedAgentStatus ++ ","
     ++ "\"terminal\":" ++ boolString witness.terminal
     ++ "}"
 
 def codexShimSubagentStatusCases : List CodexShimSubagentStatusCase :=
-  [ { witness := "codex_shim.subagent_status.pending"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "pending", projectedAgentStatus := "pendingInit", terminal := false }
-  , { witness := "codex_shim.subagent_status.claimed"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "claimed", projectedAgentStatus := "running", terminal := false }
-  , { witness := "codex_shim.subagent_status.processing"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "processing", projectedAgentStatus := "running", terminal := false }
-  , { witness := "codex_shim.subagent_status.input_required"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "inputRequired", projectedAgentStatus := "running", terminal := false }
-  , { witness := "codex_shim.subagent_status.completed"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "completed", projectedAgentStatus := "completed", terminal := true }
-  , { witness := "codex_shim.subagent_status.failed"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "failed", projectedAgentStatus := "errored", terminal := true }
-  , { witness := "codex_shim.subagent_status.dead"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "dead", projectedAgentStatus := "errored", terminal := true }
-  , { witness := "codex_shim.subagent_status.superseded"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "superseded", projectedAgentStatus := "interrupted", terminal := true }
-  , { witness := "codex_shim.subagent_status.interrupted"
-    , leanTheorems := [ "CodexShim.subagent_status_terminal_precisely" ]
-    , requestState := "interrupted", projectedAgentStatus := "interrupted", terminal := true }
+  [ codexShimSubagentStatusCase "codex_shim.subagent_status.pending" .pending none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.claimed" .claimed none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.processing" .processing none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.input_required" .inputRequired none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.completed" .completed none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.failed" .failed none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.dead" .dead none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.superseded" .superseded none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.interrupted" .interrupted none
+  , codexShimSubagentStatusCase
+      "codex_shim.subagent_status.processing_complete_response"
+      .processing (some .complete)
+  , codexShimSubagentStatusCase
+      "codex_shim.subagent_status.processing_error_response"
+      .processing (some .error)
   ]
 
 def codexShimSubagentStatusCasesJson : String :=
@@ -758,6 +678,7 @@ structure CodexShimThreadStatusCase where
   witness : String
   leanTheorems : List String
   requestState : Option String
+  responseStatus : Option String
   conversationStatus : String
   projectedStatus : String
 
@@ -765,14 +686,17 @@ def codexShimThreadStatusCase
     (witness : String)
     (leanTheorems : List String)
     (requestState : Option RequestState)
+    (responseStatus : Option ResponseStatus)
     (conversationStatus : String) : CodexShimThreadStatusCase :=
+  let head := requestState.map fun state => clientHeadProjection state responseStatus
   { witness
   , leanTheorems
   , requestState := requestState.map RequestState.toDefraDB
+  , responseStatus := responseStatus.map responseStatusName
   , conversationStatus
   , projectedStatus :=
       threadPresentationStatusName
-        (CodexShim.projectThreadStatus requestState conversationStatus)
+        (CodexShim.projectThreadStatus head conversationStatus)
   }
 
 def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String :=
@@ -780,40 +704,48 @@ def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String
     ++ "\"witness\":" ++ jsonString witness.witness ++ ","
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"request_state\":" ++ jsonOptionalString witness.requestState ++ ","
+    ++ "\"response_status\":" ++ jsonOptionalString witness.responseStatus ++ ","
     ++ "\"conversation_status\":" ++ jsonString witness.conversationStatus ++ ","
     ++ "\"projected_status\":" ++ jsonString witness.projectedStatus
     ++ "}"
 
 def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
-  [ codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) "active"
-  , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) "active"
+  [ codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) none "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) none "active"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.processing"
       ["CodexShim.active_request_projects_active_thread"]
-      (some .processing) "completed"
+      (some .processing) none "completed"
   , codexShimThreadStatusCase "codex_shim.thread_status.input_required" []
-      (some .inputRequired) "active"
+      (some .inputRequired) none "active"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.completed"
       ["CodexShim.completed_request_projects_idle_thread"]
-      (some .completed) "error"
+      (some .completed) none "error"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.failed"
       ["CodexShim.failed_request_projects_system_error_thread"]
-      (some .failed) "active"
-  , codexShimThreadStatusCase "codex_shim.thread_status.dead" [] (some .dead) "active"
+      (some .failed) none "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.dead" [] (some .dead) none "active"
   , codexShimThreadStatusCase "codex_shim.thread_status.superseded" []
-      (some .superseded) "active"
+      (some .superseded) none "active"
   , codexShimThreadStatusCase "codex_shim.thread_status.interrupted" []
-      (some .interrupted) "active"
+      (some .interrupted) none "active"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.processing_complete_response"
+      ["CodexShim.terminal_response_projects_idle_thread_before_request_terminalizes"]
+      (some .processing) (some .complete) "active"
+  , codexShimThreadStatusCase
+      "codex_shim.thread_status.processing_error_response"
+      [] (some .processing) (some .error) "active"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.conversation_error"
       ["CodexShim.missing_request_error_conversation_projects_system_error"]
-      none "error"
+      none none "error"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.quiescent"
       ["CodexShim.missing_request_active_conversation_is_quiescent"]
-      none "active"
+      none none "active"
   ]
 
 def codexShimThreadStatusCasesJson : String :=

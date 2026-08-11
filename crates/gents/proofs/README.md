@@ -837,6 +837,13 @@ accepted failure mode.
 
 The implementation-facing version is `client-state-machine.md`.
 
+The Codex shim reuses this projection directly. Its adapter only maps the
+generic `ClientTurnState` into Codex wire phases and applies the acknowledged
+local-interrupt override; request/response precedence, lifecycle monotonicity,
+and terminal coherence stay owned by `Proofs/Client.lean`. Generated Codex
+conformance rows are evaluated from that composition rather than restating a
+parallel Codex-specific state machine.
+
 ### Client Shell Workflow
 
 `Proofs/ClientShell.lean` sits above the per-turn projection and models the

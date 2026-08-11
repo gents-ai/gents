@@ -6,7 +6,8 @@ use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 
 use super::command_projection::{
-    command_execution_item, command_output_payload, file_change_item, ToolProjectionStatus,
+    codex_command_status, codex_mcp_status, codex_patch_status, command_execution_item,
+    command_output_payload, file_change_item, ToolProjectionStatus,
 };
 use super::compaction_projection::{
     compaction_projection_events, context_compaction_item, CompactionProjectionEvent,
@@ -15,11 +16,14 @@ use super::compaction_projection::{
 use super::progress::{
     gents_tool_item, tool_completed_at_ms, tool_started_at_ms, GentsToolCallProgress,
 };
+use super::projection_state::{
+    collab_projection_events, CollabProjection, ProjectionEvent, ProjectionStatus,
+};
 use super::protocol::{
     agent_message_item, agent_message_item_with_phase, now_millis, send_notification,
     turn_value_with_timing,
 };
-use super::subagent_projection::{collab_tool_item, CollabProjection};
+use super::subagent_projection::collab_tool_item;
 use super::{Outbound, ShimState};
 
 #[derive(Default)]
@@ -56,7 +60,6 @@ pub(super) struct TurnProjection<'a> {
     active_reasoning_item_id: Option<String>,
     active_reasoning_text: String,
     completed_reasoning_items: ReasoningCompletionTracker,
-    completed_items: Vec<codex::ThreadItem>,
 }
 
 impl<'a> TurnProjection<'a> {
@@ -82,7 +85,6 @@ impl<'a> TurnProjection<'a> {
             active_reasoning_item_id: None,
             active_reasoning_text: String::new(),
             completed_reasoning_items: ReasoningCompletionTracker::default(),
-            completed_items: Vec::new(),
         }
     }
 
@@ -224,7 +226,6 @@ impl<'a> TurnProjection<'a> {
         )
         .await?;
         self.completed_reasoning_items.record(item_id);
-        self.completed_items.push(item);
         Ok(())
     }
 
@@ -311,7 +312,6 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        self.completed_items.push(completed_item);
         Ok(())
     }
 
@@ -355,7 +355,6 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        self.completed_items.push(completed_item);
         Ok(())
     }
 
@@ -415,7 +414,6 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        self.completed_items.push(completed_item);
         Ok(())
     }
 
@@ -451,7 +449,7 @@ impl<'a> TurnProjection<'a> {
         self.finish_agent_message_with_phase(outbound, Some(MessagePhase::Commentary))
             .await?;
         let mut started = projection.clone();
-        started.status = codex::CollabAgentToolCallStatus::InProgress;
+        started.status = ProjectionStatus::InProgress;
         send_notification(
             outbound,
             self.state,
@@ -485,15 +483,6 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        if let Some(existing) = self
-            .completed_items
-            .iter()
-            .position(|existing| existing.id() == item.id())
-        {
-            self.completed_items[existing] = item;
-        } else {
-            self.completed_items.push(item);
-        }
         Ok(())
     }
 
@@ -519,7 +508,6 @@ impl<'a> TurnProjection<'a> {
             }),
         )
         .await?;
-        self.completed_items.push(item);
         Ok(())
     }
 
@@ -530,6 +518,22 @@ impl<'a> TurnProjection<'a> {
         previous: Option<&ToolProjectionStatus>,
         current: &ToolProjectionStatus,
     ) -> Result<()> {
+        if let ToolProjectionStatus::Collab(projection) = current {
+            let events = collab_projection_events(previous, projection);
+            for event in events {
+                match event {
+                    ProjectionEvent::Started => {
+                        self.send_collab_started(outbound, tool, projection).await?
+                    }
+                    ProjectionEvent::Completed => {
+                        self.send_collab_completed(outbound, tool, projection)
+                            .await?
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         match (previous, current) {
             (Some(ToolProjectionStatus::Command(_)), ToolProjectionStatus::Mcp(status)) => {
                 let mut foreground_tool = tool.clone();
@@ -540,42 +544,40 @@ impl<'a> TurnProjection<'a> {
                     codex::CommandExecutionStatus::Completed,
                 )
                 .await?;
-                if *status != codex::McpToolCallStatus::InProgress {
+                if *status != ProjectionStatus::InProgress {
                     self.send_tool_started(outbound, tool).await?;
                 }
                 match status {
-                    codex::McpToolCallStatus::InProgress => {
-                        self.send_tool_started(outbound, tool).await
-                    }
-                    codex::McpToolCallStatus::Completed | codex::McpToolCallStatus::Failed => {
-                        self.send_tool_completed(outbound, tool, status.clone())
+                    ProjectionStatus::InProgress => self.send_tool_started(outbound, tool).await,
+                    ProjectionStatus::Completed | ProjectionStatus::Failed => {
+                        self.send_tool_completed(outbound, tool, codex_mcp_status(*status))
                             .await
                     }
                 }
             }
             (None, ToolProjectionStatus::Mcp(status))
-                if *status != codex::McpToolCallStatus::InProgress =>
+                if *status != ProjectionStatus::InProgress =>
             {
                 self.send_tool_started(outbound, tool).await?;
-                self.send_tool_completed(outbound, tool, status.clone())
+                self.send_tool_completed(outbound, tool, codex_mcp_status(*status))
                     .await
             }
             (Some(ToolProjectionStatus::DeferredCollab), ToolProjectionStatus::Mcp(status))
-                if *status != codex::McpToolCallStatus::InProgress =>
+                if *status != ProjectionStatus::InProgress =>
             {
                 self.send_tool_started(outbound, tool).await?;
-                self.send_tool_completed(outbound, tool, status.clone())
+                self.send_tool_completed(outbound, tool, codex_mcp_status(*status))
                     .await
             }
-            (_, ToolProjectionStatus::Mcp(codex::McpToolCallStatus::InProgress)) => {
+            (_, ToolProjectionStatus::Mcp(ProjectionStatus::InProgress)) => {
                 self.send_tool_started(outbound, tool).await
             }
             (_, ToolProjectionStatus::Mcp(status)) => {
-                self.send_tool_completed(outbound, tool, status.clone())
+                self.send_tool_completed(outbound, tool, codex_mcp_status(*status))
                     .await
             }
             (None, ToolProjectionStatus::Command(status))
-                if *status != codex::CommandExecutionStatus::InProgress =>
+                if *status != ProjectionStatus::InProgress =>
             {
                 self.send_command_execution_started(
                     outbound,
@@ -583,48 +585,38 @@ impl<'a> TurnProjection<'a> {
                     codex::CommandExecutionStatus::InProgress,
                 )
                 .await?;
-                self.send_command_execution_completed(outbound, tool, status.clone())
+                self.send_command_execution_completed(outbound, tool, codex_command_status(*status))
                     .await
             }
-            (_, ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)) => {
-                self.send_command_execution_started(outbound, tool, current.command_status())
-                    .await
+            (_, ToolProjectionStatus::Command(ProjectionStatus::InProgress)) => {
+                self.send_command_execution_started(
+                    outbound,
+                    tool,
+                    codex_command_status(current.command_status()),
+                )
+                .await
             }
             (_, ToolProjectionStatus::Command(status)) => {
-                self.send_command_execution_completed(outbound, tool, status.clone())
+                self.send_command_execution_completed(outbound, tool, codex_command_status(*status))
                     .await
             }
-            (
-                None | Some(ToolProjectionStatus::DeferredCollab),
-                ToolProjectionStatus::Collab(projection),
-            ) if projection.status != codex::CollabAgentToolCallStatus::InProgress => {
-                self.send_collab_started(outbound, tool, projection).await?;
-                self.send_collab_completed(outbound, tool, projection).await
-            }
-            (_, ToolProjectionStatus::Collab(projection))
-                if projection.status == codex::CollabAgentToolCallStatus::InProgress =>
-            {
-                self.send_collab_started(outbound, tool, projection).await
-            }
-            (_, ToolProjectionStatus::Collab(projection)) => {
-                self.send_collab_completed(outbound, tool, projection).await
-            }
+            (_, ToolProjectionStatus::Collab(_)) => unreachable!("handled above"),
             (_, ToolProjectionStatus::DeferredCollab) => Ok(()),
             (_, ToolProjectionStatus::DeferredFileChange) => Ok(()),
             (None, ToolProjectionStatus::FileChange(status))
             | (
                 Some(ToolProjectionStatus::DeferredFileChange),
                 ToolProjectionStatus::FileChange(status),
-            ) if *status != codex::PatchApplyStatus::InProgress => {
+            ) if *status != ProjectionStatus::InProgress => {
                 self.send_file_change_started(outbound, tool).await?;
-                self.send_file_change_completed(outbound, tool, status.clone())
+                self.send_file_change_completed(outbound, tool, codex_patch_status(*status))
                     .await
             }
-            (_, ToolProjectionStatus::FileChange(codex::PatchApplyStatus::InProgress)) => {
+            (_, ToolProjectionStatus::FileChange(ProjectionStatus::InProgress)) => {
                 self.send_file_change_started(outbound, tool).await
             }
             (_, ToolProjectionStatus::FileChange(status)) => {
-                self.send_file_change_completed(outbound, tool, status.clone())
+                self.send_file_change_completed(outbound, tool, codex_patch_status(*status))
                     .await
             }
         }
@@ -672,7 +664,6 @@ impl<'a> TurnProjection<'a> {
                         ),
                     )
                     .await?;
-                    self.completed_items.push(item);
                 }
             }
         }

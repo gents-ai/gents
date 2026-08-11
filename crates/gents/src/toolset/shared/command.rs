@@ -8,6 +8,7 @@ use serde::Serialize;
 use super::context::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
+use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
@@ -286,8 +287,17 @@ pub(crate) async fn run_command(
         stdout: stdout.content,
         stderr: stderr.content,
     };
-
-    render_command_output(&output, raw_json).map_err(Into::into)
+    let rendered = render_command_output(&output, raw_json).map_err(ToolError::from)?;
+    if output.metadata.ok {
+        Ok(rendered)
+    } else {
+        let class = if output.metadata.timed_out {
+            FailureClass::External
+        } else {
+            FailureClass::ToolReturnedError
+        };
+        Err(ToolError::reported_failure(class, rendered))
+    }
 }
 
 #[cfg(test)]

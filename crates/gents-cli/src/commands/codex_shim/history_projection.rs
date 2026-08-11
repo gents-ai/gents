@@ -4,17 +4,18 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
+use gents_protocol::client_protocol::derive_persisted_attempt;
 use gents_protocol::transcript::present_persisted_message;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 use super::command_projection::{
-    command_execution_item, file_change_item, tool_projection_status_with_settled,
-    ToolProjectionStatus,
+    codex_command_status, codex_mcp_status, codex_patch_status, command_execution_item,
+    file_change_item, tool_projection_status_with_settled, ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
-    decode_gents_tool_call_progress, gents_tool_item, terminal_error_message, terminal_turn_status,
+    codex_turn_status, decode_gents_tool_call_progress, gents_tool_item, terminal_error_message,
     GentsToolCallProgress,
 };
 use super::protocol::{
@@ -591,12 +592,12 @@ fn append_request_items(
     compactions: &[CompactionRow],
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) {
-    let projection_settled = matches!(
+    let projection_settled = derive_persisted_attempt(
         request.lifecycle_state.trim(),
-        "completed" | "failed" | "dead" | "interrupted" | "superseded"
-    ) || response.is_some_and(|response| {
-        matches!(response.status.trim(), "complete" | "completed" | "error")
-    });
+        false,
+        response.map(|row| row.status.trim()),
+    )
+    .is_some_and(|state| state.is_terminal());
     tools.sort_by(|left, right| {
         left.message_sequence
             .cmp(&right.message_sequence)
@@ -707,16 +708,20 @@ fn project_tool(
     projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
     match tool_projection_status_with_settled(tool, projection_settled, true) {
-        ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, status)),
-        ToolProjectionStatus::Command(status) => {
-            Some(command_execution_item(&record.cwd, tool, status))
-        }
+        ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, codex_mcp_status(status))),
+        ToolProjectionStatus::Command(status) => Some(command_execution_item(
+            &record.cwd,
+            tool,
+            codex_command_status(status),
+        )),
         ToolProjectionStatus::Collab(projection) => {
             Some(collab_tool_item(&record.session_id, tool, &projection))
         }
         ToolProjectionStatus::DeferredCollab => None,
         ToolProjectionStatus::DeferredFileChange => None,
-        ToolProjectionStatus::FileChange(status) => file_change_item(tool, status),
+        ToolProjectionStatus::FileChange(status) => {
+            file_change_item(tool, codex_patch_status(status))
+        }
     }
 }
 
@@ -728,20 +733,9 @@ fn turn_status(request: &RequestRow, response: Option<&ResponseRow>) -> codex::T
         .and_then(|response| normalized_nonempty(&response.status))
         .unwrap_or_default();
 
-    if response_status == "interrupted" {
-        codex::TurnStatus::Interrupted
-    } else if response_status == "complete"
-        || response_status == "completed"
-        || response_status == "error"
-        || matches!(
-            lifecycle_state.as_str(),
-            "completed" | "failed" | "dead" | "interrupted" | "superseded"
-        )
-    {
-        terminal_turn_status(&lifecycle_state, &response_status)
-    } else {
-        codex::TurnStatus::InProgress
-    }
+    derive_persisted_attempt(&lifecycle_state, false, Some(&response_status))
+        .map(codex_turn_status)
+        .unwrap_or(codex::TurnStatus::InProgress)
 }
 
 fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<codex::TurnError> {
