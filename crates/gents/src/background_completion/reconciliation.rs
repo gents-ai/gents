@@ -306,13 +306,18 @@ pub(super) async fn request_is_locally_owned(
             response.errors
         );
     }
-    let row = response
+    let Some(row) = response
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
         .and_then(|rows| rows.first())
-        .context("physical parent AgentRequest not found")?;
+    else {
+        // Cross-deployment bridges intentionally replicate without their
+        // physical parent request. Absence is therefore an ownership-negative
+        // result, not a malformed local row or a fatal observer error.
+        return Ok(false);
+    };
     Ok(
         row.get("request_id").and_then(|v| v.as_str()) == Some(request_id)
             && row.get("agent_did").and_then(|v| v.as_str()) == Some(local_did),
