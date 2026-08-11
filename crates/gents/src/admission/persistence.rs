@@ -307,15 +307,11 @@ fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
 
 fn usage_fields(usage: Option<Usage>) -> (String, String, String) {
     match usage {
-        Some(usage) => {
-            let (prompt_tokens, completion_tokens, cached_input_tokens) =
-                crate::provider_usage::persisted_usage_counts(usage);
-            (
-                format!("prompt_tokens: {prompt_tokens},"),
-                format!("completion_tokens: {completion_tokens},"),
-                format!("cached_input_tokens: {cached_input_tokens},"),
-            )
-        }
+        Some(usage) => (
+            format!("prompt_tokens: {},", usage.input_tokens),
+            format!("completion_tokens: {},", usage.output_tokens),
+            format!("cached_input_tokens: {},", usage.cached_input_tokens),
+        ),
         None => (String::new(), String::new(), String::new()),
     }
 }
@@ -370,5 +366,20 @@ mod tests {
                 "physical request edge missing from mutation: {mutation}"
             );
         }
+    }
+
+    #[test]
+    fn usage_columns_preserve_provider_components_verbatim() {
+        let fields = usage_fields(Some(Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: 200,
+            cached_input_tokens: 40,
+            cache_creation_input_tokens: 10,
+        }));
+
+        assert_eq!(fields.0, "prompt_tokens: 100,");
+        assert_eq!(fields.1, "completion_tokens: 50,");
+        assert_eq!(fields.2, "cached_input_tokens: 40,");
     }
 }

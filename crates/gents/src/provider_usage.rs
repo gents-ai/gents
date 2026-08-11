@@ -5,46 +5,27 @@
 //! charge the same way: otherwise Harbor/ATIF sums of persisted rows diverge
 //! from the live ledger, and a crash-rehydrate path would disagree with either.
 //!
-//! Mirrors `PromptAssembly.AggregateBudget.Usage.chargedTotal` in Lean: take
-//! the larger of the provider's reported total and the sum of its
-//! input/output components so an inconsistent report can never undercharge.
+//! Mirrors `PromptAssembly.AggregateBudget.Usage.chargedTotal` in Lean: charge
+//! the provider input/output components already stored on `InferenceCall`.
+//! `total_tokens` remains an observed provider value, not a second accounting
+//! source that has no durable column.
 
 use rig::completion::Usage;
 
 /// Tokens charged against a request-wide budget for one provider usage report.
 ///
-/// Equal to `max(total_tokens, input_tokens + output_tokens)`. Zero means the
-/// report is not enforceable (treated as missing by the ledger).
+/// Equal to `input_tokens + output_tokens`, the durable components used by
+/// restart rehydration. Zero means the report is not enforceable (treated as
+/// missing by the ledger).
 pub(crate) fn charged_usage_total(usage: Usage) -> u64 {
-    usage
-        .total_tokens
-        .max(usage.input_tokens.saturating_add(usage.output_tokens))
-}
-
-/// Persist token columns with Harbor/ATIF semantics so
-/// `prompt_tokens + completion_tokens == charged_usage_total(usage)`.
-///
-/// - `prompt_tokens` is every input token implied by the charged total
-///   (including cache components that only appear in `total_tokens`)
-/// - `completion_tokens` is reported output
-/// - `cached_input_tokens` is the reported cache-read count (metadata only;
-///   already folded into the charged total when the provider put it in
-///   `total_tokens`)
-pub(crate) fn persisted_usage_counts(usage: Usage) -> (u64, u64, u64) {
-    let charged_total = charged_usage_total(usage);
-    (
-        charged_total.saturating_sub(usage.output_tokens),
-        usage.output_tokens,
-        usage.cached_input_tokens,
-    )
+    usage.input_tokens.saturating_add(usage.output_tokens)
 }
 
 /// Reconstruct the charged total from durable `InferenceCall` columns.
 ///
-/// [`persisted_usage_counts`] writes `prompt_tokens` and `completion_tokens`
-/// so they sum to [`charged_usage_total`]. Rehydrate uses that inverse: when
-/// either column is present the missing side is treated as zero (fail-closed
-/// toward more spent, never less). Both absent means the call never reported
+/// Persistence writes the provider's `input_tokens` and `output_tokens`
+/// verbatim. Rehydrate sums those facts: when either column is present the
+/// missing side is treated as zero. Both absent means the call never reported
 /// usage and contributes nothing.
 pub(crate) fn charged_from_persisted_parts(
     prompt_tokens: Option<i64>,
@@ -73,8 +54,7 @@ where
 /// Each column stays `None` until at least one row supplies a non-negative
 /// value for it — the same rule the ledger's rehydrate path uses per field.
 /// Callers that need the request-wide charged total should use
-/// [`charged_from_column_totals`] on the prompt/completion results (or
-/// [`sum_charged_from_persisted_parts`] over the raw rows).
+/// [`sum_charged_from_persisted_parts`] over the raw rows.
 pub(crate) fn sum_persisted_usage_columns<I>(rows: I) -> (Option<u64>, Option<u64>, Option<u64>)
 where
     I: IntoIterator<Item = (Option<i64>, Option<i64>, Option<i64>)>,
@@ -88,21 +68,6 @@ where
         add_column_total(&mut cached, cached_input_tokens);
     }
     (prompt, completion, cached)
-}
-
-/// Charged total from already-summed durable columns.
-pub(crate) fn charged_from_column_totals(
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-) -> Option<u64> {
-    if prompt_tokens.is_none() && completion_tokens.is_none() {
-        return None;
-    }
-    Some(
-        prompt_tokens
-            .unwrap_or(0)
-            .saturating_add(completion_tokens.unwrap_or(0)),
-    )
 }
 
 /// Remaining request-wide budget after durable spend, when a ceiling is set.
@@ -127,7 +92,7 @@ mod tests {
     use rig::completion::Usage;
 
     #[test]
-    fn charged_total_covers_components_and_cannot_underreport() {
+    fn charged_total_is_the_durable_input_output_sum() {
         let usage = Usage {
             input_tokens: 100,
             output_tokens: 50,
@@ -135,8 +100,7 @@ mod tests {
             cached_input_tokens: 40,
             cache_creation_input_tokens: 10,
         };
-        assert_eq!(charged_usage_total(usage), 200);
-        assert_eq!(persisted_usage_counts(usage), (150, 50, 40));
+        assert_eq!(charged_usage_total(usage), 150);
 
         let inconsistent = Usage {
             input_tokens: 300,
@@ -146,11 +110,10 @@ mod tests {
             cache_creation_input_tokens: 0,
         };
         assert_eq!(charged_usage_total(inconsistent), 500);
-        assert_eq!(persisted_usage_counts(inconsistent), (300, 200, 0));
     }
 
     #[test]
-    fn persisted_parts_sum_to_charged_total() {
+    fn provider_total_does_not_rewrite_durable_prompt_tokens() {
         for usage in [
             Usage {
                 input_tokens: 100,
@@ -175,7 +138,8 @@ mod tests {
             },
         ] {
             let charged = charged_usage_total(usage);
-            let (prompt, completion, _cached) = persisted_usage_counts(usage);
+            let prompt = usage.input_tokens;
+            let completion = usage.output_tokens;
             assert_eq!(
                 prompt.saturating_add(completion),
                 charged,
@@ -205,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn column_totals_and_charged_observation_agree_with_rehydrate() {
+    fn column_totals_preserve_observed_provider_usage() {
         let rows = [
             (None, None, None),
             (Some(100), Some(50), Some(20)),
@@ -215,7 +179,6 @@ mod tests {
         assert_eq!(prompt, Some(300));
         assert_eq!(completion, Some(60));
         assert_eq!(cached, Some(25));
-        assert_eq!(charged_from_column_totals(prompt, completion), Some(360));
         assert_eq!(
             sum_charged_from_persisted_parts(rows.map(|(p, c, _)| (p, c))),
             360

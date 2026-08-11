@@ -25,7 +25,7 @@ response_error_has() {
 
 # Read one non-negative integer from the root final_metrics.extra object in
 # Gents' pretty-printed ATIF. Exact indentation anchors this to the top-level
-# metrics object, so model-authored tool arguments cannot forge the settle gate.
+# metrics object, so model-authored tool arguments cannot forge the outcome.
 atif_final_metrics_extra_u64() {
   atif_path=$1
   atif_key=$2
@@ -44,9 +44,9 @@ atif_final_metrics_extra_u64() {
 
 normalize_token_budget_outcome() {
   candidate_outcome=$1
-  usage_count=$2
+  charged_tokens=$2
   if [ "${candidate_outcome}" = "token_budget_exhausted" ] && \
-    [ "${usage_count}" -eq 0 ]; then
+    [ "${charged_tokens}" -eq 0 ]; then
     printf 'agent_error\n'
   else
     printf '%s\n' "${candidate_outcome}"
@@ -123,8 +123,7 @@ EOF
     "total_steps": 1,
     "extra": {
       "inference_call_count": 2,
-      "inference_call_pending_count": 0,
-      "inference_call_usage_count": 2
+      "aggregate_token_budget_used": 400
     }
   }
 }
@@ -270,8 +269,7 @@ EOF
 
   for metric_expectation in \
     inference_call_count:2 \
-    inference_call_pending_count:0 \
-    inference_call_usage_count:2; do
+    aggregate_token_budget_used:400; do
     metric_key=${metric_expectation%%:*}
     metric_expected=${metric_expectation#*:}
     metric_actual=$(atif_final_metrics_extra_u64 \
@@ -325,14 +323,12 @@ fi
 : "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES:=67108864}"
 : "${GENTS_SUPERVISION_POLL_SECS:=1}"
 : "${GENTS_RESPONSE_WAITER_MAX_RESTARTS:=10}"
-: "${GENTS_TRACE_SETTLE_TIMEOUT_SECS:=30}"
 : "${GENTS_LOGS_DIR:=/logs/agent}"
 
 for numeric_value in \
   "${GENTS_DIAGNOSTIC_TIMEOUT_SECS}" \
   "${GENTS_DIAGNOSTIC_HOME_MAX_BYTES}" \
-  "${GENTS_RESPONSE_WAITER_MAX_RESTARTS}" \
-  "${GENTS_TRACE_SETTLE_TIMEOUT_SECS}"; do
+  "${GENTS_RESPONSE_WAITER_MAX_RESTARTS}"; do
   case "${numeric_value}" in
     ''|*[!0-9]*|0)
       echo "diagnostic bounds must be positive integers" >&2
@@ -823,7 +819,7 @@ while :; do
   exit "${waiter_status}"
 done
 
-# Persist terminal classification before trace settling. If projection cannot
+# Persist terminal classification before projection. If projection cannot
 # reopen the store, diagnostics still retain the response-derived outcome.
 response_status=$(sed -n 's/^[[:space:]]*"status": "\([^"]*\)",*$/\1/p' "${response_log}" | head -1)
 outcome=$(classify_response "${response_log}")
@@ -831,46 +827,19 @@ printf '{\n  "outcome": "%s",\n  "response_status": "%s",\n  "max_turns": %s,\n 
   "${outcome}" "${response_status:-missing}" "${GENTS_MAX_TURNS}" "${GENTS_MAX_TOTAL}" "${request_id}" \
   >"${outcome_log}"
 
-trajectory_candidate="${trajectory_path}.pending"
-trace_settle_elapsed=0
-trace_settled=0
-inference_call_count=""
-inference_call_usage_count=""
-while [ "${trace_settle_elapsed}" -lt "${GENTS_TRACE_SETTLE_TIMEOUT_SECS}" ]; do
-  rm -f "${trajectory_candidate}"
-  if "${GENTS_BINARY}" trace project \
-    --home "${GENTS_HOME}" \
-    --request-id "${request_id}" \
-    --projection atif \
-    --format native-json \
-    --output-file "${trajectory_candidate}" && \
-    [ -s "${trajectory_candidate}" ]; then
-    inference_call_count=$(atif_final_metrics_extra_u64 \
-      "${trajectory_candidate}" inference_call_count)
-    pending_call_count=$(atif_final_metrics_extra_u64 \
-      "${trajectory_candidate}" inference_call_pending_count)
-    inference_call_usage_count=$(atif_final_metrics_extra_u64 \
-      "${trajectory_candidate}" inference_call_usage_count)
-    if [ -n "${inference_call_count}" ] && \
-      [ -n "${inference_call_usage_count}" ] && \
-      [ "${pending_call_count:-missing}" = "0" ]; then
-      mv "${trajectory_candidate}" "${trajectory_path}"
-      trace_settled=1
-      break
-    fi
-  fi
-  sleep 1
-  trace_settle_elapsed=$((trace_settle_elapsed + 1))
-done
-rm -f "${trajectory_candidate}"
-if [ "${trace_settled}" != "1" ]; then
-  echo "Gents inference-call usage did not settle within ${GENTS_TRACE_SETTLE_TIMEOUT_SECS}s" >&2
-  exit 1
-fi
+"${GENTS_BINARY}" trace project \
+  --home "${GENTS_HOME}" \
+  --request-id "${request_id}" \
+  --projection atif \
+  --format native-json \
+  --output-file "${trajectory_path}"
+test -s "${trajectory_path}"
 
 classification_reason=""
+aggregate_token_budget_used=$(atif_final_metrics_extra_u64 \
+  "${trajectory_path}" aggregate_token_budget_used)
 normalized_outcome=$(normalize_token_budget_outcome \
-  "${outcome}" "${inference_call_usage_count:-0}")
+  "${outcome}" "${aggregate_token_budget_used:-0}")
 if [ "${normalized_outcome}" != "${outcome}" ]; then
   classification_reason="aggregate token budget was exhausted before any provider call retained chargeable usage"
 fi

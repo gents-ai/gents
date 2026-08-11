@@ -878,7 +878,7 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
     let cases = crate::lean_vocab_test::lean_aggregate_token_budget_cases();
     assert_eq!(
         cases.len(),
-        10,
+        11,
         "Lean should emit the aggregate token-budget witness set"
     );
 
@@ -949,7 +949,7 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
 #[tokio::test]
 async fn aggregate_budget_charges_tool_turn_before_clamping_later_dispatch() {
     let model = UsageScriptedModel::new(vec![
-        usage_echo_tool_turn(usage_response(100, 100, 20_000)),
+        usage_echo_tool_turn(usage_response(10_000, 10_000, 20_000)),
         vec![
             RawStreamingChoice::Message("done".to_string()),
             RawStreamingChoice::FinalResponse(usage_response(100, 100, 1_000)),
@@ -1082,7 +1082,7 @@ async fn aggregate_budget_charges_retracted_structured_output_attempt() {
     let model = UsageScriptedModel::new(vec![
         vec![
             RawStreamingChoice::Message("not json".to_string()),
-            RawStreamingChoice::FinalResponse(usage_response(100, 100, 20_000)),
+            RawStreamingChoice::FinalResponse(usage_response(10_000, 10_000, 20_000)),
         ],
         vec![
             RawStreamingChoice::Message(r#"{"answer":"ok"}"#.to_string()),

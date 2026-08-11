@@ -91,12 +91,18 @@ private def witnesses : List AggregateTokenBudgetWitness :=
     , configuredMaxOutputTokens := 900
     , terminalValid := false
     , usage := some { inputTokens := 0, outputTokens := 0, reportedTotal := 0 } }
-  , { name := "inconsistent-total-cannot-undercharge"
+  , { name := "inconsistent-total-uses-durable-components"
     , ledger := { limit := 1000, used := 100 }
     , inputTokens := 100
     , configuredMaxOutputTokens := 900
     , terminalValid := false
     , usage := some { inputTokens := 300, outputTokens := 200, reportedTotal := 400 } }
+  , { name := "larger-reported-total-does-not-rewrite-durable-components"
+    , ledger := { limit := 1000, used := 100 }
+    , inputTokens := 100
+    , configuredMaxOutputTokens := 900
+    , terminalValid := false
+    , usage := some { inputTokens := 100, outputTokens := 50, reportedTotal := 200 } }
   , { name := "exact-limit-is-exhausted"
     , ledger := { limit := 1000, used := 500 }
     , inputTokens := 100

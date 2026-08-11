@@ -11,12 +11,10 @@ Harbor verifier inspects.
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import os
 import re
 import shlex
-import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -27,9 +25,6 @@ import certifi
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-
-from . import jack_bench_attestation
-
 
 class GentsAgent(BaseAgent):
     """Run one Harbor instruction through a durable Gents request."""
@@ -48,12 +43,6 @@ class GentsAgent(BaseAgent):
     _REMOTE_GLIBC_BUNDLE = "/tmp/gents-harbor-glibc.tar.gz"
     _REMOTE_GLIBC_DIR = "/usr/local/lib/gents-harbor-glibc"
     _RUNNER_SOURCE = Path(__file__).with_name("run_gents.sh")
-    _JACK_BENCH_RUNTIME_ATTESTATION_SCHEMA = (
-        jack_bench_attestation.RUNTIME_ATTESTATION_SCHEMA
-    )
-    _JACK_BENCH_RUNTIME_ATTESTATION_FILE = (
-        jack_bench_attestation.RUNTIME_ATTESTATION_FILE
-    )
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -106,22 +95,6 @@ class GentsAgent(BaseAgent):
                 f"{field}"
             )
         return request[field]
-
-    def _write_jack_bench_runtime_attestation(
-        self, detected_gents_version: str
-    ) -> None:
-        if self._env("GENTS_JACK_BENCH_ATTESTATION") != "1":
-            return
-        jack_bench_attestation.write_runtime_attestation(
-            binary_path=self._env("GENTS_BINARY_PATH"),
-            controller_binary_sha256=self._env(
-                "GENTS_HARBOR_CONTROLLER_BINARY_SHA256"
-            ),
-            controller_entrypoint=Path(sys.argv[0]),
-            detected_gents_version=detected_gents_version,
-            harbor_version=importlib.metadata.version("harbor"),
-            logs_dir=self.logs_dir,
-        )
 
     @staticmethod
     def _nonnegative_int(value: Any) -> int | None:
@@ -417,7 +390,6 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             command=f"{self._REMOTE_FS_RUNNER} --self-test"
         )
         self._require_success("gents native filesystem runner self-test", fs_runner_result)
-        self._write_jack_bench_runtime_attestation(detected_version)
 
     async def run(
         self,

@@ -9,8 +9,10 @@ model gives those calls one monotone ledger. The runtime must constrain every
 dispatch from the ledger and charge every non-zero provider usage report.
 
 The provider tokenizer and the truthfulness of its usage report remain external
-assumptions. Production checks the report after each call and fails closed when
-it is absent or would put the ledger over its declared limit.
+assumptions. Production charges the input/output components it persists on the
+durable `InferenceCall`, so restart rehydration observes exactly the same spend.
+It fails closed when those components are absent, zero, or would put the ledger
+over its declared limit.
 -/
 
 namespace PromptAssembly.AggregateBudget
@@ -21,10 +23,29 @@ structure Usage where
   reportedTotal : Nat
   deriving DecidableEq, Repr
 
-/-- Charge the larger of the provider's total and its reported input/output
-sum. An internally inconsistent total can therefore never undercharge. -/
+/-- Charge the provider input/output components that are persisted durably.
+`reportedTotal` remains an observed provider fact, not a second accounting
+source with no corresponding durable column. -/
 def Usage.chargedTotal (usage : Usage) : Nat :=
-  max usage.reportedTotal (usage.inputTokens + usage.outputTokens)
+  usage.inputTokens + usage.outputTokens
+
+/-- The usage facts retained on a terminal `InferenceCall`. Keeping this shape
+separate makes the crash boundary explicit: rehydration sees these columns,
+not the transient provider response. -/
+structure PersistedUsage where
+  promptTokens : Nat
+  completionTokens : Nat
+  deriving DecidableEq, Repr
+
+def Usage.persisted (usage : Usage) : PersistedUsage :=
+  { promptTokens := usage.inputTokens
+  , completionTokens := usage.outputTokens }
+
+def PersistedUsage.chargedTotal (usage : PersistedUsage) : Nat :=
+  usage.promptTokens + usage.completionTokens
+
+def rehydrateUsed (rows : List PersistedUsage) : Nat :=
+  (rows.map PersistedUsage.chargedTotal).sum
 
 structure Ledger where
   limit : Nat
@@ -92,9 +113,29 @@ def chargeReported (ledger : Ledger) (usage : Option Usage) : ChargeResult :=
         else
           .within next
 
-theorem charged_total_covers_components (usage : Usage) :
-    usage.inputTokens + usage.outputTokens ≤ usage.chargedTotal := by
-  exact Nat.le_max_right _ _
+theorem charged_total_eq_persisted_components (usage : Usage) :
+    usage.chargedTotal = usage.inputTokens + usage.outputTokens := by
+  rfl
+
+theorem persist_preserves_charge (usage : Usage) :
+    usage.persisted.chargedTotal = usage.chargedTotal := by
+  rfl
+
+/-- Once a charged provider result is durably appended, crash rehydration
+recovers the prior spend plus exactly that charge. Production must await this
+append before publishing the terminal stream item. -/
+theorem rehydrate_after_persist (rows : List PersistedUsage) (usage : Usage) :
+    rehydrateUsed (rows ++ [usage.persisted]) =
+      rehydrateUsed rows + usage.chargedTotal := by
+  induction rows with
+  | nil =>
+      simp [rehydrateUsed, Usage.persisted, PersistedUsage.chargedTotal,
+        Usage.chargedTotal]
+  | cons head tail ih =>
+      change head.chargedTotal + rehydrateUsed (tail ++ [usage.persisted]) =
+        head.chargedTotal + rehydrateUsed tail + usage.chargedTotal
+      rw [ih]
+      omega
 
 theorem charge_monotone (ledger : Ledger) (usage : Usage) :
     ledger.used ≤ (ledger.charge usage).used := by

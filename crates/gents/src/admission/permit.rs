@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
+use futures::future::BoxFuture;
 use rig::completion::{CompletionError, Usage};
 use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
@@ -93,7 +94,6 @@ impl AdmissionPermit {
         if self.finished {
             return Ok(());
         }
-        self.finished = true;
         let terminal = self.terminal.clone().unwrap_or(PermitTerminal {
             call_state: "completed",
             failure_reason: None,
@@ -120,6 +120,7 @@ impl AdmissionPermit {
             }
             tracing::warn!(call_id = %self.call.call_id, error = %error, "failed to persist terminal inference call state");
         }
+        self.finished = true;
         Ok(())
     }
 }
@@ -136,11 +137,20 @@ impl StreamGuardLifecycle for AdmissionPermit {
     }
 
     fn mark_stream_error(&mut self, error: &CompletionError) {
-        self.terminal = Some(PermitTerminal {
-            call_state: "failed",
-            failure_reason: Some(error.to_string()),
-            usage: None,
-        });
+        if self.terminal.is_none() {
+            self.terminal = Some(PermitTerminal {
+                call_state: "failed",
+                failure_reason: Some(error.to_string()),
+                usage: None,
+            });
+        }
+    }
+
+    fn finish_stream(self) -> BoxFuture<'static, Result<(), CompletionError>> {
+        Box::pin(async move {
+            let mut permit = self;
+            permit.finish().await
+        })
     }
 }
 
@@ -194,31 +204,9 @@ impl Drop for AdmissionPermit {
         let call_id = self.call.call_id.clone();
         let call = self.call.clone();
         let charged_usage = terminal.usage;
-        // Streaming completions only reach terminal persistence via Drop. When
-        // usage was charged on Final, await the durable write on the runtime
-        // so crash redrive can rehydrate the same spend.
-        if charged_usage.is_some() {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let persist_result = tokio::task::block_in_place(|| {
-                    handle.block_on(persist_existing_call_terminal(
-                        node,
-                        &call,
-                        terminal.call_state,
-                        terminal.failure_reason.as_deref(),
-                        charged_usage,
-                    ))
-                });
-                if let Err(error) = persist_result {
-                    tracing::error!(
-                        call_id = %call_id,
-                        error = %error,
-                        "failed to persist terminal InferenceCall usage on stream drop; \
-                         aggregate budget rehydrate may undercount until the row is repaired"
-                    );
-                }
-                return;
-            }
-        }
+        // Explicit stream finalization awaits charged usage before exposing the
+        // provider's terminal item. Drop remains the abort/cancellation repair
+        // path and must never block a Tokio runtime thread.
         spawn_persistence(async move {
             if let Err(error) = persist_existing_call_terminal(
                 node,
