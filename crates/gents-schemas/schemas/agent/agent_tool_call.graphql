@@ -10,7 +10,11 @@ type AgentToolCall @branchable {
     tool_call_id: String @index
     args: String
     result: String
+    # Persistence/delivery state. A terminal failed tool may still use
+    # "completed" here once its result or background notification is durable.
     status: String
+    # Authoritative execution outcome: pending, awaitingApproval, running,
+    # completed, failed, timedOut, or cancelled.
     lifecycle_state: String @index
     started_at: DateTime
     deadline_at: DateTime

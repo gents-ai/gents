@@ -4,17 +4,25 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
 use gents_codex_protocol as codex;
+use gents_protocol::client_protocol::{
+    project_persisted_attempt, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::bound_behavior::model_selection_id;
-use super::progress::{gents_tool_call_status, GentsToolCallProgress};
+use super::progress::{observed_tool_status, GentsToolCallProgress};
+use super::projection_state::{ChildStatus, CollabProjection, CollabTool, ProjectionStatus};
 use super::store::query_node_json;
 use super::ShimState;
 
-const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 3] =
-    ["AgentRequest", "AgentToolCall", "AgentBehavior"];
+const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 4] = [
+    "AgentRequest",
+    "AgentResponse",
+    "AgentToolCall",
+    "AgentBehavior",
+];
 
 #[derive(Clone, Debug)]
 pub(super) struct SubagentProjectionUpdateFilter {
@@ -77,19 +85,9 @@ pub(super) struct LinkedSubagentThread {
     pub(super) behavior_id: String,
     pub(super) model: Option<String>,
     pub(super) nickname: String,
-    pub(super) lifecycle_state: String,
+    pub(super) client_projection: Option<ClientHeadProjection>,
     pub(super) failure_reason: Option<String>,
     pub(super) created_at: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct CollabProjection {
-    pub(super) status: codex::CollabAgentToolCallStatus,
-    pub(super) tool: codex::CollabAgentTool,
-    pub(super) receiver_thread_id: String,
-    pub(super) child_model: Option<String>,
-    pub(super) child_lifecycle_state: String,
-    pub(super) child_failure_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -105,6 +103,8 @@ struct RequestRow {
     metadata: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
+    #[serde(default)]
+    superseded_by_request: Option<String>,
     #[serde(default)]
     failure_reason: Option<String>,
     #[serde(default)]
@@ -130,6 +130,22 @@ struct ToolLinkRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     args: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ResponseRow {
+    request_id: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ConversationHeadRow {
+    session_id: String,
+    #[serde(default)]
+    latest_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -163,6 +179,7 @@ const REQUEST_ROW_FIELDS: &str = r#"
     behavior_id
     metadata
     lifecycle_state
+    superseded_by_request
     failure_reason
     created_at
     subagent_depth
@@ -324,8 +341,113 @@ async fn load_authorized_subagent_threads_for_roots(
         state.agent_did.as_ref(),
         state.behavior_id.as_ref(),
     );
+    attach_canonical_request_heads(state, &requests, &mut links).await?;
+    attach_client_head_projections(state, &mut links).await?;
     attach_runtime_models(state, &mut links).await;
     Ok(links)
+}
+
+async fn attach_canonical_request_heads(
+    state: &ShimState,
+    requests: &[RequestRow],
+    links: &mut [LinkedSubagentThread],
+) -> Result<()> {
+    let mut session_ids = links
+        .iter()
+        .map(|link| link.session_id.clone())
+        .collect::<Vec<_>>();
+    session_ids.sort_unstable();
+    session_ids.dedup();
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+    let response = query_node_json(
+        state.node.as_ref(),
+        &conversation_heads_for_sessions_query(&session_ids),
+    )
+    .await?;
+    let heads = decode_rows::<ConversationHeadRow>(&response, "AgentConversation")
+        .context("decoding subagent AgentConversation heads")?
+        .into_iter()
+        .filter_map(|row| {
+            nonempty(row.latest_request_id.as_deref())
+                .map(|request_id| (row.session_id, request_id.to_string()))
+        })
+        .collect::<HashMap<_, _>>();
+    apply_canonical_request_heads(requests, &heads, links);
+    Ok(())
+}
+
+fn apply_canonical_request_heads(
+    requests: &[RequestRow],
+    heads: &HashMap<String, String>,
+    links: &mut [LinkedSubagentThread],
+) {
+    let requests_by_id = requests
+        .iter()
+        .map(|row| (row.request_id.as_str(), row))
+        .collect::<HashMap<_, _>>();
+    for link in links {
+        let Some(request_id) = heads.get(&link.session_id) else {
+            continue;
+        };
+        let Some(request) = requests_by_id.get(request_id.as_str()) else {
+            continue;
+        };
+        if request.session_id != link.session_id
+            || request.agent_did != link.agent_did
+            || nonempty(request.behavior_id.as_deref()) != Some(link.behavior_id.as_str())
+            || request.subagent_depth.unwrap_or_default() != link.depth
+        {
+            continue;
+        }
+        apply_latest_request(link, request);
+    }
+}
+
+async fn attach_client_head_projections(
+    state: &ShimState,
+    links: &mut [LinkedSubagentThread],
+) -> Result<()> {
+    let mut request_ids = links
+        .iter()
+        .map(|link| link.latest_request_id.clone())
+        .filter(|request_id| !request_id.trim().is_empty())
+        .collect::<Vec<_>>();
+    request_ids.sort_unstable();
+    request_ids.dedup();
+    if request_ids.is_empty() {
+        return Ok(());
+    }
+
+    let response = query_node_json(
+        state.node.as_ref(),
+        &responses_for_request_ids_query(&request_ids),
+    )
+    .await?;
+    let latest_by_request = decode_rows::<ResponseRow>(&response, "AgentResponse")
+        .context("decoding subagent AgentResponse rows")?
+        .into_iter()
+        .fold(HashMap::<String, ResponseRow>::new(), |mut latest, row| {
+            let replace = latest
+                .get(&row.request_id)
+                .is_none_or(|previous| row.created_at > previous.created_at);
+            if replace {
+                latest.insert(row.request_id.clone(), row);
+            }
+            latest
+        });
+    for link in links {
+        let Some(head) = link.client_projection.filter(|head| head.is_active()) else {
+            continue;
+        };
+        let response_status = latest_by_request
+            .get(&link.latest_request_id)
+            .and_then(|row| nonempty(row.status.as_deref()));
+        link.client_projection =
+            project_persisted_attempt(head.request_state.as_str(), false, response_status);
+    }
+    Ok(())
 }
 
 async fn attach_runtime_models(state: &ShimState, links: &mut [LinkedSubagentThread]) {
@@ -447,6 +569,34 @@ fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String 
         .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn responses_for_request_ids_query(request_ids: &[String]) -> String {
+    format!(
+        r#"{{
+            AgentResponse(
+                filter: {{ request_id: {{ _in: [{}] }} }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                status
+                created_at
+            }}
+        }}"#,
+        graphql_string_list(request_ids.iter().map(String::as_str)),
+    )
+}
+
+fn conversation_heads_for_sessions_query(session_ids: &[String]) -> String {
+    format!(
+        r#"{{
+            AgentConversation(filter: {{ session_id: {{ _in: [{}] }} }}) {{
+                session_id
+                latest_request_id
+            }}
+        }}"#,
+        graphql_string_list(session_ids.iter().map(String::as_str)),
+    )
 }
 
 fn extend_unique_requests(
@@ -594,9 +744,11 @@ fn resolve_authorized_subagent_threads(
                 behavior_id,
                 model: None,
                 nickname,
-                lifecycle_state: nonempty(child.lifecycle_state.as_deref())
-                    .unwrap_or("")
-                    .to_string(),
+                client_projection: project_persisted_attempt(
+                    nonempty(child.lifecycle_state.as_deref()).unwrap_or(""),
+                    nonempty(child.superseded_by_request.as_deref()).is_some(),
+                    None,
+                ),
                 failure_reason: child
                     .failure_reason
                     .as_deref()
@@ -647,19 +799,25 @@ fn resolve_authorized_subagent_threads(
             continue;
         };
         let latest = &requests[*latest_index];
-        link.latest_request_id = latest.request_id.clone();
-        link.latest_request_content = latest.content.clone();
-        link.latest_request_created_at = latest.created_at.clone();
-        link.lifecycle_state = nonempty(latest.lifecycle_state.as_deref())
-            .unwrap_or("")
-            .to_string();
-        link.failure_reason = latest
-            .failure_reason
-            .as_deref()
-            .and_then(|value| nonempty(Some(value)))
-            .map(ToOwned::to_owned);
+        apply_latest_request(link, latest);
     }
     links
+}
+
+fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestRow) {
+    link.latest_request_id = latest.request_id.clone();
+    link.latest_request_content = latest.content.clone();
+    link.latest_request_created_at = latest.created_at.clone();
+    link.client_projection = project_persisted_attempt(
+        nonempty(latest.lifecycle_state.as_deref()).unwrap_or(""),
+        nonempty(latest.superseded_by_request.as_deref()).is_some(),
+        None,
+    );
+    link.failure_reason = latest
+        .failure_reason
+        .as_deref()
+        .and_then(|value| nonempty(Some(value)))
+        .map(ToOwned::to_owned);
 }
 
 fn request_context_key(row: &RequestRow) -> RequestContextKey {
@@ -715,12 +873,12 @@ pub(super) fn is_subagent_control_tool(tool_name: &str) -> bool {
     collab_tool(tool_name).is_some()
 }
 
-fn collab_tool(tool_name: &str) -> Option<codex::CollabAgentTool> {
+fn collab_tool(tool_name: &str) -> Option<CollabTool> {
     match tool_name {
-        "spawn_subagent" => Some(codex::CollabAgentTool::SpawnAgent),
-        "wait_subagent" => Some(codex::CollabAgentTool::Wait),
-        "steer_subagent" => Some(codex::CollabAgentTool::SendInput),
-        "cancel_subagent" => Some(codex::CollabAgentTool::CloseAgent),
+        "spawn_subagent" => Some(CollabTool::SpawnAgent),
+        "wait_subagent" => Some(CollabTool::Wait),
+        "steer_subagent" => Some(CollabTool::SendInput),
+        "cancel_subagent" => Some(CollabTool::CloseAgent),
         _ => None,
     }
 }
@@ -754,37 +912,49 @@ fn tool_child_request_id(tool: &GentsToolCallProgress) -> Option<String> {
 pub(super) fn collab_projection(tool: &GentsToolCallProgress) -> Option<CollabProjection> {
     let collab_tool = collab_tool(&tool.tool_name)?;
     let link = tool.subagent_link.as_ref()?;
-    let runtime_status = gents_tool_call_status(tool);
+    let runtime_status = observed_tool_status(tool);
     let status = match (&collab_tool, runtime_status) {
-        (_, codex::McpToolCallStatus::Failed) => codex::CollabAgentToolCallStatus::Failed,
-        (codex::CollabAgentTool::SpawnAgent, _) => {
+        (_, ProjectionStatus::Failed) => ProjectionStatus::Failed,
+        (CollabTool::SpawnAgent, _) => {
             // The reciprocal edge proves the spawn operation succeeded. GENTS
             // deliberately keeps the bridge row running while a background
             // child works; Codex represents that child lifecycle separately
             // in agentsStates, so the collaboration operation is complete.
-            codex::CollabAgentToolCallStatus::Completed
+            ProjectionStatus::Completed
         }
-        (_, codex::McpToolCallStatus::InProgress) => codex::CollabAgentToolCallStatus::InProgress,
-        (_, codex::McpToolCallStatus::Completed) => codex::CollabAgentToolCallStatus::Completed,
+        (_, ProjectionStatus::InProgress) => ProjectionStatus::InProgress,
+        (_, ProjectionStatus::Completed) => ProjectionStatus::Completed,
     };
     Some(CollabProjection {
         status,
         tool: collab_tool,
         receiver_thread_id: link.session_id.clone(),
         child_model: link.model.clone(),
-        child_lifecycle_state: link.lifecycle_state.clone(),
+        child_status: collab_agent_status(link.client_projection),
         child_failure_reason: link.failure_reason.clone(),
     })
 }
 
-pub(super) fn collab_agent_status(lifecycle_state: &str) -> codex::CollabAgentStatus {
-    match lifecycle_state.trim() {
-        "pending" => codex::CollabAgentStatus::PendingInit,
-        "claimed" | "processing" | "inputRequired" => codex::CollabAgentStatus::Running,
-        "completed" => codex::CollabAgentStatus::Completed,
-        "failed" | "dead" => codex::CollabAgentStatus::Errored,
-        "superseded" | "interrupted" => codex::CollabAgentStatus::Interrupted,
-        _ => codex::CollabAgentStatus::NotFound,
+pub(super) fn collab_agent_status(head: Option<ClientHeadProjection>) -> ChildStatus {
+    match head {
+        Some(ClientHeadProjection {
+            turn_state: ClientTurnState::Completed,
+            ..
+        }) => ChildStatus::Completed,
+        Some(ClientHeadProjection {
+            turn_state: ClientTurnState::Failed,
+            ..
+        }) => ChildStatus::Errored,
+        Some(ClientHeadProjection {
+            turn_state: ClientTurnState::Superseded | ClientTurnState::Interrupted,
+            ..
+        }) => ChildStatus::Interrupted,
+        Some(ClientHeadProjection {
+            turn_state: ClientTurnState::WaitingForClaim,
+            request_state: RequestLifecycleState::Pending,
+        }) => ChildStatus::Pending,
+        Some(_) => ChildStatus::Running,
+        None => ChildStatus::NotFound,
     }
 }
 
@@ -796,11 +966,11 @@ pub(super) fn collab_tool_item(
     let prompt = serde_json::from_str::<Value>(&tool.args)
         .ok()
         .and_then(|args| match projection.tool {
-            codex::CollabAgentTool::SpawnAgent => args
+            CollabTool::SpawnAgent => args
                 .get("prompt")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            codex::CollabAgentTool::SendInput => args
+            CollabTool::SendInput => args
                 .get("message")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
@@ -810,22 +980,84 @@ pub(super) fn collab_tool_item(
     agents_states.insert(
         projection.receiver_thread_id.clone(),
         codex::CollabAgentState {
-            status: collab_agent_status(&projection.child_lifecycle_state),
+            status: codex_child_status(projection.child_status),
             message: projection.child_failure_reason.clone(),
         },
     );
     codex::ThreadItem::CollabAgentToolCall {
         id: tool.tool_call_key.clone(),
-        tool: projection.tool.clone(),
-        status: projection.status.clone(),
+        tool: codex_collab_tool(projection.tool),
+        status: codex_collab_status(projection.status),
         sender_thread_id: sender_thread_id.to_string(),
         receiver_thread_ids: vec![projection.receiver_thread_id.clone()],
         prompt,
-        model: (projection.tool == codex::CollabAgentTool::SpawnAgent)
+        model: (projection.tool == CollabTool::SpawnAgent)
             .then(|| projection.child_model.clone())
             .flatten(),
         reasoning_effort: None,
         agents_states,
+    }
+}
+
+fn codex_collab_tool(tool: CollabTool) -> codex::CollabAgentTool {
+    match tool {
+        CollabTool::SpawnAgent => codex::CollabAgentTool::SpawnAgent,
+        CollabTool::ResumeAgent => codex::CollabAgentTool::ResumeAgent,
+        CollabTool::Wait => codex::CollabAgentTool::Wait,
+        CollabTool::SendInput => codex::CollabAgentTool::SendInput,
+        CollabTool::CloseAgent => codex::CollabAgentTool::CloseAgent,
+    }
+}
+
+fn codex_child_status(status: ChildStatus) -> codex::CollabAgentStatus {
+    match status {
+        ChildStatus::Pending => codex::CollabAgentStatus::PendingInit,
+        ChildStatus::Running => codex::CollabAgentStatus::Running,
+        ChildStatus::Interrupted => codex::CollabAgentStatus::Interrupted,
+        ChildStatus::Completed => codex::CollabAgentStatus::Completed,
+        ChildStatus::Errored => codex::CollabAgentStatus::Errored,
+        ChildStatus::Shutdown => codex::CollabAgentStatus::Shutdown,
+        ChildStatus::NotFound => codex::CollabAgentStatus::NotFound,
+    }
+}
+
+fn codex_collab_status(status: ProjectionStatus) -> codex::CollabAgentToolCallStatus {
+    match status {
+        ProjectionStatus::InProgress => codex::CollabAgentToolCallStatus::InProgress,
+        ProjectionStatus::Completed => codex::CollabAgentToolCallStatus::Completed,
+        ProjectionStatus::Failed => codex::CollabAgentToolCallStatus::Failed,
+    }
+}
+
+pub(super) fn observed_collab_status(
+    status: &codex::CollabAgentToolCallStatus,
+) -> ProjectionStatus {
+    match status {
+        codex::CollabAgentToolCallStatus::InProgress => ProjectionStatus::InProgress,
+        codex::CollabAgentToolCallStatus::Completed => ProjectionStatus::Completed,
+        codex::CollabAgentToolCallStatus::Failed => ProjectionStatus::Failed,
+    }
+}
+
+pub(super) fn observed_collab_tool(tool: &codex::CollabAgentTool) -> CollabTool {
+    match tool {
+        codex::CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
+        codex::CollabAgentTool::ResumeAgent => CollabTool::ResumeAgent,
+        codex::CollabAgentTool::Wait => CollabTool::Wait,
+        codex::CollabAgentTool::SendInput => CollabTool::SendInput,
+        codex::CollabAgentTool::CloseAgent => CollabTool::CloseAgent,
+    }
+}
+
+pub(super) fn observed_child_status(status: &codex::CollabAgentStatus) -> ChildStatus {
+    match status {
+        codex::CollabAgentStatus::PendingInit => ChildStatus::Pending,
+        codex::CollabAgentStatus::Running => ChildStatus::Running,
+        codex::CollabAgentStatus::Interrupted => ChildStatus::Interrupted,
+        codex::CollabAgentStatus::Completed => ChildStatus::Completed,
+        codex::CollabAgentStatus::Errored => ChildStatus::Errored,
+        codex::CollabAgentStatus::Shutdown => ChildStatus::Shutdown,
+        codex::CollabAgentStatus::NotFound => ChildStatus::NotFound,
     }
 }
 
@@ -856,6 +1088,7 @@ mod tests {
                 }
                 .to_string(),
             ),
+            superseded_by_request: None,
             failure_reason: None,
             created_at: None,
             subagent_depth: Some(depth),
@@ -998,7 +1231,57 @@ mod tests {
             links[0].latest_request_content,
             "content for child-followup"
         );
-        assert_eq!(links[0].lifecycle_state, "processing");
+        assert_eq!(
+            links[0].client_projection,
+            project_persisted_attempt("processing", false, None)
+        );
+    }
+
+    #[test]
+    fn canonical_conversation_head_overrides_local_timestamp_fallback() {
+        let root_session = Uuid::new_v4().to_string();
+        let child_session = Uuid::new_v4().to_string();
+        let mut canonical = request(
+            "child-request",
+            &child_session,
+            1,
+            Some("root-request"),
+            Some("spawn-call"),
+        );
+        canonical.created_at = Some("2026-01-01T00:00:01Z".to_string());
+        canonical.lifecycle_state = Some("completed".to_string());
+        let mut timestamp_fallback = request("child-followup", &child_session, 1, None, None);
+        timestamp_fallback.created_at = Some("2026-01-01T00:00:02Z".to_string());
+        timestamp_fallback.lifecycle_state = Some("processing".to_string());
+        let requests = vec![
+            request("root-request", &root_session, 0, None, None),
+            canonical,
+            timestamp_fallback,
+        ];
+        let tools = vec![ToolLinkRow {
+            request_id: "root-request".to_string(),
+            session_id: root_session,
+            agent_did: "did:root".to_string(),
+            tool_call_id: "spawn-call".to_string(),
+            tool_name: "spawn_subagent".to_string(),
+            child_request_id: Some("child-request".to_string()),
+            spawn_target_did: Some("did:child".to_string()),
+            args: r#"{"name":"reviewer"}"#.to_string(),
+        }];
+        let mut links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
+        assert_eq!(links[0].latest_request_id, "child-followup");
+
+        apply_canonical_request_heads(
+            &requests,
+            &HashMap::from([(child_session, "child-request".to_string())]),
+            &mut links,
+        );
+
+        assert_eq!(links[0].latest_request_id, "child-request");
+        assert_eq!(
+            links[0].client_projection,
+            project_persisted_attempt("completed", false, None)
+        );
     }
 
     #[test]
@@ -1018,45 +1301,29 @@ mod tests {
 
     #[test]
     fn lean_fenced_tool_and_status_mappings_match_codex_protocol() {
-        assert_eq!(
-            collab_tool("spawn_subagent"),
-            Some(codex::CollabAgentTool::SpawnAgent)
-        );
-        assert_eq!(
-            collab_tool("wait_subagent"),
-            Some(codex::CollabAgentTool::Wait)
-        );
-        assert_eq!(
-            collab_tool("steer_subagent"),
-            Some(codex::CollabAgentTool::SendInput)
-        );
-        assert_eq!(
-            collab_tool("cancel_subagent"),
-            Some(codex::CollabAgentTool::CloseAgent)
-        );
+        assert_eq!(collab_tool("spawn_subagent"), Some(CollabTool::SpawnAgent));
+        assert_eq!(collab_tool("wait_subagent"), Some(CollabTool::Wait));
+        assert_eq!(collab_tool("steer_subagent"), Some(CollabTool::SendInput));
+        assert_eq!(collab_tool("cancel_subagent"), Some(CollabTool::CloseAgent));
         assert_eq!(collab_tool("list_subagents"), None);
         assert_eq!(collab_tool("read_subagent"), None);
 
+        let status = |lifecycle, response| {
+            collab_agent_status(project_persisted_attempt(lifecycle, false, response))
+        };
+        assert_eq!(status("pending", None), ChildStatus::Pending);
+        assert_eq!(status("claimed", None), ChildStatus::Running);
+        assert_eq!(status("processing", None), ChildStatus::Running);
+        assert_eq!(status("inputRequired", None), ChildStatus::Running);
+        assert_eq!(status("completed", None), ChildStatus::Completed);
+        assert_eq!(status("failed", None), ChildStatus::Errored);
+        assert_eq!(status("interrupted", None), ChildStatus::Interrupted);
         assert_eq!(
-            collab_agent_status("pending"),
-            codex::CollabAgentStatus::PendingInit
+            status("processing", Some("complete")),
+            ChildStatus::Completed
         );
-        assert_eq!(
-            collab_agent_status("processing"),
-            codex::CollabAgentStatus::Running
-        );
-        assert_eq!(
-            collab_agent_status("completed"),
-            codex::CollabAgentStatus::Completed
-        );
-        assert_eq!(
-            collab_agent_status("failed"),
-            codex::CollabAgentStatus::Errored
-        );
-        assert_eq!(
-            collab_agent_status("interrupted"),
-            codex::CollabAgentStatus::Interrupted
-        );
+        assert_eq!(status("processing", Some("error")), ChildStatus::Errored);
+        assert_eq!(collab_agent_status(None), ChildStatus::NotFound);
     }
 
     #[test]
@@ -1089,14 +1356,14 @@ mod tests {
             behavior_id: "code-review".to_string(),
             model: Some("child-model".to_string()),
             nickname: "reviewer".to_string(),
-            lifecycle_state: "processing".to_string(),
+            client_projection: project_persisted_attempt("processing", false, None),
             failure_reason: None,
             created_at: None,
         });
         let projection = collab_projection(&tool).expect("authorized spawn projection");
         assert_eq!(
             projection.status,
-            codex::CollabAgentToolCallStatus::Completed,
+            ProjectionStatus::Completed,
             "the linked spawn operation completes while agentsStates tracks the running child"
         );
         let item = collab_tool_item("parent-thread", &tool, &projection);
@@ -1125,9 +1392,21 @@ mod tests {
             Some(&Value::String("running".to_string()))
         );
 
+        let mut claimed = tool.clone();
+        claimed
+            .subagent_link
+            .as_mut()
+            .expect("link")
+            .client_projection = project_persisted_attempt("claimed", false, None);
+        let claimed_projection = collab_projection(&claimed).expect("claimed projection");
+        assert_eq!(
+            projection, claimed_projection,
+            "storage lifecycle aliases with the same Codex status must not emit duplicate items"
+        );
+
         let mut completed = tool.clone();
         let link = completed.subagent_link.as_mut().expect("link");
-        link.lifecycle_state = "completed".to_string();
+        link.client_projection = project_persisted_attempt("completed", false, None);
         let completed_projection = collab_projection(&completed).expect("completed projection");
         assert_ne!(
             projection, completed_projection,
@@ -1140,6 +1419,7 @@ mod tests {
         let filter = SubagentProjectionUpdateFilter {
             collection_ids: HashSet::from([
                 "agent-request-id".to_string(),
+                "agent-response-id".to_string(),
                 "agent-tool-call-id".to_string(),
                 "agent-behavior-id".to_string(),
             ]),
@@ -1147,6 +1427,7 @@ mod tests {
         };
 
         assert!(filter.affects_collection_id("agent-request-id"));
+        assert!(filter.affects_collection_id("agent-response-id"));
         assert!(filter.affects_collection_id("agent-tool-call-id"));
         assert!(filter.affects_collection_id("agent-behavior-id"));
         assert!(!filter.affects_collection_id("agent-message-id"));

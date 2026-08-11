@@ -24,6 +24,9 @@ def terminal : TurnPhase → Prop
   | .notStarted => False
   | .inProgress => False
 
+instance (phase : TurnPhase) : Decidable (terminal phase) := by
+  cases phase <;> simp [terminal] <;> infer_instance
+
 def lexOrd : TurnPhase → Nat
   | .notStarted => 0
   | .inProgress => 1

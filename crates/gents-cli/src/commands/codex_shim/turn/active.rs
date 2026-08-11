@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -24,7 +25,8 @@ pub(super) struct NextSteeringRequest {
 
 impl NextSteeringRequest {
     pub(super) fn is_pending(&self) -> bool {
-        self.lifecycle_state == "pending"
+        RequestLifecycleState::try_from(self.lifecycle_state.as_str())
+            .is_ok_and(|state| state == RequestLifecycleState::Pending)
     }
 }
 
@@ -32,6 +34,8 @@ impl NextSteeringRequest {
 struct RequestRow {
     request_id: String,
     lifecycle_state: String,
+    superseded_by_request: Option<String>,
+    response_status: Option<String>,
     metadata: Option<String>,
     created_at: String,
 }
@@ -125,7 +129,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
     let mut request_ids = Vec::new();
     for row in rows.iter().filter(|row| {
         row.request_id != interrupt_request_id
-            && row.lifecycle_state_is_active()
+            && row.is_effectively_active()
             && steering_parent_id(row).is_some()
     }) {
         let (root, _) = codex_turn_root_and_depth(row, &by_id)?;
@@ -297,20 +301,66 @@ async fn load_thread_request_rows(state: &ShimState, thread_id: &str) -> Result<
             ) {{
                 request_id
                 lifecycle_state
+                superseded_by_request
                 metadata
+                created_at
+            }}
+            AgentResponse(
+                filter: {{
+                    session_id: {{ _eq: "{thread_id}" }},
+                    agent_did: {{ _eq: "{agent_did}" }}
+                }},
+                order: {{ created_at: ASC }}
+            ) {{
+                request_id
+                status
                 created_at
             }}
         }}"#
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
-    response
+    let mut rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .map(decode_request_row)
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let latest_response_status = response
+        .pointer("/data/AgentResponse")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .fold(
+            BTreeMap::<String, (String, String)>::new(),
+            |mut latest, row| {
+                let Some(request_id) = row.get("request_id").and_then(Value::as_str) else {
+                    return latest;
+                };
+                let Some(status) = row.get("status").and_then(Value::as_str) else {
+                    return latest;
+                };
+                let created_at = row
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let replace = latest
+                    .get(request_id)
+                    .is_none_or(|(_, previous_created_at)| created_at > *previous_created_at);
+                if replace {
+                    latest.insert(request_id.to_string(), (status.to_string(), created_at));
+                }
+                latest
+            },
+        );
+    for row in &mut rows {
+        row.response_status = latest_response_status
+            .get(&row.request_id)
+            .map(|(status, _)| status.clone());
+    }
+    Ok(rows)
 }
 
 fn decode_request_row(row: Value) -> Result<RequestRow> {
@@ -324,6 +374,12 @@ fn decode_request_row(row: Value) -> Result<RequestRow> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let superseded_by_request = row
+        .get("superseded_by_request")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let metadata = row
         .get("metadata")
         .and_then(Value::as_str)
@@ -336,6 +392,8 @@ fn decode_request_row(row: Value) -> Result<RequestRow> {
     Ok(RequestRow {
         request_id,
         lifecycle_state,
+        superseded_by_request,
+        response_status: None,
         metadata,
         created_at,
     })
@@ -351,7 +409,7 @@ fn active_codex_turn_from_rows(
         .collect::<BTreeMap<_, _>>();
     let active_rows = rows
         .iter()
-        .filter(|row| row.lifecycle_state_is_active())
+        .filter(|row| row.is_effectively_active())
         .collect::<Vec<_>>();
 
     let mut candidates = Vec::<(&RequestRow, String, usize)>::new();
@@ -435,11 +493,13 @@ fn steering_parent_id(row: &RequestRow) -> Option<String> {
 }
 
 impl RequestRow {
-    fn lifecycle_state_is_active(&self) -> bool {
-        matches!(
-            self.lifecycle_state.as_str(),
-            "pending" | "claimed" | "processing" | "inputRequired"
+    fn is_effectively_active(&self) -> bool {
+        project_persisted_attempt(
+            &self.lifecycle_state,
+            self.superseded_by_request.is_some(),
+            self.response_status.as_deref(),
         )
+        .is_some_and(|head| head.is_active())
     }
 }
 
@@ -462,6 +522,8 @@ mod tests {
         RequestRow {
             request_id: request_id.to_string(),
             lifecycle_state: lifecycle_state.to_string(),
+            superseded_by_request: None,
+            response_status: None,
             metadata,
             created_at: request_id.to_string(),
         }
@@ -501,6 +563,20 @@ mod tests {
         assert_eq!(active.turn_id, "turn-1");
         assert_eq!(active.interrupt_request_id, "steer-1");
         assert_eq!(active.current_request_id, "steer-1");
+    }
+
+    #[test]
+    fn terminal_response_excludes_stale_processing_request_from_active_turn() {
+        let mut completed = row("turn-1", "processing", None);
+        completed.response_status = Some("complete".to_string());
+        assert_eq!(
+            active_codex_turn_from_rows(&[completed], None).unwrap(),
+            None
+        );
+
+        let mut failed = row("turn-2", "processing", None);
+        failed.response_status = Some("error".to_string());
+        assert_eq!(active_codex_turn_from_rows(&[failed], None).unwrap(), None);
     }
 
     #[test]

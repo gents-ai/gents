@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::graphql::{parse_turn_state_response, turn_state_query, GraphqlTurnState};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -222,29 +223,49 @@ pub(super) async fn load_conversation(
         .map(serde_json::from_value)
         .transpose()
         .context("decoding AgentConversation row")?;
-    Ok(attach_latest_request(
-        conversation,
-        response.pointer("/data/AgentRequest/0"),
-    ))
+    let fallback_turn = GraphqlTurnState {
+        request: response
+            .pointer("/data/AgentRequest/0")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("decoding latest AgentRequest row")?,
+        response: None,
+    };
+    let mut conversation = attach_latest_request(conversation, Some(&fallback_turn));
+    let request_id = conversation
+        .as_ref()
+        .map(|row| row.latest_request_id.trim())
+        .filter(|request_id| !request_id.is_empty());
+    if let Some(request_id) = request_id {
+        let response = query_node_json(&state.node, &turn_state_query(request_id)).await?;
+        let turn = parse_turn_state_response(&response).context("decoding latest turn state")?;
+        if turn.request.is_some() {
+            conversation = attach_latest_request(conversation, Some(&turn));
+        }
+    }
+    Ok(conversation)
 }
 
 fn attach_latest_request(
     mut conversation: Option<ConversationRow>,
-    request: Option<&Value>,
+    turn: Option<&GraphqlTurnState>,
 ) -> Option<ConversationRow> {
+    let request = turn.and_then(|turn| turn.request.as_ref());
     if conversation.is_none() && request.is_some() {
         conversation = Some(ConversationRow::default());
     }
     if let Some(conversation) = conversation.as_mut() {
-        conversation.latest_request_lifecycle_state = request
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+        if conversation.latest_request_id.trim().is_empty() {
+            conversation.latest_request_id = request
+                .map(|row| row.request_id.trim())
+                .filter(|request_id| !request_id.is_empty())
+                .unwrap_or_default()
+                .to_string();
+        }
+        conversation.latest_request_projection = turn.and_then(GraphqlTurnState::projected_head);
         conversation.latest_request_failure_reason = request
-            .and_then(|row| row.get("failure_reason"))
-            .and_then(Value::as_str)
+            .and_then(|row| row.failure_reason.as_deref())
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
@@ -349,17 +370,25 @@ mod tests {
 
     #[test]
     fn pending_request_projects_even_before_conversation_materializes() {
-        let request = json!({
+        let request = serde_json::from_value(json!({
             "request_id": "request-1",
             "lifecycle_state": "pending",
             "failure_reason": ""
-        });
-        let conversation = attach_latest_request(None, Some(&request))
+        }))
+        .expect("decode request");
+        let turn = GraphqlTurnState {
+            request: Some(request),
+            response: None,
+        };
+        let conversation = attach_latest_request(None, Some(&turn))
             .expect("request should provide a projection shell");
         assert_eq!(
-            conversation.latest_request_lifecycle_state.as_deref(),
-            Some("pending")
+            conversation
+                .latest_request_projection
+                .map(|head| head.request_state),
+            Some(gents_protocol::client_protocol::RequestLifecycleState::Pending)
         );
+        assert_eq!(conversation.latest_request_id, "request-1");
         assert_eq!(conversation.latest_request_failure_reason, None);
     }
 

@@ -54,7 +54,7 @@ impl ToolCallState {
         }
     }
 
-    pub(crate) fn from_persisted(value: &str) -> Option<Self> {
+    pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
             "awaitingApproval" => Some(Self::AwaitingApproval),

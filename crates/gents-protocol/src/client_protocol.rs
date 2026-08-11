@@ -121,6 +121,40 @@ pub enum ResponseStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidResponseStatus {
+    status: String,
+}
+
+impl InvalidResponseStatus {
+    pub fn value(&self) -> &str {
+        &self.status
+    }
+}
+
+impl Display for InvalidResponseStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid response status: {}", self.status)
+    }
+}
+
+impl Error for InvalidResponseStatus {}
+
+impl TryFrom<&str> for ResponseStatus {
+    type Error = InvalidResponseStatus;
+
+    fn try_from(value: &str) -> Result<Self, InvalidResponseStatus> {
+        match value {
+            "streaming" => Ok(Self::Streaming),
+            "complete" | "completed" => Ok(Self::Complete),
+            "error" | "failed" | "failure" => Ok(Self::Error),
+            _ => Err(InvalidResponseStatus {
+                status: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub request_id: String,
     pub retry_parent_request: Option<String>,
@@ -139,12 +173,79 @@ pub struct AttemptView {
     pub response: Option<ResponseSnapshot>,
 }
 
+/// Response-aware state for the current request at the head of a client turn.
+///
+/// `turn_state` is the durable outcome projection. `request_state` preserves
+/// the request-side detail that clients need for presentation distinctions
+/// such as pending versus running and waiting for user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientHeadProjection {
+    pub turn_state: ClientTurnState,
+    pub request_state: RequestLifecycleState,
+}
+
+impl ClientHeadProjection {
+    pub fn is_terminal(self) -> bool {
+        self.turn_state.is_terminal()
+    }
+
+    pub fn is_active(self) -> bool {
+        !self.is_terminal()
+    }
+
+    pub fn waiting_on_user_input(self) -> bool {
+        self.is_active() && self.request_state == RequestLifecycleState::InputRequired
+    }
+}
+
+pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
+    ClientHeadProjection {
+        turn_state: derive_observation(
+            view.request.lifecycle_state,
+            view.request.is_superseded,
+            view.response.as_ref().map(|response| response.status),
+        ),
+        request_state: view.request.lifecycle_state,
+    }
+}
+
 pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
-    if view.request.is_superseded {
+    project_attempt(view).turn_state
+}
+
+pub fn project_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+    response_status: Option<&str>,
+) -> Option<ClientHeadProjection> {
+    let lifecycle_state = RequestLifecycleState::try_from(lifecycle_state.trim()).ok()?;
+    let response_status =
+        response_status.and_then(|status| ResponseStatus::try_from(status.trim()).ok());
+    Some(ClientHeadProjection {
+        turn_state: derive_observation(lifecycle_state, is_superseded, response_status),
+        request_state: lifecycle_state,
+    })
+}
+
+pub fn derive_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+    response_status: Option<&str>,
+) -> Option<ClientTurnState> {
+    project_persisted_attempt(lifecycle_state, is_superseded, response_status)
+        .map(|head| head.turn_state)
+}
+
+fn derive_observation(
+    lifecycle_state: RequestLifecycleState,
+    is_superseded: bool,
+    response_status: Option<ResponseStatus>,
+) -> ClientTurnState {
+    if is_superseded {
         return ClientTurnState::Superseded;
     }
 
-    match view.request.lifecycle_state {
+    match lifecycle_state {
         RequestLifecycleState::Superseded => ClientTurnState::Superseded,
         RequestLifecycleState::Completed => ClientTurnState::Completed,
         RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
@@ -152,8 +253,8 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
         RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
         | RequestLifecycleState::Processing
-        | RequestLifecycleState::InputRequired => match &view.response {
-            Some(resp) => match resp.status {
+        | RequestLifecycleState::InputRequired => match response_status {
+            Some(status) => match status {
                 ResponseStatus::Complete => ClientTurnState::Completed,
                 ResponseStatus::Error => ClientTurnState::Failed,
                 ResponseStatus::Streaming => ClientTurnState::Streaming,
