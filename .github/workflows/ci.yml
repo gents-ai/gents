@@ -221,6 +221,11 @@ jobs:
 
       - name: Run proof conformance tests
         if: matrix.suite == 'runtime'
+        # DefraDB operations can exceed the platform-default worker stack.
+        # Production runtimes reserve 16 MiB for the same work; keep the
+        # conformance gate representative and deterministic under parallelism.
+        env:
+          RUST_MIN_STACK: 16777216
         run: cargo test -p gents --test conformance
 
       - name: Compile and link CLI targets
@@ -280,6 +285,8 @@ jobs:
 
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
+        env:
+          RUST_MIN_STACK: 16777216
         run: cargo test -p gents --lib --tests
 
       - name: Run desktop Rust package tests
