@@ -12,12 +12,11 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::command_projection::{
-    codex_command_status, command_execution_item, command_output_payload, tool_projection_status,
-    ToolProjectionStatus,
+    codex_command_status, command_execution_item, command_output_payload,
 };
 use super::progress::{
-    decode_gents_tool_call_progress, gents_tool_progress_query, tool_completed_at_ms,
-    GentsToolCallProgress,
+    decode_gents_tool_call_progress, gents_tool_progress_query, observed_tool_status,
+    tool_completed_at_ms, GentsToolCallProgress,
 };
 use super::projection_state::ProjectionStatus;
 use super::protocol::{now_millis, send_notification};
@@ -68,76 +67,56 @@ fn spawn_background_tool_watcher_handle(
             )
             .await
             {
-                Ok(response) => response,
+                Ok(response) => Some(response),
                 Err(error) => {
                     tracing::warn!(%error, "Codex shim background tool watcher query failed");
-                    break;
+                    None
                 }
             };
             if let Some(observed) = first_query_observed.take() {
                 let _ = observed.send(());
             }
 
-            let tool_rows = response
-                .pointer("/data/AgentToolCall")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let current_tools = tool_rows
-                .iter()
-                .filter_map(decode_gents_tool_call_progress)
-                .map(|tool| (tool.tool_call_key.clone(), tool))
-                .collect::<BTreeMap<_, _>>();
+            if let Some(response) = response {
+                let tool_rows = response
+                    .pointer("/data/AgentToolCall")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let current_tools = tool_rows
+                    .iter()
+                    .filter_map(decode_gents_tool_call_progress)
+                    .map(|tool| (tool.tool_call_key.clone(), tool))
+                    .collect::<BTreeMap<_, _>>();
 
-            let tracked = running.iter().cloned().collect::<Vec<_>>();
-            for tool_key in tracked {
-                let Some(tool) = current_tools.get(&tool_key) else {
-                    running.remove(&tool_key);
-                    continue;
-                };
-                match tool_projection_status(tool) {
-                    ToolProjectionStatus::Command(ProjectionStatus::InProgress) => {}
-                    ToolProjectionStatus::Command(status) => {
-                        if let Err(error) = send_background_tool_completion(
-                            &connection.outbound,
-                            &state,
-                            &thread_id,
-                            &turn_id,
-                            tool,
-                            codex_command_status(status),
-                            &cwd,
-                        )
-                        .await
-                        {
-                            tracing::warn!(%error, "Codex shim background tool completion send failed");
-                            return;
+                let tracked = running.iter().cloned().collect::<Vec<_>>();
+                for tool_key in tracked {
+                    let Some(tool) = current_tools.get(&tool_key) else {
+                        // A missing row is not a terminal observation. DefraDB can
+                        // briefly expose an incomplete replicated/query snapshot;
+                        // forgetting the key here would strand the already-emitted
+                        // Codex command item in progress forever.
+                        continue;
+                    };
+                    match observed_tool_status(tool) {
+                        ProjectionStatus::InProgress => {}
+                        status => {
+                            if let Err(error) = send_background_tool_completion(
+                                &connection.outbound,
+                                &state,
+                                &thread_id,
+                                &turn_id,
+                                tool,
+                                codex_command_status(status),
+                                &cwd,
+                            )
+                            .await
+                            {
+                                tracing::warn!(%error, "Codex shim background tool completion send failed");
+                                return;
+                            }
+                            running.remove(&tool_key);
                         }
-                        running.remove(&tool_key);
-                    }
-                    ToolProjectionStatus::Mcp(_) => {
-                        let mut foreground_tool = tool.clone();
-                        foreground_tool.result.clear();
-                        if let Err(error) = send_background_tool_completion(
-                            &connection.outbound,
-                            &state,
-                            &thread_id,
-                            &turn_id,
-                            &foreground_tool,
-                            codex::CommandExecutionStatus::Completed,
-                            &cwd,
-                        )
-                        .await
-                        {
-                            tracing::warn!(%error, "Codex shim background foreground send failed");
-                            return;
-                        }
-                        running.remove(&tool_key);
-                    }
-                    ToolProjectionStatus::Collab(_)
-                    | ToolProjectionStatus::DeferredCollab
-                    | ToolProjectionStatus::DeferredFileChange
-                    | ToolProjectionStatus::FileChange(_) => {
-                        running.remove(&tool_key);
                     }
                 }
             }
@@ -149,7 +128,6 @@ fn spawn_background_tool_watcher_handle(
             tokio::select! {
                 _ = connection.outbound.closed() => {
                     tracing::debug!("Codex shim background tool watcher stopped after outbound closed");
-                    break;
                 }
                 _ = tokio::time::sleep(state.poll_interval) => {}
                 msg = updates.recv() => {
@@ -294,6 +272,163 @@ mod tests {
     use super::super::{CodexSidecar, ConnectionState, ShimState};
     use super::*;
 
+    fn test_connection() -> (ConnectionState, mpsc::UnboundedReceiver<String>) {
+        let (outbound, outbound_rx) = mpsc::unbounded_channel::<String>();
+        (
+            ConnectionState {
+                outbound,
+                turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
+                fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
+                pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
+                child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
+            },
+            outbound_rx,
+        )
+    }
+
+    fn test_state(
+        tempdir: &tempfile::TempDir,
+        node: Arc<EmbeddedNode>,
+        poll_interval: Duration,
+    ) -> ShimState {
+        ShimState {
+            codex_home: tempdir.path().join("codex-home"),
+            trace_path: tempdir
+                .path()
+                .join("codex-home/log/codex-shim-events.jsonl"),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            fs_root: None,
+            node,
+            background_execution_registry: gents::BackgroundExecutionRegistry::default(),
+            graphql: Arc::from("http://127.0.0.1/graphql"),
+            agent_did: Arc::from("did:test:background-watcher"),
+            behavior_id: Arc::from("did:test:background-watcher:default"),
+            id_counter: Arc::new(AtomicU64::new(1)),
+            timeout: Duration::from_secs(5),
+            poll_interval,
+            sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+            auth_token: None,
+        }
+    }
+
+    async fn seed_background_tool(
+        node: &EmbeddedNode,
+        request_id: &str,
+        session_id: &str,
+        tool_call_id: &str,
+        lifecycle_state: &str,
+        status: &str,
+    ) {
+        let tool_call_key = format!("{session_id}:{tool_call_id}");
+        let mutation = format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "{request_id}",
+                    session_id: "{session_id}",
+                    message_sequence: 1,
+                    tool_name: "bash",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{\"command\":\"true\"}}",
+                    result: "done",
+                    status: "{status}",
+                    lifecycle_state: "{lifecycle_state}",
+                    started_at: "2026-07-07T12:00:00Z",
+                    completed_at: "2026-07-07T12:00:01Z",
+                    await_mode: "background"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed AgentToolCall failed: {:?}",
+            response.errors
+        );
+    }
+
+    async fn receive_item_completed(outbound_rx: &mut mpsc::UnboundedReceiver<String>) -> Value {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let message = outbound_rx.recv().await.expect("watcher outbound message");
+                let value: Value = serde_json::from_str(&message).expect("valid JSON notification");
+                if value.get("method").and_then(Value::as_str) == Some("item/completed") {
+                    return value;
+                }
+            }
+        })
+        .await
+        .expect("watcher should emit item/completed")
+    }
+
+    async fn assert_watcher_recovers_after_initial_observation(
+        test_name: &str,
+        schemas_before_start: bool,
+    ) {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(tempdir.path().join("node"))
+                .with_storage_backend(gents::defra_node::StorageBackend::RocksDb)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        if schemas_before_start {
+            gents::schema::ensure_runtime_schemas(&node)
+                .await
+                .expect("runtime schemas");
+        }
+
+        let request_id = format!("req-{test_name}");
+        let session_id = format!("session-{test_name}");
+        let tool_call_id = format!("call-{test_name}");
+        let tool_call_key = format!("{session_id}:{tool_call_id}");
+        let (connection, mut outbound_rx) = test_connection();
+        let state = test_state(&tempdir, node.clone(), Duration::from_millis(10));
+        let running = BTreeSet::from([tool_call_key.clone()]);
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let handle = spawn_background_tool_watcher_handle(
+            connection,
+            state,
+            request_id.clone(),
+            session_id.clone(),
+            session_id.clone(),
+            request_id.clone(),
+            tempdir.path().to_path_buf(),
+            running,
+            Some(observed_tx),
+        )
+        .expect("watcher should spawn for tracked tool");
+
+        tokio::time::timeout(Duration::from_secs(5), observed_rx)
+            .await
+            .expect("watcher should make its initial observation")
+            .expect("watcher should signal first query attempt");
+        if !schemas_before_start {
+            gents::schema::ensure_runtime_schemas(&node)
+                .await
+                .expect("runtime schemas");
+        }
+        seed_background_tool(
+            &node,
+            &request_id,
+            &session_id,
+            &tool_call_id,
+            "completed",
+            "completed",
+        )
+        .await;
+
+        let completed = receive_item_completed(&mut outbound_rx).await;
+        assert_eq!(completed["params"]["item"]["id"], tool_call_key);
+        assert_eq!(completed["params"]["item"]["status"], "completed");
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("watcher should exit after durable terminal observation")
+            .expect("watcher task should not panic");
+    }
+
     #[tokio::test]
     async fn background_tool_watcher_exits_when_outbound_closes_while_tool_is_running() {
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -342,32 +477,8 @@ mod tests {
             response.errors
         );
 
-        let (outbound, outbound_rx) = mpsc::unbounded_channel::<String>();
-        let connection = ConnectionState {
-            outbound,
-            turn_streams: Arc::new(Mutex::new(BTreeMap::new())),
-            fuzzy_file_search_sessions: Arc::new(Mutex::new(BTreeMap::new())),
-            pending_steering_inputs: Arc::new(Mutex::new(BTreeMap::new())),
-            child_thread_streams: Arc::new(Mutex::new(BTreeMap::new())),
-        };
-        let state = ShimState {
-            codex_home: tempdir.path().join("codex-home"),
-            trace_path: tempdir
-                .path()
-                .join("codex-home/log/codex-shim-events.jsonl"),
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            fs_root: None,
-            node,
-            background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: Arc::from("http://127.0.0.1/graphql"),
-            agent_did: Arc::from("did:test:background-disconnect-test"),
-            behavior_id: Arc::from("did:test:background-disconnect-test:default"),
-            id_counter: Arc::new(AtomicU64::new(1)),
-            timeout: Duration::from_secs(5),
-            poll_interval: Duration::from_secs(60),
-            sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
-            auth_token: None,
-        };
+        let (connection, outbound_rx) = test_connection();
+        let state = test_state(&tempdir, node, Duration::from_secs(60));
 
         let mut running = BTreeSet::new();
         running.insert(tool_call_key);
@@ -395,5 +506,15 @@ mod tests {
             .await
             .expect("watcher should exit promptly when outbound closes")
             .expect("watcher task should not panic");
+    }
+
+    #[tokio::test]
+    async fn background_tool_watcher_retains_key_while_row_is_temporarily_missing() {
+        assert_watcher_recovers_after_initial_observation("background-missing", true).await;
+    }
+
+    #[tokio::test]
+    async fn background_tool_watcher_retries_after_query_error() {
+        assert_watcher_recovers_after_initial_observation("background-query-retry", false).await;
     }
 }

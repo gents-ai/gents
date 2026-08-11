@@ -11,6 +11,7 @@ use super::projection_state::ProjectionStatus;
 pub(super) use super::projection_state::ToolProjectionStatus;
 use super::subagent_projection::{collab_projection, is_subagent_control_tool};
 
+#[cfg(test)]
 pub(super) fn tool_projection_status(tool: &GentsToolCallProgress) -> ToolProjectionStatus {
     tool_projection_status_with_settled(tool, false, false)
 }
