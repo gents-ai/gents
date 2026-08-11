@@ -45,6 +45,13 @@ explicit `lto = "off"` and 16 codegen units. This is deliberately `"off"`, not
 `false`: Cargo defines `false` as local ThinLTO, while `"off"` disables LTO.
 Linux release jobs retain explicit per-architecture job caps for host memory.
 
+The optimized test profile also uses explicit `lto = "off"`. CI's heavy Rust
+shards enable incremental compilation over persistent target trees; local
+ThinLTO allowed stale cross-codegen-unit imports to survive there and produced
+undefined Rust symbols while linking the macOS desktop test binaries. A local
+all-targets Tauri test compile with test LTO disabled completed from the newly
+invalidated profile in 257 seconds and linked all three test executables.
+
 ## Dependency baseline
 
 The normal `gents-cli` graph currently contains:
