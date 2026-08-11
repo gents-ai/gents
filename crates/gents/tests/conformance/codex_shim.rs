@@ -209,15 +209,27 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 
     let status_cases = lean_codex_shim_subagent_status_cases();
-    assert_eq!(status_cases.len(), 9);
+    assert_eq!(status_cases.len(), 11);
     for case in status_cases {
-        let expected = match case.request_state.as_str() {
-            "pending" => ("pendingInit", false),
-            "claimed" | "processing" | "inputRequired" => ("running", false),
-            "completed" => ("completed", true),
-            "failed" | "dead" => ("errored", true),
-            "superseded" | "interrupted" => ("interrupted", true),
-            other => panic!("{}: unmodeled child request state {other:?}", case.witness),
+        let head = gents_protocol::client_protocol::project_persisted_attempt(
+            &case.request_state,
+            false,
+            case.response_status.as_deref(),
+        )
+        .unwrap_or_else(|| panic!("{}: invalid client head", case.witness));
+        use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
+        let expected = match (head.turn_state, head.request_state) {
+            (ClientTurnState::Completed, _) => ("completed", true),
+            (ClientTurnState::Failed, _) => ("errored", true),
+            (ClientTurnState::Superseded | ClientTurnState::Interrupted, _) => {
+                ("interrupted", true)
+            }
+            (ClientTurnState::WaitingForClaim, RequestLifecycleState::Pending) => {
+                ("pendingInit", false)
+            }
+            (ClientTurnState::WaitingForClaim | ClientTurnState::Streaming, _) => {
+                ("running", false)
+            }
         };
         assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
         assert_eq!(case.terminal, expected.1, "{}", case.witness);
@@ -361,15 +373,26 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(reset_before_terminal.completed_text, None);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 11);
+    assert_eq!(thread_status_cases.len(), 13);
     for case in thread_status_cases {
-        let expected = match case.request_state.as_deref() {
-            Some("pending" | "claimed" | "processing" | "inputRequired") => "active",
-            Some("failed" | "dead") => "systemError",
-            Some("completed" | "superseded" | "interrupted") => "idle",
+        use gents_protocol::client_protocol::ClientTurnState;
+        let head = case.request_state.as_deref().and_then(|request_state| {
+            gents_protocol::client_protocol::project_persisted_attempt(
+                request_state,
+                false,
+                case.response_status.as_deref(),
+            )
+        });
+        let expected = match head.map(|head| head.turn_state) {
+            Some(ClientTurnState::WaitingForClaim | ClientTurnState::Streaming) => "active",
+            Some(ClientTurnState::Failed) => "systemError",
+            Some(
+                ClientTurnState::Completed
+                | ClientTurnState::Superseded
+                | ClientTurnState::Interrupted,
+            ) => "idle",
             None if case.conversation_status == "error" => "systemError",
             None => "idle",
-            Some(other) => panic!("{}: unknown request state {other}", case.witness),
         };
         assert_eq!(case.projected_status, expected, "{}", case.witness);
     }

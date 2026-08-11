@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
-use gents_protocol::client_protocol::derive_persisted_attempt;
+use gents_protocol::client_protocol::project_persisted_attempt;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -285,8 +285,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 .and_then(response_terminal_timestamp)
                 .and_then(timestamp_millis),
         );
-        let client_turn_state =
-            derive_persisted_attempt(lifecycle_state, false, Some(response_status));
+        let client_head = project_persisted_attempt(lifecycle_state, false, Some(response_status));
+        let client_turn_state = client_head.map(|head| head.turn_state);
         let projection_settled = client_turn_state.is_some_and(|state| state.is_terminal());
 
         let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
@@ -644,7 +644,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 outbound,
                 state,
                 projection.thread_id,
-                projected_thread_status(Some(lifecycle_state), ""),
+                projected_thread_status(client_head, ""),
             )
             .await?;
             spawn_background_tool_watcher(

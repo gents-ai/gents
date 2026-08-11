@@ -219,6 +219,36 @@ fn pending_with_complete_response_trusts_response() {
 }
 
 #[test]
+fn head_projection_preserves_request_detail_but_trusts_terminal_response() {
+    let head = project_attempt(&attempt(
+        "req-1",
+        None,
+        "processing",
+        resp(ResponseStatus::Complete),
+    ));
+    assert_eq!(head.turn_state, ClientTurnState::Completed);
+    assert_eq!(head.request_state, RequestLifecycleState::Processing);
+    assert!(head.is_terminal());
+    assert!(!head.is_active());
+}
+
+#[test]
+fn input_required_head_is_active_and_waiting_on_user() {
+    let head = project_attempt(&attempt("req-1", None, "inputRequired", None));
+    assert_eq!(head.turn_state, ClientTurnState::WaitingForClaim);
+    assert!(head.is_active());
+    assert!(head.waiting_on_user_input());
+}
+
+#[test]
+fn terminal_response_clears_input_required_presentation() {
+    let head = project_persisted_attempt("inputRequired", false, Some("error")).unwrap();
+    assert_eq!(head.turn_state, ClientTurnState::Failed);
+    assert!(head.is_terminal());
+    assert!(!head.waiting_on_user_input());
+}
+
+#[test]
 fn claimed_with_streaming_response_trusts_response() {
     assert_eq!(
         derive_attempt(&attempt(

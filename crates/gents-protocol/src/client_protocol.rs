@@ -173,12 +173,58 @@ pub struct AttemptView {
     pub response: Option<ResponseSnapshot>,
 }
 
+/// Response-aware state for the current request at the head of a client turn.
+///
+/// `turn_state` is the durable outcome projection. `request_state` preserves
+/// the request-side detail that clients need for presentation distinctions
+/// such as pending versus running and waiting for user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientHeadProjection {
+    pub turn_state: ClientTurnState,
+    pub request_state: RequestLifecycleState,
+}
+
+impl ClientHeadProjection {
+    pub fn is_terminal(self) -> bool {
+        self.turn_state.is_terminal()
+    }
+
+    pub fn is_active(self) -> bool {
+        !self.is_terminal()
+    }
+
+    pub fn waiting_on_user_input(self) -> bool {
+        self.is_active() && self.request_state == RequestLifecycleState::InputRequired
+    }
+}
+
+pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
+    ClientHeadProjection {
+        turn_state: derive_observation(
+            view.request.lifecycle_state,
+            view.request.is_superseded,
+            view.response.as_ref().map(|response| response.status),
+        ),
+        request_state: view.request.lifecycle_state,
+    }
+}
+
 pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
-    derive_observation(
-        view.request.lifecycle_state,
-        view.request.is_superseded,
-        view.response.as_ref().map(|response| response.status),
-    )
+    project_attempt(view).turn_state
+}
+
+pub fn project_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+    response_status: Option<&str>,
+) -> Option<ClientHeadProjection> {
+    let lifecycle_state = RequestLifecycleState::try_from(lifecycle_state.trim()).ok()?;
+    let response_status =
+        response_status.and_then(|status| ResponseStatus::try_from(status.trim()).ok());
+    Some(ClientHeadProjection {
+        turn_state: derive_observation(lifecycle_state, is_superseded, response_status),
+        request_state: lifecycle_state,
+    })
 }
 
 pub fn derive_persisted_attempt(
@@ -186,14 +232,8 @@ pub fn derive_persisted_attempt(
     is_superseded: bool,
     response_status: Option<&str>,
 ) -> Option<ClientTurnState> {
-    let lifecycle_state = RequestLifecycleState::try_from(lifecycle_state.trim()).ok()?;
-    let response_status =
-        response_status.and_then(|status| ResponseStatus::try_from(status.trim()).ok());
-    Some(derive_observation(
-        lifecycle_state,
-        is_superseded,
-        response_status,
-    ))
+    project_persisted_attempt(lifecycle_state, is_superseded, response_status)
+        .map(|head| head.turn_state)
 }
 
 fn derive_observation(

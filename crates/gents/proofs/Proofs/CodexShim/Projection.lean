@@ -132,22 +132,24 @@ def CollabAgentPhase.terminal : CollabAgentPhase → Prop
   | .completed | .errored | .interrupted => True
   | .pendingInit | .running => False
 
-def projectSubagentState : RequestState → CollabAgentPhase
-  | .pending => .pendingInit
-  | .claimed | .processing | .inputRequired => .running
-  | .completed => .completed
-  | .failed | .dead => .errored
-  | .superseded | .interrupted => .interrupted
+def projectSubagentState : ClientHeadProjection → CollabAgentPhase
+  | ⟨.completed, _⟩ => .completed
+  | ⟨.failed, _⟩ => .errored
+  | ⟨.superseded, _⟩ | ⟨.interrupted, _⟩ => .interrupted
+  | ⟨.waitingForClaim, .pending⟩ => .pendingInit
+  | ⟨.waitingForClaim, _⟩ | ⟨.streaming, _⟩ => .running
 
 theorem subagent_status_terminal_precisely
-    (state : RequestState) :
-    CollabAgentPhase.terminal (projectSubagentState state) ↔
-      isTerminal state := by
-  cases state <;>
+    (head : ClientHeadProjection) :
+    CollabAgentPhase.terminal (projectSubagentState head) ↔
+      head.isTerminal = true := by
+  cases head with
+  | mk turnState requestState =>
+    cases turnState <;> cases requestState <;>
     simp [ projectSubagentState
          , CollabAgentPhase.terminal
-         , HasTerminal.isTerminal
-         , RequestState.instHasTerminal
+         , ClientHeadProjection.isTerminal
+         , ClientTurnState.isTerminal
          ]
 
 structure CollabPresentationFingerprint where
@@ -156,14 +158,14 @@ structure CollabPresentationFingerprint where
   deriving DecidableEq, Repr
 
 def collabPresentationFingerprint
-    (latestChildState : RequestState)
+    (latestChildState : ClientHeadProjection)
     (failureMessage : Option String) : CollabPresentationFingerprint :=
   { childPhase := projectSubagentState latestChildState
   , failureMessage := failureMessage
   }
 
 theorem collab_fingerprint_includes_latest_child_state
-    (state : RequestState)
+    (state : ClientHeadProjection)
     (failureMessage : Option String) :
     (collabPresentationFingerprint state failureMessage).childPhase =
       projectSubagentState state := rfl
@@ -461,12 +463,13 @@ inductive ThreadPresentationStatus where
   deriving DecidableEq, Repr
 
 def projectThreadStatus
-    (requestState : Option RequestState)
+    (head : Option ClientHeadProjection)
     (conversationStatus : String) : ThreadPresentationStatus :=
-  match requestState with
-  | some .pending | some .claimed | some .processing | some .inputRequired => .active
-  | some .failed | some .dead => .systemError
-  | some .completed | some .superseded | some .interrupted => .idle
+  match head with
+  | some ⟨.waitingForClaim, _⟩ | some ⟨.streaming, _⟩ => .active
+  | some ⟨.failed, _⟩ => .systemError
+  | some ⟨.completed, _⟩ | some ⟨.superseded, _⟩
+  | some ⟨.interrupted, _⟩ => .idle
   | none => if conversationStatus = "error" then .systemError else .idle
 
 def projectionBehaviorId (rootBehaviorId : String)
@@ -514,13 +517,16 @@ def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
   persisted.getD observed
 
 theorem active_request_projects_active_thread :
-    projectThreadStatus (some .processing) "completed" = .active := rfl
+    projectThreadStatus (some ⟨.waitingForClaim, .processing⟩) "completed" = .active := rfl
+
+theorem terminal_response_projects_idle_thread_before_request_terminalizes :
+    projectThreadStatus (some ⟨.completed, .processing⟩) "active" = .idle := rfl
 
 theorem failed_request_projects_system_error_thread :
-    projectThreadStatus (some .failed) "active" = .systemError := rfl
+    projectThreadStatus (some ⟨.failed, .failed⟩) "active" = .systemError := rfl
 
 theorem completed_request_projects_idle_thread :
-    projectThreadStatus (some .completed) "error" = .idle := rfl
+    projectThreadStatus (some ⟨.completed, .completed⟩) "error" = .idle := rfl
 
 theorem missing_request_error_conversation_projects_system_error :
     projectThreadStatus none "error" = .systemError := rfl

@@ -72,6 +72,34 @@ def deriveAttempt : AttemptView → ClientTurnState
         | .streaming => .streaming
       | none => .waitingForClaim
 
+/-- Generic client projection for a session/request head.  The effective turn
+    state is response-aware, while the request state remains available for thin
+    clients that present pending/running or input-required distinctions. -/
+structure ClientHeadProjection where
+  turnState : ClientTurnState
+  requestState : RequestState
+  deriving DecidableEq, Repr
+
+def projectHead (view : AttemptView) : ClientHeadProjection :=
+  { turnState := deriveAttempt view
+  , requestState := view.request.lifecycleState
+  }
+
+def ClientHeadProjection.isTerminal (head : ClientHeadProjection) : Bool :=
+  head.turnState.isTerminal
+
+def ClientHeadProjection.isActive (head : ClientHeadProjection) : Bool :=
+  !head.isTerminal
+
+def ClientHeadProjection.waitingOnUserInput (head : ClientHeadProjection) : Bool :=
+  head.isActive && head.requestState == .inputRequired
+
+theorem projectHead_turnState (view : AttemptView) :
+    (projectHead view).turnState = deriveAttempt view := rfl
+
+theorem projectHead_terminal (view : AttemptView) :
+    (projectHead view).isTerminal = (deriveAttempt view).isTerminal := rfl
+
 def deriveTurn : List AttemptView → Option ClientTurnState
   | []          => none
   | [a]         => some (deriveAttempt a)
