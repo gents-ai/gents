@@ -545,6 +545,24 @@ fn blank_response_falls_back_to_materialized_assistant_message_across_adapters()
 }
 
 #[test]
+fn provenance_without_source_version_status_deserializes_with_captured_only_default() {
+    // External adapter captures and previously exported envelopes predate
+    // source_version_status, and the published provenance schema does not
+    // require it; deserialization must not either.
+    let provenance = serde_json::from_value::<ProjectionProvenance>(json!({
+        "runtime": "gents",
+        "source_projection_id": "run_timeline",
+        "source_projection_version": "v1",
+    }))
+    .expect("provenance JSON without source_version_status must deserialize");
+    assert_eq!(
+        provenance.source_version_status,
+        ProjectionSourceVersionStatus::CurrentStateCapturedOnly
+    );
+    assert!(provenance.rendered_request_refs.is_empty());
+}
+
+#[test]
 fn empty_response_without_materialized_message_does_not_substitute_older_assistant_output() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
