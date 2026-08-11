@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-provider-accounts-list"
+description = "Enables the desktop_provider_accounts_list command without any pre-configured scope."
+commands.allow = ["desktop_provider_accounts_list"]
+
+[[permission]]
+identifier = "deny-desktop-provider-accounts-list"
+description = "Denies the desktop_provider_accounts_list command without any pre-configured scope."
+commands.deny = ["desktop_provider_accounts_list"]

@@ -17,7 +17,7 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "0.8";
+pub const CONTRACT_VERSION: &str = "0.9";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -141,6 +141,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_codex_login_cancel", "config-write"),
         ("desktop_grok_login", "config-write"),
         ("desktop_grok_login_cancel", "config-write"),
+        ("desktop_provider_accounts_list", "provider-accounts-read"),
+        ("desktop_provider_account_disconnect", "config-write"),
         // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
@@ -187,6 +189,7 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         // Projection section only in v1 (no dedicated IPC allow-* commands).
         ("config-read", "read"),
         ("config-write", "mutate"),
+        ("provider-accounts-read", "read"),
         ("tasks", "mutate"),
         ("native-e2e", "bundle"),
         ("full", "bundle"),
@@ -554,6 +557,8 @@ mod tests {
             ("desktop_codex_login_cancel", "mutate"),
             ("desktop_grok_login", "mutate"),
             ("desktop_grok_login_cancel", "mutate"),
+            ("desktop_provider_accounts_list", "read"),
+            ("desktop_provider_account_disconnect", "mutate"),
             ("desktop_task_save", "mutate"),
             ("desktop_schedule_save", "mutate"),
             ("desktop_schedule_run", "mutate"),

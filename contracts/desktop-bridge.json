@@ -237,6 +237,14 @@
       "permissionSet": "config-write"
     },
     {
+      "name": "desktop_provider_accounts_list",
+      "permissionSet": "provider-accounts-read"
+    },
+    {
+      "name": "desktop_provider_account_disconnect",
+      "permissionSet": "config-write"
+    },
+    {
       "name": "desktop_task_save",
       "permissionSet": "tasks"
     },
@@ -265,7 +273,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "0.8",
+  "contractVersion": "0.9",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -370,6 +378,10 @@
     {
       "kind": "mutate",
       "name": "config-write"
+    },
+    {
+      "kind": "read",
+      "name": "provider-accounts-read"
     },
     {
       "kind": "mutate",

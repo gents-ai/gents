@@ -11,6 +11,7 @@
 use std::time::Duration;
 
 use gents::chatgpt_codex::{normalize_provider, upsert_oauth_credential, OAuthCredential};
+use gents::oauth_credential::list_oauth_credentials;
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -261,6 +262,87 @@ pub(crate) struct GrokLoginUrl {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderAccountView {
+    pub credential_id: String,
+    pub agent_did: String,
+    pub provider: String,
+    pub account_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub access_token_expires_at: String,
+    pub last_refresh: Option<String>,
+    pub enabled: bool,
+}
+
+impl From<&OAuthCredential> for ProviderAccountView {
+    fn from(credential: &OAuthCredential) -> Self {
+        Self {
+            credential_id: credential.credential_id.clone(),
+            agent_did: credential.agent_did.clone(),
+            provider: credential.provider.clone(),
+            account_id: credential.account_id.clone(),
+            plan_type: credential.chatgpt_plan_type.clone(),
+            access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
+            last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
+            enabled: credential.enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderAccountsRequest {
+    pub agent_did: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProviderAccountDisconnectRequest {
+    pub agent_did: String,
+    pub credential_id: String,
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_accounts_list(
+    request: ProviderAccountsRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<Vec<ProviderAccountView>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
+    let agent_did = request.agent_did.trim();
+    let credentials = list_oauth_credentials(core.node(), agent_did)
+        .await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    Ok(credentials.iter().map(ProviderAccountView::from).collect())
+}
+
+#[tauri::command]
+pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
+    app: AppHandle<R>,
+    request: ProviderAccountDisconnectRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
+    let credentials = list_oauth_credentials(core.node(), request.agent_did.trim())
+        .await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    let mut credential = credentials
+        .into_iter()
+        .find(|entry| entry.credential_id == request.credential_id)
+        .ok_or_else(|| BridgeError::from_legacy_message("provider account not found"))?;
+    credential.enabled = false;
+    upsert_oauth_credential(core.node(), &credential)
+        .await
+        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    let _ = app.emit(
+        "desktop://client-updated",
+        ClientUpdateEvent { reason: "config" },
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub(crate) async fn desktop_grok_login<R: Runtime>(
     app: AppHandle<R>,
@@ -343,6 +425,37 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     );
 
     Ok(GrokLoginResult::redacted(doc_id, &credential))
+}
+
+#[cfg(test)]
+mod provider_account_tests {
+    use super::*;
+
+    #[test]
+    fn provider_account_view_never_serializes_tokens() {
+        let credential = OAuthCredential {
+            doc_id: Some("doc-1".to_string()),
+            credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
+            agent_did: "did:key:zAgent".to_string(),
+            provider: "chatgpt-codex".to_string(),
+            access_token: "secret-access".to_string(),
+            refresh_token: "secret-refresh".to_string(),
+            id_token: Some("secret-id".to_string()),
+            account_id: Some("acct-1".to_string()),
+            chatgpt_plan_type: Some("plus".to_string()),
+            is_fedramp: false,
+            access_token_expires_at: chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            last_refresh: None,
+            enabled: true,
+        };
+        let json = serde_json::to_string(&ProviderAccountView::from(&credential)).unwrap();
+        assert!(!json.contains("secret-access"));
+        assert!(!json.contains("secret-refresh"));
+        assert!(!json.contains("secret-id"));
+        assert!(json.contains("acct-1"));
+    }
 }
 
 #[tauri::command]

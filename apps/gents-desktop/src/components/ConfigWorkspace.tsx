@@ -34,6 +34,7 @@ import {
   BehaviorConfigPanel,
   EventTriggerConfigPanel,
   InferenceProfileConfigPanel,
+  ProviderAccountsPanel,
   ScheduleConfigPanel,
   SkillConfigPanel,
   TaskConfigPanel,
@@ -388,6 +389,10 @@ export function ConfigWorkspace({
               onSavedStatusChange={setSavedStatus}
               onSelectBackend={setSelectedBackendId}
             />
+          ) : null}
+
+          {activeTab === "providerAccounts" ? (
+            <ProviderAccountsPanel api={api} deployment={selectedDeployment} />
           ) : null}
 
           {activeTab === "profiles" ? (

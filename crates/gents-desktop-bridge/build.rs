@@ -51,6 +51,8 @@ const COMMANDS: &[&str] = &[
     "desktop_codex_login_cancel",
     "desktop_grok_login",
     "desktop_grok_login_cancel",
+    "desktop_provider_accounts_list",
+    "desktop_provider_account_disconnect",
     "desktop_task_save",
     "desktop_schedule_save",
     "desktop_schedule_run",

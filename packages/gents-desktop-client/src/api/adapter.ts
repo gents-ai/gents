@@ -29,6 +29,7 @@ import type {
 } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
+import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 
 type InitSummaryWire = InitSummary & {
   status_endpoint?: string | null;
@@ -228,6 +229,14 @@ export function createDesktopApiAdapter(
         },
       ),
     cancelGrokLogin: () => invokeDesktop<void>("desktop_grok_login_cancel"),
+    listProviderAccounts: (agentDid) =>
+      invokeDesktop<ProviderAccountView[]>("desktop_provider_accounts_list", {
+        request: { agentDid },
+      }),
+    disconnectProviderAccount: (agentDid, credentialId) =>
+      invokeDesktop<void>("desktop_provider_account_disconnect", {
+        request: { agentDid, credentialId },
+      }),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

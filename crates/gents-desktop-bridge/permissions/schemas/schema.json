@@ -823,6 +823,30 @@
           "markdownDescription": "Denies the desktop_probe_mcp_service command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_provider_account_disconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-provider-account-disconnect",
+          "markdownDescription": "Enables the desktop_provider_account_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_provider_account_disconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-provider-account-disconnect",
+          "markdownDescription": "Denies the desktop_provider_account_disconnect command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_provider_accounts_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-provider-accounts-list",
+          "markdownDescription": "Enables the desktop_provider_accounts_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_provider_accounts_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-provider-accounts-list",
+          "markdownDescription": "Denies the desktop_provider_accounts_list command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_request_resend command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-request-resend",
@@ -1189,10 +1213,16 @@
           "markdownDescription": "Local runtime provisioning and managed server lifecycle\n#### This permission set includes:\n\n- `allow-desktop-init-local-standard`\n- `allow-desktop-managed-server-status`\n- `allow-desktop-managed-server-start`\n- `allow-desktop-managed-server-stop`"
         },
         {
-          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`",
+          "description": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`",
           "type": "string",
           "const": "config-write",
-          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`"
+          "markdownDescription": "Config save/delete/test mutations\n#### This permission set includes:\n\n- `allow-desktop-agent-config-save`\n- `allow-desktop-behavior-save`\n- `allow-desktop-skill-save`\n- `allow-desktop-skill-delete`\n- `allow-desktop-task-delete`\n- `allow-desktop-schedule-delete`\n- `allow-desktop-event-trigger-delete`\n- `allow-desktop-backend-delete`\n- `allow-desktop-inference-profile-delete`\n- `allow-desktop-tool-selection-delete`\n- `allow-desktop-tool-service-delete`\n- `allow-desktop-behavior-delete`\n- `allow-desktop-backend-save`\n- `allow-desktop-inference-profile-save`\n- `allow-desktop-tool-selection-save`\n- `allow-desktop-tool-service-save`\n- `allow-desktop-tool-service-test`\n- `allow-desktop-probe-inference-endpoint`\n- `allow-desktop-codex-login`\n- `allow-desktop-codex-login-cancel`\n- `allow-desktop-grok-login`\n- `allow-desktop-grok-login-cancel`\n- `allow-desktop-provider-account-disconnect`"
+        },
+        {
+          "description": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`",
+          "type": "string",
+          "const": "provider-accounts-read",
+          "markdownDescription": "Read redacted provider account metadata\n#### This permission set includes:\n\n- `allow-desktop-provider-accounts-list`"
         },
         {
           "description": "Task/schedule/event-trigger save and run\n#### This permission set includes:\n\n- `allow-desktop-task-save`\n- `allow-desktop-schedule-save`\n- `allow-desktop-schedule-run`\n- `allow-desktop-event-trigger-save`\n- `allow-desktop-task-run`",
@@ -1207,10 +1237,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `tasks`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `tasks`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `runtime-admin`\n- `session-read`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `holds-read`\n- `holds-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
         }
       ]
     }

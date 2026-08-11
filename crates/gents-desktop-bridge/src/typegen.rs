@@ -23,7 +23,8 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::tauri_commands::chat::{RequestResendResultView, SessionForkResultView};
 use crate::tauri_commands::inference_setup::{
     CodexLoginRequest, CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult,
-    GrokLoginUrl, InferenceProbeRequest, InferenceProbeResult,
+    GrokLoginUrl, InferenceProbeRequest, InferenceProbeResult, ProviderAccountDisconnectRequest,
+    ProviderAccountView, ProviderAccountsRequest,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -215,6 +216,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InferenceProbeRequest,
         CodexLoginRequest,
         GrokLoginRequest,
+        ProviderAccountsRequest,
+        ProviderAccountDisconnectRequest,
     );
 
     export_types!(
@@ -253,6 +256,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         CodexLoginUrl,
         GrokLoginResult,
         GrokLoginUrl,
+        ProviderAccountView,
     );
 
     normalize_generated_types(dir)?;

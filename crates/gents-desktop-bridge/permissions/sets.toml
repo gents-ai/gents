@@ -147,7 +147,13 @@ permissions = [
   "allow-desktop-codex-login-cancel",
   "allow-desktop-grok-login",
   "allow-desktop-grok-login-cancel",
+  "allow-desktop-provider-account-disconnect",
 ]
+
+[[set]]
+identifier = "provider-accounts-read"
+description = "Read redacted provider account metadata"
+permissions = ["allow-desktop-provider-accounts-list"]
 
 [[set]]
 identifier = "tasks"
@@ -188,5 +194,6 @@ permissions = [
   "holds-read",
   "holds-control",
   "config-write",
+  "provider-accounts-read",
   "tasks",
 ]

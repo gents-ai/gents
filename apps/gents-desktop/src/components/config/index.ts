@@ -1,5 +1,6 @@
 export * from "./AgentConfigPanel";
 export * from "./BackendConfigPanel";
+export * from "./ProviderAccountsPanel";
 export * from "./BehaviorConfigPanel";
 export * from "./ConfigChrome";
 export * from "./EventTriggerConfigPanel";
