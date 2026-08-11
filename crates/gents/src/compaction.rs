@@ -38,6 +38,8 @@ pub struct CompactionOptions {
     /// Request-scoped provider budget shared with the outer owned loop. This
     /// is crate-private because callers cannot safely mint or replace it.
     pub(crate) aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+    /// Effective request seed shared with every provider call in the request.
+    pub(crate) sampling_seed: Option<i64>,
 }
 
 impl Default for CompactionOptions {
@@ -52,6 +54,7 @@ impl Default for CompactionOptions {
             force_summarize: false,
             deadline: None,
             aggregate_token_budget: None,
+            sampling_seed: None,
         }
     }
 }
@@ -215,6 +218,12 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS);
         summary_config.max_tokens = Some(summary_max_output_tokens as u64);
         summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
+        summary_config.additional_params = crate::completion_factory::merge_optional_params(
+            summary_config.additional_params.take(),
+            options
+                .sampling_seed
+                .map(|seed| serde_json::json!({ "seed": seed })),
+        );
         // Both deadlines are hard stops when present; recovery must respect
         // the earlier one.
         summary_config.deadline = match (options.deadline, summary_config.deadline) {

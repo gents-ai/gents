@@ -31,7 +31,9 @@ def Usage.chargedTotal (usage : Usage) : Nat :=
 
 /-- The usage facts retained on a terminal `InferenceCall`. Keeping this shape
 separate makes the crash boundary explicit: rehydration sees these columns,
-not the transient provider response. -/
+not the transient provider response. Production admits a row into this model
+only when both durable components are present and non-negative; partial or
+negative rows fail decoding rather than becoming a `PersistedUsage`. -/
 structure PersistedUsage where
   promptTokens : Nat
   completionTokens : Nat

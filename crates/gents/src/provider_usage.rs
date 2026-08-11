@@ -23,30 +23,39 @@ pub(crate) fn charged_usage_total(usage: Usage) -> u64 {
 
 /// Reconstruct the charged total from durable `InferenceCall` columns.
 ///
-/// Persistence writes the provider's `input_tokens` and `output_tokens`
-/// verbatim. Rehydrate sums those facts: when either column is present the
-/// missing side is treated as zero. Both absent means the call never reported
-/// usage and contributes nothing.
-pub(crate) fn charged_from_persisted_parts(
+/// Persistence writes both provider components together. Both absent means the
+/// call never reported usage; any partial or negative row is corrupt and must
+/// fail budget rehydration closed.
+fn charged_from_persisted_parts(
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,
-) -> Option<u64> {
-    if prompt_tokens.is_none() && completion_tokens.is_none() {
-        return None;
+) -> anyhow::Result<Option<u64>> {
+    match (prompt_tokens, completion_tokens) {
+        (None, None) => Ok(None),
+        (Some(prompt), Some(completion)) => {
+            let prompt = u64::try_from(prompt)
+                .map_err(|_| anyhow::anyhow!("persisted prompt_tokens must be non-negative"))?;
+            let completion = u64::try_from(completion)
+                .map_err(|_| anyhow::anyhow!("persisted completion_tokens must be non-negative"))?;
+            Ok(Some(prompt.saturating_add(completion)))
+        }
+        _ => anyhow::bail!(
+            "persisted prompt_tokens and completion_tokens must both be present or both be absent"
+        ),
     }
-    let prompt = nonnegative_tokens(prompt_tokens).unwrap_or(0);
-    let completion = nonnegative_tokens(completion_tokens).unwrap_or(0);
-    Some(prompt.saturating_add(completion))
 }
 
 /// Sum charged totals across durable usage rows for one physical request.
-pub(crate) fn sum_charged_from_persisted_parts<I>(rows: I) -> u64
+pub(crate) fn sum_charged_from_persisted_parts<I>(rows: I) -> anyhow::Result<u64>
 where
     I: IntoIterator<Item = (Option<i64>, Option<i64>)>,
 {
     rows.into_iter()
-        .filter_map(|(prompt, completion)| charged_from_persisted_parts(prompt, completion))
-        .fold(0u64, u64::saturating_add)
+        .try_fold(0u64, |total, (prompt, completion)| {
+            Ok(total.saturating_add(
+                charged_from_persisted_parts(prompt, completion)?.unwrap_or_default(),
+            ))
+        })
 }
 
 /// Sum durable usage columns across rows for observation (ATIF / Harbor).
@@ -146,7 +155,7 @@ mod tests {
                 "durable columns must reconstruct the ledger charge: {usage:?}"
             );
             assert_eq!(
-                charged_from_persisted_parts(Some(prompt as i64), Some(completion as i64)),
+                charged_from_persisted_parts(Some(prompt as i64), Some(completion as i64)).unwrap(),
                 Some(charged),
                 "rehydrate inverse of persist: {usage:?}"
             );
@@ -154,18 +163,32 @@ mod tests {
     }
 
     #[test]
-    fn rehydrate_skips_rows_without_usage_and_sums_the_rest() {
-        assert_eq!(charged_from_persisted_parts(None, None), None);
-        assert_eq!(charged_from_persisted_parts(Some(100), None), Some(100));
-        assert_eq!(charged_from_persisted_parts(None, Some(50)), Some(50));
+    fn rehydrate_skips_rows_without_usage_and_sums_complete_rows() {
+        assert_eq!(charged_from_persisted_parts(None, None).unwrap(), None);
         assert_eq!(
             sum_charged_from_persisted_parts([
                 (None, None),
                 (Some(100), Some(50)),
                 (Some(200), Some(10)),
-            ]),
+            ])
+            .unwrap(),
             360
         );
+    }
+
+    #[test]
+    fn rehydrate_rejects_partial_and_negative_usage_rows() {
+        for row in [
+            (Some(100), None),
+            (None, Some(50)),
+            (Some(-1), Some(50)),
+            (Some(100), Some(-1)),
+        ] {
+            assert!(
+                charged_from_persisted_parts(row.0, row.1).is_err(),
+                "invalid durable usage must fail closed: {row:?}"
+            );
+        }
     }
 
     #[test]
@@ -180,7 +203,7 @@ mod tests {
         assert_eq!(completion, Some(60));
         assert_eq!(cached, Some(25));
         assert_eq!(
-            sum_charged_from_persisted_parts(rows.map(|(p, c, _)| (p, c))),
+            sum_charged_from_persisted_parts(rows.map(|(p, c, _)| (p, c))).unwrap(),
             360
         );
         assert_eq!(remaining_budget(1_000, 360), 640);

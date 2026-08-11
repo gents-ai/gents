@@ -1313,6 +1313,13 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
             "reasoning_effort": "max"
         }
     });
+    let expected_params = serde_json::json!({
+        "chat_template_kwargs": {
+            "enable_thinking": true,
+            "reasoning_effort": "max"
+        },
+        "seed": 1234
+    });
     let mut config = scheduled_origin_config();
     config.additional_params = Some(inherited_reasoning.clone());
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
@@ -1325,6 +1332,7 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                sampling_seed: Some(1234),
                 ..Default::default()
             },
         )
@@ -1354,8 +1362,8 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
     assert!(
         requests
             .iter()
-            .all(|request| request.additional_params.as_ref() == Some(&inherited_reasoning)),
-        "guided compaction and its fallback must inherit the parent reasoning profile"
+            .all(|request| request.additional_params.as_ref() == Some(&expected_params)),
+        "guided compaction and its fallback must retain the request seed and reasoning profile"
     );
 }
 

@@ -12,6 +12,8 @@ mod interrupt_live;
 mod p2p_admission_concurrent_live;
 #[path = "e2e_live/post_status_json_live.rs"]
 mod post_status_json_live;
+#[path = "e2e_live/seed_live.rs"]
+mod seed_live;
 #[path = "e2e_live/steward_loop_live.rs"]
 mod steward_loop_live;
 #[path = "e2e_live/subagent_delegation_live.rs"]

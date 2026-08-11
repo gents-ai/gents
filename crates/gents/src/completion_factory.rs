@@ -192,10 +192,13 @@ async fn load_prior_charged_tokens(
     .map_err(|error| {
         anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
     })?;
-    Ok(provider_usage::sum_charged_from_persisted_parts(
+    provider_usage::sum_charged_from_persisted_parts(
         rows.into_iter()
             .map(|row| (row.prompt_tokens, row.completion_tokens)),
-    ))
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
+    })
 }
 
 /// Decode the `InferenceCall` array from a GraphQL data payload.
@@ -224,7 +227,10 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> SamplingConfig {
+pub(crate) fn sampling_for_request(
+    defaults: SamplingConfig,
+    request: &AgentRequest,
+) -> SamplingConfig {
     SamplingConfig {
         temperature: request.temperature.or(defaults.temperature),
         top_p: request.top_p.or(defaults.top_p),
@@ -242,7 +248,7 @@ fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> Sam
     }
 }
 
-fn merge_optional_params(
+pub(crate) fn merge_optional_params(
     left: Option<serde_json::Value>,
     right: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {

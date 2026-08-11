@@ -267,12 +267,13 @@ pub(super) fn build_atif_trajectory(
         .and_then(|limit| u64::try_from(limit).ok())
         .filter(|limit| *limit > 0);
     // Match live rehydrate: budgeted-but-not-yet-charged is used=0, not "missing".
-    let aggregate_token_budget_used = aggregate_token_budget_limit.map(|_| {
+    let aggregate_token_budget_used = aggregate_token_budget_limit.and_then(|_| {
         crate::provider_usage::sum_charged_from_persisted_parts(
             root_provider_calls
                 .iter()
                 .map(|call| (call.prompt_tokens, call.completion_tokens)),
         )
+        .ok()
     });
     let aggregate_token_budget_remaining = aggregate_token_budget_limit
         .zip(aggregate_token_budget_used)
@@ -1284,6 +1285,38 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(5_000)
         );
+    }
+
+    #[test]
+    fn invalid_durable_usage_does_not_project_an_undercounted_budget() {
+        let timeline = build_run_timeline(RunTimelineRows {
+            request: TimelineRequestRow {
+                request_id: "req-invalid-usage".to_string(),
+                doc_id: Some("req-invalid-usage-doc".to_string()),
+                max_total_tokens: Some(5_000),
+                ..TimelineRequestRow::default()
+            },
+            inference_calls: vec![TimelineInferenceCallRow {
+                call_id: "partial".to_string(),
+                request_id: "req-invalid-usage".to_string(),
+                request_doc_id: Some("req-invalid-usage-doc".to_string()),
+                call_kind: "inference".to_string(),
+                prompt_tokens: Some(100),
+                completion_tokens: None,
+                ..TimelineInferenceCallRow::default()
+            }],
+            ..RunTimelineRows::default()
+        });
+        let trajectory = build_atif_trajectory(&timeline, &ProjectionContext::default());
+        let extra = trajectory
+            .final_metrics
+            .as_ref()
+            .and_then(|metrics| metrics.extra.as_ref())
+            .expect("final_metrics.extra");
+
+        assert!(extra.contains_key("aggregate_token_budget_limit"));
+        assert!(!extra.contains_key("aggregate_token_budget_used"));
+        assert!(!extra.contains_key("aggregate_token_budget_remaining"));
     }
 
     #[test]

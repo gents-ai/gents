@@ -137,6 +137,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+        effective_seed: Option<i64>,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let workspace_cwd = request_workspace_cwd(request);
@@ -210,6 +211,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
                     aggregate_token_budget,
+                    effective_seed,
                 );
                 let turn_node = self.node.clone();
                 let turn_session_id = request.session_id.clone();

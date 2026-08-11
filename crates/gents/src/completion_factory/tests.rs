@@ -531,9 +531,30 @@ fn prior_usage_decode_fails_closed_on_malformed_payload() {
         crate::provider_usage::sum_charged_from_persisted_parts(
             rows.into_iter()
                 .map(|row| (row.prompt_tokens, row.completion_tokens))
-        ),
+        )
+        .unwrap(),
         360
     );
+}
+
+#[test]
+fn prior_usage_decode_rejects_partial_or_negative_components() {
+    for payload in [
+        serde_json::json!([{"prompt_tokens": 100, "completion_tokens": null}]),
+        serde_json::json!([{"prompt_tokens": null, "completion_tokens": 50}]),
+        serde_json::json!([{"prompt_tokens": -1, "completion_tokens": 50}]),
+        serde_json::json!([{"prompt_tokens": 100, "completion_tokens": -1}]),
+    ] {
+        let rows = super::prior_usage_rows_from_response(Some(&payload)).unwrap();
+        assert!(
+            crate::provider_usage::sum_charged_from_persisted_parts(
+                rows.into_iter()
+                    .map(|row| (row.prompt_tokens, row.completion_tokens))
+            )
+            .is_err(),
+            "invalid durable usage must fail closed: {payload}"
+        );
+    }
 }
 
 #[tokio::test]
