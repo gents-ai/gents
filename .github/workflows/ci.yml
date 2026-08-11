@@ -79,7 +79,9 @@ jobs:
       - name: Check Harbor runner syntax
         run: |
           bash -n scripts/harbor/run_gents.sh
+          bash -n scripts/measure-gents-binary.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
+          shellcheck scripts/measure-gents-binary.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
@@ -192,6 +194,22 @@ jobs:
       - name: Verify Rust CI covers every workspace package
         if: matrix.suite == 'support'
         run: .github/scripts/check-rust-ci-package-coverage.sh
+
+      - name: Record Rust dependency graph metrics
+        if: matrix.suite == 'support'
+        env:
+          MEASURE_MODE: graph
+          OUTPUT_JSON: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
+        run: scripts/measure-gents-binary.sh
+
+      - name: Upload Rust dependency graph metrics
+        if: matrix.suite == 'support'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-build-graph-${{ github.sha }}
+          path: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
+          if-no-files-found: error
+          retention-days: 30
 
       # Together these four jobs compile and link the FULL workspace target
       # surface — examples, benches, every test target, and the desktop crates.
