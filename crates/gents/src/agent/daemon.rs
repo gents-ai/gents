@@ -129,10 +129,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn compaction_options_for_request(
         &self,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
+        aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+        sampling_seed: Option<i64>,
     ) -> CompactionOptions {
         CompactionOptions {
             force_summarize: true,
             deadline,
+            aggregate_token_budget,
+            sampling_seed,
             ..self.compaction_options.clone()
         }
     }

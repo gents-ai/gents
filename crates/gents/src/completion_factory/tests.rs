@@ -21,7 +21,9 @@ fn request() -> AgentRequest {
         temperature: None,
         top_p: None,
         top_k: None,
+        seed: None,
         max_tokens: None,
+        max_total_tokens: None,
         metadata: None,
         execution_origin: None,
         created_at: String::new(),
@@ -286,7 +288,9 @@ fn request_sampling_overrides_behavior_defaults() {
         temperature: Some(0.0),
         top_p: None,
         top_k: Some(40),
+        seed: Some(1234),
         max_tokens: Some(512),
+        max_total_tokens: Some(4096),
         metadata: Some(r#"{"run_id":"foo"}"#.to_string()),
         execution_origin: None,
         created_at: String::new(),
@@ -303,6 +307,7 @@ fn request_sampling_overrides_behavior_defaults() {
     assert_eq!(sampling.temperature, Some(0.0));
     assert_eq!(sampling.top_p, Some(0.9));
     assert_eq!(sampling.top_k, Some(40));
+    assert_eq!(sampling.seed, Some(1234));
     assert_eq!(sampling.max_tokens, Some(512));
 }
 
@@ -343,7 +348,8 @@ fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
     request.execution_origin = Some("interactive".to_string());
     request.deadline = Some("2030-01-01T00:00:00Z".to_string());
 
-    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request, 0);
+    let config =
+        loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0).unwrap();
 
     assert_eq!(
         config.retry_policy.transport_backoff,
@@ -361,12 +367,63 @@ fn loop_config_for_request_defaults_unknown_retry_origin_to_scheduled() {
     let mut request = request();
     request.execution_origin = Some("legacy-or-missing".to_string());
 
-    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request, 0);
+    let config =
+        loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0).unwrap();
 
     assert_eq!(
         config.retry_policy,
         CompletionRetryPolicy::scheduled_default()
     );
+}
+
+#[test]
+fn request_seed_rejects_provider_paths_without_seed_support() {
+    let mut behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
+    let mut request = request();
+    request.seed = Some(1234);
+
+    let Err(error) = loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0)
+    else {
+        panic!("Responses must reject a sampling seed");
+    };
+    assert_eq!(
+        error.to_string(),
+        "sampling seed is unsupported by provider OpenAiCompatible on the responses wire"
+    );
+}
+
+#[test]
+fn profile_seed_rejects_provider_paths_without_seed_support() {
+    let sampling = SamplingConfig {
+        seed: Some(1234),
+        ..Default::default()
+    };
+
+    sampling
+        .validate_for_provider(
+            BackendProviderKind::OpenAiCompatible,
+            crate::OpenAiWireApi::ChatCompletions,
+        )
+        .unwrap();
+    sampling
+        .validate_for_provider(
+            BackendProviderKind::OpenRouter,
+            crate::OpenAiWireApi::ChatCompletions,
+        )
+        .unwrap();
+    assert!(sampling
+        .validate_for_provider(
+            BackendProviderKind::ChatGptCodex,
+            crate::OpenAiWireApi::Responses,
+        )
+        .is_err());
+    assert!(sampling
+        .validate_for_provider(
+            BackendProviderKind::XaiGrokOAuth,
+            crate::OpenAiWireApi::ChatCompletions,
+        )
+        .is_err());
 }
 
 fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentBehavior {
@@ -414,6 +471,167 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
     }
 }
 
+#[test]
+fn request_budget_construction_fails_closed_on_non_positive_values() {
+    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    for invalid in [-1, 0] {
+        let error = parse_aggregate_token_limit(Some(invalid))
+            .err()
+            .expect("non-positive aggregate budget must be rejected");
+        assert!(error.to_string().contains("must be a positive integer"));
+    }
+
+    assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);
+    assert_eq!(
+        parse_aggregate_token_limit(Some(4_096)).unwrap(),
+        Some(4_096)
+    );
+
+    let mut request = request();
+    request.max_total_tokens = Some(4_096);
+    let budget = Some(AggregateTokenBudget::new(4_096));
+    assert!(
+        loop_config_for_request(&behavior, "system".to_string(), &request, budget, 0)
+            .unwrap()
+            .aggregate_token_budget
+            .is_some()
+    );
+}
+
+#[test]
+fn prior_usage_blocks_dispatch_when_already_at_limit() {
+    let budget = AggregateTokenBudget::with_prior_usage(1_000, 1_000);
+    let ledger = budget.snapshot().expect("ledger lock");
+    assert_eq!(ledger.remaining(), 0);
+    assert!(!ledger.can_dispatch(1, 100));
+}
+
+#[test]
+fn prior_usage_decode_fails_closed_on_malformed_payload() {
+    let err = super::prior_usage_rows_from_response(Some(&serde_json::json!({"not": "an-array"})))
+        .expect_err("object payload must not decode as empty usage");
+    assert!(
+        err.to_string().contains("not a row array"),
+        "unexpected error: {err}"
+    );
+    assert!(super::prior_usage_rows_from_response(None)
+        .unwrap()
+        .is_empty());
+    assert!(
+        super::prior_usage_rows_from_response(Some(&serde_json::Value::Null))
+            .unwrap()
+            .is_empty()
+    );
+    let rows = super::prior_usage_rows_from_response(Some(&serde_json::json!([
+        {"prompt_tokens": 100, "completion_tokens": 50},
+        {"prompt_tokens": 200, "completion_tokens": 10},
+    ])))
+    .unwrap();
+    assert_eq!(
+        crate::provider_usage::sum_charged_from_persisted_parts(
+            rows.into_iter()
+                .map(|row| (row.prompt_tokens, row.completion_tokens))
+        )
+        .unwrap(),
+        360
+    );
+}
+
+#[test]
+fn prior_usage_decode_rejects_partial_or_negative_components() {
+    for payload in [
+        serde_json::json!([{"prompt_tokens": 100, "completion_tokens": null}]),
+        serde_json::json!([{"prompt_tokens": null, "completion_tokens": 50}]),
+        serde_json::json!([{"prompt_tokens": -1, "completion_tokens": 50}]),
+        serde_json::json!([{"prompt_tokens": 100, "completion_tokens": -1}]),
+    ] {
+        let rows = super::prior_usage_rows_from_response(Some(&payload)).unwrap();
+        assert!(
+            crate::provider_usage::sum_charged_from_persisted_parts(
+                rows.into_iter()
+                    .map(|row| (row.prompt_tokens, row.completion_tokens))
+            )
+            .is_err(),
+            "invalid durable usage must fail closed: {payload}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
+    use crate::schema::ensure_schemas;
+    use defra_node::EmbeddedNode;
+
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    ensure_schemas(&node).await.unwrap();
+
+    let request_doc_id = "doc-budget-rehydrate";
+    let seed = r#"mutation {
+        create_InferenceCall(input: {
+            call_id: "call-1"
+            runtime_instance_id: "runtime-1"
+            request_id: "req-budget"
+            request_doc_id: "doc-budget-rehydrate"
+            call_seq: 1
+            backend_id: "backend-1"
+            behavior_id: "behavior-1"
+            agent_did: "did:test:agent"
+            call_kind: "inference"
+            attempt: 1
+            call_state: "completed"
+            prompt_tokens: 100
+            completion_tokens: 50
+            queue_depth_at_enqueue: 0
+            controller_generation: 1
+            backend_config_fingerprint: "fp"
+        }) { _docID }
+        create_InferenceCall(input: {
+            call_id: "call-2"
+            runtime_instance_id: "runtime-1"
+            request_id: "req-budget"
+            request_doc_id: "doc-budget-rehydrate"
+            call_seq: 2
+            backend_id: "backend-1"
+            behavior_id: "behavior-1"
+            agent_did: "did:test:agent"
+            call_kind: "compaction"
+            attempt: 1
+            call_state: "completed"
+            prompt_tokens: 200
+            completion_tokens: 10
+            queue_depth_at_enqueue: 0
+            controller_generation: 1
+            backend_config_fingerprint: "fp"
+        }) { _docID }
+    }"#;
+    let response = node.execute(seed).await;
+    assert!(
+        !response.has_errors(),
+        "seed InferenceCall rows: {:?}",
+        response.errors
+    );
+
+    let mut request = request();
+    request.doc_id = request_doc_id.to_string();
+    request.request_id = "req-budget".to_string();
+    request.max_total_tokens = Some(1_000);
+
+    let budget = aggregate_token_budget_for_request(&node, &request)
+        .await
+        .expect("rehydrate")
+        .expect("budget present");
+    let ledger = budget.snapshot().expect("ledger");
+    assert_eq!(ledger.used, 360, "100+50 + 200+10 charged totals");
+    assert_eq!(ledger.limit, 1_000);
+    assert!(
+        !ledger.can_dispatch(700, 100),
+        "remaining 640 cannot cover 700 input"
+    );
+    assert!(ledger.can_dispatch(100, 100));
+
+    node.shutdown().await;
+}
+
 /// #649: every sampling knob a profile can pin must reach the provider body.
 ///
 /// rig's `CompletionRequest` models only `temperature`/`max_tokens`, so the
@@ -426,6 +644,7 @@ fn every_profile_sampling_knob_reaches_the_provider_body() {
         temperature: Some(0.7),
         top_p: Some(0.95),
         top_k: Some(40),
+        seed: Some(1234),
         min_p: Some(0.05),
         frequency_penalty: Some(0.5),
         presence_penalty: Some(-0.25),
@@ -440,6 +659,7 @@ fn every_profile_sampling_knob_reaches_the_provider_body() {
 
     assert_eq!(value["top_p"], 0.95);
     assert_eq!(value["top_k"], 40);
+    assert_eq!(value["seed"], 1234);
     assert_eq!(value["min_p"], 0.05);
     assert_eq!(value["frequency_penalty"], 0.5);
     assert_eq!(value["presence_penalty"], -0.25);
@@ -548,7 +768,8 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 #[test]
 fn loop_config_for_request_keeps_the_inference_capture_scope() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
-    let config = loop_config_for_request(&behavior, "preamble".to_string(), &request(), 0);
+    let config =
+        loop_config_for_request(&behavior, "preamble".to_string(), &request(), None, 0).unwrap();
     assert!(
         config.on_rendered_request.is_some(),
         "the request path must arm a rendered-request capture"

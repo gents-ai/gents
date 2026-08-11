@@ -20,7 +20,9 @@ pub(super) struct AgentRequestRow {
     pub(super) temperature: Option<f64>,
     pub(super) top_p: Option<f64>,
     pub(super) top_k: Option<i64>,
+    pub(super) seed: Option<i64>,
     pub(super) max_tokens: Option<i64>,
+    pub(super) max_total_tokens: Option<i64>,
     pub(super) metadata: Option<String>,
     pub(super) execution_origin: Option<String>,
     pub(super) created_at: String,
@@ -102,7 +104,9 @@ impl AgentRequestRow {
             temperature: self.temperature,
             top_p: self.top_p,
             top_k: self.top_k,
+            seed: self.seed,
             max_tokens: self.max_tokens,
+            max_total_tokens: self.max_total_tokens,
             metadata: self.metadata,
             execution_origin: normalize_optional_string(self.execution_origin),
             created_at: self.created_at,
@@ -113,7 +117,7 @@ impl AgentRequestRow {
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
         };
-        validate_agent_request_subagent_coherence(&req)?;
+        validate_agent_request(&req)?;
         Ok(req)
     }
 }

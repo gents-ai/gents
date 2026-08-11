@@ -19,6 +19,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
+        let effective_sampling =
+            crate::completion_factory::sampling_for_request(self.behavior.sampling, &request);
+        effective_sampling.validate_for_provider(
+            self.behavior.backend_provider_kind,
+            self.behavior.openai_wire_api,
+        )?;
+        let effective_seed = effective_sampling.seed;
+        let aggregate_token_budget = crate::completion_factory::aggregate_token_budget_for_request(
+            self.node.as_ref(),
+            &request,
+        )
+        .await?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let behavior_name = self.behavior.behavior_id.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -204,7 +216,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         self.compactor.compact(
                             history,
                             self.behavior.context_window,
-                            &self.compaction_options_for_request(lifecycle.claimed_deadline_at()),
+                            &self.compaction_options_for_request(
+                                lifecycle.claimed_deadline_at(),
+                                aggregate_token_budget.clone(),
+                                effective_seed,
+                            ),
                         ),
                     )
                     .await?;
@@ -305,6 +321,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     &mut shutdown,
                     &mut interrupt_rx,
                     &request_token,
+                    aggregate_token_budget,
+                    effective_seed,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",

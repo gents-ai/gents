@@ -1,15 +1,19 @@
 use crate::llm::ToolChoice;
 use chrono::{DateTime, Utc};
+use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
+use serde::Deserialize;
 
 use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::completion_retry::CompletionRetryPolicy;
-use crate::agent::loop_stream::LoopConfig;
+use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
 use crate::config::{AgentBehavior, ReasoningEffort, SamplingConfig};
+use crate::graphql::escape_graphql_string;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
+use crate::provider_usage;
 use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
@@ -52,6 +56,7 @@ pub(crate) fn loop_config(
         context_message: None,
         temperature: behavior.sampling.temperature,
         max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
+        aggregate_token_budget: None,
         additional_params: merge_optional_params(
             merge_optional_params(
                 reasoning_profile_params(
@@ -81,12 +86,15 @@ pub(crate) fn loop_config_for_request(
     behavior: &AgentBehavior,
     preamble: String,
     request: &AgentRequest,
+    aggregate_token_budget: Option<AggregateTokenBudget>,
     tool_count: usize,
-) -> LoopConfig {
+) -> anyhow::Result<LoopConfig> {
     let mut config = loop_config(behavior, preamble, tool_count, CaptureScopeKind::Inference);
     let sampling = sampling_for_request(behavior.sampling, request);
+    sampling.validate_for_provider(behavior.backend_provider_kind, behavior.openai_wire_api)?;
     config.temperature = sampling.temperature;
     config.max_tokens = effective_max_tokens(behavior.max_output_tokens, sampling.max_tokens);
+    config.aggregate_token_budget = aggregate_token_budget;
     let request_additional_params = merge_optional_params(
         sampling.additional_params(),
         request_additional_params(behavior, request),
@@ -98,7 +106,112 @@ pub(crate) fn loop_config_for_request(
     let origin = completion_retry_origin(request.execution_origin.as_deref());
     config.retry_policy = CompletionRetryPolicy::resolve(&behavior.completion_retry, origin);
     config.deadline = parse_request_deadline(request.deadline.as_deref());
-    config
+    Ok(config)
+}
+
+/// Parse `AgentRequest.max_total_tokens` into a positive ledger limit.
+pub(crate) fn parse_aggregate_token_limit(
+    max_total_tokens: Option<i64>,
+) -> anyhow::Result<Option<u64>> {
+    max_total_tokens
+        .map(|limit| {
+            let limit = u64::try_from(limit)
+                .map_err(|_| anyhow::anyhow!("max_total_tokens must be a positive integer"))?;
+            if limit == 0 {
+                anyhow::bail!("max_total_tokens must be a positive integer");
+            }
+            Ok(limit)
+        })
+        .transpose()
+}
+
+/// Mint the single monotone provider-usage ledger for one durable request.
+///
+/// `used` is rehydrated from durable `InferenceCall` rows for this physical
+/// `request_doc_id` so crash redrive and process restart cannot mint a fresh
+/// allowance. Callers must construct it before any request-scoped provider
+/// work so session compaction and the owned inference loop share one handle.
+pub(crate) async fn aggregate_token_budget_for_request(
+    node: &EmbeddedNode,
+    request: &AgentRequest,
+) -> anyhow::Result<Option<AggregateTokenBudget>> {
+    let Some(limit) = parse_aggregate_token_limit(request.max_total_tokens)? else {
+        return Ok(None);
+    };
+    let used = load_prior_charged_tokens(node, &request.doc_id).await?;
+    if used == 0 {
+        return Ok(Some(AggregateTokenBudget::new(limit)));
+    }
+    tracing::info!(
+        request_id = %request.request_id,
+        request_doc_id = %request.doc_id,
+        used,
+        limit,
+        "rehydrated aggregate token budget from durable InferenceCall rows"
+    );
+    Ok(Some(AggregateTokenBudget::with_prior_usage(limit, used)))
+}
+
+#[derive(Debug, Deserialize)]
+struct PriorUsageRow {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+}
+
+/// Sum charged tokens already persisted for this physical request.
+async fn load_prior_charged_tokens(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> anyhow::Result<u64> {
+    if request_doc_id.trim().is_empty() {
+        return Ok(0);
+    }
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }}
+            ) {{
+                prompt_tokens
+                completion_tokens
+            }}
+        }}"#,
+        escape_graphql_string(request_doc_id)
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        anyhow::bail!(
+            "loading prior InferenceCall usage for request_doc_id={request_doc_id}: {:?}",
+            resp.errors
+        );
+    }
+    let rows = prior_usage_rows_from_response(
+        resp.data
+            .as_ref()
+            .and_then(|data| data.get("InferenceCall")),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
+    })?;
+    provider_usage::sum_charged_from_persisted_parts(
+        rows.into_iter()
+            .map(|row| (row.prompt_tokens, row.completion_tokens)),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
+    })
+}
+
+/// Decode the `InferenceCall` array from a GraphQL data payload.
+/// Missing/null → empty (no prior usage). Present but malformed → error.
+fn prior_usage_rows_from_response(
+    value: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<PriorUsageRow>> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            anyhow::anyhow!("InferenceCall usage payload is not a row array: {error}")
+        }),
+    }
 }
 
 fn completion_retry_origin(value: Option<&str>) -> ExecutionOrigin {
@@ -114,11 +227,15 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> SamplingConfig {
+pub(crate) fn sampling_for_request(
+    defaults: SamplingConfig,
+    request: &AgentRequest,
+) -> SamplingConfig {
     SamplingConfig {
         temperature: request.temperature.or(defaults.temperature),
         top_p: request.top_p.or(defaults.top_p),
         top_k: request.top_k.or(defaults.top_k),
+        seed: request.seed.or(defaults.seed),
         min_p: defaults.min_p,
         frequency_penalty: defaults.frequency_penalty,
         presence_penalty: defaults.presence_penalty,
@@ -131,7 +248,7 @@ fn sampling_for_request(defaults: SamplingConfig, request: &AgentRequest) -> Sam
     }
 }
 
-fn merge_optional_params(
+pub(crate) fn merge_optional_params(
     left: Option<serde_json::Value>,
     right: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
