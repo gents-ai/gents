@@ -70,6 +70,7 @@ use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeili
 use serde_json::Value;
 
 use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::interrupt::wait_for_runtime_ready;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::fetch_runtime_snapshot;
 use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
@@ -565,23 +566,7 @@ async fn boot_agent(db: &crate::support::TestDb, test_name: &str, backend_id: &s
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(db.node.as_ref(), &agent_did).await {
-            if snapshot.process_state == "ready"
-                && snapshot.reconcile_phase == "idle"
-                && snapshot.active_generation >= 1
-                && snapshot.runnable_behavior_count >= 1
-            {
-                break;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "agent did not reach ready + runnable_behavior_count>=1 within 30s"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
 
     BootedAgent {
         shutdown_tx,
