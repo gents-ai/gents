@@ -7,10 +7,6 @@ use serde_json::Value;
 use super::retry::log_mutation_timing;
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::active_runtime_lifecycle_state_graphql_list;
-use crate::retry::{
-    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
-    DEFRA_DB_CONFLICT_MAX_RETRIES,
-};
 
 const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
 
@@ -60,7 +56,12 @@ pub trait GraphqlExecutor: Send + Sync {
 impl GraphqlExecutor for EmbeddedNode {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
         Ok(GraphqlExecuteResponse::from_embedded(
-            self.execute(query).await,
+            crate::graphql::graphql_response_with_transaction_retry(
+                self,
+                query,
+                "session fork GraphQL",
+            )
+            .await,
         ))
     }
 }
@@ -463,7 +464,7 @@ async fn copy_messages(
                     sequence: {{ _lt: {cut_seq} }}
                 }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role content reasoning timestamp }}
+            ) {{ requester_did sequence role content reasoning timestamp }}
         }}"#
     );
     let resp = executor.execute_graphql(&query).await?;
@@ -486,12 +487,16 @@ async fn copy_messages(
         let content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
         let reasoning = row.get("reasoning").and_then(|v| v.as_str()).unwrap_or("");
         let timestamp = row.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+        let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let message_key = format!("{child_session_escaped}:{sequence}");
         mutation_fields.push(format!(
             r#"message_{index}: create_AgentMessage(input: {{
                     message_key: "{message_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
+                    request_id: "",
+                    request_doc_id: "",
+                    requester_did: {requester_did},
                     sequence: {sequence},
                     role: "{role_escaped}",
                     content: "{content_escaped}",
@@ -503,6 +508,7 @@ async fn copy_messages(
             content_escaped = escape_graphql_string(content),
             reasoning_escaped = escape_graphql_string(reasoning),
             timestamp_escaped = escape_graphql_string(timestamp),
+            requester_did = nullable_string_literal(requester_did),
         ));
     }
     execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_messages").await?;
@@ -526,7 +532,7 @@ async fn copy_tool_calls(
                 }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                message_sequence tool_name tool_call_id args result status lifecycle_state
+                requester_did message_sequence tool_name tool_call_id args result status lifecycle_state
                 started_at completed_at selected_service_id selected_tool_name tool_failure_class
                 denial_reason denied_argv denied_command denied_argument denied_subcommand
                 denied_prefix policy_mode policy_network
@@ -577,6 +583,7 @@ async fn copy_tool_calls(
         let policy_network = row.get("policy_network").and_then(|v| v.as_str());
         let cancel_cause = row.get("cancel_cause").and_then(|v| v.as_str());
         let latency_ms = row.get("latency_ms").and_then(json_i64);
+        let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let tool_call_id_escaped = escape_graphql_string(tool_call_id);
         let tool_call_key = format!("{child_session_escaped}:{tool_call_id_escaped}");
         mutation_fields.push(format!(
@@ -584,6 +591,9 @@ async fn copy_tool_calls(
                     tool_call_key: "{tool_call_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
+                    request_id: "",
+                    request_doc_id: "",
+                    requester_did: {requester_did},
                     message_sequence: {message_sequence},
                     tool_name: "{tool_name_escaped}",
                     tool_call_id: "{tool_call_id_escaped}",
@@ -628,6 +638,7 @@ async fn copy_tool_calls(
             policy_network = nullable_string_literal(policy_network),
             cancel_cause = nullable_string_literal(cancel_cause),
             latency_ms = nullable_i64_literal(latency_ms),
+            requester_did = nullable_string_literal(requester_did),
         ));
     }
     execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_tool_calls").await?;
@@ -687,6 +698,7 @@ async fn copy_tool_results(
         let created_at = row.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
         mutation_fields.push(format!(
             r#"tool_result_{index}: create_AgentToolResult(input: {{
+                    tool_call_doc_id: "",
                     agent_did: "{child_agent_did_escaped}",
                     session_id: "{child_session_escaped}",
                     tool_name: "{tool_name_escaped}",
@@ -777,6 +789,8 @@ async fn copy_compaction_entries(
                     compaction_key: "{compaction_key}",
                     session_id: "{child_session_escaped}",
                     agent_did: "{agent_did_escaped}",
+                    request_id: "",
+                    request_doc_id: "",
                     sequence: {sequence},
                     summary: "{summary_escaped}",
                     files_read: "{files_read_escaped}",
@@ -857,67 +871,13 @@ async fn execute_mutation_with_retry(
     mutation: &str,
     operation: &str,
 ) -> Result<GraphqlExecuteResponse> {
-    let mut last_resp = None;
-    let mut last_error = None;
-    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
-        if attempt > 0 {
-            let backoff = defradb_conflict_retry_backoff(attempt - 1);
-            tracing::warn!(
-                operation = %operation,
-                attempt = attempt,
-                backoff_ms = backoff.as_millis() as u64,
-                "retrying mutation"
-            );
-            tokio::time::sleep(backoff).await;
-        }
-
-        let started = std::time::Instant::now();
-        let resp = executor.execute_graphql(mutation).await;
-        let elapsed = started.elapsed();
-        log_mutation_timing(operation, elapsed);
-
-        match resp {
-            Ok(resp) if !resp.has_errors() => return Ok(resp),
-            Ok(resp) => {
-                let retryable = is_defradb_transaction_conflict_text(&render_graphql_errors(&resp));
-                tracing::warn!(
-                    operation = %operation,
-                    attempt = attempt,
-                    errors = %render_graphql_errors(&resp),
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    "mutation failed"
-                );
-                if retryable && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
-                    last_resp = Some(resp);
-                    continue;
-                }
-                anyhow::bail!("{operation} failed: {}", render_graphql_errors(&resp));
-            }
-            Err(error) => {
-                tracing::warn!(
-                    operation = %operation,
-                    attempt = attempt,
-                    error = %error,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    "mutation transport failed"
-                );
-                if attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
-                    last_error = Some(error);
-                    continue;
-                }
-                return Err(error);
-            }
-        }
+    let started = std::time::Instant::now();
+    let response = executor.execute_graphql(mutation).await?;
+    log_mutation_timing(operation, started.elapsed());
+    if response.has_errors() {
+        anyhow::bail!("{operation} failed: {}", render_graphql_errors(&response));
     }
-
-    if let Some(resp) = last_resp {
-        anyhow::bail!(
-            "{operation} failed after {DEFRA_DB_CONFLICT_MAX_RETRIES} retries: {}",
-            render_graphql_errors(&resp)
-        );
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("{operation} failed without GraphQL response")))
+    Ok(response)
 }
 
 async fn execute_batch_mutation_with_retry(

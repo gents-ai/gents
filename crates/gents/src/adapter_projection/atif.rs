@@ -206,6 +206,7 @@ pub(super) fn build_atif_trajectory(
             RunTimelineEvent::Request(_)
             | RunTimelineEvent::RenderedRequest(_)
             | RunTimelineEvent::InferenceCall(_)
+            | RunTimelineEvent::Compaction(_)
             | RunTimelineEvent::Message(_)
             | RunTimelineEvent::ToolCall(_)
             | RunTimelineEvent::Response(_) => {}
@@ -240,6 +241,13 @@ pub(super) fn build_atif_trajectory(
         .filter(
             |event| matches!(event, RunTimelineEvent::ToolCall(tool) if root_tool(timeline, tool)),
         )
+        .count();
+    let compaction_count = timeline
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(event, RunTimelineEvent::Compaction(compaction) if compaction.request_id == timeline.request_id)
+        })
         .count();
 
     AtifTrajectory {
@@ -291,6 +299,7 @@ pub(super) fn build_atif_trajectory(
                 ),
                 ("inference_call_count", Some(json!(inference_call_count))),
                 ("tool_call_count", Some(json!(tool_call_count))),
+                ("compaction_count", Some(json!(compaction_count))),
                 ("child_request_ids", Some(json!(timeline.child_request_ids))),
             ]),
         }),
@@ -757,7 +766,13 @@ fn projected_message(
     Some((
         source,
         presented.body_markdown,
-        presented.reasoning_markdown,
+        message
+            .reasoning
+            .as_deref()
+            .map(str::trim)
+            .filter(|reasoning| !reasoning.is_empty())
+            .map(ToOwned::to_owned)
+            .or(presented.reasoning_markdown),
     ))
 }
 

@@ -397,17 +397,27 @@ mod tests {
     }
 
     async fn seed_agent_request(node: &EmbeddedNode, request_id: &str, requester_did: &str) {
+        let session_id = format!("{request_id}-session");
+        seed_agent_request_for_session(node, request_id, &session_id, Some(requester_did)).await;
+    }
+
+    async fn seed_agent_request_for_session(
+        node: &EmbeddedNode,
+        request_id: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) {
         let request_id = escape_graphql_string(request_id);
-        let requester_did = escape_graphql_string(requester_did);
         let agent_did = "did:key:host";
-        let session_id = escape_graphql_string(&format!("{request_id}-session"));
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
+        let session_id = escape_graphql_string(session_id);
         let behavior_id = escape_graphql_string(&format!("{agent_did}:default"));
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
-                    requester_did: "{requester_did}",
+                    {requester_did_field}
                     behavior_id: "{behavior_id}",
                     session_id: "{session_id}",
                     retry_parent_request: "",
@@ -469,6 +479,8 @@ mod tests {
         let agent_did = "did:key:host";
         let behavior_id = "did:key:host:default";
 
+        seed_agent_request_for_session(node, &request_id, &session_id, requester_did).await;
+
         crate::session::ensure_session_with_behavior_id_and_requester_did(
             node,
             &session_id,
@@ -501,6 +513,8 @@ mod tests {
             "assistant",
             "child result",
             None,
+            None,
+            None,
         )
         .await
         .expect("create routed AgentMessage");
@@ -509,7 +523,7 @@ mod tests {
             agent_did,
             Duration::from_secs(60),
         )
-        .begin_with_requester_did(&session_id, &request_id, behavior_id, requester_did)
+        .begin_with_requester_did(&session_id, &request_id, None, behavior_id, requester_did)
         .await
         .expect("create routed AgentResponse");
     }

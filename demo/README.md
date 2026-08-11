@@ -18,8 +18,10 @@ gents demo run pipeline --keep-home  # keep the node home for debugging
 
 Everything a run produces lands under `<pack>/runs/<job_id>/` (gitignored):
 `meta.json` with stage request ids, lifecycle states, collection counts and
-token totals, plus `server.log`. `--keep-home` also leaves the node home
-there, so a failed run can be re-opened and queried:
+token totals, signed request-version provenance, plus timeline and adapter
+projection artifacts under `projections/`. The runner fails when a configured
+projection cannot be built or its contract is invalid. `--keep-home` also
+leaves the node home there, so a failed run can be re-opened and queried:
 
 ```bash
 gents server --home demo/pipeline/runs/<job_id>/home --http-port 19393

@@ -116,7 +116,7 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
     let task = resolved_task_for_test("task-manual", "general", "manual body");
 
     let request_id = materializer
-        .materialize(&task, None, TriggerKind::Manual, "manual body")
+        .materialize(&task, None, TriggerKind::Manual, None, "manual body")
         .await
         .expect("Manual materialize should succeed");
 
@@ -129,6 +129,7 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
             ) {{
                 caused_by_trigger_id
                 caused_by_trigger_kind
+                caused_by_source_doc_id
                 execution_origin
                 status
                 lifecycle_state
@@ -160,6 +161,12 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
         Some("manual"),
         "Manual lineage must serialize via TriggerKind::as_str() = \"manual\": {row}"
     );
+    assert!(
+        row.get("caused_by_source_doc_id")
+            .and_then(|v| v.as_str())
+            .is_none(),
+        "Manual fires must not persist event source-document lineage: {row}"
+    );
     assert_eq!(
         row.get("execution_origin").and_then(|v| v.as_str()),
         Some("interactive"),
@@ -183,6 +190,95 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
 }
 
 #[tokio::test]
+async fn production_materializer_persists_event_source_document_lineage() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let snapshot =
+        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-event", "general", "event body");
+
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            Some("source-doc-exact"),
+            "event body",
+        )
+        .await
+        .expect("Event materialize should succeed");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ caused_by_trigger_kind caused_by_source_doc_id }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "AgentRequest query failed: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("event AgentRequest row");
+    assert_eq!(
+        row.get("caused_by_trigger_kind")
+            .and_then(serde_json::Value::as_str),
+        Some("event")
+    );
+    assert_eq!(
+        row.get("caused_by_source_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some("source-doc-exact")
+    );
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_incoherent_source_document_lineage() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    let snapshot =
+        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+    let task = resolved_task_for_test("task-lineage-input", "general", "body");
+
+    let missing = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            None,
+            "body",
+        )
+        .await
+        .expect_err("Event materialization without a source document must fail closed");
+    assert!(missing.to_string().contains("requires source_doc_id"));
+
+    let misplaced = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some("event-doc-on-schedule"),
+            "body",
+        )
+        .await
+        .expect_err("non-Event materialization must reject source document lineage");
+    assert!(misplaced.to_string().contains("Only Event"));
+}
+
+#[tokio::test]
 async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     let snapshot = snapshot_with_schedules(HashMap::new());
@@ -195,6 +291,7 @@ async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
             &task,
             Some("manual-must-not-have-id"),
             TriggerKind::Manual,
+            None,
             "manual body",
         )
         .await

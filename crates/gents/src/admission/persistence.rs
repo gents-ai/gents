@@ -6,8 +6,7 @@ use defra_node::EmbeddedNode;
 use rig::completion::{CompletionError, Usage};
 
 use super::controller::InferenceCallRecord;
-use crate::graphql::escape_graphql_string;
-use crate::retry::execute_graphql_with_conflict_retry;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub(super) fn spawn_persistence<F>(future: F)
 where
@@ -46,15 +45,9 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
-    let resp = execute_graphql_with_conflict_retry(
-        node.as_ref(),
-        &mutation,
-        "persist queued InferenceCall",
-    )
-    .await;
-    if resp.has_errors() {
-        anyhow::bail!("persisting queued InferenceCall failed: {:?}", resp.errors);
-    }
+    let resp =
+        graphql_with_transaction_retry(node.as_ref(), &mutation, "persist queued InferenceCall")
+            .await?;
     extract_inference_call_doc_id(resp.data.as_ref())
 }
 
@@ -64,18 +57,10 @@ pub(super) async fn persist_call_started(
 ) -> Result<String, CompletionError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
-    let resp = execute_graphql_with_conflict_retry(
-        node.as_ref(),
-        &mutation,
-        "persist running InferenceCall",
-    )
-    .await;
-    if resp.has_errors() {
-        return Err(CompletionError::ProviderError(format!(
-            "persisting running InferenceCall failed: {:?}",
-            resp.errors
-        )));
-    }
+    let resp =
+        graphql_with_transaction_retry(node.as_ref(), &mutation, "persist running InferenceCall")
+            .await
+            .map_err(completion_persistence_error)?;
     extract_inference_call_doc_id(resp.data.as_ref()).map_err(completion_persistence_error)
 }
 
@@ -85,15 +70,12 @@ pub(super) async fn persist_existing_call_running(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_running_mutation(call, &now);
-    let resp = execute_graphql_with_conflict_retry(
+    graphql_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing running InferenceCall",
     )
-    .await;
-    if resp.has_errors() {
-        anyhow::bail!("persisting running InferenceCall failed: {:?}", resp.errors);
-    }
+    .await?;
     Ok(())
 }
 
@@ -114,18 +96,8 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     );
-    let resp = execute_graphql_with_conflict_retry(
-        node.as_ref(),
-        &mutation,
-        "persist terminal InferenceCall",
-    )
-    .await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "persisting terminal InferenceCall failed: {:?}",
-            resp.errors
-        );
-    }
+    graphql_with_transaction_retry(node.as_ref(), &mutation, "persist terminal InferenceCall")
+        .await?;
     Ok(())
 }
 
@@ -138,18 +110,12 @@ pub(super) async fn persist_existing_call_terminal(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = upsert_call_terminal_mutation(call, call_state, failure_reason, &now, usage);
-    let resp = execute_graphql_with_conflict_retry(
+    graphql_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing terminal InferenceCall",
     )
-    .await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "persisting terminal InferenceCall failed: {:?}",
-            resp.errors
-        );
-    }
+    .await?;
     Ok(())
 }
 
@@ -173,6 +139,7 @@ fn add_call_mutation(
                 call_id: "{call_id}",
                 runtime_instance_id: "{runtime_instance_id}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 call_seq: {call_seq},
                 backend_id: "{backend_id}",
                 behavior_id: "{behavior_id}",
@@ -196,6 +163,7 @@ fn add_call_mutation(
         call_id = escape_graphql_string(&call.call_id),
         runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
         request_id = escape_graphql_string(&call.request_id),
+        request_doc_id = escape_graphql_string(&call.request_doc_id),
         call_seq = call.call_seq,
         backend_id = escape_graphql_string(&call.backend_id),
         behavior_id = escape_graphql_string(&call.behavior_id),
@@ -225,6 +193,7 @@ fn upsert_call_running_mutation(call: &InferenceCallRecord, started_at: &str) ->
                     call_id: "{call_id}",
                     runtime_instance_id: "{runtime_instance_id}",
                     request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
                     call_seq: {call_seq},
                     backend_id: "{backend_id}",
                     behavior_id: "{behavior_id}",
@@ -248,6 +217,7 @@ fn upsert_call_running_mutation(call: &InferenceCallRecord, started_at: &str) ->
         call_id = escape_graphql_string(&call.call_id),
         runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
         request_id = escape_graphql_string(&call.request_id),
+        request_doc_id = escape_graphql_string(&call.request_doc_id),
         call_seq = call.call_seq,
         backend_id = escape_graphql_string(&call.backend_id),
         behavior_id = escape_graphql_string(&call.behavior_id),
@@ -278,6 +248,7 @@ fn upsert_call_terminal_mutation(
                     call_id: "{call_id}",
                     runtime_instance_id: "{runtime_instance_id}",
                     request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
                     call_seq: {call_seq},
                     backend_id: "{backend_id}",
                     behavior_id: "{behavior_id}",
@@ -309,6 +280,7 @@ fn upsert_call_terminal_mutation(
         call_id = escape_graphql_string(&call.call_id),
         runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
         request_id = escape_graphql_string(&call.request_id),
+        request_doc_id = escape_graphql_string(&call.request_doc_id),
         call_seq = call.call_seq,
         backend_id = escape_graphql_string(&call.backend_id),
         behavior_id = escape_graphql_string(&call.behavior_id),
@@ -341,5 +313,58 @@ fn usage_fields(usage: Option<Usage>) -> (String, String, String) {
             format!("cached_input_tokens: {},", usage.cached_input_tokens),
         ),
         None => (String::new(), String::new(), String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::admission::client::CallKind;
+
+    fn call() -> InferenceCallRecord {
+        InferenceCallRecord {
+            call_id: "call-1".to_string(),
+            runtime_instance_id: "runtime-1".to_string(),
+            request_id: "request-logical".to_string(),
+            request_doc_id: "request-doc-physical".to_string(),
+            call_seq: 1,
+            backend_id: "backend-1".to_string(),
+            behavior_id: "behavior-1".to_string(),
+            agent_did: "did:test:agent".to_string(),
+            call_kind: CallKind::Inference,
+            attempt: 1,
+            queue_depth_at_enqueue: 0,
+            controller_generation: 1,
+            backend_config_fingerprint: "fingerprint-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn every_inference_call_create_arm_persists_the_physical_request_edge() {
+        let call = call();
+        let mutations = [
+            add_call_mutation(
+                &call,
+                "queued",
+                None,
+                Some("2026-08-09T00:00:00Z"),
+                None,
+                None,
+                None,
+            ),
+            upsert_call_running_mutation(&call, "2026-08-09T00:00:01Z"),
+            upsert_call_terminal_mutation(&call, "completed", None, "2026-08-09T00:00:02Z", None),
+        ];
+
+        for mutation in mutations {
+            assert!(
+                mutation.contains(r#"request_id: "request-logical""#),
+                "logical correlation id missing from mutation: {mutation}"
+            );
+            assert!(
+                mutation.contains(r#"request_doc_id: "request-doc-physical""#),
+                "physical request edge missing from mutation: {mutation}"
+            );
+        }
     }
 }

@@ -1,4 +1,4 @@
-type ProjectionAcpBinding {
+type ProjectionAcpBinding @branchable {
     # Stable manifest/config id for this projection access binding.
     binding_id: String @index(unique: true)
     # Required owner agent DID. Runtime auto-discovery only considers bindings for

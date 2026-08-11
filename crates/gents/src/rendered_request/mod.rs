@@ -47,10 +47,6 @@
 //! CID this record relies on is not a consequence of `@branchable` — that
 //! directive is taken for replication and collection-scoped ACP reasons, which
 //! `rendered_request.graphql` explains.
-//!
-//! `prompt_hash` and `tools_hash` survive only as query indexes — "find every
-//! capture sharing this tool surface". Treating either as proof of content is a
-//! bug.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -103,6 +99,9 @@ pub struct RenderedRequestContext {
     /// invalid duplicate logical id exists in the collection. Empty only for a
     /// one-shot run, which does not author an `AgentRequest` document.
     pub request_doc_id: String,
+    /// Exact composite DefraDB commit returned by the mutation that claimed
+    /// this request. Empty only for a one-shot run.
+    pub request_commit_cid: String,
     pub request_id: String,
     pub agent_did: String,
     /// The requesting principal. Empty when the request has none — an empty DID
@@ -117,9 +116,27 @@ pub struct RenderedRequestContext {
 }
 
 impl RenderedRequestContext {
+    #[cfg(test)]
     pub(crate) fn for_request(request: &crate::watcher::AgentRequest, model_name: String) -> Self {
+        Self::for_request_version(request, "", model_name)
+    }
+
+    pub(crate) fn for_claimed_request(
+        request: &crate::watcher::AgentRequest,
+        request_commit_cid: &str,
+        model_name: String,
+    ) -> Self {
+        Self::for_request_version(request, request_commit_cid, model_name)
+    }
+
+    fn for_request_version(
+        request: &crate::watcher::AgentRequest,
+        request_commit_cid: &str,
+        model_name: String,
+    ) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
+            request_commit_cid: request_commit_cid.to_string(),
             request_id: request.request_id.clone(),
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone().unwrap_or_default(),
@@ -133,22 +150,17 @@ impl RenderedRequestContext {
 /// The JSON pieces extracted from one captured provider body. Grouped so the
 /// DTO builder keeps a readable arity.
 pub(crate) struct RenderedRequestComponents {
-    /// The complete provider request. This is the fact record; the four fields
-    /// below are query conveniences derived from it.
+    /// The complete provider request. This is the fact record; the fields below
+    /// are typed views used while validating transport conversion.
     pub(crate) request_json: Value,
     pub(crate) messages_json: Value,
-    /// Complete provider prompt surface used for `prompt_hash`. Responses
-    /// carries system text separately in `instructions`; Chat Completions has
-    /// no prompt-bearing field outside `messages`.
-    pub(crate) prompt_json: Value,
     pub(crate) tools_json: Value,
     pub(crate) tool_choice_json: Value,
     pub(crate) sampling_json: Value,
 }
 
 impl RenderedRequestComponents {
-    /// Split a captured provider body into the payload plus the four derived
-    /// views the DTO indexes over.
+    /// Split a captured provider body into the payload plus derived views.
     ///
     /// Every view is read out of the body, never re-derived from the assembled
     /// `CompletionRequest`: on the Codex path the assembled request still
@@ -158,13 +170,6 @@ impl RenderedRequestComponents {
         let field = |name: &str| request_json.get(name).cloned();
         let messages_json =
             field(source.messages_field()).unwrap_or_else(|| Value::Array(Vec::new()));
-        let prompt_json = match source {
-            RenderedRequestSource::OpenAiResponses => json!({
-                "instructions": field("instructions").unwrap_or(Value::Null),
-                "input": messages_json.clone(),
-            }),
-            RenderedRequestSource::OpenAiChatCompletions => messages_json.clone(),
-        };
         let tools_json = field("tools").unwrap_or_else(|| Value::Array(Vec::new()));
         let tool_choice_json = field("tool_choice").unwrap_or(Value::Null);
         let sampling_json = json!({
@@ -182,7 +187,6 @@ impl RenderedRequestComponents {
         Self {
             request_json,
             messages_json,
-            prompt_json,
             tools_json,
             tool_choice_json,
             sampling_json,
@@ -201,6 +205,9 @@ pub struct RenderedCompletionRequest {
     /// remains alongside it for user-facing correlation and queries. Empty for
     /// a one-shot run, which has no `AgentRequest` document.
     pub request_doc_id: String,
+    /// Exact composite version of `request_doc_id` that supplied the runtime
+    /// input. The CID is DefraDB's native time-travel and integrity reference.
+    pub request_commit_cid: String,
     pub request_id: String,
     /// Which completion loop inside the request issued this call, e.g.
     /// `inference.1` or `compaction.2`. See [`CaptureScopeKind`].
@@ -214,19 +221,12 @@ pub struct RenderedCompletionRequest {
     pub session_id: String,
     pub model_name: String,
     pub source: RenderedRequestSource,
-    /// The complete rendered provider request. Retained in full: component
-    /// hashes are indexes, not a substitute for the payload.
+    /// The complete rendered provider request retained as the durable payload.
     pub request_json: Value,
     pub messages_json: Value,
     pub tools_json: Value,
     pub tool_choice_json: Value,
     pub sampling_json: Value,
-    /// Query index over the complete provider prompt surface: `messages` for
-    /// Chat Completions, and `instructions` plus `input` for Responses. Not an
-    /// integrity mechanism.
-    pub prompt_hash: String,
-    /// Query index over `tools_json`. Not an integrity mechanism.
-    pub tools_hash: String,
     pub assembly_trace: AssemblyTrace,
     /// Canonical JSON of the `ProvenanceManifest` built from `assembly_trace`.
     /// Derived by the builder so the column and the typed value cannot
@@ -247,14 +247,11 @@ pub(crate) fn build_rendered_completion_request(
     let RenderedRequestComponents {
         request_json,
         messages_json,
-        prompt_json,
         tools_json,
         tool_choice_json,
         sampling_json,
     } = components;
 
-    let prompt_hash = sha256_canonical_json(&prompt_json)?;
-    let tools_hash = sha256_canonical_json(&tools_json)?;
     let capture_key = capture_key(
         &context.agent_did,
         &context.session_id,
@@ -282,6 +279,7 @@ pub(crate) fn build_rendered_completion_request(
         capture_key,
         capture_version: CAPTURE_VERSION,
         request_doc_id: context.request_doc_id.clone(),
+        request_commit_cid: context.request_commit_cid.clone(),
         request_id: context.request_id.clone(),
         capture_scope: capture_scope.to_string(),
         turn_index,
@@ -297,8 +295,6 @@ pub(crate) fn build_rendered_completion_request(
         tools_json,
         tool_choice_json,
         sampling_json,
-        prompt_hash,
-        tools_hash,
         assembly_trace,
         provenance_json,
     })
@@ -435,6 +431,7 @@ mod tests {
     fn context() -> RenderedRequestContext {
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
+            request_commit_cid: "bafy-request-commit".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:test".to_string(),
             requester_did: "did:key:requester".to_string(),
@@ -570,10 +567,10 @@ mod tests {
         assert_eq!(parsed, canonical_json(&value));
     }
 
-    /// Absent tools and tool choice must still hash — an empty list is a real
-    /// tool surface, not a missing one, and it has to be findable by index.
+    /// Absent tools and tool choice remain explicit typed views of the captured
+    /// transport body.
     #[test]
-    fn empty_tools_and_tool_choice_still_produce_component_hashes() {
+    fn empty_tools_and_tool_choice_remain_explicit() {
         let rendered = build(
             0,
             0,
@@ -584,14 +581,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(
-            rendered.prompt_hash,
-            sha256_canonical_json(&json!([])).unwrap()
-        );
-        assert_eq!(
-            rendered.tools_hash,
-            sha256_canonical_json(&json!([])).unwrap()
-        );
+        assert_eq!(rendered.tools_json, json!([]));
         assert_eq!(rendered.tool_choice_json, Value::Null);
         assert_eq!(rendered.sampling_json["temperature"], Value::Null);
     }
@@ -613,35 +603,6 @@ mod tests {
         assert_eq!(components.sampling_json["max_tokens"], 4096);
     }
 
-    #[test]
-    fn responses_prompt_hash_includes_hoisted_instructions() {
-        let build_responses = |instructions: &str| {
-            build_rendered_completion_request(
-                &context(),
-                "inference.1",
-                RenderedRequestSource::OpenAiResponses,
-                Some("https://api.example.test".to_string()),
-                0,
-                0,
-                empty_trace(),
-                RenderedRequestComponents::from_provider_body(
-                    json!({
-                        "model": "gpt-5.2",
-                        "instructions": instructions,
-                        "input": [{"role": "user", "content": "same input"}],
-                    }),
-                    RenderedRequestSource::OpenAiResponses,
-                ),
-            )
-            .expect("rendered Responses request")
-        };
-
-        let first = build_responses("first system prompt");
-        let second = build_responses("different system prompt");
-        assert_eq!(first.messages_json, second.messages_json);
-        assert_ne!(first.prompt_hash, second.prompt_hash);
-    }
-
     /// Codex deletes `max_output_tokens`, `temperature`, and `top_p` from the
     /// body. The row has to say `null`, not the value the loop assembled.
     #[test]
@@ -656,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_completion_request_hashes_prompt_and_tools() {
+    fn rendered_completion_request_retains_transport_views() {
         let rendered = build(0, 0, empty_trace(), components());
 
         assert_eq!(rendered.request_id, "req-1");
@@ -673,12 +634,9 @@ mod tests {
         assert_eq!(rendered.tools_json[0]["function"]["name"], "read_file");
         assert_eq!(rendered.sampling_json["temperature"], 0.2);
         assert_eq!(rendered.sampling_json["max_tokens"], 512);
-        assert_eq!(rendered.prompt_hash.len(), 64);
-        assert_eq!(rendered.tools_hash.len(), 64);
     }
 
-    /// The payload survives capture. Component hashes are indexes; they never
-    /// replace `request_json`.
+    /// The payload survives capture as the durable source of truth.
     #[test]
     fn rendered_completion_request_retains_the_full_payload() {
         let rendered = build(0, 0, empty_trace(), components());
@@ -930,7 +888,9 @@ mod tests {
             deadline: None,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
+            caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
+            caused_by_parent_tool_call_doc_id: None,
         }
     }
 

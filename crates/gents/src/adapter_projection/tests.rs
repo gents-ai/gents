@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 
 use crate::run_timeline::{
     build_run_timeline, RunTimelineRows, TimelineInferenceCallRow, TimelineMessageRow,
-    TimelineRenderedRequestRow, TimelineRequestRow, TimelineResponseRow, TimelineToolCallRow,
+    TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
+    TimelineResponseRow, TimelineToolCallRow,
 };
 
 const BODY_SENTINEL: &str = "SENTINEL_RENDERED_BODY_9f3a";
@@ -266,6 +267,7 @@ struct ProjectionToolCall {
 fn delegated_coherence_timeline() -> RunTimeline {
     build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
+            doc_id: Some("doc-req-root".to_string()),
             request_id: "req-root".to_string(),
             agent_did: Some("did:test:coordinator".to_string()),
             behavior_id: Some("coordinator".to_string()),
@@ -277,6 +279,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
             ..TimelineRequestRow::default()
         },
         requests: vec![TimelineRequestRow {
+            doc_id: Some("doc-req-review".to_string()),
             request_id: "req-review".to_string(),
             agent_did: Some("did:test:reviewer".to_string()),
             behavior_id: Some("reviewer".to_string()),
@@ -284,7 +287,9 @@ fn delegated_coherence_timeline() -> RunTimeline {
             status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             caused_by_parent_request_id: Some("req-root".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-req-root".to_string()),
             caused_by_parent_tool_call_id: Some("call-delegate".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("doc-call-delegate".to_string()),
             created_at: Some("2026-06-05T00:00:03Z".to_string()),
             ..TimelineRequestRow::default()
         }],
@@ -293,24 +298,30 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 doc_id: None,
                 session_id: "session-root".to_string(),
                 request_id: Some("req-root".to_string()),
+                request_doc_id: None,
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "root private assistant note".to_string(),
+                reasoning: None,
                 timestamp: Some("2026-06-05T00:00:01Z".to_string()),
             },
             TimelineMessageRow {
                 doc_id: None,
                 session_id: "session-review".to_string(),
                 request_id: Some("req-review".to_string()),
+                request_doc_id: None,
                 sequence: 1,
                 role: "assistant".to_string(),
                 content: "child private assistant note".to_string(),
+                reasoning: None,
                 timestamp: Some("2026-06-05T00:00:03.100Z".to_string()),
             },
         ],
         tool_calls: vec![
             TimelineToolCallRow {
+                doc_id: Some("doc-call-delegate".to_string()),
                 request_id: Some("req-root".to_string()),
+                request_doc_id: Some("doc-req-root".to_string()),
                 session_id: "session-root".to_string(),
                 message_sequence: Some(1),
                 tool_name: "delegate".to_string(),
@@ -446,6 +457,255 @@ fn participant(
         agent_did,
         behavior_id,
     })
+}
+
+#[test]
+fn blank_response_falls_back_to_materialized_assistant_message_across_adapters() {
+    let timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            content: Some("question".to_string()),
+            created_at: Some("2026-06-05T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+        requests: vec![TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            ..Default::default()
+        }],
+        messages: vec![TimelineMessageRow {
+            doc_id: Some("doc-message".to_string()),
+            session_id: "session-root".to_string(),
+            request_id: Some("req-root".to_string()),
+            request_doc_id: Some("doc-root".to_string()),
+            sequence: 2,
+            role: "assistant".to_string(),
+            content: "final durable answer".to_string(),
+            reasoning: None,
+            timestamp: Some("2026-06-05T00:00:02Z".to_string()),
+        }],
+        responses: vec![TimelineResponseRow {
+            doc_id: Some("doc-response".to_string()),
+            request_id: "req-root".to_string(),
+            request_doc_id: Some("doc-root".to_string()),
+            session_id: Some("session-root".to_string()),
+            content: Some("  ".to_string()),
+            reasoning: Some(String::new()),
+            error_message: Some(String::new()),
+            status: Some("complete".to_string()),
+            materialized_message_sequence: Some(2),
+            completed_at: Some("2026-06-05T00:00:03Z".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let context = ProjectionContext::default();
+    let atif = build_adapter_projection(AdapterProjectionKind::AtifTrajectory, &timeline, &context);
+    let AdapterProjection::AtifTrajectory(atif) = atif.output else {
+        panic!("ATIF projection");
+    };
+    assert!(atif
+        .steps
+        .iter()
+        .any(|step| step.message == "final durable answer"));
+    assert!(!atif.steps.iter().any(|step| step.message.trim().is_empty()));
+
+    let codex = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &context,
+    );
+    let AdapterProjection::OpenAiCodexRunTrace(codex) = codex.output else {
+        panic!("Codex projection");
+    };
+    assert!(codex.items.iter().any(|item| {
+        matches!(item, OpenAiCodexTraceItem::Response { output: Some(output), .. } if output == "final durable answer")
+    }));
+
+    let langgraph = build_adapter_projection(
+        AdapterProjectionKind::LangGraphStateHistory,
+        &timeline,
+        &context,
+    );
+    assert_eq!(
+        langgraph.provenance.source_version_status,
+        ProjectionSourceVersionStatus::CurrentStateCapturedOnly
+    );
+    let AdapterProjection::LangGraphStateHistory(langgraph) = langgraph.output else {
+        panic!("LangGraph projection");
+    };
+    assert_eq!(
+        langgraph.values.get("final_output"),
+        Some(&json!("final durable answer"))
+    );
+}
+
+#[test]
+fn empty_response_without_materialized_message_does_not_substitute_older_assistant_output() {
+    let timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            content: Some("question".to_string()),
+            created_at: Some("2026-06-05T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+        messages: vec![TimelineMessageRow {
+            doc_id: Some("doc-older-message".to_string()),
+            session_id: "session-root".to_string(),
+            request_id: Some("req-root".to_string()),
+            request_doc_id: Some("doc-root".to_string()),
+            sequence: 1,
+            role: "assistant".to_string(),
+            content: "older assistant output".to_string(),
+            reasoning: None,
+            timestamp: Some("2026-06-05T00:00:01Z".to_string()),
+        }],
+        responses: vec![TimelineResponseRow {
+            doc_id: Some("doc-response".to_string()),
+            request_id: "req-root".to_string(),
+            request_doc_id: Some("doc-root".to_string()),
+            session_id: Some("session-root".to_string()),
+            content: Some(String::new()),
+            status: Some("complete".to_string()),
+            materialized_message_sequence: None,
+            completed_at: Some("2026-06-05T00:00:02Z".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let codex = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+    let AdapterProjection::OpenAiCodexRunTrace(codex) = codex.output else {
+        panic!("Codex projection");
+    };
+    assert!(codex
+        .items
+        .iter()
+        .any(|item| { matches!(item, OpenAiCodexTraceItem::Response { output: None, .. }) }));
+
+    let langgraph = build_adapter_projection(
+        AdapterProjectionKind::LangGraphStateHistory,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+    let AdapterProjection::LangGraphStateHistory(langgraph) = langgraph.output else {
+        panic!("LangGraph projection");
+    };
+    assert!(!langgraph.values.contains_key("final_output"));
+}
+
+#[test]
+fn public_projection_masks_rendered_request_capture_locator() {
+    let timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            ..Default::default()
+        },
+        rendered_request_refs: vec![TimelineRenderedRequestRef {
+            doc_id: "private-rendered-request-doc".to_string(),
+            request_doc_id: "doc-root".to_string(),
+            request_commit_cid: "bafy-request-commit".to_string(),
+        }],
+        ..Default::default()
+    });
+
+    let full = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+    assert_eq!(
+        full.provenance.rendered_request_refs[0].capture_doc_id,
+        "private-rendered-request-doc"
+    );
+
+    let public = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext {
+            actor_did: None,
+            redaction_mode: ProjectionRedactionMode::Public,
+        },
+    );
+    validate_adapter_projection_contract(&public).unwrap();
+    let reference = &public.provenance.rendered_request_refs[0];
+    assert_eq!(reference.capture_doc_id, "[redacted]");
+    assert_eq!(reference.request_doc_id, "doc-root");
+    assert_eq!(reference.request_commit_cid, "bafy-request-commit");
+    assert!(!serde_json::to_string(&public)
+        .unwrap()
+        .contains("private-rendered-request-doc"));
+}
+
+#[test]
+fn compaction_is_visible_without_fabricating_external_messages() {
+    let timeline = build_run_timeline(RunTimelineRows {
+        request: TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            created_at: Some("2026-06-05T00:00:00Z".to_string()),
+            ..Default::default()
+        },
+        requests: vec![TimelineRequestRow {
+            doc_id: Some("doc-root".to_string()),
+            request_id: "req-root".to_string(),
+            session_id: Some("session-root".to_string()),
+            ..Default::default()
+        }],
+        compactions: vec![crate::run_timeline::TimelineCompactionRow {
+            compaction_key: "session-root:1".to_string(),
+            request_id: "req-root".to_string(),
+            request_doc_id: Some("doc-root".to_string()),
+            session_id: "session-root".to_string(),
+            sequence: 1,
+            summary: "compact checkpoint".to_string(),
+            messages_compacted: 6,
+            original_tokens: 700,
+            compacted_tokens: 100,
+            created_at: Some("2026-06-05T00:00:01Z".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let context = ProjectionContext::default();
+
+    let langgraph = build_adapter_projection(
+        AdapterProjectionKind::LangGraphStateHistory,
+        &timeline,
+        &context,
+    );
+    let AdapterProjection::LangGraphStateHistory(langgraph) = langgraph.output else {
+        panic!("LangGraph projection");
+    };
+    assert!(langgraph.nodes.iter().any(|node| {
+        node.id == "compaction:session-root:1"
+            && node.kind == "compaction"
+            && node.content.as_deref() == Some("compact checkpoint")
+    }));
+
+    let atif = build_adapter_projection(AdapterProjectionKind::AtifTrajectory, &timeline, &context);
+    let AdapterProjection::AtifTrajectory(atif) = atif.output else {
+        panic!("ATIF projection");
+    };
+    assert_eq!(
+        atif.final_metrics
+            .and_then(|metrics| metrics.extra)
+            .and_then(|extra| extra.get("compaction_count").cloned()),
+        Some(json!(1))
+    );
 }
 
 fn projection_delegations(envelope: &AdapterProjectionEnvelope) -> BTreeSet<ProjectionDelegation> {
@@ -750,6 +1010,7 @@ fn atif_projection_emits_a_schema_valid_native_harbor_document() {
 fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
+            doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
             agent_did: Some("did:test:root".to_string()),
             behavior_id: Some("root".to_string()),
@@ -761,6 +1022,7 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             ..TimelineRequestRow::default()
         },
         requests: vec![TimelineRequestRow {
+            doc_id: Some("doc-child-1".to_string()),
             request_id: "child-1".to_string(),
             agent_did: Some("did:test:child".to_string()),
             behavior_id: Some("child".to_string()),
@@ -768,7 +1030,9 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             caused_by_parent_request_id: Some("req-1".to_string()),
+            caused_by_parent_request_doc_id: Some("doc-req-1".to_string()),
             caused_by_parent_tool_call_id: Some("call-child".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("doc-call-child".to_string()),
             created_at: Some("2026-06-05T00:00:03Z".to_string()),
             ..TimelineRequestRow::default()
         }],
@@ -776,13 +1040,17 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             doc_id: None,
             session_id: "session-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: None,
             sequence: 1,
             role: "assistant".to_string(),
             content: "sensitive assistant text".to_string(),
+            reasoning: None,
             timestamp: Some("2026-06-05T00:00:01Z".to_string()),
         }],
         tool_calls: vec![TimelineToolCallRow {
+            doc_id: Some("doc-call-child".to_string()),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("doc-req-1".to_string()),
             session_id: "session-1".to_string(),
             message_sequence: Some(1),
             tool_name: "delegate".to_string(),

@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::InferenceError;
 
-pub const DEFRA_DB_CONFLICT_MAX_RETRIES: u32 = 3;
-pub const DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS: u64 = 100;
+pub use crate::graphql::{
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS, DEFRA_DB_CONFLICT_MAX_RETRIES,
+};
 pub const TERMINAL_PERSISTENCE_MAX_RETRIES: u32 = 3;
 pub const TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS: u64 = 100;
 
@@ -64,70 +66,6 @@ impl RetryPolicy {
 pub fn is_retryable_streaming_error(error: &rig::agent::StreamingError) -> bool {
     let classified = crate::error::classify_completion_error(error);
     classified.is_retryable()
-}
-
-pub fn is_defradb_transaction_conflict_text(text: &str) -> bool {
-    text.to_ascii_lowercase().contains("transaction conflict")
-}
-
-pub fn query_response_has_defradb_transaction_conflict(response: &QueryResponse) -> bool {
-    response
-        .errors
-        .iter()
-        .any(|error| is_defradb_transaction_conflict_text(&error.message))
-}
-
-pub fn defradb_conflict_retry_backoff(retry_index: u32) -> Duration {
-    Duration::from_millis(
-        DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS.saturating_mul(1u64 << retry_index.min(10)),
-    )
-}
-
-pub async fn execute_graphql_with_conflict_retry(
-    node: &EmbeddedNode,
-    graphql: &str,
-    operation: &str,
-) -> QueryResponse {
-    let mut retry_count = 0;
-    loop {
-        let started = std::time::Instant::now();
-        let response = node.execute(graphql).await;
-        let elapsed = started.elapsed();
-
-        if !query_response_has_defradb_transaction_conflict(&response)
-            || retry_count >= DEFRA_DB_CONFLICT_MAX_RETRIES
-        {
-            if elapsed > Duration::from_secs(1) {
-                tracing::warn!(
-                    operation = %operation,
-                    retry_count,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    "DefraDB GraphQL completed"
-                );
-            } else {
-                tracing::debug!(
-                    operation = %operation,
-                    retry_count,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    "DefraDB GraphQL completed"
-                );
-            }
-            return response;
-        }
-
-        let backoff = defradb_conflict_retry_backoff(retry_count);
-        tracing::warn!(
-            operation = %operation,
-            retry_count = retry_count + 1,
-            max_retries = DEFRA_DB_CONFLICT_MAX_RETRIES,
-            backoff_ms = backoff.as_millis() as u64,
-            errors = ?response.errors,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "retrying DefraDB GraphQL after transaction conflict"
-        );
-        tokio::time::sleep(backoff).await;
-        retry_count += 1;
-    }
 }
 
 /// Retry a terminal persistence operation on every storage error, not only a

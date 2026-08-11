@@ -18,6 +18,7 @@ use cooldown::{
     mark_processed, prune_processed_requests, request_is_cooling_down,
     take_next_eligible_pending_request, GOSSIP_FALLBACK_POLL, PROCESSED_REQUEST_COOLDOWN,
 };
+pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELDS};
 
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
@@ -38,22 +39,38 @@ pub struct AgentRequest {
     pub deadline: Option<String>,
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
+    pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
+    pub caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 pub fn validate_agent_request_subagent_coherence(req: &AgentRequest) -> Result<()> {
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
-    let request_only_control_link =
-        has_parent_req && !has_parent_tc && (is_steering_queue(req) || is_goal_queue(req));
+    let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
+    let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
+    let request_only_control_link = has_parent_req
+        && !has_parent_tc
+        && (is_steering_queue(req)
+            || is_goal_queue(req)
+            || crate::lifecycle::is_background_completion_request(req.metadata.as_deref()));
+    if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
     if has_parent_req != has_parent_tc && !request_only_control_link {
+        return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
+    }
+    if req.subagent_depth > 0
+        && !request_only_control_link
+        && !(has_parent_req && has_parent_tc && has_parent_req_doc && has_parent_tc_doc)
+    {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     let is_top_level = !has_parent_req;
     if is_top_level && req.subagent_depth != 0 {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    if !is_top_level && req.subagent_depth == 0 && !is_goal_queue(req) {
+    if !is_top_level && req.subagent_depth == 0 && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())

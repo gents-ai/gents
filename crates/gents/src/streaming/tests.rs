@@ -34,6 +34,7 @@ async fn load_response(
                     limit: 1
                 ) {{
                     _docID
+                    request_doc_id
                     content
                     reasoning
                     error_message
@@ -55,6 +56,35 @@ async fn load_response(
         .and_then(|row| row.as_object())
         .cloned()
         .expect("response row")
+}
+
+#[tokio::test]
+async fn response_stores_exact_request_document_edge() {
+    let (node, data_path) = build_test_node("request-doc-edge").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_processing_request(&node, &request_id, "session-edge").await;
+
+    let response_doc_id = writer
+        .begin_with_requester_did(
+            "session-edge",
+            &request_id,
+            Some(&request_doc_id),
+            "general",
+            None,
+        )
+        .await
+        .unwrap();
+
+    let response = load_response(&node, &response_doc_id).await;
+    assert_eq!(
+        response
+            .get("request_doc_id")
+            .and_then(|value| value.as_str()),
+        Some(request_doc_id.as_str())
+    );
+
+    let _ = fs::remove_dir_all(&data_path);
 }
 
 async fn create_processing_request(
@@ -900,12 +930,11 @@ async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
     let mut streams = Vec::with_capacity(STREAM_COUNT);
     for index in 0..STREAM_COUNT {
         let writer = Arc::clone(&writers[index % WRITER_COUNT]);
+        let session_id = format!("parallel-session-{index}");
+        let request_id = format!("parallel-request-{index}");
+        create_processing_request(&node, &request_id, &session_id).await;
         let doc_id = writer
-            .begin(
-                &format!("parallel-session-{index}"),
-                &format!("parallel-request-{index}"),
-                "general",
-            )
+            .begin(&session_id, &request_id, "general")
             .await
             .expect("begin parallel stream");
         streams.push((writer, doc_id));

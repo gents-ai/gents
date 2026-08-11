@@ -5,7 +5,6 @@ use gents::config_client::ConfigApplyTxn;
 use gents::skills::prompt_slash_skill_selection;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -72,14 +71,18 @@ pub async fn submit_request(
 
     // Thread retry linkage: carry parent's retry root forward, else this row is
     // the root of its own retry chain.
-    let (retry_parent_request, retry_root_request) =
+    let (retry_parent_request, retry_parent_request_doc_id, retry_root_request) =
         if let Some(parent_id) = options.retry_parent_request.as_deref() {
-            let root = fetch_retry_root(node, parent_id, agent_did, requester_did)
-                .await?
-                .unwrap_or_else(|| parent_id.to_string());
-            (parent_id.to_string(), root)
+            let parent = fetch_retry_lineage(node, parent_id, agent_did, requester_did).await?;
+            (
+                parent_id.to_string(),
+                Some(parent.doc_id),
+                parent
+                    .retry_root_request
+                    .unwrap_or_else(|| parent_id.to_string()),
+            )
         } else {
-            (String::new(), request_id.clone())
+            (String::new(), None, request_id.clone())
         };
 
     let session_field = build_upsert_session_field(
@@ -100,6 +103,7 @@ pub async fn submit_request(
         binding.behavior_id.as_deref().unwrap_or(""),
         session_id,
         &retry_parent_request,
+        retry_parent_request_doc_id.as_deref(),
         &retry_root_request,
         &content,
         &created_at,
@@ -259,12 +263,12 @@ async fn retry_request_in_txn(
     requester_did: &str,
     candidate_request_id: &str,
 ) -> Result<SubmittedRequest> {
-    let retry_key = retry_successor_key(agent_did, requester_did, parent_request_id);
+    let (parent_doc_id, parent) =
+        load_retry_parent_in_txn(txn, parent_request_id, agent_did, requester_did).await?;
+    let retry_key = retry_successor_key(&parent_doc_id);
     if let Some(existing) = load_retry_successor_in_txn(txn, &retry_key).await? {
         return Ok(existing);
     }
-
-    let parent = load_retry_parent_in_txn(txn, parent_request_id, agent_did, requester_did).await?;
     let parent_session_id = normalize_required(
         "session_id",
         parent
@@ -335,6 +339,7 @@ async fn retry_request_in_txn(
         binding.behavior_id.as_deref().unwrap_or(""),
         parent_session_id,
         parent_request_id,
+        Some(&parent_doc_id),
         retry_root_request,
         content,
         &created_at,
@@ -372,15 +377,8 @@ async fn retry_request_in_txn(
     })
 }
 
-fn retry_successor_key(agent_did: &str, requester_did: &str, parent_request_id: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"gents:retry-successor:v1\0");
-    digest.update(agent_did.as_bytes());
-    digest.update(b"\0");
-    digest.update(requester_did.as_bytes());
-    digest.update(b"\0");
-    digest.update(parent_request_id.as_bytes());
-    format!("retry:v1:{:x}", digest.finalize())
+fn retry_successor_key(parent_request_doc_id: &str) -> String {
+    format!("retry:doc:{parent_request_doc_id}")
 }
 
 fn retry_transaction_error_is_retryable(error: &anyhow::Error) -> bool {
@@ -448,7 +446,7 @@ async fn load_retry_parent_in_txn(
     parent_request_id: &str,
     agent_did: &str,
     requester_did: &str,
-) -> Result<AgentRequestRow> {
+) -> Result<(String, AgentRequestRow)> {
     let parent_request_id = escape_graphql_string(parent_request_id);
     let agent_did = escape_graphql_string(agent_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -460,8 +458,9 @@ async fn load_retry_parent_in_txn(
                     agent_did: {{ _eq: "{agent_did}" }},
                     requester_did: {{ _eq: "{requester_did}" }}
                 }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID
                 request_id
                 agent_did
                 requester_did
@@ -497,19 +496,28 @@ async fn load_retry_parent_in_txn(
         }}"#
     );
     let response = txn.execute(&query).await?;
-    let row = response
+    let rows = response
         .get("data")
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
         .cloned()
-        .with_context(|| {
-            format!(
-                "retry parent request not found: request_id={}",
-                parent_request_id
-            )
-        })?;
-    serde_json::from_value(row).context("decoding retry parent request")
+        .unwrap_or_default();
+    match rows.len() {
+        0 => bail!("retry parent request not found"),
+        1 => {}
+        count => bail!("retry parent request_id is ambiguous across {count} documents"),
+    }
+    let row = rows
+        .into_iter()
+        .next()
+        .context("retry parent request absent")?;
+    let doc_id = row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("retry parent request has no _docID")?
+        .to_string();
+    let request = serde_json::from_value(row).context("decoding retry parent request")?;
+    Ok((doc_id, request))
 }
 
 async fn retry_conversation_latest_in_txn(
@@ -791,6 +799,7 @@ fn build_add_agent_request_field(
     behavior_id: &str,
     session_id: &str,
     retry_parent_request: &str,
+    retry_parent_request_doc_id: Option<&str>,
     retry_root_request: &str,
     content: &str,
     created_at: &str,
@@ -806,6 +815,10 @@ fn build_add_agent_request_field(
     let escaped_behavior_id = escape_graphql_string(behavior_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_retry_parent = escape_graphql_string(retry_parent_request);
+    let retry_parent_doc_field = retry_parent_request_doc_id
+        .map(escape_graphql_string)
+        .map(|doc_id| format!(r#"retry_parent_request_doc_id: "{doc_id}","#))
+        .unwrap_or_default();
     let escaped_retry_root = escape_graphql_string(retry_root_request);
     let escaped_content = escape_graphql_string(content);
     let escaped_created_at = escape_graphql_string(created_at);
@@ -820,6 +833,7 @@ fn build_add_agent_request_field(
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "{escaped_retry_parent}",
+                {retry_parent_doc_field}
                 retry_root_request: "{escaped_retry_root}",
                 superseded_by_request: "",
                 content: "{escaped_content}",
@@ -982,12 +996,17 @@ async fn fetch_request_view(
     })
 }
 
-async fn fetch_retry_root(
+struct RetryLineage {
+    doc_id: String,
+    retry_root_request: Option<String>,
+}
+
+async fn fetch_retry_lineage(
     node: &EmbeddedNode,
     request_id: &str,
     agent_did: &str,
     requester_did: &str,
-) -> Result<Option<String>> {
+) -> Result<RetryLineage> {
     let escaped = escape_graphql_string(request_id);
     let agent_did = escape_graphql_string(agent_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -999,26 +1018,47 @@ async fn fetch_retry_root(
                     agent_did: {{ _eq: "{agent_did}" }},
                     requester_did: {{ _eq: "{requester_did}" }}
                 }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID
                 retry_root_request
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
     if resp.has_errors() {
-        anyhow::bail!("fetch_retry_root({request_id}) failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "fetch_retry_lineage({request_id}) failed: {:?}",
+            resp.errors
+        );
     }
-    Ok(resp
+    let rows = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|row| row.get("retry_root_request"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from))
+        .cloned()
+        .unwrap_or_default();
+    match rows.len() {
+        0 => bail!("retry parent request not found"),
+        1 => {}
+        count => bail!("retry parent request_id is ambiguous across {count} documents"),
+    }
+    let row = rows
+        .into_iter()
+        .next()
+        .context("retry parent request absent")?;
+    Ok(RetryLineage {
+        doc_id: row
+            .get("_docID")
+            .and_then(Value::as_str)
+            .context("retry parent request has no _docID")?
+            .to_string(),
+        retry_root_request: normalize_optional_string(
+            row.get("retry_root_request").and_then(Value::as_str),
+        )
+        .map(str::to_string),
+    })
 }
 
 #[cfg(test)]
@@ -1067,6 +1107,8 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct RecoveryRequestRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
         request_id: String,
         agent_did: String,
         behavior_id: String,
@@ -1083,6 +1125,7 @@ mod tests {
         execution_origin: String,
         retry_root_request: String,
         retry_parent_request: String,
+        retry_parent_request_doc_id: Option<String>,
         retry_count: i64,
         max_retries: i64,
     }
@@ -1105,6 +1148,33 @@ mod tests {
             Some(r#"{"selected_skill_ids":["triage"]}"#)
         );
         Ok(())
+    }
+
+    #[test]
+    fn retry_key_and_mutation_are_scoped_to_exact_parent_document() {
+        assert_ne!(
+            retry_successor_key("parent-doc-a"),
+            retry_successor_key("parent-doc-b")
+        );
+        let field = build_add_agent_request_field(
+            "request",
+            "retry-request",
+            "did:test:agent",
+            "did:test:requester",
+            "behavior",
+            "session",
+            "logical-parent",
+            Some("parent-doc-a"),
+            "logical-root",
+            "retry content",
+            "2026-08-09T00:00:00Z",
+            1,
+            3,
+            "backend",
+            "interactive",
+            "",
+        );
+        assert!(field.contains(r#"retry_parent_request_doc_id: "parent-doc-a""#));
     }
 
     #[test]
@@ -1726,6 +1796,7 @@ mod tests {
             &format!(
                 r#"{{
                     AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                        _docID
                         request_id
                         agent_did
                         behavior_id
@@ -1742,6 +1813,7 @@ mod tests {
                         execution_origin
                         retry_root_request
                         retry_parent_request
+                        retry_parent_request_doc_id
                         retry_count
                         max_retries
                     }}
@@ -2112,7 +2184,12 @@ mod tests {
 
         let submitted = core.retry_request(&parent).await?;
         let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
+        let original_row = fetch_request_row_for_test(core.node(), &original.request_id).await?;
         assert_eq!(retried.retry_parent_request, original.request_id);
+        assert_eq!(
+            retried.retry_parent_request_doc_id.as_deref(),
+            Some(original_row.doc_id.as_str())
+        );
         assert_eq!(retried.retry_root_request, original.request_id);
         assert_eq!(retried.temperature, Some(0.35));
         assert_eq!(retried.top_p, Some(0.92));
@@ -2293,6 +2370,7 @@ mod tests {
             behavior_id,
             session_id,
             "",
+            None,
             "",
             "existing duplicate request id occupant",
             &created_at,

@@ -166,6 +166,7 @@ pub(crate) struct CurrentCallJoin {
 #[derive(Clone)]
 pub(crate) struct AdmissionCallContext {
     pub(super) request_id: String,
+    pub(super) request_doc_id: String,
     pub(super) backend_id: String,
     pub(super) behavior_id: String,
     pub(super) agent_did: String,
@@ -190,6 +191,7 @@ impl AdmissionCallContext {
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
+            request_doc_id: request.doc_id.clone(),
             backend_id: backend_id.into(),
             behavior_id: behavior_id.into(),
             agent_did: request.agent_did.clone(),
@@ -209,6 +211,7 @@ impl AdmissionCallContext {
             call_id: uuid::Uuid::new_v4().to_string(),
             runtime_instance_id: runtime_instance_id.to_string(),
             request_id: self.request_id.clone(),
+            request_doc_id: self.request_doc_id.clone(),
             call_seq,
             backend_id: self.backend_id.clone(),
             behavior_id: self.behavior_id.clone(),

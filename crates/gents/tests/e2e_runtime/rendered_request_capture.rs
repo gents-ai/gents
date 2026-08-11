@@ -197,10 +197,7 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
 #[tokio::test]
 async fn capture_is_idempotent_and_never_rebinds_a_key() {
     let db = test_db("rendered-request-capture-idempotency").await;
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(
-        db.node.clone(),
-        "did:key:z6MkCaptureIdempotency",
-    );
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(db.node.clone());
 
     let first = rendered_fixture(serde_json::json!({"model": "m", "messages": [{"role": "user"}]}));
     sink.capture(first.clone()).await.expect("first capture");
@@ -259,6 +256,22 @@ async fn capture_is_idempotent_and_never_rebinds_a_key() {
         commit_set(db.node.as_ref(), &first.capture_key).await,
         anchor,
         "a provenance conflict must not mutate the winning fact"
+    );
+
+    let mut version_conflict = first.clone();
+    version_conflict.request_commit_cid = "bafy-different-request-version".to_string();
+    let error = sink
+        .capture(version_conflict)
+        .await
+        .expect_err("request-version rebinding must be an integrity error");
+    assert!(
+        error.to_string().contains("integrity violation"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        commit_set(db.node.as_ref(), &first.capture_key).await,
+        anchor,
+        "a request-version conflict must not mutate the winning fact"
     );
 
     // Same key, different canonical value: integrity error, no write.
@@ -452,10 +465,32 @@ async fn a_multi_turn_tool_using_request_captures_every_turn_in_order() {
         "one row per turn, in order, all inside one completion loop"
     );
     for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row["request_doc_id"].as_str(), Some(doc_id.as_str()));
+        let request_commit_cid = row["request_commit_cid"]
+            .as_str()
+            .expect("request-backed capture commit CID");
+        assert!(
+            !request_commit_cid.is_empty(),
+            "request-backed provider calls must pin a DefraDB version"
+        );
         assert_eq!(
             parse_json(&row["request_json"]),
             canonical(&observed[index]),
             "turn {index} must carry the body the provider was posted"
+        );
+    }
+    let request_commits = gents::graphql::composite_commits(
+        db.node.as_ref(),
+        &doc_id,
+        "load captured AgentRequest versions",
+    )
+    .await
+    .expect("AgentRequest commits");
+    for row in &rows {
+        let pinned = row["request_commit_cid"].as_str().unwrap_or_default();
+        assert!(
+            request_commits.iter().any(|commit| commit.cid == pinned),
+            "capture must pin an actual DefraDB version of its request: {pinned}"
         );
     }
 
@@ -1162,7 +1197,9 @@ fn parse_json(value: &Value) -> Value {
 fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
     let agent_did = "did:key:z6MkCaptureIdempotency".to_string();
     let session_id = "session-idem".to_string();
-    let request_doc_id = "bae-request-idem".to_string();
+    // This direct sink test exercises the explicit document-less one-shot
+    // path. Runtime-backed tests cover AgentRequest version pinning.
+    let request_doc_id = String::new();
     let request_id = "req-idem".to_string();
     let capture_scope = "inference.1".to_string();
     let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
@@ -1181,6 +1218,7 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         .expect("capture key"),
         capture_version: gents::rendered_request::CAPTURE_VERSION,
         request_doc_id,
+        request_commit_cid: String::new(),
         request_id,
         capture_scope: capture_scope.clone(),
         turn_index: 0,
@@ -1196,8 +1234,6 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
         tools_json: serde_json::json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
-        prompt_hash: "0".repeat(64),
-        tools_hash: "0".repeat(64),
         provenance_json: serde_json::to_value(
             gents::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
@@ -1243,6 +1279,7 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
             RenderedRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 capture_key
                 request_doc_id
+                request_commit_cid
                 request_id
                 session_id
                 agent_did
@@ -1255,8 +1292,6 @@ async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> 
                 model_name
                 source
                 request_json
-                prompt_hash
-                tools_hash
                 provenance_json
             }}
         }}"#,

@@ -155,6 +155,8 @@ struct ToolCallRow {
 #[derive(Debug, Deserialize)]
 struct MessageRow {
     content: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 async fn setup_hook(
@@ -196,7 +198,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ content }}
+            ) {{ content request_id request_doc_id }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -244,7 +246,7 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ metadata }}
+            ) {{ _docID request_id metadata }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -333,7 +335,7 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 
 #[tokio::test]
 async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_envelope() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let (db, hook, session_id, request_id) = setup_hook(
         "r6-background-success",
         registry(
             vec![Box::new(StaticTool {
@@ -385,14 +387,17 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     assert!(message.content.contains(r#"tool_name="test_tool""#));
     assert!(message.content.contains(r#"status="completed""#));
     assert!(message.content.contains("<result>done</result>"));
-
+    let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(
-        fetch_background_wakes(db.node.as_ref(), &session_id)
-            .await
-            .len(),
+        wakes.len(),
         1,
         "tool completion notification should enqueue one resumable agent turn"
     );
+    let wake_request_id = wakes[0]["request_id"].as_str().unwrap();
+    let wake_doc_id = wakes[0]["_docID"].as_str().unwrap();
+    assert_ne!(wake_request_id, request_id);
+    assert_eq!(message.request_id.as_deref(), Some(wake_request_id));
+    assert_eq!(message.request_doc_id.as_deref(), Some(wake_doc_id));
 }
 
 // #985: a backgrounded bash run's lifetime budget is decoupled from both the
@@ -981,7 +986,8 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     .await;
     let requester_did = "did:key:same-requester";
     hook.set_active_request_lineage(Some(origin_request_id), Some(requester_did.to_string()))
-        .await;
+        .await
+        .unwrap();
 
     let receipt = skip_reason_json(
         hook.on_tool_call(
@@ -1004,7 +1010,8 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     )
     .await;
     hook.set_active_request_lineage(Some(next_request_id), Some(requester_did.to_string()))
-        .await;
+        .await
+        .unwrap();
 
     let listed = skip_reason_json(
         hook.on_tool_call("list_processes", None, "meta-list-cross-turn", r#"{}"#)
@@ -1063,7 +1070,8 @@ async fn process_controls_deny_different_requester_in_same_session() {
     )
     .await;
     hook.set_active_request_lineage(Some(request_id.clone()), Some("did:key:owner".to_string()))
-        .await;
+        .await
+        .unwrap();
     let receipt = skip_reason_json(
         hook.on_tool_call(
             "spawn_process",
@@ -1075,11 +1083,18 @@ async fn process_controls_deny_different_requester_in_same_session() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    hook.set_active_request_lineage(
-        Some(format!("{request_id}-other")),
-        Some("did:key:other".to_string()),
+    let other_request_id = format!("{request_id}-other");
+    crate::support::create_request(
+        db.node.as_ref(),
+        &other_request_id,
+        &session_id,
+        "processing",
+        "2026-05-14T00:00:02Z",
     )
     .await;
+    hook.set_active_request_lineage(Some(other_request_id), Some("did:key:other".to_string()))
+        .await
+        .unwrap();
     let listed = skip_reason_json(
         hook.on_tool_call("list_processes", None, "meta-list-cross-requester", r#"{}"#)
             .await,
@@ -1121,7 +1136,8 @@ async fn process_controls_deny_different_requester_in_same_session() {
     assert_eq!(row.cancel_cause.as_deref(), None);
 
     hook.set_active_request_lineage(Some(request_id), Some("did:key:owner".to_string()))
-        .await;
+        .await
+        .unwrap();
     let _ = hook
         .on_tool_call(
             "cancel_process",

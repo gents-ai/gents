@@ -279,7 +279,7 @@ async fn lookup_doc_id_by_request_id(
 ) -> Result<Option<String>> {
     let query = format!(
         r#"query {{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, limit: 2) {{
                 _docID
             }}
         }}"#,
@@ -291,11 +291,20 @@ async fn lookup_doc_id_by_request_id(
             anyhow::bail!("lookup AgentRequest by request_id {request_id} failed: {errs:?}");
         }
     }
-    Ok(response
+    let rows = response
         .get("data")
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|arr| arr.as_array())
-        .and_then(|arr| arr.first())
+        .cloned()
+        .unwrap_or_default();
+    if rows.len() > 1 {
+        anyhow::bail!(
+            "lookup AgentRequest by request_id {request_id} is ambiguous across {} documents",
+            rows.len()
+        );
+    }
+    Ok(rows
+        .first()
         .and_then(|row| row.get("_docID"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string()))

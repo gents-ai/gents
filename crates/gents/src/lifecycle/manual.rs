@@ -62,6 +62,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         TriggerLineage {
             trigger_id: None,
             trigger_kind: Some("manual".to_string()),
+            source_doc_id: None,
         },
         conversation_title,
     )

@@ -1,7 +1,8 @@
-type InferenceCall {
+type InferenceCall @branchable {
     call_id: String @index(unique: true)
     runtime_instance_id: String @index
     request_id: String @index
+    request_doc_id: String @index @immutable
     call_seq: Int
     backend_id: String @index
     behavior_id: String @index

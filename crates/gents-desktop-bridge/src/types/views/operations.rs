@@ -205,6 +205,7 @@ pub struct InterruptRequestResult {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HeldToolCallView {
+    pub tool_call_doc_id: String,
     pub tool_call_id: String,
     pub request_id: Option<String>,
     pub session_id: Option<String>,

@@ -11,6 +11,7 @@ async fn key_identity_round_trip() {
     let payload = b"hello world";
 
     assert!(!identity.did().starts_with("did:test:"));
+    assert!(defra_core::signing::get_identity(identity.did()).is_some());
     let signature = identity.sign(payload).await.unwrap();
     assert!(identity
         .verify(identity.did(), payload, &signature)
@@ -23,6 +24,60 @@ async fn key_identity_round_trip() {
         .verify(identity.did(), payload, &signature)
         .await
         .unwrap());
+}
+
+#[tokio::test]
+async fn key_identity_signs_embedded_node_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let did = identity.did().to_string();
+    let expected_signer = defra_core::signing::get_identity(&did)
+        .expect("KeyIdentity registers a DefraDB signer")
+        .public_key_hex
+        .clone();
+    assert_eq!(
+        commit_signer_identity_for_did(&did).unwrap(),
+        expected_signer
+    );
+    let node = defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(&did)
+        .build()
+        .await
+        .unwrap();
+    node.add_schema("type SignedFact { value: String }")
+        .await
+        .unwrap();
+
+    let response = node
+        .execute(
+            r#"mutation {
+                create_SignedFact(input: {value: "durable"}) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("add_SignedFact"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("created document id");
+
+    let commits = crate::graphql::composite_commits(&node, doc_id, "load signed fact versions")
+        .await
+        .unwrap();
+    assert!(commits.iter().any(|commit| {
+        commit
+            .signature
+            .as_ref()
+            .map(|signature| &signature.identity)
+            == Some(&expected_signer)
+    }));
+
+    node.shutdown().await;
 }
 
 #[tokio::test]

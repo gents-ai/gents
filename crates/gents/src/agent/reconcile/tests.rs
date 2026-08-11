@@ -137,7 +137,9 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         deadline: None,
         subagent_depth: 1,
         caused_by_parent_request_id: Some("parent-request".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tool-call".to_string()),
+        caused_by_parent_tool_call_doc_id: Some("parent-tool-call-doc".to_string()),
     }
 }
 

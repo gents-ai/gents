@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
@@ -83,15 +83,12 @@ async fn tick_endpoint(
         .await
         .context("signing PeerEndpoint binding")?;
     let mutation = peer_endpoint_upsert_mutation(&record);
-    let response = crate::retry::execute_graphql_with_conflict_retry(
+    crate::graphql::graphql_with_transaction_retry(
         node,
         &mutation,
         "upsert_peer_endpoint_heartbeat",
     )
-    .await;
-    if response.has_errors() {
-        bail!("upsert_PeerEndpoint failed: {:?}", response.errors);
-    }
+    .await?;
     tracing::debug!(
         did = %record.did,
         node_id = %record.node_id,

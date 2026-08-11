@@ -1,4 +1,4 @@
-type AgentBehavior {
+type AgentBehavior @branchable {
     behavior_id: String @index(unique: true)
     agent_did: String @index
     display_name: String

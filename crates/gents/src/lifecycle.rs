@@ -43,10 +43,23 @@ fn graphql_retry_root_request(retry_root_request: Option<&str>, request_id: &str
 }
 
 fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+    // DefraDB's GraphQL surface accepts `create_<Collection>` while the
+    // response data may expose the normalized `add_<Collection>` field. Read
+    // both so callers keep the exact create result instead of falling back to
+    // a non-unique logical-ID lookup.
+    let normalized_add_key = key
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"));
     response
         .data
         .as_ref()
-        .and_then(|data| data.get(key))
+        .and_then(|data| {
+            data.get(key).or_else(|| {
+                normalized_add_key
+                    .as_deref()
+                    .and_then(|normalized| data.get(normalized))
+            })
+        })
         .and_then(|value| {
             value
                 .get("_docID")
@@ -107,6 +120,7 @@ impl ExecutionOrigin {
 pub struct TriggerLineage {
     pub trigger_id: Option<String>,
     pub trigger_kind: Option<String>,
+    pub source_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +255,7 @@ pub struct RequestLifecycle {
     backend_id: String,
     failure_reason: Option<String>,
     request: AgentRequest,
+    request_commit_cid: Option<String>,
     response_doc_id: Option<String>,
     progress_seq: u32,
     deadline_duration_secs: u64,
@@ -252,6 +267,12 @@ pub struct RequestLifecycle {
 impl RequestLifecycle {
     pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.claimed_deadline_at
+    }
+
+    /// Exact composite commit produced by the successful claim/materialization
+    /// mutation. This is the version whose request fields the runtime uses.
+    pub(crate) fn request_commit_cid(&self) -> Option<&str> {
+        self.request_commit_cid.as_deref()
     }
 
     pub fn valid_until_at_claim_for_test(&self) -> Option<chrono::DateTime<chrono::Utc>> {

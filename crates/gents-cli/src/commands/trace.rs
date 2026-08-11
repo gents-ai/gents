@@ -18,8 +18,8 @@ use gents::run_timeline::{
 };
 #[cfg(test)]
 use gents::run_timeline::{
-    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineResponseRow,
-    TimelineSessionRow, TimelineToolCallRow,
+    TimelineConversationRow, TimelineInferenceCallRow, TimelineMessageRow,
+    TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::trace_export::{
@@ -110,8 +110,6 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                 capture_version
                 model_name
                 source
-                prompt_hash
-                tools_hash
                 provenance_json
                 created_at{body_fields}
             }}
@@ -369,8 +367,10 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentResponse",
     "InferenceCall",
+    "CompactionEntry",
     "AgentSession",
     "AgentConversation",
+    "RenderedRequest",
 ];
 
 async fn projection_acp_read_scope(
@@ -702,6 +702,21 @@ async fn apply_projection_acp_read_filter(
         }
     }
 
+    let mut filtered_compactions = Vec::new();
+    for compaction in rows.compactions {
+        let doc_id = required_doc_id(
+            "CompactionEntry",
+            compaction.compaction_key.as_str(),
+            &compaction.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("CompactionEntry"), doc_id)
+            .await?
+        {
+            filtered_compactions.push(compaction);
+        }
+    }
+
     let session = match rows.session {
         Some(session) => {
             let doc_id =
@@ -735,6 +750,37 @@ async fn apply_projection_acp_read_filter(
         }
         None => None,
     };
+    let mut filtered_rendered_request_refs = Vec::new();
+    for rendered_request_ref in rows.rendered_request_refs {
+        let doc_id = rendered_request_ref.doc_id.trim();
+        if doc_id.is_empty() {
+            anyhow::bail!(
+                "DefraDB ACP projection decisions require _docID for RenderedRequest {}",
+                rendered_request_ref.request_commit_cid
+            );
+        }
+        if decider
+            .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
+            .await?
+        {
+            filtered_rendered_request_refs.push(rendered_request_ref);
+        }
+    }
+
+    let mut filtered_rendered_requests = Vec::new();
+    for rendered_request in rows.rendered_requests {
+        let doc_id = required_doc_id(
+            "RenderedRequest",
+            rendered_request.capture_key.as_str(),
+            &rendered_request.doc_id,
+        )?;
+        if decider
+            .read_allowed(scope.resource_name("RenderedRequest"), doc_id)
+            .await?
+        {
+            filtered_rendered_requests.push(rendered_request);
+        }
+    }
 
     Ok(RunTimelineRows {
         request: rows.request,
@@ -744,15 +790,10 @@ async fn apply_projection_acp_read_filter(
         messages: filtered_messages,
         tool_calls: filtered_tool_calls,
         inference_calls: filtered_inference_calls,
+        compactions: filtered_compactions,
         responses: filtered_responses,
-        // Passed through unfiltered: ACP enforcement is DefraDB's, not this
-        // filter's. Reads executed under a requester identity return only the
-        // rows that identity may see, and an unpoliced collection is public by
-        // DefraDB's own rules. When `RenderedRequest` gains its `@policy`,
-        // rows are excluded at the database read — with nothing to change
-        // here. (This per-row decider exists only for the actor-on-behalf
-        // GraphQL path the seven families above already use.)
-        rendered_requests: rows.rendered_requests,
+        rendered_requests: filtered_rendered_requests,
+        rendered_request_refs: filtered_rendered_request_refs,
     })
 }
 
@@ -955,6 +996,9 @@ fn should_keep_scoped_timeline_event(
             .request_id
             .as_deref()
             .is_some_and(|request_id| allowed_request_ids.contains(request_id)),
+        RunTimelineEvent::Compaction(compaction) => {
+            allowed_request_ids.contains(&compaction.request_id)
+        }
         RunTimelineEvent::Message(message) => scoped_request_id_allowed(
             message.request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -1255,6 +1299,7 @@ async fn load_tool_calls(
                 limit: {limit}
             ) {{
                 session_id
+                request_id
                 message_sequence
                 tool_name
                 tool_call_id
@@ -1275,7 +1320,7 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
                 request_id
                 agent_did
@@ -1293,11 +1338,14 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
         }}"#,
         escape_graphql_string(request_id)
     );
-    load_rows::<RequestRow>(access, "AgentRequest", &query)
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+    let mut rows = load_rows::<RequestRow>(access, "AgentRequest", &query).await?;
+    match rows.len() {
+        0 => Err(anyhow::anyhow!("request {request_id} not found")),
+        1 => Ok(rows.remove(0)),
+        count => anyhow::bail!(
+            "request_id {request_id} is ambiguous across {count} AgentRequest documents"
+        ),
+    }
 }
 
 async fn load_requests_for_sessions(
@@ -1530,6 +1578,20 @@ fn infer_request_for_tool_call<'a>(
     requests: &[&'a RequestRow],
     responses: &[&ResponseRow],
 ) -> Option<&'a RequestRow> {
+    if let Some(request_id) = tool_call
+        .request_id
+        .as_deref()
+        .filter(|request_id| !request_id.is_empty())
+    {
+        // AgentToolCall.request_id is the durable provenance edge. If it names
+        // a request that was not loaded, do not silently reassign the call by
+        // timestamp or message position.
+        return requests
+            .iter()
+            .copied()
+            .find(|request| request.request_id == request_id);
+    }
+
     if let Some(sequence) = tool_call.message_sequence {
         if let Some(response) = responses
             .iter()
@@ -1693,6 +1755,8 @@ trait HasSessionId {
 struct ToolCallRow {
     #[serde(default)]
     session_id: String,
+    #[serde(default)]
+    request_id: Option<String>,
     #[serde(default)]
     message_sequence: Option<i64>,
     #[serde(default)]
@@ -2118,6 +2182,7 @@ mod tests {
             ("AgentResponse", "doc-response-allowed"),
             ("InferenceCall", "doc-inference-allowed"),
             ("AgentConversation", "doc-conversation"),
+            ("RenderedRequest", "doc-rendered-allowed"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
         }
@@ -2173,6 +2238,11 @@ mod tests {
             filtered.conversation.is_some(),
             "conversation row should remain when ACP allows it"
         );
+        assert_eq!(filtered.rendered_request_refs.len(), 1);
+        assert_eq!(
+            filtered.rendered_request_refs[0].doc_id,
+            "doc-rendered-allowed"
+        );
         Ok(())
     }
 
@@ -2186,6 +2256,7 @@ mod tests {
             ("runtime_response", "doc-response-allowed"),
             ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_conversation", "doc-conversation"),
+            ("runtime_rendered_request", "doc-rendered-allowed"),
         ] {
             allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
         }
@@ -2203,6 +2274,10 @@ mod tests {
                 "AgentConversation".to_string(),
                 "runtime_conversation".to_string(),
             ),
+            (
+                "RenderedRequest".to_string(),
+                "runtime_rendered_request".to_string(),
+            ),
         ]);
 
         let filtered = apply_projection_acp_read_filter(acp_fixture_rows(), &scope).await?;
@@ -2213,6 +2288,7 @@ mod tests {
         assert_eq!(filtered.inference_calls.len(), 1);
         assert_eq!(filtered.responses.len(), 1);
         assert!(filtered.conversation.is_some());
+        assert_eq!(filtered.rendered_request_refs.len(), 1);
         assert!(filtered.session.is_none());
         Ok(())
     }
@@ -2271,18 +2347,22 @@ mod tests {
                     doc_id: Some("doc-message-allowed".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-root".to_string()),
+                    request_doc_id: Some("doc-request-root".to_string()),
                     sequence: 1,
                     role: "user".to_string(),
                     content: "allowed".to_string(),
+                    reasoning: None,
                     timestamp: None,
                 },
                 TimelineMessageRow {
                     doc_id: Some("doc-message-denied".to_string()),
                     session_id: "session-acp".to_string(),
                     request_id: Some("req-child".to_string()),
+                    request_doc_id: Some("doc-request-child".to_string()),
                     sequence: 2,
                     role: "assistant".to_string(),
                     content: "denied".to_string(),
+                    reasoning: None,
                     timestamp: None,
                 },
             ],
@@ -2346,6 +2426,19 @@ mod tests {
                 },
             ],
             rendered_requests: Vec::new(),
+            compactions: Vec::new(),
+            rendered_request_refs: vec![
+                TimelineRenderedRequestRef {
+                    doc_id: "doc-rendered-allowed".to_string(),
+                    request_doc_id: "doc-request-root".to_string(),
+                    request_commit_cid: "bafy-allowed".to_string(),
+                },
+                TimelineRenderedRequestRef {
+                    doc_id: "doc-rendered-denied".to_string(),
+                    request_doc_id: "doc-request-root".to_string(),
+                    request_commit_cid: "bafy-denied".to_string(),
+                },
+            ],
         }
     }
 
@@ -2372,6 +2465,7 @@ mod tests {
     fn empty_tool_call() -> ToolCallRow {
         ToolCallRow {
             session_id: String::new(),
+            request_id: None,
             message_sequence: None,
             tool_name: String::new(),
             tool_call_id: String::new(),

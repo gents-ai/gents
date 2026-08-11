@@ -421,7 +421,7 @@ impl ProductionEventDeliveryDriver {
         let parent_request_id = format!("event-delivery-parent-{doc}");
         let parent_session_id = format!("event-delivery-session-{doc}");
         let child_request_id = format!("event-delivery-child-{doc}");
-        create_request(
+        let parent_request_doc_id = create_request(
             self.db.node.as_ref(),
             &parent_request_id,
             &parent_session_id,
@@ -430,6 +430,7 @@ impl ProductionEventDeliveryDriver {
         )
         .await;
         let parent_request_id = escape_graphql_string(&parent_request_id);
+        let parent_request_doc_id = escape_graphql_string(&parent_request_doc_id);
         let parent_session_id = escape_graphql_string(&parent_session_id);
         let child_request_id = escape_graphql_string(&child_request_id);
         let args = escape_graphql_string(
@@ -446,6 +447,7 @@ impl ProductionEventDeliveryDriver {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{parent_request_id}",
+                    request_doc_id: "{parent_request_doc_id}",
                     session_id: "{parent_session_id}",
                     message_sequence: 1,
                     tool_name: "spawn_subagent",

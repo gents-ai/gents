@@ -337,6 +337,16 @@ async fn write_agent_request(
 ) -> Result<()> {
     ensure_behavior(node, behavior_id, agent_did).await?;
 
+    let (parent_request_doc_id, parent_tool_call_doc_id) =
+        match (parent_request_id, parent_tool_call_id) {
+            (Some(parent_request_id), Some(parent_tool_call_id)) => (
+                Some(load_request(node, parent_request_id).await?.doc_id),
+                Some(load_tool_call_doc_id(node, parent_request_id, parent_tool_call_id).await?),
+            ),
+            (None, None) => (None, None),
+            _ => bail!("R5 request fixture must provide both parent linkage IDs or neither"),
+        };
+
     let request_id = escape_graphql_string(request_id);
     let agent_did = escape_graphql_string(agent_did);
     let behavior_id = escape_graphql_string(behavior_id);
@@ -345,19 +355,24 @@ async fn write_agent_request(
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
     let parent_request_field = parent_request_id
-        .map(|value| {
+        .zip(parent_request_doc_id.as_deref())
+        .map(|(value, doc_id)| {
             format!(
-                r#", caused_by_parent_request_id: "{}""#,
-                escape_graphql_string(value)
+                r#", caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}""#,
+                escape_graphql_string(value),
+                escape_graphql_string(doc_id),
             )
         })
         .unwrap_or_default();
     let parent_tool_field = parent_tool_call_id
-        .map(|value| {
+        .zip(parent_tool_call_doc_id.as_deref())
+        .map(|(value, doc_id)| {
             let value = escape_graphql_string(value);
-            format!(r#", caused_by_parent_tool_call_id: "{value}", caused_by_trigger_id: "{value}", caused_by_trigger_kind: "subagent""#)
+            let doc_id = escape_graphql_string(doc_id);
+            format!(r#", caused_by_parent_tool_call_id: "{value}", caused_by_parent_tool_call_doc_id: "{doc_id}", caused_by_trigger_id: "{value}", caused_by_trigger_kind: "subagent""#)
         })
         .unwrap_or_default();
+    let subagent_depth = u8::from(parent_request_id.is_some());
     let mutation = format!(
         r#"mutation {{
             upsert_AgentRequest(
@@ -381,7 +396,7 @@ async fn write_agent_request(
                     deadline: "{deadline}",
                     retry_count: 0,
                     max_retries: 3,
-                    subagent_depth: 0
+                    subagent_depth: {subagent_depth}
                     {parent_request_field}
                     {parent_tool_field}
                 }},
@@ -407,21 +422,15 @@ async fn write_parent_tool_call(
     behavior_id: &str,
     unclaimed_deadline_at: Option<&str>,
 ) -> Result<()> {
-    let agent_did = load_request(node, parent_request_id)
-        .await
-        .map(|row| row.agent_did)
-        .unwrap_or_else(|_| {
-            if node.id == "A" {
-                NODE_A_DID.to_string()
-            } else {
-                NODE_B_DID.to_string()
-            }
-        });
+    let parent_request = load_request(node, parent_request_id).await?;
+    let agent_did = parent_request.agent_did;
+    let request_doc_id = parent_request.doc_id;
     let session_id_raw = format!("{parent_request_id}-session");
     let parent_request_id = escape_graphql_string(parent_request_id);
     let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let child_request_id = escape_graphql_string(child_request_id);
     let agent_did = escape_graphql_string(&agent_did);
+    let request_doc_id = escape_graphql_string(&request_doc_id);
     let session_id = escape_graphql_string(&session_id_raw);
     let args = escape_graphql_string(
         &json!({
@@ -448,6 +457,7 @@ async fn write_parent_tool_call(
                 add: {{
                     tool_call_key: "{session_id}:{parent_tool_call_id}",
                     request_id: "{parent_request_id}",
+                    request_doc_id: "{request_doc_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
                     message_sequence: 1,
@@ -466,6 +476,7 @@ async fn write_parent_tool_call(
                 }},
                 update: {{
                     lifecycle_state: "running",
+                    request_doc_id: "{request_doc_id}",
                     await_mode: "background",
                     cancel_policy: "cascade",
                     child_request_id: "{child_request_id}"
@@ -571,6 +582,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
     let tool_call_id = str_field(row, "tool_call_id")?;
     let tool_call_key = str_field(row, "tool_call_key")?;
     let request_id = str_field(row, "request_id")?;
+    let request_doc_id = load_request(node, request_id).await?.doc_id;
     let agent_did = opt_str_field(row, "agent_did").unwrap_or(if node.id == "B" {
         NODE_B_DID
     } else {
@@ -594,6 +606,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
                 add: {{
                     tool_call_key: "{}",
                     request_id: "{}",
+                    request_doc_id: "{}",
                     session_id: "{}",
                     agent_did: "{}",
                     message_sequence: {},
@@ -612,6 +625,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
                 }},
                 update: {{
                     result: "{result}",
+                    request_doc_id: "{}",
                     status: "{}",
                     lifecycle_state: "{}",
                     started_at: "{started_at}",
@@ -626,6 +640,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
         escape_graphql_string(tool_call_key),
         escape_graphql_string(tool_call_key),
         escape_graphql_string(request_id),
+        escape_graphql_string(&request_doc_id),
         escape_graphql_string(session_id),
         escape_graphql_string(agent_did),
         row.get("message_sequence")
@@ -637,6 +652,7 @@ async fn import_tool_call(node: &HarnessNode, row: &serde_json::Value) -> Result
         opt_str_field(row, "lifecycle_state").unwrap_or("running"),
         opt_str_field(row, "await_mode").unwrap_or("background"),
         opt_str_field(row, "cancel_policy").unwrap_or("cascade"),
+        escape_graphql_string(&request_doc_id),
         opt_str_field(row, "status").unwrap_or("called"),
         opt_str_field(row, "lifecycle_state").unwrap_or("running"),
         opt_str_field(row, "await_mode").unwrap_or("background"),
@@ -1042,6 +1058,8 @@ async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> 
 
 #[derive(Deserialize)]
 struct RequestRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     request_id: String,
     agent_did: String,
     behavior_id: String,
@@ -1069,13 +1087,47 @@ async fn load_request_optional(node: &HarnessNode, request_id: &str) -> Result<O
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                request_id agent_did behavior_id session_id lifecycle_state interrupt_requested_at
+                _docID request_id agent_did behavior_id session_id lifecycle_state interrupt_requested_at
             }}
         }}"#,
         escape_graphql_string(request_id)
     );
     let response = node.db.node.execute(&query).await;
     Ok(first_optional_row(&response, "AgentRequest"))
+}
+
+#[derive(Deserialize)]
+struct ToolCallDocRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+}
+
+async fn load_tool_call_doc_id(
+    node: &HarnessNode,
+    parent_request_id: &str,
+    parent_tool_call_id: &str,
+) -> Result<String> {
+    let query = format!(
+        r#"{{
+            AgentToolCall(
+                filter: {{
+                    request_id: {{ _eq: "{}" }},
+                    tool_call_id: {{ _eq: "{}" }}
+                }},
+                limit: 1
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(parent_request_id),
+        escape_graphql_string(parent_tool_call_id),
+    );
+    let response = node.db.node.execute(&query).await;
+    first_optional_row::<ToolCallDocRow>(&response, "AgentToolCall")
+        .map(|row| row.doc_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "parent AgentToolCall {parent_tool_call_id} for {parent_request_id} not found"
+            )
+        })
 }
 
 async fn set_child_interrupt(node: &HarnessNode, request_id: &str, when: &str) -> Result<()> {

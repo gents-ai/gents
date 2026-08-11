@@ -10,6 +10,27 @@ use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
 #[tokio::test]
+async fn document_constructor_rejects_node_without_signing_did_before_migrations() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let identity = Arc::new(test_identity("document-constructor-unsigned-node"));
+
+    let error = match Gents::from_default_behavior_documents(
+        node,
+        identity,
+        DocumentRuntimeOptions::default(),
+    )
+    .await
+    {
+        Ok(_) => panic!("document constructor should reject an unsigned node"),
+        Err(error) => error,
+    };
+
+    assert!(error
+        .to_string()
+        .contains("EmbeddedNode configured with a node signing DID"));
+}
+
+#[tokio::test]
 async fn from_default_behavior_documents_marks_unbound_default_behavior_unavailable() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

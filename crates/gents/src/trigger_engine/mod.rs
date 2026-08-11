@@ -93,6 +93,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         task: &crate::runtime_snapshot::ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        source_doc_id: Option<&str>,
         rendered_prompt: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
@@ -364,12 +365,24 @@ impl TriggerEngine {
     }
 
     async fn materialize_after_lock(&self, intent: FireIntent, rendered: String) -> FireResult {
+        let source_doc_id = if matches!(intent.trigger_kind, TriggerKind::Event) {
+            intent
+                .event_vars
+                .get("source_doc_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        } else {
+            None
+        };
         let request_id = match self
             .materializer
             .materialize(
                 &intent.task,
                 intent.trigger_id.as_deref(),
                 intent.trigger_kind,
+                source_doc_id.as_deref(),
                 &rendered,
             )
             .await
@@ -403,6 +416,7 @@ pub async fn run_subagent_source_for_test(
             _task: &crate::runtime_snapshot::ResolvedTask,
             _trigger_id: Option<&str>,
             _trigger_kind: TriggerKind,
+            _source_doc_id: Option<&str>,
             _rendered_prompt: &str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>
         {

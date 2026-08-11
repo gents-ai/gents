@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, watcher::AgentRequest};
+use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -30,6 +30,7 @@ pub const DEADLINE_SECS: u64 = 300;
 pub struct TestDb {
     pub node: Arc<EmbeddedNode>,
     pub process_generation: u64,
+    node_identity_did: String,
     tempdir: TempDir,
 }
 
@@ -71,6 +72,7 @@ impl TestDb {
 
         let reopened = EmbeddedNode::builder()
             .data_path(&data_path)
+            .with_node_identity_did(&self.node_identity_did)
             .build()
             .await
             .map_err(|e| {
@@ -95,9 +97,13 @@ pub async fn test_db(name: &str) -> TestDb {
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .build()
             .await
             .expect("embedded node"),
@@ -108,6 +114,7 @@ pub async fn test_db(name: &str) -> TestDb {
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }
@@ -146,9 +153,13 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .build()
             .await
             .expect("embedded node"),
@@ -169,6 +180,7 @@ pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }
@@ -300,9 +312,13 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
+    let node_identity =
+        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity");
+    let node_identity_did = node_identity.did().to_string();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(tempdir.path())
+            .with_node_identity_did(&node_identity_did)
             .with_p2p(P2PConfig {
                 port: 0,
                 bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
@@ -328,6 +344,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
     TestDb {
         node,
         process_generation: 0,
+        node_identity_did,
         tempdir,
     }
 }
@@ -389,6 +406,41 @@ pub async fn create_request(
     );
     let resp = node.execute(&query).await;
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
+}
+
+/// Resolve a logical request id only at test setup boundaries, rejecting
+/// ambiguous fixtures instead of silently selecting an arbitrary document.
+pub async fn exact_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String {
+    let request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+                limit: 2
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "exact request document lookup failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("AgentRequest rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "request id must resolve to exactly one document"
+    );
+    rows[0]["_docID"]
+        .as_str()
+        .expect("AgentRequest _docID")
+        .to_string()
 }
 
 pub async fn create_retry_request(
@@ -644,7 +696,9 @@ pub fn build_request(
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 
@@ -832,6 +886,8 @@ pub async fn create_compaction_entry(
     messages_compacted: u32,
     created_at: &str,
 ) {
+    let request_id = escape_graphql_string(&format!("{session_id}:request:{sequence}"));
+    let request_doc_id = escape_graphql_string(&format!("request-doc:{session_id}:{sequence}"));
     let session_id_escaped = escape_graphql_string(session_id);
     let summary_escaped = escape_graphql_string(summary);
     let created_at_escaped = escape_graphql_string(created_at);
@@ -841,6 +897,8 @@ pub async fn create_compaction_entry(
             create_CompactionEntry(input: {{
                 compaction_key: "{compaction_key}",
                 session_id: "{session_id_escaped}",
+                request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 sequence: {sequence},
                 summary: "{summary_escaped}",
                 files_read: "[]",

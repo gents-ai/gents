@@ -39,6 +39,7 @@ pub struct SubagentSource {
     cancel: CancellationToken,
     collection_id_to_name: HashMap<String, String>,
     processed_tool_calls: HashSet<String>,
+    warned_incoherent_tool_calls: HashSet<String>,
     rescan_tick: tokio::time::Interval,
 }
 
@@ -50,6 +51,8 @@ struct ToolCallRow {
     tool_call_key: Option<String>,
     #[serde(default)]
     request_id: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
     #[serde(default)]
     agent_did: Option<String>,
     tool_call_id: String,
@@ -90,6 +93,7 @@ impl ToolCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestRow {
+    request_id: String,
     agent_did: String,
     #[serde(default)]
     subagent_depth: Option<i64>,
@@ -172,6 +176,7 @@ impl SubagentSource {
             cancel,
             collection_id_to_name: HashMap::new(),
             processed_tool_calls: HashSet::new(),
+            warned_incoherent_tool_calls: HashSet::new(),
             rescan_tick: subagent_source_rescan_tick(SUBAGENT_SOURCE_RESCAN_INTERVAL),
         }
     }
@@ -237,6 +242,7 @@ impl SubagentSource {
                     _docID
                     tool_call_key
                     request_id
+                    request_doc_id
                     agent_did
                     tool_call_id
                     tool_name
@@ -269,15 +275,16 @@ impl SubagentSource {
 
     async fn load_parent_request(
         &self,
-        request_id: &str,
+        request_doc_id: &str,
     ) -> anyhow::Result<Option<ParentRequestRow>> {
-        let escaped_request_id = escape_graphql_string(request_id);
+        let escaped_request_doc_id = escape_graphql_string(request_doc_id);
         let query = format!(
             r#"{{
                 AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{
+                    request_id
                     agent_did
                     subagent_depth
                 }}
@@ -301,13 +308,13 @@ impl SubagentSource {
 
     async fn load_parent_terminal(
         &self,
-        request_id: &str,
+        request_doc_id: &str,
     ) -> anyhow::Result<Option<ParentTerminalRow>> {
-        let escaped_request_id = escape_graphql_string(request_id);
+        let escaped_request_doc_id = escape_graphql_string(request_doc_id);
         let query = format!(
             r#"{{
                 AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                    filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{
                     status
@@ -465,6 +472,55 @@ impl SubagentSource {
             Some(value) => value.to_string(),
             None => return Ok(None),
         };
+        let parent_request_doc_id = match non_empty(row.request_doc_id.as_deref()) {
+            Some(value) => value.to_string(),
+            None => match crate::request_binding::resolve_request_doc_id(
+                self.node.as_ref(),
+                &parent_request_id,
+            )
+            .await
+            {
+                Ok(Some(doc_id)) => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        parent_request_id = %parent_request_id,
+                        parent_request_doc_id = %doc_id,
+                        tool_call_id = %row.tool_call_id,
+                        "subagent source recovered legacy logical-only request binding",
+                    );
+                    doc_id
+                }
+                Ok(None) => {
+                    if self
+                        .warned_incoherent_tool_calls
+                        .insert(processed_key.clone())
+                    {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            parent_request_id = %parent_request_id,
+                            tool_call_id = %row.tool_call_id,
+                            "subagent source quarantined AgentToolCall whose parent request is not visible",
+                        );
+                    }
+                    return Ok(None);
+                }
+                Err(error) => {
+                    if self
+                        .warned_incoherent_tool_calls
+                        .insert(processed_key.clone())
+                    {
+                        tracing::warn!(
+                            doc_id = %row.doc_id,
+                            parent_request_id = %parent_request_id,
+                            tool_call_id = %row.tool_call_id,
+                            %error,
+                            "subagent source could not resolve legacy logical-only request binding",
+                        );
+                    }
+                    return Ok(None);
+                }
+            },
+        };
         let parent_tool_call_id = match non_empty(Some(&row.tool_call_id)) {
             Some(value) => value.to_string(),
             None => return Ok(None),
@@ -503,7 +559,13 @@ impl SubagentSource {
             .and_then(AwaitMode::from_persisted)
             .unwrap_or(AwaitMode::Foreground);
 
-        let parent = self.load_parent_request(&parent_request_id).await?;
+        let parent = self.load_parent_request(&parent_request_doc_id).await?;
+        if parent
+            .as_ref()
+            .is_some_and(|parent| parent.request_id != parent_request_id)
+        {
+            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+        }
         let snapshot = self.snapshot_rx.borrow().clone();
         // SECURITY (#377): under the current replication-trust posture this
         // self-declared bridge DID is trusted once it names a configured paired
@@ -714,7 +776,9 @@ impl SubagentSource {
                 &self.node,
                 child_request_id.clone(),
                 parent_request_id.clone(),
+                parent_request_doc_id.clone(),
                 parent_tool_call_id.clone(),
+                row.doc_id.clone(),
                 parent_depth,
                 child_agent_did,
                 spawn_args.behavior_id.clone(),
@@ -728,7 +792,9 @@ impl SubagentSource {
                 &self.node,
                 child_request_id.clone(),
                 parent_request_id.clone(),
+                parent_request_doc_id.clone(),
                 parent_tool_call_id.clone(),
+                row.doc_id.clone(),
                 parent_depth,
                 child_agent_did,
                 spawn_args.behavior_id.clone(),
@@ -796,7 +862,7 @@ impl SubagentSource {
                 false
             };
             let parent_cancel_worthy_terminal = if parent.is_some() {
-                match self.load_parent_terminal(&parent_request_id).await {
+                match self.load_parent_terminal(&parent_request_doc_id).await {
                     Ok(Some(row)) => parent_reached_cancel_worthy_terminal(&row),
                     Ok(None) => true,
                     Err(error) => {

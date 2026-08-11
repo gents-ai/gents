@@ -336,7 +336,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
         gents_protocol::schemas::INFERENCE_CALL,
-        "bafyreiba6ptexjit4udtq2xfcxyre4ph2zezyexn5vg2nycnzaefpexaju"
+        "bafyreidz4yn2zxshvpjekf42uotxd3wnrurzldnt2t4ldlnomi2gibtipm"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_CONVERSATION_NAME,
@@ -346,17 +346,17 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreidm25txacrwuypexjpvvxqyekewsw352ftqjohsf267cvlsklxu4y"
+        "bafyreigk6dk2fv33a2cguirrafuxaghlcs5ucwoqpxokfckcn5km5wlf3a"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
         gents_protocol::schemas::AGENT_RESPONSE,
-        "bafyreihihn632s6qtxj62hgcjgc2l2qy5ebim3ehmwbtbejc7ey7ux4qzi"
+        "bafyreigr4eflydkzsigq7m2dzpdd7yy3ny5zwdwicefyzntjrsfiptua2u"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
         gents_protocol::schemas::AGENT_TOOL_RESULT,
-        "bafyreibyv44zzio5tdatrh2bxp35i6jrdli5zpszxdtysovqnd5smesxku"
+        "bafyreihsejgpwhha27y2sdaigigxdqv6tvqr6h7latzmlpns2qusqzck34"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
@@ -371,27 +371,27 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
-        "bafyreiemjtuletwxi5p2jvgplanfyzne6pu7a3knkn4n4dbx6kmgxytfre"
+        "bafyreig7x5jbsj5mlpd2k2whc2v6d4tbwnwik6l3nvu67oiwb2vc4x2wru"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreihjkmrocfh7zk5wl5hloawnerbalu6d5e7ovx5kod4kcb7yopbsui"
+        "bafyreicok6ibr6xcnu4c25wec4pp4ed2h6d4onb7lmsm5m337ijua6e4fa"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,
         gents_protocol::schemas::AGENT_TOOL_APPROVAL,
-        "bafyreic6razxeyhpi4re5nshdxtih63in7ostxn2uoqdoet2k7yl4a54cm"
+        "bafyreibtmy2oaf5j5gxlugjofklqdrw6et2vuf3h2wnybhl3cyb6kx3fd4"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
         gents_protocol::schemas::COMPACTION_ENTRY,
-        "bafyreiczxjv6ah2blpjdz7jxtwzue4rvjzwkefuds4gukibexhddam4j5y"
+        "bafyreihhmopyxndufk2fktp6ctbietqgv4jas76hdlrmvvdzabxyo7affi"
     ),
     baseline_entry!(
         gents_protocol::schemas::RENDERED_REQUEST_NAME,
         gents_protocol::schemas::RENDERED_REQUEST,
-        "bafyreidvnuaxv3up5nyrjpjq75tqbjagbd2slczmqu53vudojewrsl5ofu"
+        "bafyreicderii4drvuggodfzo24q5ergcponrix4u6zv6qfo75uvescmwh4"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,

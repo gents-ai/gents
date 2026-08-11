@@ -18,24 +18,15 @@
 //!
 //! ## Identity
 //!
-//! Writes go through `EmbeddedNode::execute_request_with_retry` with the
-//! agent's DID attached to the `QueryRequest`, not through the identity-less
-//! `EmbeddedNode::execute`. Today that identity is **inert**: `QueryRequest`'s
-//! identity is an ACP-check input, `RenderedRequest` carries no `@policy`, so
-//! every ACP branch is skipped and no ownership record is written. The row is
-//! attributable only via its `agent_did` column — a self-report by the same
-//! process that wrote the row, which proves nothing to an auditor. The DID is
-//! attached now so owner registration works unchanged once a policy can be
-//! installed (blocked on defradb.rs#1318). A DID that does not parse degrades to an
-//! anonymous write with a warning rather than failing the request: refusing to
-//! capture would refuse the provider call, and a malformed principal is a
-//! configuration defect, not a reason to take the agent offline.
+//! Reads and writes use the node identity installed on `EmbeddedNode`. DefraDB
+//! therefore signs the commit at the same boundary used by every other runtime
+//! write. The `agent_did` column remains application data; it is not treated as
+//! proof of authorship.
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest, QueryResponse};
-use identity::Did;
+use defra_node::EmbeddedNode;
 use serde_json::Value;
 
 use super::{
@@ -48,52 +39,17 @@ use crate::graphql::escape_graphql_string;
 #[derive(Clone)]
 pub struct DefraRenderedRequestSink {
     node: Arc<EmbeddedNode>,
-    identity: Option<Did>,
 }
 
 impl std::fmt::Debug for DefraRenderedRequestSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DefraRenderedRequestSink")
-            .field(
-                "identity",
-                &self.identity.as_ref().map(|did| did.as_str().to_string()),
-            )
-            .finish()
+        f.debug_struct("DefraRenderedRequestSink").finish()
     }
 }
 
 impl DefraRenderedRequestSink {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: &str) -> Self {
-        let identity = match Did::new(agent_did) {
-            Ok(did) => Some(did),
-            Err(error) => {
-                tracing::warn!(
-                    agent_did = %agent_did,
-                    error = %error,
-                    "rendered-request captures will be written anonymously: agent DID is not a did:key"
-                );
-                None
-            }
-        };
-        Self { node, identity }
-    }
-
-    async fn execute(&self, graphql: &str, operation: &str, warn_on_error: bool) -> QueryResponse {
-        let response = self
-            .node
-            .execute_request_with_retry(
-                QueryRequest::new(graphql).with_identity(self.identity.clone()),
-                ExecuteRetryPolicy::default(),
-            )
-            .await;
-        if warn_on_error && response.has_errors() {
-            tracing::warn!(
-                operation = %operation,
-                errors = ?response.errors,
-                "rendered-request capture statement failed"
-            );
-        }
-        response
+    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+        Self { node }
     }
 
     /// The immutable capture fact already stored under `capture_key`, if any.
@@ -106,6 +62,7 @@ impl DefraRenderedRequestSink {
             r#"query {{
                 {collection}(filter: {{ capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
                     request_doc_id
+                    request_commit_cid
                     request_id
                     session_id
                     agent_did
@@ -118,21 +75,18 @@ impl DefraRenderedRequestSink {
                     model_name
                     source
                     request_json
-                    prompt_hash
-                    tools_hash
                     provenance_json
                 }}
             }}"#,
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(capture_key),
         );
-        let response = self.execute(&query, "rendered_request::lookup", true).await;
-        if response.has_errors() {
-            return Err(anyhow!(
-                "reading RenderedRequest by capture key failed: {:?}",
-                response.errors
-            ));
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "rendered_request::lookup",
+        )
+        .await?;
         let data = response
             .data
             .ok_or_else(|| anyhow!("reading RenderedRequest by capture key returned no data"))?;
@@ -159,6 +113,12 @@ impl DefraRenderedRequestSink {
         request_json: &str,
         provenance_json: &str,
     ) -> Result<()> {
+        if !rendered.request_doc_id.is_empty() && rendered.request_commit_cid.is_empty() {
+            anyhow::bail!(
+                "AgentRequest {} capture has no claimed DefraDB commit CID",
+                rendered.request_doc_id
+            );
+        }
         let source = serde_json::to_value(rendered.source)
             .ok()
             .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -168,6 +128,7 @@ impl DefraRenderedRequestSink {
                 create_{collection}(input: {{
                     capture_key: "{capture_key}",
                     request_doc_id: "{request_doc_id}",
+                    request_commit_cid: "{request_commit_cid}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
@@ -180,8 +141,6 @@ impl DefraRenderedRequestSink {
                     model_name: "{model_name}",
                     source: "{source}",
                     request_json: "{request_json}",
-                    prompt_hash: "{prompt_hash}",
-                    tools_hash: "{tools_hash}",
                     provenance_json: "{provenance_json}",
                     created_at: "{created_at}"
                 }}) {{ _docID }}
@@ -189,6 +148,7 @@ impl DefraRenderedRequestSink {
             collection = RENDERED_REQUEST_COLLECTION,
             capture_key = escape_graphql_string(&rendered.capture_key),
             request_doc_id = escape_graphql_string(&rendered.request_doc_id),
+            request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
             agent_did = escape_graphql_string(&rendered.agent_did),
@@ -201,8 +161,6 @@ impl DefraRenderedRequestSink {
             model_name = escape_graphql_string(&rendered.model_name),
             source = escape_graphql_string(&source),
             request_json = escape_graphql_string(request_json),
-            prompt_hash = escape_graphql_string(&rendered.prompt_hash),
-            tools_hash = escape_graphql_string(&rendered.tools_hash),
             provenance_json = escape_graphql_string(provenance_json),
             created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
         );
@@ -210,15 +168,12 @@ impl DefraRenderedRequestSink {
         // A duplicate-key error is an expected input to reconciliation, so the
         // create itself does not warn. A genuine failure is logged by the
         // transport after the re-read below cannot establish idempotency.
-        let response = self
-            .execute(&mutation, "rendered_request::create", false)
-            .await;
-        if response.has_errors() {
-            return Err(anyhow!(
-                "creating RenderedRequest failed: {:?}",
-                response.errors
-            ));
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "rendered_request::create",
+        )
+        .await?;
         // A mutation that returns no document wrote nothing, and "no errors" is
         // not the same as "durable". The field lookup is explicit rather than
         // handing the whole `data` object to `response_has_documents`, which
@@ -327,13 +282,15 @@ impl DefraRenderedRequestSink {
 }
 
 /// Canonical equality surface for idempotency. `created_at` is intentionally
-/// excluded: it records when the winning writer created the row, while every
-/// other immutable column is part of the fact a later projection will trust.
+/// excluded because it records when the winning writer created the row. The
+/// request commit CID is included: a retry may not rebind the same provider
+/// attempt to a different source version.
 fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value> {
     let source =
         serde_json::to_value(rendered.source).context("encoding rendered-request source")?;
     Ok(canonical_json(&serde_json::json!({
         "request_doc_id": rendered.request_doc_id,
+        "request_commit_cid": rendered.request_commit_cid,
         "request_id": rendered.request_id,
         "session_id": rendered.session_id,
         "agent_did": rendered.agent_did,
@@ -346,8 +303,6 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         "model_name": rendered.model_name,
         "source": source,
         "request_json": canonical_json(&rendered.request_json),
-        "prompt_hash": rendered.prompt_hash,
-        "tools_hash": rendered.tools_hash,
         "provenance_json": canonical_json(&rendered.provenance_json),
     })))
 }
@@ -383,12 +338,12 @@ fn single_mutation_result(data: &Value) -> Option<&Value> {
 }
 
 /// The production capture factory: one sink per request context, all writing
-/// through the same node under the requesting agent's DID.
+/// through the same identity-configured node.
 pub(crate) fn defra_rendered_request_capture_factory(
     node: Arc<EmbeddedNode>,
 ) -> RenderedRequestCaptureFactory {
-    Arc::new(move |context: RenderedRequestContext| {
-        let sink = DefraRenderedRequestSink::new(Arc::clone(&node), &context.agent_did);
+    Arc::new(move |_context: RenderedRequestContext| {
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         let sink: RenderedRequestCaptureSink = Arc::new(move |rendered| {
             let sink = sink.clone();
             Box::pin(async move { sink.capture(rendered).await })

@@ -1,4 +1,4 @@
-type ToolSelection {
+type ToolSelection @branchable {
     selection_id: String @index(unique: true)
     agent_did: String @index
     display_name: String

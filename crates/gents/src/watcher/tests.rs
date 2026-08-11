@@ -52,7 +52,57 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
                 .to_string(),
         ),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
+fn validate_accepts_background_completion_lineage_without_tool_call_link() {
+    let req = AgentRequest {
+        subagent_depth: 1,
+        metadata: Some(
+            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"child-1"},"background_completion_wake_version":1}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
+fn validate_accepts_depth_zero_background_completion_control_lineage() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        metadata: Some(
+            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"goal-1"},"background_completion_wake_version":1}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("goal-parent-1".to_string()),
+        caused_by_parent_request_doc_id: Some("goal-parent-doc-1".to_string()),
+        caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_ok());
+}
+
+#[test]
+fn validate_accepts_depth_zero_steering_control_lineage() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        metadata: Some(
+            r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_ok());
@@ -74,7 +124,24 @@ fn validate_rejects_subagent_depth_zero_with_parent_fields() {
     let req = AgentRequest {
         subagent_depth: 0,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
+        ..base_request()
+    };
+    assert!(validate_agent_request_subagent_coherence(&req).is_err());
+}
+
+#[test]
+fn validate_rejects_logical_parent_without_physical_parent() {
+    let req = AgentRequest {
+        subagent_depth: 0,
+        metadata: Some(
+            r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":null}}"#
+                .to_string(),
+        ),
+        caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: None,
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_err());
@@ -85,7 +152,9 @@ fn validate_accepts_top_level_request() {
     let req = AgentRequest {
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_ok());
@@ -96,7 +165,9 @@ fn validate_accepts_subagent_request() {
     let req = AgentRequest {
         subagent_depth: 1,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
+        caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
+        caused_by_parent_tool_call_doc_id: Some("parent-tc-doc-1".to_string()),
         ..base_request()
     };
     assert!(validate_agent_request_subagent_coherence(&req).is_ok());
@@ -122,7 +193,9 @@ fn agent_request_clone() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
     let cloned = req.clone();
     assert_eq!(cloned.doc_id, "abc");
@@ -186,7 +259,9 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 
@@ -348,6 +423,24 @@ async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id:
     );
 }
 
+async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
+    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                input: {{ status: "processing", lifecycle_state: "processing" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "update AgentRequest processing failed: {:?}",
+        response.errors
+    );
+}
+
 async fn set_request_interrupt_requested_at(
     node: &defra_node::EmbeddedNode,
     doc_id: &str,
@@ -420,6 +513,8 @@ async fn request_terminal_fields(
                 status
                 lifecycle_state
                 failure_reason
+                terminalized_at
+                terminal_redrive_attempts
             }}
         }}"#
     );
@@ -585,24 +680,69 @@ async fn next_request_ignores_legacy_completion_wake_without_mutating_it() {
 }
 
 #[tokio::test]
-async fn pending_requests_rejects_incoherent_subagent_linkage() {
+async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let agent_did = "did:key:z-watcher-coherence-pending";
     insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-pending").await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-valid-pending",
+        "sess-incoherent",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
 
     let watcher = DefraWatcher::new(node.clone(), agent_did);
-    let result = watcher.pending_requests().await;
-    assert!(
-        result.is_err(),
-        "pending_requests must fail for incoherent subagent linkage, got: {:?}",
-        result
+    let pending = watcher.pending_requests().await.unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["req-valid-pending"],
+        "an incoherent row must not poison or queue-block coherent work"
     );
+    let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-pending").await;
+    assert_eq!(terminal["status"], "error");
+    assert_eq!(terminal["lifecycle_state"], "failed");
+    assert!(terminal["terminalized_at"].is_string());
+    assert_eq!(terminal["terminal_redrive_attempts"], 0);
+    assert!(terminal["failure_reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("incoherent durable lineage")));
 }
 
 #[tokio::test]
-async fn try_fetch_request_rejects_incoherent_subagent_linkage() {
+async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
+    let node = test_node().await;
+    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let agent_did = "did:key:z-watcher-coherence-active";
+    let incoherent_doc_id =
+        insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-active").await;
+    set_request_processing(node.as_ref(), &incoherent_doc_id).await;
+    insert_agent_request_row(
+        node.as_ref(),
+        agent_did,
+        "req-valid-pending",
+        "sess-incoherent",
+        "pending",
+        "pending",
+        "2026-03-12T00:00:01Z",
+    )
+    .await;
+
+    let watcher = DefraWatcher::new(node, agent_did);
+    assert!(watcher.pending_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
@@ -611,10 +751,11 @@ async fn try_fetch_request_rejects_incoherent_subagent_linkage() {
         insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-fetch").await;
 
     let watcher = DefraWatcher::new(node.clone(), agent_did);
-    let result = watcher.try_fetch_request(&doc_id).await;
-    assert!(
-        result.is_err(),
-        "try_fetch_request must fail for incoherent subagent linkage, got: {:?}",
-        result
-    );
+    let result = watcher.try_fetch_request(&doc_id).await.unwrap();
+    assert!(result.is_none());
+    let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-fetch").await;
+    assert_eq!(terminal["status"], "error");
+    assert_eq!(terminal["lifecycle_state"], "failed");
+    assert!(terminal["terminalized_at"].is_string());
+    assert_eq!(terminal["terminal_redrive_attempts"], 0);
 }

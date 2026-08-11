@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::llm::message::Message;
 use anyhow::Result;
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
@@ -38,8 +38,8 @@ pub use history::load_history;
 #[allow(unused_imports)]
 pub(crate) use history::{
     append_message_once_with_key_and_requester_did, append_message_with_requester_did,
-    mark_response_materialized, message_sequence_for_request_content, save_message,
-    save_message_with_requester_did,
+    create_message_mutation, mark_response_materialized, message_sequence_for_request_content,
+    save_message, save_message_with_requester_did,
 };
 pub(crate) use query::{
     load_session_behavior_id, session_has_live_response, session_has_other_live_response,
@@ -62,6 +62,14 @@ pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String 
         .map(str::trim)
         .filter(|did| !did.is_empty())
         .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_default()
+}
+
+pub(crate) fn request_doc_id_create_field(request_doc_id: Option<&str>) -> String {
+    request_doc_id
+        .map(str::trim)
+        .filter(|doc_id| !doc_id.is_empty())
+        .map(|doc_id| format!(r#"request_doc_id: "{}","#, escape_graphql_string(doc_id)))
         .unwrap_or_default()
 }
 

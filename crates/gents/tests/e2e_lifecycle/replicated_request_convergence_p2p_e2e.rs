@@ -511,7 +511,6 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let failed_before = baseline["push_backlog"]["failed_total"]
         .as_u64()
         .expect("failed_total counter");
-
     let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
         .await
         .expect("terminal redrive wave");

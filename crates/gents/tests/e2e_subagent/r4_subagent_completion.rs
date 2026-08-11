@@ -43,6 +43,8 @@ struct MessageRow {
     sequence: u32,
     role: String,
     content: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -183,20 +185,8 @@ async fn create_child_and_bridge(
     message_sequence: u32,
 ) -> (String, String) {
     let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
-    create_subagent_request_with_request_id(
-        node.as_ref(),
-        child_request_id.clone(),
-        parent_request_id.to_string(),
-        tool_call_id.to_string(),
-        0,
-        AGENT_DID.to_string(),
-        CHILD_BEHAVIOR_ID.to_string(),
-        format!("prompt for {tool_call_id}"),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .unwrap();
-    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(node.as_ref(), parent_request_id).await;
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         node.clone(),
@@ -217,8 +207,27 @@ async fn create_child_and_bridge(
         CancelPolicy::Cascade,
         child_request_id.clone(),
         AGENT_DID.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    let parent_tool_call_doc_id = lifecycle.doc_id().expect("bridge document id").to_string();
+
+    create_subagent_request_with_request_id(
+        node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.to_string(),
+        parent_request_doc_id,
+        tool_call_id.to_string(),
+        parent_tool_call_doc_id,
+        0,
+        AGENT_DID.to_string(),
+        CHILD_BEHAVIOR_ID.to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .unwrap();
+    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
 
     (child_request_id, child_session_id)
 }
@@ -508,7 +517,7 @@ async fn fetch_parent_messages(node: &EmbeddedNode, session_id: &str) -> Vec<Mes
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role content }}
+            ) {{ sequence role content request_id request_doc_id }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -536,6 +545,7 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<ser
                 }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 content
                 status
@@ -791,6 +801,16 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert!(messages[1].content.contains("child_request_id"));
     assert_eq!(messages[2].sequence, 3);
     assert!(messages[2].content.contains("<subagent-notification"));
+    let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(
+        messages[2].request_id.as_deref(),
+        wakes[0]["request_id"].as_str()
+    );
+    assert_eq!(
+        messages[2].request_doc_id.as_deref(),
+        wakes[0]["_docID"].as_str()
+    );
 }
 
 #[tokio::test]

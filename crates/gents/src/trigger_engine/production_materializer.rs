@@ -116,6 +116,7 @@ impl MaterializerHandle for ProductionMaterializer {
         task: &ResolvedTask,
         trigger_id: Option<&str>,
         trigger_kind: TriggerKind,
+        source_doc_id: Option<&str>,
         rendered_prompt: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
         if matches!(trigger_kind, TriggerKind::Manual) && trigger_id.is_some() {
@@ -132,6 +133,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let task_label = task.display_label().to_string();
         let rendered_prompt = rendered_prompt.to_string();
         let trigger_id = trigger_id.map(str::to_owned);
+        let source_doc_id = source_doc_id.map(str::to_owned);
         let trigger_kind_str = trigger_kind.as_str().to_owned();
 
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
@@ -141,6 +143,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),
+                source_doc_id,
             };
             let conversation_title = task_run_conversation_title(&task_label);
             let enqueued = write_pending_agent_request_with_lineage_and_conversation_title(

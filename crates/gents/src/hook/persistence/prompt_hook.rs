@@ -308,6 +308,7 @@ impl DefraSessionHook {
         let result: anyhow::Result<()> = async {
             let (session_id, request_id, deadline_at, seq) =
                 self.ensure_assistant_turn_sequence().await?;
+            let request_doc_id = self.active_request_doc_id_or_reload(&request_id).await?;
             self.state.lock().await.register_tool_result_identity(
                 internal_call_id,
                 None,
@@ -325,7 +326,8 @@ impl DefraSessionHook {
                 args.to_string(),
                 deadline_at,
             )
-            .with_requester_did(self.active_requester_did().await);
+            .with_requester_did(self.active_requester_did().await)
+            .with_request_doc_id(request_doc_id);
             if hold_required {
                 lc.hold_for_approval().await?;
             } else {
@@ -424,6 +426,19 @@ impl DefraSessionHook {
             // strip: the model-facing text is the only text there is.
             let result = outcome.model_facing_text();
 
+            let tool_call_doc_id = {
+                let lifecycles = self.in_flight_lifecycles.lock().await;
+                lifecycles
+                    .get(internal_call_id)
+                    .and_then(|lifecycle| lifecycle.doc_id())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "on_tool_result: persisted AgentToolCall _docID missing for tool_call_id={internal_call_id}"
+                        )
+                    })?
+            };
+
             let (session_id, should_persist_message, persisted_result_id, persisted_call_id) = {
                 let mut state = self.state.lock().await;
                 let session_id = state
@@ -456,7 +471,7 @@ impl DefraSessionHook {
                     result_for_persistence,
                     truncation_mode_for(tool_name),
                     &self.truncation_limits,
-                    None,
+                    Some(&tool_call_doc_id),
                 )
                 .await?;
 

@@ -46,19 +46,20 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| data_dir.join("keys").join(format!("{agent_name}.key")));
 
     let http_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), http_port);
+    let identity = Arc::new(
+        KeyIdentity::load_or_create(key_path, None)
+            .context("creating or loading agent identity key")?,
+    );
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_http(HttpConfig::with_addr(http_addr))
+            .with_node_identity_did(identity.did())
             .build()
             .await
             .context("building embedded DefraDB node")?,
     );
     ensure_runtime_schemas(node.as_ref()).await?;
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(key_path, None)
-            .context("creating or loading agent identity key")?,
-    );
     seed_demo_documents(
         node.as_ref(),
         identity.did(),

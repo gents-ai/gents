@@ -6,6 +6,28 @@ use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 
 #[tokio::test]
+async fn builder_rejects_node_without_signing_did() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let identity = Arc::new(test_identity("builder-unsigned-node"));
+
+    let error = match Gents::builder()
+        .node(node)
+        .identity(identity)
+        .behavior("policy-ops")
+        .done()
+        .build()
+        .await
+    {
+        Ok(_) => panic!("builder should reject an unsigned node"),
+        Err(error) => error,
+    };
+
+    assert!(error
+        .to_string()
+        .contains("EmbeddedNode configured with a node signing DID"));
+}
+
+#[tokio::test]
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

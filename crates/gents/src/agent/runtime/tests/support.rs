@@ -17,7 +17,14 @@ pub(super) use crate::watcher::AgentRequest;
 pub(super) use serde_json::Value;
 
 pub(super) async fn test_node() -> Arc<defra_node::EmbeddedNode> {
-    Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
+    let identity = test_identity("runtime-test-node");
+    Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    )
 }
 
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
@@ -44,7 +51,9 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 
@@ -92,6 +101,59 @@ pub(super) async fn fetch_runtime_status(
         .cloned()
         .expect("AgentRuntime row");
     serde_json::from_value(value).expect("decode AgentRuntime row")
+}
+
+pub(super) async fn wait_for_runtime_reconcile_phase(
+    node: &defra_node::EmbeddedNode,
+    agent_did: &str,
+    expected_reconcile_phase: &str,
+) -> RuntimeStatusRow {
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let query = format!(
+            r#"{{
+                AgentRuntime(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
+                    process_state
+                    reconcile_phase
+                    active_generation
+                    runnable_behavior_count
+                    unavailable_behavior_count
+                    last_reconcile_result
+                    last_reconcile_error
+                }}
+            }}"#
+        );
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "AgentRuntime query failed: {:?}",
+            response.errors
+        );
+        let row = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRuntime"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .cloned()
+            .map(|value| {
+                serde_json::from_value::<RuntimeStatusRow>(value).expect("decode AgentRuntime row")
+            });
+        if row.as_ref().map(|row| row.reconcile_phase.as_str()) == Some(expected_reconcile_phase) {
+            return row.expect("checked AgentRuntime row");
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for AgentRuntime {} to reach reconcile_phase={}; last={:?}",
+            agent_did,
+            expected_reconcile_phase,
+            row.as_ref().map(|row| row.reconcile_phase.as_str())
+        );
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
 }
 
 pub(super) async fn wait_for_runtime_process_state(

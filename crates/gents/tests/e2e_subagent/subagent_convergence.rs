@@ -234,6 +234,8 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         "parent prompt background",
     )
     .await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
         "behavior_id": running.behavior_id.clone(),
@@ -255,7 +257,8 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -315,6 +318,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     )
     .await;
     wait_for_request_deadline(db.node.as_ref(), parent_request_id).await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
         "name": "remote-coder",
@@ -338,7 +343,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:key:z6MkUnclaimedRemoteTarget".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let escaped_child = escape_graphql_string(child_request_id);
@@ -479,6 +485,8 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         "parent prompt foreground",
     )
     .await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
         "behavior_id": running.behavior_id.clone(),
@@ -499,7 +507,8 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;

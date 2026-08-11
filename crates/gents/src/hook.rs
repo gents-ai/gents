@@ -215,6 +215,7 @@ struct ToolResultIdentity {
 struct SessionState {
     session_id: Option<String>,
     current_request_id: Option<String>,
+    current_request_doc_id: Option<String>,
     current_requester_did: Option<String>,
     request_deadline_at: Option<DateTime<Utc>>,
     approval_required_tools: Vec<String>,
@@ -434,6 +435,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: None,
                 current_request_id: None,
+                current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
                 approval_required_tools: Vec::new(),
@@ -476,6 +478,7 @@ impl DefraSessionHook {
             state: Arc::new(Mutex::new(SessionState {
                 session_id: Some(session_id.to_string()),
                 current_request_id: None,
+                current_request_doc_id: None,
                 current_requester_did: None,
                 request_deadline_at: None,
                 approval_required_tools: Vec::new(),
@@ -557,21 +560,102 @@ impl DefraSessionHook {
     }
 
     pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        self.set_active_request_lineage(request_id, None).await;
+        if let Err(error) = self.set_active_request_lineage(request_id, None).await {
+            // Resolution happens before the binding mutation, so preserve the
+            // last coherent binding rather than silently clearing provenance
+            // on a transient/missing/ambiguous lookup.
+            tracing::error!(
+                %error,
+                "failed to bind active request id; preserving previous coherent binding",
+            );
+        }
     }
 
     pub async fn set_active_request_lineage(
         &self,
         request_id: Option<String>,
         requester_did: Option<String>,
+    ) -> anyhow::Result<()> {
+        let request_doc_id = match request_id.as_deref() {
+            Some(request_id) => Some(
+                self.request_doc_id_for_request(request_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("active AgentRequest {request_id} not found"))?,
+            ),
+            None => None,
+        };
+        self.set_active_request_binding(request_id, request_doc_id, requester_did)
+            .await;
+        Ok(())
+    }
+
+    pub async fn set_active_request_binding(
+        &self,
+        request_id: Option<String>,
+        request_doc_id: Option<String>,
+        requester_did: Option<String>,
     ) {
+        if request_id.is_some() != request_doc_id.is_some() {
+            tracing::warn!(
+                has_request_id = request_id.is_some(),
+                has_request_doc_id = request_doc_id.is_some(),
+                "rejected half-bound active request lineage",
+            );
+            let mut state = self.state.lock().await;
+            state.current_request_id = None;
+            state.current_request_doc_id = None;
+            state.current_requester_did = None;
+            return;
+        }
         let mut state = self.state.lock().await;
         state.current_request_id = request_id;
+        state.current_request_doc_id = request_doc_id;
         state.current_requester_did = requester_did;
     }
 
     async fn active_requester_did(&self) -> Option<String> {
         self.state.lock().await.current_requester_did.clone()
+    }
+
+    async fn active_request_doc_id(&self) -> Option<String> {
+        self.state.lock().await.current_request_doc_id.clone()
+    }
+
+    async fn active_request_doc_id_or_reload(
+        &self,
+        request_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        // Hooks may also be used for session-only transcript capture, where
+        // there is deliberately no AgentRequest to bind. Keep that state
+        // wholly unbound instead of trying to resolve an empty logical id.
+        if request_id.trim().is_empty() {
+            return Ok(None);
+        }
+        {
+            let state = self.state.lock().await;
+            if state.current_request_id.as_deref() != Some(request_id) {
+                anyhow::bail!("active request changed while resolving document provenance");
+            }
+            if state.current_request_doc_id.is_some() {
+                return Ok(state.current_request_doc_id.clone());
+            }
+        }
+
+        let Some(doc_id) = self.request_doc_id_for_request(request_id).await? else {
+            return Ok(None);
+        };
+        let mut state = self.state.lock().await;
+        if state.current_request_id.as_deref() != Some(request_id) {
+            anyhow::bail!("active request changed while resolving document provenance");
+        }
+        if state.current_request_doc_id.is_none() {
+            state.current_request_doc_id = Some(doc_id);
+        }
+        Ok(state.current_request_doc_id.clone())
+    }
+
+    async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
+        crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
     }
 
     pub(crate) async fn register_stream_tool_call_identity(

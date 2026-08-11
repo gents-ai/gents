@@ -1248,6 +1248,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     let scope = test_scope(
         RenderedRequestContext {
             request_doc_id: "doc-1".to_string(),
+            request_commit_cid: "bafy-request-commit".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),
             requester_did: String::new(),
@@ -2195,6 +2196,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         &node,
         "session-1",
         "did:test:test",
+        "request-compaction-test",
+        "request-doc-compaction-test",
         &summary,
         &result.files_read,
         &result.files_modified,

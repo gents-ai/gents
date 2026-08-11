@@ -27,13 +27,17 @@ struct RequestRow {
     metadata: Option<String>,
     subagent_depth: Option<u32>,
     caused_by_parent_request_id: Option<String>,
+    caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct MessageRow {
     role: String,
     content: String,
+    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 async fn setup_db(
@@ -279,7 +283,9 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> RequestRow {
                 metadata
                 subagent_depth
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#
     );
@@ -298,6 +304,8 @@ async fn latest_user_message(node: &EmbeddedNode, session_id: &str) -> MessageRo
             ) {{
                 role
                 content
+                request_id
+                request_doc_id
             }}
         }}"#
     );
@@ -455,11 +463,18 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     assert_eq!(queued.session_id, child_session_id);
     assert_eq!(queued.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
     assert_eq!(queued.subagent_depth, Some(1));
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), "parent-append").await;
     assert_eq!(
         queued.caused_by_parent_request_id.as_deref(),
         Some("parent-append")
     );
+    assert_eq!(
+        queued.caused_by_parent_request_doc_id.as_deref(),
+        Some(parent_request_doc_id.as_str())
+    );
     assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
+    assert_eq!(queued.caused_by_parent_tool_call_doc_id.as_deref(), None);
     assert_eq!(queued.status.as_deref(), Some("pending"));
     assert_eq!(queued.lifecycle_state.as_deref(), Some("pending"));
     let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
@@ -475,7 +490,7 @@ async fn steer_subagent_append_writes_user_message() {
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
 
-    let _ = steer_subagent(
+    let result = steer_subagent(
         &hook,
         "steer-message",
         json!({
@@ -488,6 +503,14 @@ async fn steer_subagent_append_writes_user_message() {
     let message = latest_user_message(db.node.as_ref(), child_session_id).await;
     assert_eq!(message.role, "user");
     assert!(message.content.contains("also check the staging config"));
+    let queued_request_id = result["queued_request_id"].as_str().unwrap();
+    let queued_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), queued_request_id).await;
+    assert_eq!(message.request_id.as_deref(), Some(queued_request_id));
+    assert_eq!(
+        message.request_doc_id.as_deref(),
+        Some(queued_request_doc_id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -672,6 +695,8 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
     .await;
 
     let grandchild_request_id = "r4c-steer-grandchild";
+    let child_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &child_request_id).await;
     let mut descendant_bridge = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         child_request_id.clone(),
@@ -686,13 +711,20 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
         CancelPolicy::Cascade,
         grandchild_request_id.to_string(),
         AGENT_DID.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(child_request_doc_id.clone()));
     descendant_bridge.start_running().await.unwrap();
+    let descendant_bridge_doc_id = descendant_bridge
+        .doc_id()
+        .expect("descendant bridge document id")
+        .to_string();
     let _grandchild_session_id = create_subagent_request_with_request_id(
         db.node.as_ref(),
         grandchild_request_id.to_string(),
         child_request_id.clone(),
+        child_request_doc_id,
         "internal-steer-descendant".to_string(),
+        descendant_bridge_doc_id,
         1,
         AGENT_DID.to_string(),
         CHILD_BEHAVIOR_ID.to_string(),

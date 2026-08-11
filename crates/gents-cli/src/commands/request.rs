@@ -48,6 +48,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
             metadata: args.metadata.clone(),
             valid_until,
             retry_parent_request: None,
+            retry_parent_request_doc_id: None,
             retry_root_request: None,
         },
     )
@@ -1316,6 +1317,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
             metadata: stale.metadata.clone(),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),
+            retry_parent_request_doc_id: Some(stale.doc_id.clone()),
             retry_root_request: stale.retry_root_request.clone(),
         },
     )

@@ -1,32 +1,5 @@
-use anyhow::{bail, Context, Result};
-use defra_node::QueryResponse;
-use serde::Deserialize;
-
 use crate::graphql::escape_graphql_string;
-
-pub(super) fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-pub(super) fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
-}
-
-pub(super) fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    Ok(rows::<T>(response, field)?.into_iter().next())
-}
+pub(super) use crate::graphql::{ensure_no_errors, first_row, rows};
 
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).

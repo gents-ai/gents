@@ -84,6 +84,8 @@ struct RunningToolCallRow {
     doc_id: String,
     #[serde(default)]
     request_id: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
     /// Immutable owner principal stamped at create. Recovery scopes by this
     /// field — `request_id` alone is not unique across agents.
     #[serde(default)]
@@ -869,11 +871,26 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
         }
 
         let child_agent_did = resolved_target_did.unwrap_or_else(|| parent.agent_did.clone());
+        let Some(parent_request_doc_id) = row
+            .request_doc_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                tool_call_id = %row.tool_call_id,
+                "cannot materialize orphan subagent child without exact parent request document"
+            );
+            continue;
+        };
         if let Err(error) = create_subagent_request_with_request_id(
             node,
             child_request_id.clone(),
             parent_request_id.clone(),
+            parent_request_doc_id.to_string(),
             row.tool_call_id.clone(),
+            row.doc_id.clone(),
             parent_depth,
             child_agent_did,
             spawn_args.behavior_id,
@@ -1116,6 +1133,7 @@ async fn load_running_tool_call_rows_with_filter(
         ) {{
             _docID
             request_id
+            request_doc_id
             agent_did
             session_id
             tool_call_id

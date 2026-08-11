@@ -1258,6 +1258,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
+        source_doc_id: None,
     };
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
@@ -1307,6 +1308,7 @@ async fn serial_skip_does_not_create_request() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-serial".into()),
         trigger_kind: Some("schedule".into()),
+        source_doc_id: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1398,6 +1400,7 @@ async fn latest_only_transition_to_superseded() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-latest".into()),
         trigger_kind: Some("schedule".into()),
+        source_doc_id: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1476,6 +1479,7 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
     let lineage = TriggerLineage {
         trigger_id: Some("sched-input-required".into()),
         trigger_kind: Some("schedule".into()),
+        source_doc_id: None,
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1667,6 +1671,7 @@ async fn serial_skip_event_does_not_create_request() {
     let lineage = TriggerLineage {
         trigger_id: Some("trigger-event-serial".into()),
         trigger_kind: Some("event".into()),
+        source_doc_id: Some("event-source-serial-doc".into()),
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -1757,6 +1762,7 @@ async fn latest_only_event_transition_to_superseded() {
     let lineage = TriggerLineage {
         trigger_id: Some("trigger-event-latest".into()),
         trigger_kind: Some("event".into()),
+        source_doc_id: Some("event-source-latest-doc".into()),
     };
     let seeded = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
@@ -2813,20 +2819,8 @@ async fn create_background_child_bridge(
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
     let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
-    create_subagent_request_with_request_id(
-        node.as_ref(),
-        child_request_id.clone(),
-        parent_request_id.to_string(),
-        tool_call_id.to_string(),
-        0,
-        AGENT_DID.to_string(),
-        CHILD_BEHAVIOR_ID.to_string(),
-        format!("prompt for {tool_call_id}"),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .unwrap();
-    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(node.as_ref(), parent_request_id).await;
 
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         node.clone(),
@@ -2847,8 +2841,27 @@ async fn create_background_child_bridge(
         CancelPolicy::Cascade,
         child_request_id.clone(),
         AGENT_DID.to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    let parent_tool_call_doc_id = lifecycle.doc_id().expect("bridge document id").to_string();
+
+    create_subagent_request_with_request_id(
+        node.as_ref(),
+        child_request_id.clone(),
+        parent_request_id.to_string(),
+        parent_request_doc_id,
+        tool_call_id.to_string(),
+        parent_tool_call_doc_id,
+        0,
+        AGENT_DID.to_string(),
+        CHILD_BEHAVIOR_ID.to_string(),
+        format!("prompt for {tool_call_id}"),
+        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
+    )
+    .await
+    .unwrap();
+    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
 
     (child_request_id, child_session_id)
 }

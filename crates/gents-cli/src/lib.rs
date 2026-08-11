@@ -578,7 +578,7 @@ pub(crate) async fn resolve_config_access(
     let node = {
         use std::sync::Arc;
         let node_arc = Arc::new(
-            persistent_node_builder(&data_dir)
+            persistent_node_builder_with_stored_identity(&home_dir, &data_dir)?
                 .build()
                 .await
                 .with_context(|| {
@@ -597,6 +597,23 @@ pub(crate) fn persistent_node_builder(data_dir: &Path) -> NodeBuilder {
     EmbeddedNode::builder()
         .data_path(data_dir)
         .with_storage_backend(StorageBackend::RocksDb)
+}
+
+pub(crate) fn persistent_node_builder_with_stored_identity(
+    home_dir: &Path,
+    data_dir: &Path,
+) -> Result<NodeBuilder> {
+    let mut builder = persistent_node_builder(data_dir);
+    let config = read_init_config(home_dir)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "gents home {} is not initialized; run `gents init --home {}` first",
+            home_dir.display(),
+            home_dir.display()
+        )
+    })?;
+    let identity = load_initialized_home_identity(home_dir, &config)?;
+    builder = builder.with_node_identity_did(identity.did().to_string());
+    Ok(builder)
 }
 
 pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
@@ -647,7 +664,56 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::AgentIdentity as _;
     use serde_json::Value;
+
+    #[tokio::test]
+    async fn initialized_offline_node_reuses_the_home_signer() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+        let key_path = default_key_path(&home, "default");
+        std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        let did = identity.did().to_string();
+        write_init_config(
+            &home,
+            &StoredInitConfig {
+                home: home.to_string_lossy().to_string(),
+                agent_name: "default".to_string(),
+                agent_did: did.clone(),
+                key_path: Some(key_path.to_string_lossy().to_string()),
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: ToolCeilingArg::Readonly,
+                tool_root: None,
+            },
+        )
+        .unwrap();
+
+        let node = persistent_node_builder_with_stored_identity(&home, &data)
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(node.node_identity_did(), Some(did.as_str()));
+    }
+
+    #[test]
+    fn uninitialized_offline_home_requires_init() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let data = default_data_dir(&home);
+
+        let error = match persistent_node_builder_with_stored_identity(&home, &data) {
+            Ok(_) => panic!("uninitialized home should not produce an unsigned node builder"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("run `gents init --home"));
+    }
 
     #[test]
     fn default_codex_remote_matches_shim_port() {

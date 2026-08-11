@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use defra_node::{EmbeddedNode, EventName, QueryResponse};
@@ -21,7 +21,9 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::persona_presets::{builtin_preset_names, preset_name, PresetFields};
-use crate::graphql::escape_graphql_string;
+#[cfg(test)]
+use crate::graphql::ensure_no_errors;
+use crate::graphql::{escape_graphql_string, rows};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirectoryEntry {
@@ -491,8 +493,12 @@ impl DirectoryStore for GraphqlDirectoryStore {
                 top_p
             }
         }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query directory source snapshot")?;
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            query,
+            "query directory source snapshot",
+        )
+        .await?;
         Ok(SourceSnapshot {
             principals: parse_principals(&response)?,
             behaviors: parse_behaviors(&response)?,
@@ -531,8 +537,12 @@ impl DirectoryStore for GraphqlDirectoryStore {
             }}
         }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query AgentDirectoryEntry")?;
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query AgentDirectoryEntry",
+        )
+        .await?;
         Ok(rows::<DirectoryRow>(&response, "AgentDirectoryEntry")?
             .into_iter()
             .filter_map(|row| {
@@ -574,14 +584,24 @@ impl DirectoryStore for GraphqlDirectoryStore {
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = upsert_directory_entry_mutation(entry, &now);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "upsert AgentDirectoryEntry")
+        crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "upsert AgentDirectoryEntry",
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()> {
         let mutation = delete_directory_entry_mutation(source_did, agent_did);
-        let response = self.node.execute(&mutation).await;
-        ensure_no_errors(&response, "delete AgentDirectoryEntry")
+        crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &mutation,
+            "delete AgentDirectoryEntry",
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -704,23 +724,6 @@ fn graphql_nullable_datetime_literal(value: &str) -> String {
     } else {
         format!(r#""{}""#, escape_graphql_string(trimmed))
     }
-}
-
-fn ensure_no_errors(response: &QueryResponse, label: &str) -> Result<()> {
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(())
-}
-
-fn rows<T>(response: &QueryResponse, field: &str) -> Result<Vec<T>>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
 }
 
 // The per-collection decoders behind `load_source_snapshot`, each reading its

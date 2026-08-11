@@ -136,7 +136,8 @@ impl DefraSessionHook {
             target_args.clone(),
             background_deadline_at,
         )
-        .with_requester_did(self.active_requester_did().await);
+        .with_requester_did(self.active_requester_did().await)
+        .with_request_doc_id(self.active_request_doc_id().await);
         let cancellation_token = tokio_util::sync::CancellationToken::new();
         let execution_reservation = self
             .background_executions

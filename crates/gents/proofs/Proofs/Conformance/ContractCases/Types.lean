@@ -528,9 +528,18 @@ structure ReadToolOutputDispatchesByState where
 
 structure SteerAppendPreservesLineage where
   callerRequestId : String
+  callerRequestDocId : String
   childSessionId : String
   queuedRequestId : String
   causedByParentRequestId : String
+  causedByParentRequestDocId : String
+  causedByParentToolCallIdPresent : Bool
+  causedByParentToolCallDocIdPresent : Bool
+  lineageAdmissible : Bool
+  depthZeroLineageAdmissible : Bool
+  backgroundCompletionDepthZeroAdmissible : Bool
+  requestVisibleBeforeMessageAllowed : Bool
+  messageThenRequestAllowed : Bool
   queueSource : String
   queuePolicy : String
   deriving Repr

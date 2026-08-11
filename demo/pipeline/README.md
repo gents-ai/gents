@@ -111,7 +111,10 @@ registers `schemas/` first so that name resolves.
 
    A complete run has two `AgentRequest` rows — `exp-stage1` and `exp-stage2`,
    both `caused_by_trigger_kind: "event"`, both `completed` — plus one
-   `ExperimentFinding` written by stage-1's surface tool.
+   `ExperimentFinding` written by stage-1's surface tool. The automated runner
+   also requires every provider request to pin a signed `AgentRequest` commit,
+   then reconstructs the timeline and all four adapter projections from the
+   persisted documents.
 
    ```bash
    gents trace timeline --request-id <id> --home <home>

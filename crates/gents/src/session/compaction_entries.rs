@@ -62,6 +62,8 @@ pub async fn save_compaction_entry(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    request_id: &str,
+    request_doc_id: &str,
     summary: &str,
     files_read: &[String],
     files_modified: &[String],
@@ -74,6 +76,8 @@ pub async fn save_compaction_entry(
         session_id,
         agent_did,
         None,
+        request_id,
+        request_doc_id,
         summary,
         files_read,
         files_modified,
@@ -90,6 +94,8 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     session_id: &str,
     agent_did: &str,
     requester_did: Option<&str>,
+    request_id: &str,
+    request_doc_id: &str,
     summary: &str,
     files_read: &[String],
     files_modified: &[String],
@@ -124,6 +130,8 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let escaped_summary = escape_graphql_string(&summary);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_request_doc_id = escape_graphql_string(request_doc_id);
     let requester_did_field = super::requester_did_create_field(requester_did);
 
     let compaction_key = format!("{escaped_session_id}:{sequence}");
@@ -136,6 +144,8 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
+                    request_id: "{escaped_request_id}",
+                    request_doc_id: "{escaped_request_doc_id}",
                     sequence: {sequence},
                     summary: "{escaped_summary}",
                     files_read: "{files_read_json}",

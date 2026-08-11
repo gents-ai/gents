@@ -129,6 +129,21 @@ fn legacy_wake_is_filtered_from_latest_turn_projection() {
 }
 
 #[test]
+fn background_notification_is_control_by_message_key_with_honest_request_binding() {
+    let mut rows = make_streaming_store_with_response_content("").to_rows();
+    rows.responses.clear();
+    rows.messages[0].message_key =
+        "background-completion-notification:child-1:subagent".to_string();
+    rows.messages[0].request_id = Some("req-1".to_string());
+
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
+        .expect("session snapshot");
+
+    assert!(snapshot.messages[0].runtime_control);
+}
+
+#[test]
 fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();

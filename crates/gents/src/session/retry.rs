@@ -1,26 +1,11 @@
 use super::*;
 use crate::retry::{
-    defradb_conflict_retry_backoff, execute_graphql_with_conflict_retry,
-    is_defradb_transaction_conflict_text, DEFRA_DB_CONFLICT_MAX_RETRIES,
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
 
-pub(crate) async fn execute_mutation_with_retry(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &str,
-) -> Result<QueryResponse> {
-    let resp = execute_graphql_with_conflict_retry(node, mutation, operation).await;
-    if resp.has_errors() {
-        tracing::warn!(
-            operation = %operation,
-            errors = ?resp.errors,
-            "mutation failed"
-        );
-        anyhow::bail!("{operation} failed: {:?}", resp.errors);
-    }
-
-    Ok(resp)
-}
+pub(super) use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
+pub(crate) use crate::graphql::graphql_with_transaction_retry as execute_mutation_with_retry;
 
 pub(super) async fn retry_operation<F, Fut, T>(operation: &str, f: F) -> Result<T>
 where
@@ -78,17 +63,6 @@ pub(super) fn log_mutation_timing(operation: &str, elapsed: Duration) {
     }
 }
 
-pub(super) async fn execute_query_timed(
-    node: &EmbeddedNode,
-    query: &str,
-    operation: &str,
-) -> QueryResponse {
-    let started = std::time::Instant::now();
-    let resp = node.execute(query).await;
-    log_mutation_timing(operation, started.elapsed());
-    resp
-}
-
 pub async fn count_active_sessions(node: &EmbeddedNode) -> Result<usize> {
     let query = r#"{
         AgentSession(
@@ -98,16 +72,8 @@ pub async fn count_active_sessions(node: &EmbeddedNode) -> Result<usize> {
         }
     }"#;
 
-    let resp = node.execute(query).await;
-    if resp.has_errors() {
-        anyhow::bail!("counting active sessions: {:?}", resp.errors);
-    }
-
-    Ok(resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(|value| value.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0))
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, query, "count active sessions")
+            .await?;
+    Ok(crate::graphql::rows::<serde_json::Value>(&response, "AgentSession")?.len())
 }

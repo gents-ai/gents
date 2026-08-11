@@ -1,7 +1,13 @@
 use std::sync::Arc;
 
 use axum::{extract::State, routing::post, Json, Router};
+use gents::adapter_projection::{
+    build_adapter_projection, validate_adapter_projection_contract, AdapterProjectionKind,
+    ProjectionContext,
+};
+use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
+use gents::run_timeline_fetch::load_run_timeline;
 use gents::session::{fork, fork_via_http, ForkError, ForkParams};
 use serde::Deserialize;
 use tokio::net::TcpListener;
@@ -550,11 +556,211 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
     assert_eq!(child_compactions.len(), 1);
     assert_eq!(child_compactions[0].summary, "early summary");
     assert_eq!(child_compactions[0].sequence, 1);
+    assert_eq!(child_compactions[0].request_id, "");
+    assert_eq!(child_compactions[0].request_doc_id, "");
     assert_eq!(
         child_compactions[0].compaction_key,
         format!("{}:1", outcome.session_id)
     );
     assert_eq!(outcome.copied_compaction_entries, 1);
+}
+
+#[tokio::test]
+async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() {
+    let db = test_db("fork-history-physical-edges").await;
+    let parent_session = "parent-physical-edges";
+    let parent_request_id = "parent-physical-request";
+    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    let parent_request_doc_id = create_request(
+        &db.node,
+        parent_request_id,
+        parent_session,
+        "completed",
+        "2026-04-21T10:00:00Z",
+    )
+    .await;
+
+    let parent_session_escaped = escape_graphql_string(parent_session);
+    let parent_request_id_escaped = escape_graphql_string(parent_request_id);
+    let parent_request_doc_id_escaped = escape_graphql_string(&parent_request_doc_id);
+    let tool_call_key = format!("{parent_session_escaped}:physical-tool");
+    let mutation = format!(
+        r#"mutation {{
+            user: create_AgentMessage(input: {{
+                message_key: "{parent_session_escaped}:1",
+                session_id: "{parent_session_escaped}",
+                agent_did: "{AGENT_DID}",
+                request_id: "{parent_request_id_escaped}",
+                request_doc_id: "{parent_request_doc_id_escaped}",
+                sequence: 1,
+                role: "user",
+                content: "fork this history",
+                timestamp: "2026-04-21T10:00:01Z"
+            }}) {{ _docID }}
+            assistant: create_AgentMessage(input: {{
+                message_key: "{parent_session_escaped}:2",
+                session_id: "{parent_session_escaped}",
+                agent_did: "{AGENT_DID}",
+                request_id: "{parent_request_id_escaped}",
+                request_doc_id: "{parent_request_doc_id_escaped}",
+                sequence: 2,
+                role: "assistant",
+                content: "calling a tool",
+                timestamp: "2026-04-21T10:00:02Z"
+            }}) {{ _docID }}
+            tool: create_AgentToolCall(input: {{
+                tool_call_key: "{tool_call_key}",
+                session_id: "{parent_session_escaped}",
+                agent_did: "{AGENT_DID}",
+                request_id: "{parent_request_id_escaped}",
+                request_doc_id: "{parent_request_doc_id_escaped}",
+                message_sequence: 2,
+                tool_name: "read_file",
+                tool_call_id: "physical-tool",
+                args: "{{}}",
+                result: "tool output",
+                status: "completed",
+                lifecycle_state: "completed",
+                started_at: "2026-04-21T10:00:02Z",
+                completed_at: "2026-04-21T10:00:03Z"
+            }}) {{ _docID }}
+            compaction: create_CompactionEntry(input: {{
+                compaction_key: "{parent_session_escaped}:1",
+                session_id: "{parent_session_escaped}",
+                agent_did: "{AGENT_DID}",
+                request_id: "{parent_request_id_escaped}",
+                request_doc_id: "{parent_request_doc_id_escaped}",
+                sequence: 1,
+                summary: "parent summary",
+                files_read: "[]",
+                files_modified: "[]",
+                messages_compacted: 1,
+                original_tokens: 10,
+                compacted_tokens: 5,
+                created_at: "2026-04-21T10:00:02Z"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create request-bound fork facts failed: {:?}",
+        response.errors
+    );
+    let tool_query = format!(
+        r#"{{
+            AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }}, limit: 1) {{
+                _docID
+            }}
+        }}"#
+    );
+    let response = db.node.execute(&tool_query).await;
+    let parent_tool_call_doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("parent AgentToolCall _docID");
+    let result_mutation = format!(
+        r#"mutation {{
+            create_AgentToolResult(input: {{
+                tool_call_doc_id: "{}",
+                agent_did: "{AGENT_DID}",
+                session_id: "{parent_session_escaped}",
+                tool_name: "read_file",
+                tool_input: "{{}}",
+                output_text: "spilled output",
+                truncated: false,
+                truncation_metadata: "",
+                conversation_doc_id: "",
+                created_at: "2026-04-21T10:00:03Z"
+            }}) {{ _docID }}
+        }}"#,
+        escape_graphql_string(parent_tool_call_doc_id),
+    );
+    let response = db.node.execute(&result_mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create request-bound tool result failed: {:?}",
+        response.errors
+    );
+
+    let outcome = fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent_session,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            target_behavior_id: None,
+        },
+    )
+    .await
+    .expect("fork succeeds");
+
+    let child_session_escaped = escape_graphql_string(&outcome.session_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
+                request_id request_doc_id
+            }}
+            AgentToolCall(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
+                request_id request_doc_id
+            }}
+            CompactionEntry(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
+                request_id request_doc_id
+            }}
+            AgentToolResult(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
+                tool_call_doc_id
+            }}
+        }}"#
+    );
+    let response = db.node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "query fork facts: {:?}",
+        response.errors
+    );
+    let data = response.data.as_ref().expect("fork fact data");
+    for collection in ["AgentMessage", "AgentToolCall", "CompactionEntry"] {
+        for row in data[collection]
+            .as_array()
+            .expect("fork request-scoped rows")
+        {
+            assert_eq!(row["request_id"].as_str(), Some(""));
+            assert_eq!(row["request_doc_id"].as_str(), Some(""));
+        }
+    }
+    for row in data["AgentToolResult"]
+        .as_array()
+        .expect("fork tool-result rows")
+    {
+        assert_eq!(row["tool_call_doc_id"].as_str(), Some(""));
+    }
+
+    let child_request_id = "child-projection-request";
+    create_request(
+        &db.node,
+        child_request_id,
+        &outcome.session_id,
+        "completed",
+        "2026-04-21T10:00:04Z",
+    )
+    .await;
+    let timeline = load_run_timeline(&ConfigAccess::Local(db.node.clone()), child_request_id)
+        .await
+        .expect("forked session timeline remains valid");
+    let projection = build_adapter_projection(
+        AdapterProjectionKind::OpenAiCodexRunTrace,
+        &timeline,
+        &ProjectionContext::default(),
+    );
+    validate_adapter_projection_contract(&projection)
+        .expect("forked session projection remains contract-valid");
 }
 
 #[tokio::test]

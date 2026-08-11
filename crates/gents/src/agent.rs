@@ -133,6 +133,11 @@ impl Gents {
         identity: Arc<dyn AgentIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
+        if node.node_identity_did().is_none() {
+            anyhow::bail!(
+                "Gents runtime requires an EmbeddedNode configured with a node signing DID"
+            );
+        }
         // Run the AgentBehavior migration before any behavior read so that
         // desktops, embedders, and CLI serve paths all see description/summary
         // even when the DB was created before branch #377. This is idempotent
@@ -222,11 +227,10 @@ impl Gents {
 
     /// Returns the deployment principal record.
     ///
-    /// All DefraDB ops issued by this `Gents` are signed by
-    /// `self.principal.identity`. Two `AgentBehavior`s on the same
-    /// `Gents` share this Arc by construction (single-principal
-    /// per snapshot invariant), so any DID-keyed permission decision
-    /// returns identical results for behaviors on this deployment.
+    /// DefraDB ops issued by this `Gents` are signed by the node identity
+    /// configured on its `EmbeddedNode`. That signer may differ from the
+    /// deployment principal identity: the node is the durable write author,
+    /// while the principal remains the permission boundary for its behaviors.
     pub fn principal(&self) -> &AgentPrincipal {
         &self.principal
     }

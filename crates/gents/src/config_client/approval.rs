@@ -16,6 +16,8 @@ use super::ConfigAccess;
 /// A tool call persisted in `awaitingApproval`, as surfaced to operators.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeldToolCall {
+    #[serde(rename(deserialize = "_docID"))]
+    pub tool_call_doc_id: String,
     pub tool_call_id: String,
     pub request_id: Option<String>,
     pub session_id: Option<String>,
@@ -43,6 +45,7 @@ pub async fn list_held_tool_calls(
                 filter: {{ lifecycle_state: {{ _eq: "awaitingApproval" }}{agent_filter} }},
                 order: {{ deadline_at: ASC }}
             ) {{
+                _docID
                 tool_call_id
                 request_id
                 session_id
@@ -65,6 +68,7 @@ pub async fn list_held_tool_calls(
 /// Verdict to record for a held tool call.
 #[derive(Debug, Clone)]
 pub struct ToolApprovalVerdict {
+    pub tool_call_doc_id: String,
     pub tool_call_id: String,
     pub agent_did: String,
     pub request_id: Option<String>,
@@ -79,8 +83,13 @@ pub async fn write_tool_approval(
     access: &ConfigAccess,
     verdict: &ToolApprovalVerdict,
 ) -> Result<String> {
+    let tool_call_doc_id = verdict.tool_call_doc_id.trim();
+    if tool_call_doc_id.is_empty() {
+        anyhow::bail!("tool_call_doc_id must not be empty");
+    }
     let approval_id = format!("approval-{}-{}", verdict.tool_call_id, uuid::Uuid::new_v4());
     let escaped_approval_id = escape_graphql_string(&approval_id);
+    let escaped_tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let escaped_tool_call_id = escape_graphql_string(&verdict.tool_call_id);
     let escaped_agent_did = escape_graphql_string(&verdict.agent_did);
     let escaped_approver_did = escape_graphql_string(&verdict.approver_did);
@@ -111,6 +120,7 @@ pub async fn write_tool_approval(
         r#"mutation {{
             create_AgentToolApproval(input: {{
                 approval_id: "{escaped_approval_id}",
+                tool_call_doc_id: "{escaped_tool_call_doc_id}",
                 tool_call_id: "{escaped_tool_call_id}",
                 {request_id_field}
                 agent_did: "{escaped_agent_did}",
@@ -179,6 +189,7 @@ mod tests {
         let approval_id = write_tool_approval(
             &access,
             &ToolApprovalVerdict {
+                tool_call_doc_id: held[0].tool_call_doc_id.clone(),
                 tool_call_id: "call-client".to_string(),
                 agent_did: "did:test:general".to_string(),
                 request_id: Some("req-client".to_string()),
@@ -193,7 +204,7 @@ mod tests {
 
         let decision = access
             .execute(
-                r#"{ AgentToolApproval(filter: { tool_call_id: { _eq: "call-client" } }) { decision reason approver_did } }"#,
+                r#"{ AgentToolApproval(filter: { tool_call_id: { _eq: "call-client" } }) { tool_call_doc_id decision reason approver_did } }"#,
             )
             .await
             .unwrap();
@@ -204,6 +215,12 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]
+                .get("tool_call_doc_id")
+                .and_then(|value| value.as_str()),
+            Some(held[0].tool_call_doc_id.as_str())
+        );
         assert_eq!(
             rows[0].get("decision").and_then(|value| value.as_str()),
             Some("denied")

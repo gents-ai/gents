@@ -182,4 +182,15 @@ mod tests {
             ["AgentRequest".to_string()].into_iter().collect()
         );
     }
+
+    #[test]
+    fn profiles_replicate_agent_runtime_for_fleet_visibility() {
+        for profile in [
+            P2pCollectionProfile::Runtime,
+            P2pCollectionProfile::Agent,
+            P2pCollectionProfile::Discovery,
+        ] {
+            assert!(profile.collection_names().contains(&"AgentRuntime"));
+        }
+    }
 }

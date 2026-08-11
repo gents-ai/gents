@@ -76,7 +76,11 @@ struct RequestRow {
     #[serde(default)]
     caused_by_parent_request_id: Option<String>,
     #[serde(default)]
+    caused_by_parent_request_doc_id: Option<String>,
+    #[serde(default)]
     caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    caused_by_parent_tool_call_doc_id: Option<String>,
 }
 
 impl RequestRow {
@@ -115,7 +119,9 @@ impl RequestRow {
             deadline: self.deadline,
             subagent_depth: self.subagent_depth.unwrap_or_default().max(0) as u32,
             caused_by_parent_request_id: self.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
         }
     }
 }
@@ -533,7 +539,8 @@ impl GoalSource {
                     _docID request_id agent_did requester_did behavior_id session_id content
                     temperature top_p top_k max_tokens metadata execution_origin
                     lifecycle_state created_at deadline subagent_depth
-                    caused_by_parent_request_id caused_by_parent_tool_call_id
+                    caused_by_parent_request_id caused_by_parent_request_doc_id
+                    caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
                 }}
             }}"#
         );

@@ -90,13 +90,66 @@ impl KeyIdentity {
     ) -> Result<Self> {
         let identity = Arc::new(load_or_create_identity(&key_path.into())?);
         let did = identity.did().map_err(anyhow::Error::from)?.to_string();
-        register_public_key(&did, identity.key_type(), identity.public_key_bytes());
+        let public_key_bytes = identity.public_key_bytes();
+        register_public_key(&did, identity.key_type(), public_key_bytes.clone());
+        register_ed25519_signing_identity(&did, &identity.private_key_bytes(), &public_key_bytes)?;
         Ok(Self {
             did,
             service_account,
             identity,
         })
     }
+}
+
+/// Register an existing Ed25519 identity for DefraDB commit signing.
+///
+/// Gents already owns the principal key; this makes the same identity
+/// available to `EmbeddedNode::with_node_identity_did` instead of creating a
+/// second database-specific identity.
+pub fn register_ed25519_signing_identity(
+    did: &str,
+    private_key_bytes: &[u8],
+    public_key_bytes: &[u8],
+) -> Result<()> {
+    let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, private_key_bytes)
+        .map_err(anyhow::Error::from)
+        .context("loading Ed25519 node signing identity")?;
+    let derived_did = identity.did().map_err(anyhow::Error::from)?.to_string();
+    if derived_did != did {
+        anyhow::bail!("node signing DID mismatch: expected {did}, derived {derived_did}");
+    }
+    if identity.public_key_bytes() != public_key_bytes {
+        anyhow::bail!("node signing public key does not match DID {did}");
+    }
+
+    defra_core::signing::store_identity(
+        did,
+        SigningConfig {
+            key_type: SigningKeyType::Ed25519,
+            private_key_bytes: SigningConfig::private_key_bytes_from_vec(
+                private_key_bytes.to_vec(),
+            ),
+            public_key_bytes: public_key_bytes.to_vec(),
+            public_key_hex: lowercase_hex(public_key_bytes),
+            remote_signer: None,
+            signing_authorization: None,
+        },
+    );
+    Ok(())
+}
+
+/// Return the identity string DefraDB stores in commit signature headers for
+/// a `did:key` principal.
+///
+/// DefraDB signatures carry the hexadecimal public key, while Gents exposes
+/// the corresponding DID at its API boundary. Keeping this conversion next to
+/// identity registration lets audit consumers compare the two without
+/// reimplementing `did:key` parsing.
+pub fn commit_signer_identity_for_did(did: &str) -> Result<String> {
+    let (_, public_key_bytes) = crypto::parse_did_key(did)
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("parsing commit signer DID {did}"))?;
+    Ok(lowercase_hex(&public_key_bytes))
 }
 
 #[async_trait]

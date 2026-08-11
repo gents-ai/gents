@@ -62,13 +62,18 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
             case.name
         );
         let engine = TriggerEngine::new(rx, materializer.clone());
+        let event_vars = if matches!(trigger_kind, TriggerKind::Event) {
+            serde_json::json!({"source_doc_id": "lean-event-source-doc"})
+        } else {
+            serde_json::json!({})
+        };
 
         let intent = FireIntent {
             trigger_id: case.trigger_id.clone(),
             trigger_kind,
             task,
             concurrency,
-            event_vars: serde_json::json!({}),
+            event_vars,
             doc_vars: None,
             args_vars: None,
             pre_materialized_request_id: None,
@@ -145,6 +150,13 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
                 "Lean case {} request caused_by kind drifted",
                 case.name
             );
+            assert_eq!(
+                materializer.source_doc_ids(),
+                vec![matches!(trigger_kind, TriggerKind::Event)
+                    .then(|| "lean-event-source-doc".to_string())],
+                "Lean case {} source document lineage drifted",
+                case.name
+            );
         } else {
             assert!(
                 case.expected_materialize_trigger_id.is_none()
@@ -153,6 +165,7 @@ pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_case
                 "Lean case {} should not carry materialization fields when skipped",
                 case.name
             );
+            assert!(materializer.source_doc_ids().is_empty());
         }
 
         let supersede_calls = materializer.supersede_calls();

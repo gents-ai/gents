@@ -14,19 +14,22 @@ impl DefraSpillTruncator {
         tool_input: &str,
         output: &str,
         metadata: &str,
-        conversation_doc_id: Option<&str>,
+        tool_call_doc_id: Option<&str>,
     ) -> Result<String> {
         let now = chrono::Utc::now().to_rfc3339();
         let escaped_output = escape_graphql_string(output);
         let escaped_input = escape_graphql_string(tool_input);
         let escaped_metadata = escape_graphql_string(metadata);
-        let escaped_conversation_doc_id =
-            escape_graphql_string(conversation_doc_id.unwrap_or_default());
+        let tool_call_doc_id_field = tool_call_doc_id
+            .map(escape_graphql_string)
+            .map(|doc_id| format!(r#"tool_call_doc_id: "{doc_id}","#))
+            .unwrap_or_default();
         let requester_did_field =
             crate::session::requester_did_create_field(self.requester_did.as_deref());
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolResult(input: {{
+                    {tool_call_doc_id_field}
                     agent_did: "{agent_did}",
                     {requester_did_field}
                     session_id: "{session_id}",
@@ -35,7 +38,6 @@ impl DefraSpillTruncator {
                     output_text: "{escaped_output}",
                     truncated: true,
                     truncation_metadata: "{escaped_metadata}",
-                    conversation_doc_id: "{escaped_conversation_doc_id}",
                     created_at: "{now}"
                 }}) {{ _docID }}
             }}"#,
@@ -71,7 +73,7 @@ impl Truncator for DefraSpillTruncator {
         output: &str,
         mode: TruncationMode,
         limits: &TruncationLimits,
-        conversation_doc_id: Option<&str>,
+        tool_call_doc_id: Option<&str>,
     ) -> Result<TruncationResult> {
         let original_lines = output.lines().count();
         let original_bytes = output.len();
@@ -96,13 +98,7 @@ impl Truncator for DefraSpillTruncator {
             })
             .to_string();
             match self
-                .spill(
-                    tool_name,
-                    tool_input,
-                    output,
-                    &metadata,
-                    conversation_doc_id,
-                )
+                .spill(tool_name, tool_input, output, &metadata, tool_call_doc_id)
                 .await
             {
                 Ok(id) => Some(id),

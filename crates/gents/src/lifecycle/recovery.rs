@@ -443,6 +443,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                     status: {{ _eq: "processing" }}
                 }}
             ) {{
+                _docID
                 request_id
                 requester_did
                 behavior_id
@@ -469,6 +470,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
 
     let mut recovered = 0;
     for row in rows {
+        let request_doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
         let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
         let requester_did = row.get("requester_did").and_then(|v| v.as_str());
         let behavior_id = row
@@ -476,7 +478,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-        if request_id.is_empty() || session_id.is_empty() {
+        if request_doc_id.is_empty() || request_id.is_empty() || session_id.is_empty() {
             continue;
         }
 
@@ -492,6 +494,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
         let error_text = escape_graphql_string(&format!("Error: {error_reason}"));
         let escaped_error_reason = escape_graphql_string(error_reason);
         let escaped_request_id = escape_graphql_string(request_id);
+        let escaped_request_doc_id = escape_graphql_string(request_doc_id);
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_behavior_id = escape_graphql_string(behavior_id);
         let escaped_session_id = escape_graphql_string(session_id);
@@ -501,6 +504,7 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
                 create_AgentResponse(input: {{
                     response_key: "{escaped_request_id}",
                     request_id: "{escaped_request_id}",
+                    request_doc_id: "{escaped_request_doc_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
                     behavior_id: "{escaped_behavior_id}",
@@ -774,11 +778,6 @@ async fn update_conversation_status_by_doc_id(
         latest_request_id = escape_graphql_string(&canonical.latest_request_id),
     );
 
-    let resp =
-        crate::retry::execute_graphql_with_conflict_retry(node, &mutation, "recover_conversation")
-            .await;
-    if resp.has_errors() {
-        anyhow::bail!("recovering conversation doc_id={doc_id}: {:?}", resp.errors);
-    }
+    crate::graphql::graphql_with_transaction_retry(node, &mutation, "recover_conversation").await?;
     Ok(())
 }

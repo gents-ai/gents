@@ -19,6 +19,17 @@
   "default_prompt": "List three risks of running agents with database write access. Be brief.",
   "expect": {
     "trigger_ids": ["exp-stage1", "exp-stage2"],
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["exp-stage1"],
+    "source_edges": [
+      {
+        "producer_trigger_id": "exp-stage1",
+        "producer_tool_name": "write_experiment_finding",
+        "consumer_trigger_id": "exp-stage2",
+        "source_collection": "ExperimentFinding"
+      }
+    ],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {
       "ExperimentFinding": 1
     }

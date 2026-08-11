@@ -37,10 +37,27 @@ pub async fn cancel_background_tool_call(
         });
     }
 
-    let live_execution_cancelled = background_executions.cancel(tool_call_id).await;
-    let dispatch = lifecycle
+    let persisted = lifecycle
         .cancel_during_run_with_cascade_dispatch(CancelCause::UserCancelled, agent_did)
-        .await?;
+        .await;
+    // Persist the operator-authored terminal cause before signalling the live
+    // worker. Otherwise the worker can observe cancellation first and win the
+    // terminal write with the less-specific `interrupted` cause. A persistence
+    // failure must still stop the live work: cancellation is best-effort state
+    // control, not contingent on observability storage being available.
+    let live_execution_cancelled = background_executions.cancel(tool_call_id).await;
+    let dispatch = match persisted {
+        Ok(dispatch) => dispatch,
+        Err(error) => {
+            tracing::error!(
+                tool_call_id,
+                live_execution_cancelled,
+                %error,
+                "failed to persist background cancellation after stopping live execution",
+            );
+            return Err(error);
+        }
+    };
 
     if let Some(CascadeDispatch::Local(intent)) = dispatch {
         interrupt_request(node.as_ref(), &intent.child_request_id).await?;

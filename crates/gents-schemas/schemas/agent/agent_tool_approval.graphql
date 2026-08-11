@@ -1,5 +1,8 @@
 type AgentToolApproval @branchable {
     approval_id: String @index(unique: true)
+    # Exact AgentToolCall document this decision authorizes. tool_call_id is
+    # provider-supplied and may be reused in another session.
+    tool_call_doc_id: String @index @immutable
     tool_call_id: String @index
     request_id: String @index
     agent_did: String @index @immutable

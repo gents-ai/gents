@@ -37,7 +37,8 @@ impl DefraSessionHook {
             args.to_string(),
             deadline_at,
         )
-        .with_requester_did(self.active_requester_did().await);
+        .with_requester_did(self.active_requester_did().await)
+        .with_request_doc_id(self.active_request_doc_id().await);
         lifecycle.start_running().await?;
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
             json!({"error": "get_goal expects an empty object"}).to_string()
@@ -80,7 +81,8 @@ impl DefraSessionHook {
             args.to_string(),
             deadline_at,
         )
-        .with_requester_did(self.active_requester_did().await);
+        .with_requester_did(self.active_requester_did().await)
+        .with_request_doc_id(self.active_request_doc_id().await);
         lifecycle.start_running().await?;
         let parsed = match serde_json::from_str::<UpdateGoalArgs>(args) {
             Ok(parsed) => parsed,

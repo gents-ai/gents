@@ -28,7 +28,9 @@ fn request() -> AgentRequest {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     }
 }
 
@@ -291,7 +293,9 @@ fn request_sampling_overrides_behavior_defaults() {
         deadline: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
+        caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
+        caused_by_parent_tool_call_doc_id: None,
     };
 
     let sampling = sampling_for_request(defaults, &request);
@@ -477,6 +481,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
     let context = RenderedRequestContext {
         request_doc_id: "doc-1".to_string(),
+        request_commit_cid: "bafy-request-commit".to_string(),
         request_id: "req-1".to_string(),
         agent_did: "did:key:agent".to_string(),
         requester_did: String::new(),

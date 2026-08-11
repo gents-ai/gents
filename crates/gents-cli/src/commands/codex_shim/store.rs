@@ -1,8 +1,10 @@
 use anyhow::Result;
-use gents::defra_node::{EmbeddedNode, QueryRequest};
+use gents::config_client::ConfigApplyTxn;
+use gents::defra_node::EmbeddedNode;
+use gents::graphql::graphql_with_transaction_retry;
 use gents::retry::{
-    defradb_conflict_retry_backoff, execute_graphql_with_conflict_retry,
-    is_defradb_transaction_conflict_text, DEFRA_DB_CONFLICT_MAX_RETRIES,
+    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
+    DEFRA_DB_CONFLICT_MAX_RETRIES,
 };
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
@@ -15,10 +17,7 @@ use crate::materialized_message_query;
 /// reconciliation writes are still in flight, and an unretried auto-commit
 /// surfaces a raw `transaction conflict` to the Codex client (#933).
 pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
-    let response = execute_graphql_with_conflict_retry(node, query, "codex shim store").await;
-    if response.has_errors() {
-        anyhow::bail!("GENTS Codex shim query failed: {:?}", response.errors);
-    }
+    let response = graphql_with_transaction_retry(node, query, "codex shim store").await?;
     Ok(json!({
         "data": response.data.unwrap_or_else(|| json!({})),
     }))
@@ -30,9 +29,9 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
 /// COMMIT does. Routing skill enable/disable writes through here lets a running
 /// agent pick up Codex-driven toggles without a restart — matching the
 /// `config skill` CLI path (#340). Mirrors the Local arm of
-/// `gents::config_client::txn::ConfigApplyTxn`, plus a bounded conflict retry
-/// that arm does not have (#933): a conflicted cycle commits nothing, so a
-/// successful call still emits exactly one Update event.
+/// [`ConfigApplyTxn`], plus a bounded conflict retry that the config client does
+/// not have (#933): a conflicted cycle commits nothing, so a successful call
+/// still emits exactly one Update event.
 pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
     let mut retry_index = 0;
     loop {
@@ -59,24 +58,17 @@ pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Re
 }
 
 async fn execute_committed_once(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
-    let handle = node
-        .runner()
-        .begin_txn(false)
-        .await
-        .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
-    let request = QueryRequest::new(mutation);
-    let response = node.runner().execute_in_txn(request, &handle).await;
-    if response.has_errors() {
-        let _ = node.runner().rollback_txn(&handle).await;
-        anyhow::bail!("GENTS Codex shim mutation failed: {:?}", response.errors);
+    let txn = ConfigApplyTxn::begin_local(node, None).await?;
+    match txn.execute(mutation).await {
+        Ok(response) => {
+            txn.commit().await?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error.context("GENTS Codex shim mutation failed"))
+        }
     }
-    node.runner()
-        .commit_txn(&handle)
-        .await
-        .map_err(|error| anyhow::anyhow!("commit_txn: {error}"))?;
-    Ok(json!({
-        "data": response.data.unwrap_or_else(|| json!({})),
-    }))
 }
 
 pub(super) async fn hydrate_materialized_response_content(

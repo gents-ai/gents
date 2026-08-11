@@ -8,9 +8,10 @@
 //! The client is DID-parameterized: [`ConfigApplyTxn::begin_local`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor — authorization is
-//! enforced at the node, not by app-level ownership checks. The CLI paths
-//! ([`ConfigAccess::execute`] / [`ConfigAccess::begin_apply_txn`]) remain
-//! identity-less, preserving their existing behavior.
+//! enforced at the node, not by app-level ownership checks. Embedded CLI paths
+//! default to the node DID and signer. HTTP paths require bearer
+//! authentication for a caller ACP identity; without it, the server still
+//! signs committed mutations as the node but evaluates the query anonymously.
 //!
 //! Write conventions (load-bearing — see `CLAUDE.md`):
 //! - every interpolated value goes through
@@ -73,10 +74,9 @@ impl ConfigAccess {
         match self {
             Self::Graphql(graphql) => post_graphql(graphql, query).await,
             Self::Local(node) => {
-                let response = node.execute(query).await;
-                if response.has_errors() {
-                    anyhow::bail!("graphql returned errors: {:?}", response.errors);
-                }
+                let response =
+                    crate::graphql::graphql_with_transaction_retry(node, query, "config GraphQL")
+                        .await?;
                 Ok(json!({
                     "data": response.data.unwrap_or(Value::Null),
                 }))
@@ -97,7 +97,7 @@ pub struct ExistingDocumentRef {
 /// `http://host:port/api/v0/graphql`). Stripping that suffix gives the API
 /// base `http://host:port/api/v0`, from which paths like `/tx` (begin) and
 /// `/tx/{id}` (commit/discard) are appended.
-pub(crate) fn graphql_api_base(graphql: &str) -> Result<String> {
+pub fn graphql_api_base(graphql: &str) -> Result<String> {
     graphql
         .trim()
         .strip_suffix("/graphql")
@@ -117,7 +117,7 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 /// `request_timeline`) strip these hint lines before surfacing the error.
 /// Never reaches agent-facing tool errors (the runtime always writes
 /// through the embedded node).
-pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
+pub fn graphql_diagnostic_hint(graphql: &str) -> String {
     if is_probably_local_graphql_endpoint(graphql) {
         "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents server`\n  3. Inspect it with `gents status`".to_string()
     } else {
@@ -127,7 +127,7 @@ pub(crate) fn graphql_diagnostic_hint(graphql: &str) -> String {
     }
 }
 
-async fn post_graphql(graphql: &str, query: &str) -> Result<Value> {
+pub async fn post_graphql(graphql: &str, query: &str) -> Result<Value> {
     execute_graphql_async(
         graphql,
         query,

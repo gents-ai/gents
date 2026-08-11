@@ -71,6 +71,8 @@ struct ToolCallRow {
     #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
+    request_doc_id: Option<String>,
+    #[serde(default)]
     agent_did: Option<String>,
     #[serde(default)]
     requester_did: Option<String>,
@@ -114,6 +116,7 @@ impl ToolCallLifecycle {
                 ) {{
                     _docID
                     request_id
+                    request_doc_id
                     agent_did
                     requester_did
                     message_sequence
@@ -209,6 +212,7 @@ impl ToolCallLifecycle {
         Ok(Some(Self {
             node,
             request_id: row.request_id.unwrap_or_default(),
+            request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
             session_id: session_id.to_string(),
             agent_did: row.agent_did.unwrap_or_default(),
             // Current recovery paths only update the existing immutable row,

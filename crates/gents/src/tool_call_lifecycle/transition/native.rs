@@ -5,6 +5,10 @@ impl ToolCallLifecycle {
         crate::session::requester_did_create_field(self.requester_did.as_deref())
     }
 
+    fn request_doc_id_fragment(&self) -> String {
+        crate::session::request_doc_id_create_field(self.request_doc_id.as_deref())
+    }
+
     /// GraphQL fragment for the durable workflow-group projection fields,
     /// emitted on every create path so a bridge stays projectable by
     /// `workflow_group_id` regardless of which transition created its row.
@@ -85,6 +89,7 @@ impl ToolCallLifecycle {
                     cancel_policy: "{cancel_policy_str}","#
         );
         let requester_did_field = self.requester_did_fragment();
+        let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
@@ -92,6 +97,7 @@ impl ToolCallLifecycle {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
+                    {request_doc_id_field}
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
@@ -321,6 +327,7 @@ impl ToolCallLifecycle {
         let failure_class_str = failure.as_str();
         let command_denial_fields = command_denial_fields_fragment(command_denial);
         let requester_did_field = self.requester_did_fragment();
+        let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
@@ -328,6 +335,7 @@ impl ToolCallLifecycle {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
+                    {request_doc_id_field}
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
@@ -458,6 +466,7 @@ impl ToolCallLifecycle {
         let message_sequence = self.message_sequence;
         let cancel_cause = cause.as_str();
         let requester_did_field = self.requester_did_fragment();
+        let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
@@ -467,6 +476,7 @@ impl ToolCallLifecycle {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
+                    {request_doc_id_field}
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
@@ -519,6 +529,7 @@ impl ToolCallLifecycle {
         let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
         let message_sequence = self.message_sequence;
         let requester_did_field = self.requester_did_fragment();
+        let request_doc_id_field = self.request_doc_id_fragment();
         let workflow_fields = self.workflow_fields_fragment();
 
         let mutation = format!(
@@ -526,6 +537,7 @@ impl ToolCallLifecycle {
                 create_AgentToolCall(input: {{
                     tool_call_key: "{tool_call_key}",
                     request_id: "{escaped_request_id}",
+                    {request_doc_id_field}
                     session_id: "{escaped_session_id}",
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}

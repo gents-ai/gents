@@ -126,7 +126,9 @@ mod tests {
             deadline: Some("2026-06-04T00:05:00Z".to_string()),
             subagent_depth: 1,
             caused_by_parent_request_id: Some("parent-req".to_string()),
+            caused_by_parent_request_doc_id: Some("parent-req-doc".to_string()),
             caused_by_parent_tool_call_id: Some("parent-tool".to_string()),
+            caused_by_parent_tool_call_doc_id: Some("parent-tool-doc".to_string()),
         }
     }
 

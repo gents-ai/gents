@@ -35,6 +35,7 @@ pub(crate) struct RequestSubmitOptions {
     pub(crate) metadata: Option<String>,
     pub(crate) valid_until: Option<DateTime<Utc>>,
     pub(crate) retry_parent_request: Option<String>,
+    pub(crate) retry_parent_request_doc_id: Option<String>,
     pub(crate) retry_root_request: Option<String>,
 }
 
@@ -271,6 +272,17 @@ pub(crate) async fn create_agent_request(
         format!("{request_override_fields},\n                ")
     };
     let retry_parent_value = options.retry_parent_request.as_deref().unwrap_or_default();
+    let retry_parent_doc_field = options
+        .retry_parent_request_doc_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            format!(
+                r#"retry_parent_request_doc_id: "{}","#,
+                escape_graphql_string(value)
+            )
+        })
+        .unwrap_or_default();
     let retry_root_value = options
         .retry_root_request
         .as_deref()
@@ -291,6 +303,7 @@ pub(crate) async fn create_agent_request(
                 {behavior_field}
                 session_id: "{session_id}",
                 retry_parent_request: "{retry_parent}",
+                {retry_parent_doc_field}
                 retry_root_request: "{retry_root}",
                 superseded_by_request: "",
                 content: "{content}",
@@ -705,6 +718,7 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
 
 #[derive(Debug, Clone)]
 pub(crate) struct StaleRequestView {
+    pub(crate) doc_id: String,
     pub(crate) agent_did: String,
     pub(crate) behavior_id: Option<String>,
     pub(crate) content: String,
@@ -726,8 +740,9 @@ pub(crate) async fn fetch_request_view(
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 1
+                limit: 2
             ) {{
+                _docID
                 agent_did
                 behavior_id
                 content
@@ -744,11 +759,20 @@ pub(crate) async fn fetch_request_view(
         request_id = escape_graphql_string(request_id),
     );
     let response = post_graphql(graphql, &query).await?;
-    let row = response
+    let rows = response
         .pointer("/data/AgentRequest")
         .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
         .cloned()
+        .unwrap_or_default();
+    if rows.len() != 1 {
+        anyhow::bail!(
+            "request_id {request_id} is ambiguous or absent across {} AgentRequest documents",
+            rows.len()
+        );
+    }
+    let row = rows
+        .into_iter()
+        .next()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
     let as_string = |key: &str| {
         row.get(key)
@@ -765,6 +789,7 @@ pub(crate) async fn fetch_request_view(
     let as_optional_f64 = |key: &str| row.get(key).and_then(|v| v.as_f64());
     let as_optional_i64 = |key: &str| row.get(key).and_then(|v| v.as_i64());
     Ok(StaleRequestView {
+        doc_id: as_string("_docID"),
         agent_did: as_string("agent_did"),
         behavior_id: as_optional("behavior_id"),
         content: as_string("content"),

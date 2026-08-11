@@ -480,8 +480,10 @@ fn import_langgraph_capture(
             messages,
             tool_calls,
             inference_calls: Vec::new(),
+            compactions: Vec::new(),
             responses,
             rendered_requests: Vec::new(),
+            rendered_request_refs: Vec::new(),
         },
     })
 }
@@ -1065,8 +1067,10 @@ fn import_multi_agent_capture(
             messages,
             tool_calls,
             inference_calls: Vec::new(),
+            compactions: Vec::new(),
             responses,
             rendered_requests: Vec::new(),
+            rendered_request_refs: Vec::new(),
         },
     })
 }

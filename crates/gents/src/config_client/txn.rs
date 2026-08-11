@@ -34,8 +34,9 @@ use super::{graphql_api_base, graphql_diagnostic_hint, ConfigAccess};
 
 enum TxnBackend<'a> {
     /// Numeric txn id parsed from `POST /api/v0/tx`. Identity cannot ride
-    /// this path (`QueryRequest.identity` is `#[serde(skip)]`); HTTP writes
-    /// execute under the node's ambient identity policy.
+    /// this path (`QueryRequest.identity` is `#[serde(skip)]`): without an
+    /// authenticated HTTP bearer the ACP actor is anonymous, while committed
+    /// mutations are still signed by the server node.
     Graphql {
         endpoint: &'a str,
         id: String,
@@ -58,9 +59,12 @@ pub struct ConfigApplyTxn<'a> {
 impl<'a> ConfigApplyTxn<'a> {
     /// Begin an embedded-node transaction, optionally executing under a
     /// specific DID identity so document ACP applies to every statement.
+    /// When omitted, DefraDB supplies the embedded node DID and signer.
     ///
     /// This is the runtime self-config entry point; the CLI apply path goes
-    /// through [`ConfigAccess::begin_apply_txn`] (identity-less).
+    /// through [`ConfigAccess::begin_apply_txn`]. Embedded access defaults to
+    /// the node DID; HTTP access needs bearer authentication for a caller ACP
+    /// identity even though the server node signs its commits.
     pub async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
         let handle = node
             .runner()
@@ -101,7 +105,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 identity,
             } => {
                 let request = QueryRequest::new(query).with_identity(identity.clone());
-                let response = node.runner().execute_in_txn(request, handle).await;
+                let response = node.execute_request_in_txn(request, handle).await;
                 if response.has_errors() {
                     anyhow::bail!("graphql returned errors: {:?}", response.errors);
                 }
@@ -191,7 +195,83 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::commit_signer_identity_for_did;
+    use crate::{AgentIdentity, KeyIdentity};
+
+    #[tokio::test]
+    async fn local_transaction_is_signed_by_the_node_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+        let did = identity.did().to_string();
+        let expected_signer = commit_signer_identity_for_did(&did).unwrap();
+        let node = EmbeddedNode::builder()
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .unwrap();
+        node.add_schema("type SignedTransactionFact { value: String }")
+            .await
+            .unwrap();
+
+        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        let response = txn
+            .execute(
+                r#"mutation {
+                    create_SignedTransactionFact(input: {value: "durable"}) { _docID }
+                }"#,
+            )
+            .await
+            .unwrap();
+        let doc_id = response["data"]["add_SignedTransactionFact"][0]["_docID"]
+            .as_str()
+            .expect("created document ID")
+            .to_string();
+        txn.commit().await.unwrap();
+
+        let commits =
+            crate::graphql::composite_commits(&node, &doc_id, "load signed explicit transaction")
+                .await
+                .unwrap();
+        assert!(commits.iter().any(|commit| {
+            commit
+                .signature
+                .as_ref()
+                .map(|signature| signature.identity.as_str())
+                == Some(expected_signer.as_str())
+        }));
+
+        node.shutdown().await;
+    }
+}
+
 impl ConfigAccess {
+    /// Execute and commit one statement through the authoritative path for the
+    /// selected backend.
+    ///
+    /// Embedded nodes use `EmbeddedNode::execute_with_retry` via
+    /// `ConfigAccess::execute`, which installs the node's commit-signing
+    /// context. HTTP uses an explicit transaction so the server publishes the
+    /// commit event consumed by a running runtime.
+    pub async fn execute_committed(&self, query: &str) -> Result<Value> {
+        if matches!(self, Self::Local(_)) {
+            return self.execute(query).await;
+        }
+        let txn = self.begin_apply_txn().await?;
+        match txn.execute(query).await {
+            Ok(response) => {
+                txn.commit().await?;
+                Ok(response)
+            }
+            Err(error) => {
+                let _ = txn.discard().await;
+                Err(error)
+            }
+        }
+    }
+
     /// Begin a write transaction on the underlying backend.
     pub async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
         match self {

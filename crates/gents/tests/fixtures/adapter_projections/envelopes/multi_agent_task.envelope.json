@@ -58,6 +58,7 @@
   "projection_version": "v1",
   "provenance": {
     "runtime": "gents",
+    "source_version_status": "current_state_captured_only",
     "source_projection_id": "run_timeline",
     "source_projection_version": "v1"
   },

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, QueryResponse};
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -528,19 +528,8 @@ fn sort_goals_canonical(goals: &mut [GoalDocument]) {
 }
 
 async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDocument>> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!("Goal query failed: {:?}", response.errors);
-    }
-    serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("Goal"))
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
-    )
-    .context("decoding Goal rows")
+    let response = graphql_with_transaction_retry(node, query, "Goal query").await?;
+    rows(&response, "Goal").context("decoding Goal rows")
 }
 
 pub async fn set_goal(
@@ -774,10 +763,8 @@ pub async fn claim_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!("claim goal continuation failed: {:?}", response.errors);
-    }
+    let response =
+        graphql_with_transaction_retry(node, &mutation, "claim goal continuation").await?;
     Ok(response
         .data
         .as_ref()
@@ -797,19 +784,15 @@ pub async fn session_token_usage(
             AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
         }}"#
     );
-    let response = node.execute(&request_query).await;
-    if response.has_errors() {
-        bail!("query goal session requests failed: {:?}", response.errors);
-    }
-    let mut request_ids = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| value.as_array())
+    let response =
+        graphql_with_transaction_retry(node, &request_query, "query goal session requests").await?;
+    let mut request_ids = rows::<serde_json::Value>(&response, "AgentRequest")?
         .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("request_id").and_then(|value| value.as_str()))
-        .map(ToOwned::to_owned)
+        .filter_map(|row| {
+            row.get("request_id")
+                .and_then(|value| value.as_str())
+                .map(ToOwned::to_owned)
+        })
         .collect::<Vec<_>>();
     request_ids.sort();
     request_ids.dedup();
@@ -837,20 +820,11 @@ pub async fn session_token_usage(
         #[serde(default)]
         cached_input_tokens: Option<i64>,
     }
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!("query goal inference usage failed: {:?}", response.errors);
-    }
-    let rows: Vec<UsageRow> = serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("InferenceCall"))
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
-    )
-    .context("decoding goal inference usage")?;
-    Ok(rows.into_iter().fold(0_i64, |total, row| {
+    let response =
+        graphql_with_transaction_retry(node, &query, "query goal inference usage").await?;
+    let usage_rows: Vec<UsageRow> =
+        rows(&response, "InferenceCall").context("decoding goal inference usage")?;
+    Ok(usage_rows.into_iter().fold(0_i64, |total, row| {
         let fresh_input = row
             .prompt_tokens
             .unwrap_or_default()
@@ -904,11 +878,7 @@ async fn execute_goal_mutation_response(
     mutation: &str,
     label: &str,
 ) -> Result<QueryResponse> {
-    let response = crate::retry::execute_graphql_with_conflict_retry(node, mutation, label).await;
-    if response.has_errors() {
-        bail!("{label} failed: {:?}", response.errors);
-    }
-    Ok(response)
+    graphql_with_transaction_retry(node, mutation, label).await
 }
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {

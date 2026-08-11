@@ -1,4 +1,4 @@
-type Skill {
+type Skill @branchable {
     skill_id: String @index(unique: true)
     agent_did: String @index
     scope: String @index

@@ -156,11 +156,27 @@ impl DefraStreamWriter {
         &self,
         session_id: &str,
         request_id: &str,
+        request_doc_id: Option<&str>,
         behavior_id: &str,
         requester_did: Option<&str>,
     ) -> Result<String> {
-        self.begin_inner(session_id, request_id, behavior_id, requester_did)
-            .await
+        let resolved_request_doc_id;
+        let request_doc_id = match request_doc_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(request_doc_id) => Some(request_doc_id),
+            None => {
+                resolved_request_doc_id =
+                    crate::request_binding::require_request_doc_id(&self.node, request_id).await?;
+                Some(resolved_request_doc_id.as_str())
+            }
+        };
+        self.begin_inner(
+            session_id,
+            request_id,
+            request_doc_id,
+            behavior_id,
+            requester_did,
+        )
+        .await
     }
 
     async fn flush_snapshot(&self, doc_id: &str, snapshot: &StreamBufferSnapshot) -> Result<()> {
@@ -586,7 +602,7 @@ impl DefraStreamWriter {
 
 impl StreamWriter for DefraStreamWriter {
     async fn begin(&self, session_id: &str, request_id: &str, behavior_id: &str) -> Result<String> {
-        self.begin_inner(session_id, request_id, behavior_id, None)
+        self.begin_with_requester_did(session_id, request_id, None, behavior_id, None)
             .await
     }
 
@@ -612,6 +628,7 @@ impl DefraStreamWriter {
         &self,
         session_id: &str,
         request_id: &str,
+        request_doc_id: Option<&str>,
         behavior_id: &str,
         requester_did: Option<&str>,
     ) -> Result<String> {
@@ -628,6 +645,11 @@ impl DefraStreamWriter {
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let response_key = escape_graphql_string(request_id);
         let escaped_request_id = escape_graphql_string(request_id);
+        let request_doc_id_field = request_doc_id
+            .map(str::trim)
+            .filter(|doc_id| !doc_id.is_empty())
+            .map(|doc_id| format!("request_doc_id: \"{}\",", escape_graphql_string(doc_id)))
+            .unwrap_or_default();
         let escaped_agent_did = escape_graphql_string(&self.agent_did);
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let escaped_session_id = escape_graphql_string(session_id);
@@ -637,6 +659,7 @@ impl DefraStreamWriter {
                 create_AgentResponse(input: {{
                     response_key: "{response_key}",
                     request_id: "{escaped_request_id}",
+                    {request_doc_id_field}
                     agent_did: "{escaped_agent_did}",
                     {requester_did_field}
                     behavior_id: "{escaped_behavior_id}",

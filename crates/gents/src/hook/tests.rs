@@ -27,6 +27,7 @@ fn session_state_for_test() -> SessionState {
     SessionState {
         session_id: Some("session-1".to_string()),
         current_request_id: None,
+        current_request_doc_id: None,
         current_requester_did: None,
         request_deadline_at: None,
         approval_required_tools: Vec::new(),
@@ -48,7 +49,46 @@ fn hook_counters_for_test() -> HookCounters {
 }
 
 #[tokio::test]
-async fn legacy_request_id_setter_clears_requester_lineage() {
+async fn request_id_setter_preserves_previous_binding_when_request_is_missing() {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:host",
+        FailurePolicy::default(),
+    );
+
+    hook.set_active_request_binding(
+        Some("request-a".to_string()),
+        Some("request-doc-a".to_string()),
+        Some("did:test:coordinator".to_string()),
+    )
+    .await;
+    hook.set_active_request_id(Some("request-b".to_string()))
+        .await;
+
+    let state = hook.state.lock().await;
+    assert_eq!(state.current_request_id.as_deref(), Some("request-a"));
+    assert_eq!(
+        state.current_request_doc_id.as_deref(),
+        Some("request-doc-a")
+    );
+    assert_eq!(
+        state.current_requester_did.as_deref(),
+        Some("did:test:coordinator")
+    );
+    drop(state);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn active_request_binding_rejects_a_half_bound_pair() {
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .build()
@@ -62,18 +102,74 @@ async fn legacy_request_id_setter_clears_requester_lineage() {
         FailurePolicy::default(),
     );
 
-    hook.set_active_request_lineage(
+    hook.set_active_request_binding(
         Some("request-a".to_string()),
+        None,
         Some("did:test:coordinator".to_string()),
     )
     .await;
-    hook.set_active_request_id(Some("request-b".to_string()))
-        .await;
 
     let state = hook.state.lock().await;
-    assert_eq!(state.current_request_id.as_deref(), Some("request-b"));
+    assert_eq!(state.current_request_id, None);
+    assert_eq!(state.current_request_doc_id, None);
     assert_eq!(state.current_requester_did, None);
     drop(state);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn request_lineage_resolves_doc_id_and_prompt_tool_path_reloads_legacy_binding() {
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
+    ensure_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    create_interruptible_request(node.as_ref(), "request-lineage", &session_id).await;
+
+    hook.set_active_request_lineage(
+        Some("request-lineage".to_string()),
+        Some("did:test:requester".to_string()),
+    )
+    .await
+    .unwrap();
+    let expected_doc_id = hook
+        .state
+        .lock()
+        .await
+        .current_request_doc_id
+        .clone()
+        .expect("resolved request doc id");
+
+    hook.set_active_request_id(Some("request-lineage".to_string()))
+        .await;
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    assert!(matches!(
+        hook.on_tool_call("read", None, "lineage-reload", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let row = fetch_tool_call_row(&node, &session_id, "lineage-reload").await;
+    assert_eq!(
+        row.get("request_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(expected_doc_id.as_str())
+    );
     node.shutdown().await;
 }
 
@@ -476,7 +572,9 @@ async fn fetch_tool_call_row(
                     }},
                     limit: 1
                 ) {{
+                    _docID
                     request_id
+                    request_doc_id
                     deadline_at
                     lifecycle_state
                     result
@@ -520,6 +618,7 @@ async fn fetch_tool_result_spill_row(
                     }},
                     limit: 1
                 ) {{
+                    tool_call_doc_id
                     output_text
                     truncated
                     truncation_metadata
@@ -569,8 +668,12 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     let deadline = chrono::DateTime::parse_from_rfc3339("2026-05-08T12:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    hook.set_active_request_id(Some("req-deadline".to_string()))
-        .await;
+    hook.set_active_request_binding(
+        Some("req-deadline".to_string()),
+        Some("request-doc-deadline".to_string()),
+        None,
+    )
+    .await;
     hook.set_request_deadline_at(Some(deadline)).await;
 
     assert!(matches!(
@@ -583,6 +686,10 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     assert_eq!(
         row.get("request_id").and_then(|value| value.as_str()),
         Some("req-deadline")
+    );
+    assert_eq!(
+        row.get("request_doc_id").and_then(|value| value.as_str()),
+        Some("request-doc-deadline")
     );
     let observed_deadline = chrono::DateTime::parse_from_rfc3339(
         row.get("deadline_at")
@@ -754,7 +861,11 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         FailurePolicy::default(),
     );
     hook1
-        .set_active_request_id(Some("req-retry".to_string()))
+        .set_active_request_binding(
+            Some("req-retry".to_string()),
+            Some("request-doc-retry".to_string()),
+            None,
+        )
         .await;
     assert!(matches!(
         hook1
@@ -776,7 +887,11 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     .await
     .unwrap();
     hook2
-        .set_active_request_id(Some("req-retry".to_string()))
+        .set_active_request_binding(
+            Some("req-retry".to_string()),
+            Some("request-doc-retry".to_string()),
+            None,
+        )
         .await;
     assert!(matches!(
         hook2
@@ -804,6 +919,22 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         2,
         "retry must not duplicate turn-1 messages; expected [context, prompt], got {history:?}"
     );
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
+            crate::graphql::escape_graphql_string(&session_id)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let data = response.data.unwrap();
+    let rows = data["AgentMessage"].as_array().expect("message rows");
+    assert!(rows
+        .iter()
+        .all(|row| row["request_doc_id"] == "request-doc-retry"));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -1016,6 +1147,12 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
     );
 
     let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;
+    assert_eq!(
+        spill
+            .get("tool_call_doc_id")
+            .and_then(|value| value.as_str()),
+        tool_call.get("_docID").and_then(|value| value.as_str())
+    );
     assert_eq!(
         spill.get("truncated").and_then(|value| value.as_bool()),
         Some(true)
@@ -2237,20 +2374,24 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
 
 async fn write_approval_document(
     node: &defra_node::EmbeddedNode,
+    tool_call_doc_id: &str,
     tool_call_id: &str,
     agent_did: &str,
     decision: &str,
     reason: &str,
 ) {
+    let escaped_tool_call_doc_id = crate::graphql::escape_graphql_string(tool_call_doc_id);
     let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
     let escaped_agent_did = crate::graphql::escape_graphql_string(agent_did);
     let escaped_decision = crate::graphql::escape_graphql_string(decision);
     let escaped_reason = crate::graphql::escape_graphql_string(reason);
     let created_at = chrono::Utc::now().to_rfc3339();
+    let approval_id = uuid::Uuid::new_v4();
     let mutation = format!(
         r#"mutation {{
             create_AgentToolApproval(input: {{
-                approval_id: "approval-{escaped_tool_call_id}",
+                approval_id: "approval-{approval_id}",
+                tool_call_doc_id: "{escaped_tool_call_doc_id}",
                 tool_call_id: "{escaped_tool_call_id}",
                 request_id: "req-hold",
                 agent_did: "{escaped_agent_did}",
@@ -2274,7 +2415,7 @@ async fn wait_for_lifecycle_state(
     session_id: &str,
     tool_call_id: &str,
     expected: &str,
-) {
+) -> String {
     for _ in 0..200 {
         let session = crate::graphql::escape_graphql_string(session_id);
         let call = crate::graphql::escape_graphql_string(tool_call_id);
@@ -2287,7 +2428,7 @@ async fn wait_for_lifecycle_state(
                             tool_call_id: {{ _eq: "{call}" }}
                         }},
                         limit: 1
-                    ) {{ lifecycle_state }}
+                    ) {{ _docID lifecycle_state }}
                 }}"#
             ))
             .await;
@@ -2306,7 +2447,16 @@ async fn wait_for_lifecycle_state(
             .and_then(|value| value.as_str())
             .map(str::to_string);
         if state.as_deref() == Some(expected) {
-            return;
+            return resp
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("_docID"))
+                .and_then(|value| value.as_str())
+                .expect("held AgentToolCall _docID")
+                .to_string();
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
@@ -2356,7 +2506,7 @@ async fn held_tool_call_dispatches_after_operator_approval() {
     let approver_node = node.clone();
     let approver_session = session_id.clone();
     let approver = tokio::spawn(async move {
-        wait_for_lifecycle_state(
+        let tool_call_doc_id = wait_for_lifecycle_state(
             &approver_node,
             &approver_session,
             "internal-approve",
@@ -2365,6 +2515,26 @@ async fn held_tool_call_dispatches_after_operator_approval() {
         .await;
         write_approval_document(
             &approver_node,
+            "different-tool-call-doc",
+            "internal-approve",
+            "did:test:general",
+            "approved",
+            "",
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let still_held =
+            fetch_tool_call_row(&approver_node, &approver_session, "internal-approve").await;
+        assert_eq!(
+            still_held
+                .get("lifecycle_state")
+                .and_then(|value| value.as_str()),
+            Some("awaitingApproval"),
+            "approval for another AgentToolCall _docID must be ignored"
+        );
+        write_approval_document(
+            &approver_node,
+            &tool_call_doc_id,
             "internal-approve",
             "did:test:general",
             "approved",
@@ -2400,7 +2570,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
     let approver_node = node.clone();
     let approver_session = session_id.clone();
     let approver = tokio::spawn(async move {
-        wait_for_lifecycle_state(
+        let tool_call_doc_id = wait_for_lifecycle_state(
             &approver_node,
             &approver_session,
             "internal-deny",
@@ -2409,6 +2579,7 @@ async fn held_tool_call_denied_skips_with_operator_reason() {
         .await;
         write_approval_document(
             &approver_node,
+            &tool_call_doc_id,
             "internal-deny",
             "did:test:general",
             "denied",
