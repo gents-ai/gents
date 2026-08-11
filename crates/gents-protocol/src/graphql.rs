@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_protocol::{
-    derive_turn as derive_client_turn, AttemptView, ClientTurnState, RequestLifecycleState,
+    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
     RequestSnapshot, ResponseSnapshot, ResponseStatus,
 };
 use crate::row::{
@@ -44,9 +44,12 @@ pub struct GraphqlTurnState {
 }
 
 impl GraphqlTurnState {
+    pub fn projected_head(&self) -> Option<ClientHeadProjection> {
+        self.attempt_view().as_ref().map(project_attempt)
+    }
+
     pub fn derived_turn_state(&self) -> Option<ClientTurnState> {
-        let attempt = self.attempt_view()?;
-        derive_client_turn(&[attempt])
+        self.projected_head().map(|head| head.turn_state)
     }
 
     pub fn response_is_durably_complete(&self) -> bool {
@@ -836,6 +839,7 @@ pub fn turn_state_query(request_id: &str) -> String {
                 max_total_tokens
                 metadata
                 lifecycle_state
+                failure_reason
                 interrupt_requested_at
                 valid_until
             }}
@@ -979,12 +983,7 @@ pub fn parse_session_shape_response(
 }
 
 fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    match row.status.as_deref().unwrap_or_default() {
-        "streaming" => Some(ResponseStatus::Streaming),
-        "complete" | "completed" => Some(ResponseStatus::Complete),
-        "error" | "failed" | "failure" => Some(ResponseStatus::Error),
-        _ => None,
-    }
+    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
 
 fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<serde_json::Value> {
@@ -1111,6 +1110,7 @@ mod tests {
         assert!(turn_query.contains("top_k"));
         assert!(turn_query.contains("max_tokens"));
         assert!(turn_query.contains("metadata"));
+        assert!(turn_query.contains("failure_reason"));
         assert!(turn_query.contains("interrupt_requested_at"));
         assert!(turn_query.contains("valid_until"));
         assert!(turn_query.contains("interrupted_at"));

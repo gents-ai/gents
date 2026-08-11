@@ -72,9 +72,11 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(
         pending.lean_theorems,
         vec![
-            "CodexShim.project_pending_is_in_progress".to_string(),
-            "CodexShim.nonterminal_without_response_projects_in_progress".to_string(),
-            "CodexShim.request_transition_projection_monotonic".to_string(),
+            "deriveAttempt_total".to_string(),
+            "lifecycle_transition_monotonic".to_string(),
+            "terminal_coherence".to_string(),
+            "CodexShim.projectClientTurnState_terminal".to_string(),
+            "CodexShim.projection_without_local_interrupt".to_string(),
             "CodexShim.codex_turn_terminates_precisely".to_string(),
         ]
     );
@@ -89,7 +91,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert!(!completed.interruptible_request_state);
     assert!(completed
         .lean_theorems
-        .contains(&"CodexShim.terminal_request_overrides_response".to_string()));
+        .contains(&"terminal_coherence".to_string()));
 
     let local_interrupt = lean_codex_shim_projection_case(
         "codex_shim.projection.local_interrupt_preempts_core_state",
@@ -207,15 +209,27 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 
     let status_cases = lean_codex_shim_subagent_status_cases();
-    assert_eq!(status_cases.len(), 9);
+    assert_eq!(status_cases.len(), 11);
     for case in status_cases {
-        let expected = match case.request_state.as_str() {
-            "pending" => ("pendingInit", false),
-            "claimed" | "processing" | "inputRequired" => ("running", false),
-            "completed" => ("completed", true),
-            "failed" | "dead" => ("errored", true),
-            "superseded" | "interrupted" => ("interrupted", true),
-            other => panic!("{}: unmodeled child request state {other:?}", case.witness),
+        let head = gents_protocol::client_protocol::project_persisted_attempt(
+            &case.request_state,
+            false,
+            case.response_status.as_deref(),
+        )
+        .unwrap_or_else(|| panic!("{}: invalid client head", case.witness));
+        use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
+        let expected = match (head.turn_state, head.request_state) {
+            (ClientTurnState::Completed, _) => ("completed", true),
+            (ClientTurnState::Failed, _) => ("errored", true),
+            (ClientTurnState::Superseded | ClientTurnState::Interrupted, _) => {
+                ("interrupted", true)
+            }
+            (ClientTurnState::WaitingForClaim, RequestLifecycleState::Pending) => {
+                ("pendingInit", false)
+            }
+            (ClientTurnState::WaitingForClaim | ClientTurnState::Streaming, _) => {
+                ("running", false)
+            }
         };
         assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
         assert_eq!(case.terminal, expected.1, "{}", case.witness);
@@ -359,15 +373,26 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(reset_before_terminal.completed_text, None);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 11);
+    assert_eq!(thread_status_cases.len(), 13);
     for case in thread_status_cases {
-        let expected = match case.request_state.as_deref() {
-            Some("pending" | "claimed" | "processing" | "inputRequired") => "active",
-            Some("failed" | "dead") => "systemError",
-            Some("completed" | "superseded" | "interrupted") => "idle",
+        use gents_protocol::client_protocol::ClientTurnState;
+        let head = case.request_state.as_deref().and_then(|request_state| {
+            gents_protocol::client_protocol::project_persisted_attempt(
+                request_state,
+                false,
+                case.response_status.as_deref(),
+            )
+        });
+        let expected = match head.map(|head| head.turn_state) {
+            Some(ClientTurnState::WaitingForClaim | ClientTurnState::Streaming) => "active",
+            Some(ClientTurnState::Failed) => "systemError",
+            Some(
+                ClientTurnState::Completed
+                | ClientTurnState::Superseded
+                | ClientTurnState::Interrupted,
+            ) => "idle",
             None if case.conversation_status == "error" => "systemError",
             None => "idle",
-            Some(other) => panic!("{}: unknown request state {other}", case.witness),
         };
         assert_eq!(case.projected_status, expected, "{}", case.witness);
     }

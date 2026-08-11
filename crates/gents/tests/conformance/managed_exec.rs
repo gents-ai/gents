@@ -79,6 +79,15 @@ pub(super) fn managed_exec_liveness_cases_pin_native_process_boundary() {
     assert_eq!(cancel.expected_tool_state, "cancelled");
     assert!(cancel.kill_signal_required);
 
+    let nonzero = cases
+        .iter()
+        .find(|case| case.name == "nonzero_child_exit_fails_without_kill")
+        .expect("nonzero-exit outcome case must be emitted");
+    assert_eq!(nonzero.trigger, "observeExitFailure");
+    assert_eq!(nonzero.expected_exec_state, "exited");
+    assert_eq!(nonzero.expected_tool_state, "failed");
+    assert!(!nonzero.kill_signal_required);
+
     for case in cases {
         if case.expected_exec_state == "killSignaled" {
             assert!(

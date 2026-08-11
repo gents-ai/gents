@@ -32,6 +32,7 @@ mod handlers;
 mod history_projection;
 mod host_runtime;
 mod progress;
+mod projection_state;
 mod protocol;
 mod store;
 mod subagent_projection;

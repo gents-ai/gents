@@ -2892,3 +2892,72 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+#[tokio::test]
+async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
+    let data_path = std::env::temp_dir().join(format!(
+        "agent-hook-reported-failure-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    hook.set_active_request_id(Some("req-reported-failure".to_string()))
+        .await;
+
+    assert!(matches!(
+        hook.on_tool_call("bash", None, "internal-reported-failure", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let text = r#"gents_exec: {"ok":false,"status":"exit_nonzero","exit_code":1}"#;
+    let outcome = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
+        "bash",
+        Err(crate::llm::tool::ToolError::ReportedFailure {
+            class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+            text: text.to_string(),
+        }),
+    );
+    assert!(matches!(
+        hook.on_tool_result("bash", None, "internal-reported-failure", "{}", &outcome)
+            .await,
+        HookAction::Continue
+    ));
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-reported-failure").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed")
+    );
+    assert_eq!(
+        row.get("tool_failure_class")
+            .and_then(|value| value.as_str()),
+        Some("toolReturnedError")
+    );
+    assert_eq!(
+        row.get("result").and_then(|value| value.as_str()),
+        Some(text)
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}

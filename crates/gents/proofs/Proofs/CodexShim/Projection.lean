@@ -1,27 +1,19 @@
-import Proofs.Client.Types
+import Proofs.Client
 import Proofs.CodexShim.TurnLifecycle
 import Proofs.InferenceCall.State
-import Proofs.Request.Transition
 
 namespace CodexShim
 
-def projectedRank : TurnPhase → Nat
-  | .notStarted => 0
-  | .inProgress => 1
-  | .completed => 2
-  | .failed => 2
-  | .interrupted => 2
-
-def projectRequestState : RequestState → TurnPhase
-  | .pending => .inProgress
-  | .claimed => .inProgress
-  | .processing => .inProgress
-  | .inputRequired => .inProgress
+def projectClientTurnState : ClientTurnState → TurnPhase
+  | .waitingForClaim | .streaming => .inProgress
   | .completed => .completed
   | .failed => .failed
-  | .dead => .failed
-  | .superseded => .interrupted
-  | .interrupted => .interrupted
+  | .superseded | .interrupted => .interrupted
+
+theorem projectClientTurnState_terminal (state : ClientTurnState) :
+    TurnPhase.terminal (projectClientTurnState state) ↔ state.isTerminal = true := by
+  cases state <;>
+    simp [projectClientTurnState, TurnPhase.terminal, ClientTurnState.isTerminal]
 
 inductive SubagentControlTool where
   | spawn
@@ -140,22 +132,24 @@ def CollabAgentPhase.terminal : CollabAgentPhase → Prop
   | .completed | .errored | .interrupted => True
   | .pendingInit | .running => False
 
-def projectSubagentState : RequestState → CollabAgentPhase
-  | .pending => .pendingInit
-  | .claimed | .processing | .inputRequired => .running
-  | .completed => .completed
-  | .failed | .dead => .errored
-  | .superseded | .interrupted => .interrupted
+def projectSubagentState : ClientHeadProjection → CollabAgentPhase
+  | ⟨.completed, _⟩ => .completed
+  | ⟨.failed, _⟩ => .errored
+  | ⟨.superseded, _⟩ | ⟨.interrupted, _⟩ => .interrupted
+  | ⟨.waitingForClaim, .pending⟩ => .pendingInit
+  | ⟨.waitingForClaim, _⟩ | ⟨.streaming, _⟩ => .running
 
 theorem subagent_status_terminal_precisely
-    (state : RequestState) :
-    CollabAgentPhase.terminal (projectSubagentState state) ↔
-      isTerminal state := by
-  cases state <;>
+    (head : ClientHeadProjection) :
+    CollabAgentPhase.terminal (projectSubagentState head) ↔
+      head.isTerminal = true := by
+  cases head with
+  | mk turnState requestState =>
+    cases turnState <;> cases requestState <;>
     simp [ projectSubagentState
          , CollabAgentPhase.terminal
-         , HasTerminal.isTerminal
-         , RequestState.instHasTerminal
+         , ClientHeadProjection.isTerminal
+         , ClientTurnState.isTerminal
          ]
 
 structure CollabPresentationFingerprint where
@@ -164,14 +158,14 @@ structure CollabPresentationFingerprint where
   deriving DecidableEq, Repr
 
 def collabPresentationFingerprint
-    (latestChildState : RequestState)
+    (latestChildState : ClientHeadProjection)
     (failureMessage : Option String) : CollabPresentationFingerprint :=
   { childPhase := projectSubagentState latestChildState
   , failureMessage := failureMessage
   }
 
 theorem collab_fingerprint_includes_latest_child_state
-    (state : RequestState)
+    (state : ClientHeadProjection)
     (failureMessage : Option String) :
     (collabPresentationFingerprint state failureMessage).childPhase =
       projectSubagentState state := rfl
@@ -469,12 +463,13 @@ inductive ThreadPresentationStatus where
   deriving DecidableEq, Repr
 
 def projectThreadStatus
-    (requestState : Option RequestState)
+    (head : Option ClientHeadProjection)
     (conversationStatus : String) : ThreadPresentationStatus :=
-  match requestState with
-  | some .pending | some .claimed | some .processing | some .inputRequired => .active
-  | some .failed | some .dead => .systemError
-  | some .completed | some .superseded | some .interrupted => .idle
+  match head with
+  | some ⟨.waitingForClaim, _⟩ | some ⟨.streaming, _⟩ => .active
+  | some ⟨.failed, _⟩ => .systemError
+  | some ⟨.completed, _⟩ | some ⟨.superseded, _⟩
+  | some ⟨.interrupted, _⟩ => .idle
   | none => if conversationStatus = "error" then .systemError else .idle
 
 def projectionBehaviorId (rootBehaviorId : String)
@@ -522,13 +517,16 @@ def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
   persisted.getD observed
 
 theorem active_request_projects_active_thread :
-    projectThreadStatus (some .processing) "completed" = .active := rfl
+    projectThreadStatus (some ⟨.waitingForClaim, .processing⟩) "completed" = .active := rfl
+
+theorem terminal_response_projects_idle_thread_before_request_terminalizes :
+    projectThreadStatus (some ⟨.completed, .processing⟩) "active" = .idle := rfl
 
 theorem failed_request_projects_system_error_thread :
-    projectThreadStatus (some .failed) "active" = .systemError := rfl
+    projectThreadStatus (some ⟨.failed, .failed⟩) "active" = .systemError := rfl
 
 theorem completed_request_projects_idle_thread :
-    projectThreadStatus (some .completed) "error" = .idle := rfl
+    projectThreadStatus (some ⟨.completed, .completed⟩) "error" = .idle := rfl
 
 theorem missing_request_error_conversation_projects_system_error :
     projectThreadStatus none "error" = .systemError := rfl
@@ -679,94 +677,36 @@ structure ProjectionObservation where
   localInterruptAcked : Bool
   deriving DecidableEq, Repr
 
-def responseStatusTerminal : Option ResponseStatus → Prop
-  | some .complete => True
-  | some .error => True
-  | some .streaming => False
-  | none => False
+def clientAttemptObservation (obs : ProjectionObservation) : AttemptView :=
+  { request :=
+      { lifecycleState := obs.requestState
+      , isSuperseded := false
+      }
+  , response := obs.responseStatus.map fun status =>
+      { status := status
+      , tailEmpty := true
+      }
+  }
 
 def turnEffectivelyTerminal (obs : ProjectionObservation) : Prop :=
-  isTerminal obs.requestState ∨
-  obs.localInterruptAcked = true ∨
-  responseStatusTerminal obs.responseStatus
+  obs.localInterruptAcked = true ∨ effectivelyTerminal (clientAttemptObservation obs)
+
+instance (obs : ProjectionObservation) : Decidable (turnEffectivelyTerminal obs) := by
+  unfold turnEffectivelyTerminal
+  infer_instance
 
 def projectObservation (obs : ProjectionObservation) : TurnPhase :=
   if obs.localInterruptAcked then
     .interrupted
   else
-    match obs.requestState with
-    | .pending | .claimed | .processing | .inputRequired =>
-      match obs.responseStatus with
-      | some .complete => .completed
-      | some .error => .failed
-      | some .streaming => .inProgress
-      | none => .inProgress
-    | .completed => .completed
-    | .failed => .failed
-    | .dead => .failed
-    | .superseded => .interrupted
-    | .interrupted => .interrupted
+    projectClientTurnState (deriveAttempt (clientAttemptObservation obs))
 
-theorem project_pending_is_in_progress :
-    projectRequestState .pending = .inProgress := rfl
-
-theorem project_claimed_is_in_progress :
-    projectRequestState .claimed = .inProgress := rfl
-
-theorem project_processing_is_in_progress :
-    projectRequestState .processing = .inProgress := rfl
-
-theorem project_completed_is_completed :
-    projectRequestState .completed = .completed := rfl
-
-theorem project_failed_is_failed :
-    projectRequestState .failed = .failed := rfl
-
-theorem project_dead_is_failed :
-    projectRequestState .dead = .failed := rfl
-
-theorem project_superseded_is_interrupted :
-    projectRequestState .superseded = .interrupted := rfl
-
-theorem project_interrupted_is_interrupted :
-    projectRequestState .interrupted = .interrupted := rfl
-
-theorem nonterminal_without_response_projects_in_progress
-    {s : RequestState}
-    (h : s = .pending ∨ s = .claimed ∨ s = .processing ∨ s = .inputRequired) :
-    projectObservation
-      { requestState := s, responseStatus := none, localInterruptAcked := false } =
-        .inProgress := by
-  rcases h with h | h | h | h <;> subst s <;> rfl
-
-theorem response_complete_advances_nonterminal_to_completed
-    {s : RequestState}
-    (h : s = .pending ∨ s = .claimed ∨ s = .processing ∨ s = .inputRequired) :
-    projectObservation
-      { requestState := s
-      , responseStatus := some .complete
-      , localInterruptAcked := false } = .completed := by
-  rcases h with h | h | h | h <;> subst s <;> rfl
-
-theorem response_error_advances_nonterminal_to_failed
-    {s : RequestState}
-    (h : s = .pending ∨ s = .claimed ∨ s = .processing ∨ s = .inputRequired) :
-    projectObservation
-      { requestState := s
-      , responseStatus := some .error
-      , localInterruptAcked := false } = .failed := by
-  rcases h with h | h | h | h <;> subst s <;> rfl
-
-theorem terminal_request_overrides_response
-    {s : RequestState}
-    {resp : Option ResponseStatus}
-    (h : s = .completed ∨ s = .failed ∨ s = .dead ∨
-         s = .superseded ∨ s = .interrupted) :
-    projectObservation
-      { requestState := s
-      , responseStatus := resp
-      , localInterruptAcked := false } = projectRequestState s := by
-  rcases h with h | h | h | h | h <;> subst s <;> cases resp <;> rfl
+theorem projection_without_local_interrupt
+    {obs : ProjectionObservation}
+    (h : obs.localInterruptAcked = false) :
+    projectObservation obs =
+      projectClientTurnState (deriveAttempt (clientAttemptObservation obs)) := by
+  simp [projectObservation, h]
 
 theorem local_interrupt_projects_interrupted
     {obs : ProjectionObservation}
@@ -782,77 +722,17 @@ theorem local_interrupt_never_projects_in_progress
   intro h_eq
   cases h_eq
 
-theorem terminal_request_projects_terminal
-    {s : RequestState}
-    (h : s = .completed ∨ s = .failed ∨ s = .superseded ∨
-         s = .dead ∨ s = .interrupted) :
-    TurnPhase.terminal (projectRequestState s) := by
-  rcases h with h | h | h | h | h <;> subst s <;> trivial
-
 theorem codex_turn_terminates_precisely
     (obs : ProjectionObservation) :
     TurnPhase.terminal (projectObservation obs) ↔
       turnEffectivelyTerminal obs := by
-  obtain ⟨requestState, responseStatus, localInterruptAcked⟩ := obs
-  cases localInterruptAcked <;> cases requestState
-  all_goals
-    cases responseStatus with
-    | none =>
-        simp [ projectObservation
-             , turnEffectivelyTerminal
-             , responseStatusTerminal
-             , TurnPhase.terminal
-             , HasTerminal.isTerminal
-             , RequestState.instHasTerminal
-             ]
-    | some status =>
-        cases status <;>
-          simp [ projectObservation
-               , turnEffectivelyTerminal
-               , responseStatusTerminal
-               , TurnPhase.terminal
-               , HasTerminal.isTerminal
-               , RequestState.instHasTerminal
-               ]
-
-theorem request_transition_projection_monotonic
-    {pre post : RequestContext}
-    (h : RequestContext.Transition pre post) :
-    projectedRank (projectRequestState post.state) ≥
-      projectedRank (projectRequestState pre.state) := by
-  cases h with
-  | claim h_state _ _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | dedup_lose h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | begin_inference h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | advance h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | finish h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | fail h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | fail_before_stream h_state _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | expire h_state _ _ _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | interrupt_before_claim h_state _ _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | interrupt_claimed h_state _ _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
-  | interrupt_processing h_state _ _ h_post =>
-      subst h_post
-      simp [projectRequestState, projectedRank, h_state]
+  cases h : obs.localInterruptAcked with
+  | false =>
+      rw [projection_without_local_interrupt h]
+      rw [projectClientTurnState_terminal]
+      rw [terminal_coherence]
+      simp [turnEffectivelyTerminal, h]
+  | true =>
+      simp [projectObservation, turnEffectivelyTerminal, h, TurnPhase.terminal]
 
 end CodexShim

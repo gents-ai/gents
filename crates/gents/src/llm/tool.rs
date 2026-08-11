@@ -3,6 +3,8 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tool_call_lifecycle::FailureClass;
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,6 +35,11 @@ pub enum ToolError {
         kind: UnparseableArgsKind,
         reason: String,
     },
+    /// A trusted tool adapter observed an execution failure and rendered the
+    /// model-facing detail without asking persistence to infer semantics from
+    /// arbitrary output text.
+    #[error("{text}")]
+    ReportedFailure { class: FailureClass, text: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +73,13 @@ pub trait Tool: Sized + Send + Sync {
         &self,
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+
+    /// Convert the concrete tool error at the trusted adapter boundary. Tools
+    /// that deliberately return a recoverable, model-facing failure override
+    /// this to preserve its typed class and rendered detail.
+    fn into_dyn_error(error: Self::Error) -> ToolError {
+        ToolError::ToolCallError(Box::new(error))
+    }
 }
 
 pub trait ToolDyn: Send + Sync {
@@ -95,7 +109,7 @@ impl<T: Tool> ToolDyn for T {
             let parsed = parse_tool_args::<<Self as Tool>::Args>(&args)?;
             <Self as Tool>::call(self, parsed)
                 .await
-                .map_err(|error| ToolError::ToolCallError(Box::new(error)))
+                .map_err(<Self as Tool>::into_dyn_error)
                 .and_then(|output| serialize_tool_output(output).map_err(ToolError::JsonError))
         })
     }

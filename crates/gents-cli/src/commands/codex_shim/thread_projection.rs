@@ -3,6 +3,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_protocol::client_protocol::ClientHeadProjection;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
@@ -81,8 +82,8 @@ pub(super) struct ConversationRow {
     pub(super) updated_at: Option<String>,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     pub(super) latest_request_id: String,
-    #[serde(default)]
-    pub(super) latest_request_lifecycle_state: Option<String>,
+    #[serde(skip)]
+    pub(super) latest_request_projection: Option<ClientHeadProjection>,
     #[serde(default)]
     pub(super) latest_request_failure_reason: Option<String>,
     #[serde(default)]
@@ -488,7 +489,11 @@ mod tests {
                 behavior_id: "child-behavior".to_string(),
                 model: None,
                 nickname: format!("child-{index}"),
-                lifecycle_state: "running".to_string(),
+                client_projection: gents_protocol::client_protocol::project_persisted_attempt(
+                    "processing",
+                    false,
+                    None,
+                ),
                 failure_reason: None,
                 created_at: None,
             };

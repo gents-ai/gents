@@ -76,13 +76,13 @@ impl Tool for CallToolTool {
             .ctx
             .blocked_service_error(&args.service_id, &args.tool_name)
         {
-            return Ok(error.to_result_text());
+            return Err(MetaToolError::structured(error));
         }
 
         let arguments =
             match normalize_arguments(&args.service_id, &args.tool_name, &args.arguments) {
                 Ok(arguments) => arguments,
-                Err(error) => return Ok(error.to_result_text()),
+                Err(error) => return Err(MetaToolError::structured(error)),
             };
 
         let Value::Object(argument_object) = &arguments else {
@@ -115,7 +115,7 @@ impl Tool for CallToolTool {
             )
             .await
         {
-            return Ok(error.to_result_text());
+            return Err(MetaToolError::structured(error));
         }
 
         let result = tokio::time::timeout(
@@ -165,6 +165,10 @@ impl Tool for CallToolTool {
         let (capped, _trigger, _was_truncated) =
             truncate_text(&text, TruncationMode::Head, &limits);
         Ok(capped)
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -505,15 +509,15 @@ mod tests {
             allowed_mcp_service_ids: vec!["x-data".to_string()],
         });
 
-        let output = tool
+        let error = tool
             .call(CallToolArgs {
                 service_id: "observability-mcp".to_string(),
                 tool_name: "query_metrics".to_string(),
                 arguments: json!("not an object"),
             })
             .await
-            .expect("disallowed service should return structured text");
-        let value: Value = serde_json::from_str(&output).expect("structured json");
+            .expect_err("disallowed service should return a typed failure");
+        let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["failure_class"], "tool_not_allowed");

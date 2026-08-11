@@ -209,6 +209,10 @@ impl Tool for ListFilesTool {
             )
             .await
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for ReadFileTool {
@@ -293,6 +297,10 @@ impl Tool for ReadFileTool {
             args.raw_json,
         )?)
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for GlobTool {
@@ -350,6 +358,10 @@ impl Tool for GlobTool {
                 Self::NAME,
             )
             .await
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -415,6 +427,10 @@ impl Tool for GrepTool {
                 Self::NAME,
             )
             .await
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -485,6 +501,10 @@ impl Tool for WriteFileTool {
             &output,
             args.raw_json,
         )?)
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -713,6 +733,10 @@ impl Tool for EditFileTool {
             )
             .into()),
         }
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 

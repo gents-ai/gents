@@ -7,6 +7,7 @@ use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 use super::shared::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
+use crate::tool_call_lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
@@ -45,6 +46,17 @@ fn fs_runner_timed_out_result(
     }
     format!(
         "native filesystem runner for {tool_name} exceeded the {MAX_FS_RUNNER_SECONDS}s per-call cap and was stopped before completing. Narrow the path or pattern (a more specific anchor prunes the walk), or split the search into smaller calls."
+    )
+}
+
+fn fs_runner_timed_out_error(
+    tool_name: &str,
+    request_deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ToolError {
+    ToolError::reported_failure(
+        FailureClass::External,
+        fs_runner_timed_out_result(tool_name, request_deadline, now),
     )
 }
 
@@ -109,7 +121,7 @@ impl NativeFsRunner {
                 stdout_truncated,
                 stderr_truncated,
             ),
-            ManagedExecOutcome::TimedOut { .. } => Ok(fs_runner_timed_out_result(
+            ManagedExecOutcome::TimedOut { .. } => Err(fs_runner_timed_out_error(
                 tool_name,
                 request_deadline,
                 chrono::Utc::now(),
@@ -358,6 +370,21 @@ mod tests {
         let now = Utc::now();
         let result = fs_runner_timed_out_result("grep", None, now);
         assert!(result.contains("per-call cap"), "{result}");
+    }
+
+    #[test]
+    fn cap_expiry_is_a_recoverable_typed_failure() {
+        let now = Utc::now();
+        let dispatch_error = fs_runner_timed_out_error("grep", None, now).into_dispatch_error();
+        let outcome =
+            crate::tool_call_lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
+        assert!(matches!(
+            outcome,
+            crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class: FailureClass::External,
+                ..
+            }
+        ));
     }
 
     #[test]

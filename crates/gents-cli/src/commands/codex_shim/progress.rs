@@ -1,7 +1,10 @@
 use gents::graphql::escape_graphql_string;
+use gents::tool_call_lifecycle::{FailureClass, ToolCallState};
 use gents_codex_protocol as codex;
+use gents_protocol::client_protocol::ClientTurnState;
 use serde_json::{json, Value};
 
+use super::projection_state::ProjectionStatus;
 use super::subagent_projection::LinkedSubagentThread;
 
 #[derive(Debug, Clone, Default)]
@@ -280,29 +283,51 @@ pub(super) fn timestamp_millis(raw: &str) -> Option<i64> {
         .map(|timestamp| timestamp.timestamp_millis())
 }
 
-pub(super) fn gents_tool_call_status(tool: &GentsToolCallProgress) -> codex::McpToolCallStatus {
-    let status = tool
+pub(super) fn observed_tool_status(tool: &GentsToolCallProgress) -> ProjectionStatus {
+    let persisted_failure = tool
+        .tool_failure_class
+        .as_deref()
+        .map(str::trim)
+        .filter(|class| !class.is_empty())
+        .and_then(FailureClass::from_persisted)
+        .is_some();
+    if persisted_failure {
+        return ProjectionStatus::Failed;
+    }
+
+    if let Some(lifecycle_state) = tool
         .lifecycle_state
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or(&tool.status)
-        .trim()
-        .to_ascii_lowercase();
+    {
+        return match ToolCallState::from_persisted(lifecycle_state.trim()) {
+            Some(ToolCallState::Completed) => ProjectionStatus::Completed,
+            Some(ToolCallState::Failed | ToolCallState::TimedOut | ToolCallState::Cancelled) => {
+                ProjectionStatus::Failed
+            }
+            _ => ProjectionStatus::InProgress,
+        };
+    }
+
+    // Compatibility is intentionally isolated to rows written before the
+    // durable lifecycle field existed. Current rows never derive execution
+    // semantics from model-facing result text.
+    let status = tool.status.trim().to_ascii_lowercase();
     if matches!(
         status.as_str(),
         "cancelled" | "dead" | "error" | "failed" | "failure" | "timedout"
     ) || tool_result_looks_error(&tool.result)
         || gents_exec_result_failed(&tool.result)
     {
-        return codex::McpToolCallStatus::Failed;
+        return ProjectionStatus::Failed;
     }
     if matches!(
         status.as_str(),
         "completed" | "complete" | "success" | "succeeded"
     ) {
-        return codex::McpToolCallStatus::Completed;
+        return ProjectionStatus::Completed;
     }
-    codex::McpToolCallStatus::InProgress
+    ProjectionStatus::InProgress
 }
 
 pub(super) fn content_delta(previous: &str, current: &str) -> String {
@@ -339,16 +364,16 @@ pub(super) fn response_field_is_blank(response: &Value, field: &str) -> bool {
         .is_empty()
 }
 
-pub(super) fn terminal_turn_status(
-    lifecycle_state: &str,
-    response_status: &str,
-) -> codex::TurnStatus {
-    match (lifecycle_state, response_status) {
-        ("interrupted" | "superseded", _) => codex::TurnStatus::Interrupted,
-        ("failed" | "dead", _) => codex::TurnStatus::Failed,
-        ("completed", _) => codex::TurnStatus::Completed,
-        (_, "error") => codex::TurnStatus::Failed,
-        _ => codex::TurnStatus::Completed,
+pub(super) fn codex_turn_status(state: ClientTurnState) -> codex::TurnStatus {
+    match state {
+        ClientTurnState::WaitingForClaim | ClientTurnState::Streaming => {
+            codex::TurnStatus::InProgress
+        }
+        ClientTurnState::Completed => codex::TurnStatus::Completed,
+        ClientTurnState::Failed => codex::TurnStatus::Failed,
+        ClientTurnState::Superseded | ClientTurnState::Interrupted => {
+            codex::TurnStatus::Interrupted
+        }
     }
 }
 
@@ -436,14 +461,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gents_tool_errors_render_as_failed_codex_tool_calls() {
-        let tool = test_tool("glob", "completed", r#"{"pattern":"**/*.lean"}"#)
+    fn legacy_tool_errors_render_as_failed_codex_tool_calls() {
+        let mut tool = test_tool("glob", "completed", r#"{"pattern":"**/*.lean"}"#)
             .with_result("Toolset error: missing runner");
+        tool.lifecycle_state = None;
 
-        assert_eq!(
-            gents_tool_call_status(&tool),
-            codex::McpToolCallStatus::Failed
-        );
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Failed);
         let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
         let codex::ThreadItem::McpToolCall {
             server,
@@ -467,6 +490,36 @@ mod tests {
     }
 
     #[test]
+    fn persisted_failure_class_overrides_legacy_completed_status() {
+        let mut tool = test_tool("bash", "completed", r#"{"command":"false"}"#)
+            .with_result("legacy row without a parseable command envelope");
+        tool.lifecycle_state = Some("completed".to_string());
+        tool.tool_failure_class = Some("toolReturnedError".to_string());
+
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Failed);
+    }
+
+    #[test]
+    fn durable_completed_status_ignores_failure_shaped_result_text() {
+        let tool = test_tool("bash", "completed", r#"{"command":"true"}"#)
+            .with_result(r#"gents_exec: {"ok":false,"status":"exit_nonzero"}"#);
+
+        assert_eq!(
+            observed_tool_status(&tool),
+            ProjectionStatus::Completed,
+            "model-facing result text is not authoritative for durable rows"
+        );
+    }
+
+    #[test]
+    fn unknown_failure_class_does_not_override_durable_lifecycle() {
+        let mut tool = test_tool("bash", "completed", r#"{"command":"true"}"#);
+        tool.tool_failure_class = Some("futureUnknownClass".to_string());
+
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Completed);
+    }
+
+    #[test]
     fn content_delta_ignores_terminal_leading_whitespace_normalization() {
         assert_eq!(
             content_delta("\n\nAnswer with context", "Answer with context"),
@@ -479,21 +532,21 @@ mod tests {
     }
 
     #[test]
-    fn terminal_turn_status_matches_codex_projection_request_precedence() {
+    fn codex_turn_status_is_only_a_wire_vocabulary_mapping() {
         assert_eq!(
-            terminal_turn_status("completed", "error"),
+            codex_turn_status(ClientTurnState::Completed),
             codex::TurnStatus::Completed
         );
         assert_eq!(
-            terminal_turn_status("processing", "error"),
+            codex_turn_status(ClientTurnState::Failed),
             codex::TurnStatus::Failed
         );
         assert_eq!(
-            terminal_turn_status("failed", "complete"),
-            codex::TurnStatus::Failed
+            codex_turn_status(ClientTurnState::Streaming),
+            codex::TurnStatus::InProgress
         );
         assert_eq!(
-            terminal_turn_status("superseded", "error"),
+            codex_turn_status(ClientTurnState::Superseded),
             codex::TurnStatus::Interrupted
         );
     }
