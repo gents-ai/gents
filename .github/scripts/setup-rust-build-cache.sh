@@ -28,14 +28,19 @@ echo "Using RUSTC_WRAPPER=${RUSTC_WRAPPER:-unset}"
 
 if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
   workspace_root="${GITHUB_WORKSPACE:-$(pwd -P)}"
-  direct_wrapper="${workspace_root}/.github/scripts/rustc-direct.sh"
-  if [[ ! -x "${direct_wrapper}" ]]; then
-    echo "::error::Direct rustc wrapper is missing or not executable (${direct_wrapper})."
+  workspace_wrapper="${workspace_root}/.github/scripts/rustc-direct.sh"
+  if [[ ! -x "${workspace_wrapper}" ]]; then
+    echo "::error::Direct rustc wrapper is missing or not executable (${workspace_wrapper})."
     exit 1
   fi
   shared_cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
   runner_cargo_home="${CARGO_TARGET_ROOT}/.cargo-home/${runner_cache_key}"
   mkdir -p "${runner_cargo_home}"
+  # Cargo and its build scripts can outlive checkout cleanup long enough to
+  # request another rustc process. Keep the wrapper beside the persistent
+  # runner cache instead of pointing those processes back into the checkout.
+  direct_wrapper="${runner_cargo_home}/rustc-direct.sh"
+  install -m 0755 "${workspace_wrapper}" "${direct_wrapper}"
   for cache_entry in registry git .package-cache .package-cache-mutate; do
     if [[ -e "${shared_cargo_home}/${cache_entry}" ]]; then
       cache_link="${runner_cargo_home}/${cache_entry}"
@@ -53,8 +58,13 @@ if [[ "${RUSTC_WRAPPER:-}" != "sccache" ]]; then
     fi
   done
   printf '[build]\nrustc-wrapper = "%s"\n' "${direct_wrapper}" > "${runner_cargo_home}/config.toml"
-  echo "CARGO_HOME=${runner_cargo_home}" >> "${GITHUB_ENV}"
+  {
+    echo "CARGO_HOME=${runner_cargo_home}"
+    echo "CARGO_BUILD_RUSTC_WRAPPER=${direct_wrapper}"
+    echo "RUSTC_WRAPPER=${direct_wrapper}"
+  } >> "${GITHUB_ENV}"
   echo "Installed isolated Cargo configuration at ${runner_cargo_home}/config.toml."
+  echo "Installed stable direct rustc wrapper at ${direct_wrapper}."
   echo "Shared dependency caches remain rooted at ${shared_cargo_home}."
   echo "sccache is disabled for this suite; using the runner-local Cargo target tree."
   exit 0
