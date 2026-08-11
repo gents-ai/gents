@@ -9,7 +9,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::bound_behavior::model_selection_id;
-use super::progress::{gents_tool_call_status, GentsToolCallProgress};
+use super::progress::{observed_tool_status, GentsToolCallProgress};
+use super::projection_state::{ChildStatus, CollabProjection, CollabTool, ProjectionStatus};
 use super::store::query_node_json;
 use super::ShimState;
 
@@ -80,16 +81,6 @@ pub(super) struct LinkedSubagentThread {
     pub(super) lifecycle_state: String,
     pub(super) failure_reason: Option<String>,
     pub(super) created_at: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct CollabProjection {
-    pub(super) status: codex::CollabAgentToolCallStatus,
-    pub(super) tool: codex::CollabAgentTool,
-    pub(super) receiver_thread_id: String,
-    pub(super) child_model: Option<String>,
-    pub(super) child_status: codex::CollabAgentStatus,
-    pub(super) child_failure_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -715,12 +706,12 @@ pub(super) fn is_subagent_control_tool(tool_name: &str) -> bool {
     collab_tool(tool_name).is_some()
 }
 
-fn collab_tool(tool_name: &str) -> Option<codex::CollabAgentTool> {
+fn collab_tool(tool_name: &str) -> Option<CollabTool> {
     match tool_name {
-        "spawn_subagent" => Some(codex::CollabAgentTool::SpawnAgent),
-        "wait_subagent" => Some(codex::CollabAgentTool::Wait),
-        "steer_subagent" => Some(codex::CollabAgentTool::SendInput),
-        "cancel_subagent" => Some(codex::CollabAgentTool::CloseAgent),
+        "spawn_subagent" => Some(CollabTool::SpawnAgent),
+        "wait_subagent" => Some(CollabTool::Wait),
+        "steer_subagent" => Some(CollabTool::SendInput),
+        "cancel_subagent" => Some(CollabTool::CloseAgent),
         _ => None,
     }
 }
@@ -754,18 +745,18 @@ fn tool_child_request_id(tool: &GentsToolCallProgress) -> Option<String> {
 pub(super) fn collab_projection(tool: &GentsToolCallProgress) -> Option<CollabProjection> {
     let collab_tool = collab_tool(&tool.tool_name)?;
     let link = tool.subagent_link.as_ref()?;
-    let runtime_status = gents_tool_call_status(tool);
+    let runtime_status = observed_tool_status(tool);
     let status = match (&collab_tool, runtime_status) {
-        (_, codex::McpToolCallStatus::Failed) => codex::CollabAgentToolCallStatus::Failed,
-        (codex::CollabAgentTool::SpawnAgent, _) => {
+        (_, ProjectionStatus::Failed) => ProjectionStatus::Failed,
+        (CollabTool::SpawnAgent, _) => {
             // The reciprocal edge proves the spawn operation succeeded. GENTS
             // deliberately keeps the bridge row running while a background
             // child works; Codex represents that child lifecycle separately
             // in agentsStates, so the collaboration operation is complete.
-            codex::CollabAgentToolCallStatus::Completed
+            ProjectionStatus::Completed
         }
-        (_, codex::McpToolCallStatus::InProgress) => codex::CollabAgentToolCallStatus::InProgress,
-        (_, codex::McpToolCallStatus::Completed) => codex::CollabAgentToolCallStatus::Completed,
+        (_, ProjectionStatus::InProgress) => ProjectionStatus::InProgress,
+        (_, ProjectionStatus::Completed) => ProjectionStatus::Completed,
     };
     Some(CollabProjection {
         status,
@@ -777,14 +768,14 @@ pub(super) fn collab_projection(tool: &GentsToolCallProgress) -> Option<CollabPr
     })
 }
 
-pub(super) fn collab_agent_status(lifecycle_state: &str) -> codex::CollabAgentStatus {
+pub(super) fn collab_agent_status(lifecycle_state: &str) -> ChildStatus {
     match lifecycle_state.trim() {
-        "pending" => codex::CollabAgentStatus::PendingInit,
-        "claimed" | "processing" | "inputRequired" => codex::CollabAgentStatus::Running,
-        "completed" => codex::CollabAgentStatus::Completed,
-        "failed" | "dead" => codex::CollabAgentStatus::Errored,
-        "superseded" | "interrupted" => codex::CollabAgentStatus::Interrupted,
-        _ => codex::CollabAgentStatus::NotFound,
+        "pending" => ChildStatus::Pending,
+        "claimed" | "processing" | "inputRequired" | "running" => ChildStatus::Running,
+        "completed" => ChildStatus::Completed,
+        "failed" | "dead" => ChildStatus::Errored,
+        "superseded" | "interrupted" => ChildStatus::Interrupted,
+        _ => ChildStatus::NotFound,
     }
 }
 
@@ -796,11 +787,11 @@ pub(super) fn collab_tool_item(
     let prompt = serde_json::from_str::<Value>(&tool.args)
         .ok()
         .and_then(|args| match projection.tool {
-            codex::CollabAgentTool::SpawnAgent => args
+            CollabTool::SpawnAgent => args
                 .get("prompt")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
-            codex::CollabAgentTool::SendInput => args
+            CollabTool::SendInput => args
                 .get("message")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
@@ -810,22 +801,84 @@ pub(super) fn collab_tool_item(
     agents_states.insert(
         projection.receiver_thread_id.clone(),
         codex::CollabAgentState {
-            status: projection.child_status.clone(),
+            status: codex_child_status(projection.child_status),
             message: projection.child_failure_reason.clone(),
         },
     );
     codex::ThreadItem::CollabAgentToolCall {
         id: tool.tool_call_key.clone(),
-        tool: projection.tool.clone(),
-        status: projection.status.clone(),
+        tool: codex_collab_tool(projection.tool),
+        status: codex_collab_status(projection.status),
         sender_thread_id: sender_thread_id.to_string(),
         receiver_thread_ids: vec![projection.receiver_thread_id.clone()],
         prompt,
-        model: (projection.tool == codex::CollabAgentTool::SpawnAgent)
+        model: (projection.tool == CollabTool::SpawnAgent)
             .then(|| projection.child_model.clone())
             .flatten(),
         reasoning_effort: None,
         agents_states,
+    }
+}
+
+fn codex_collab_tool(tool: CollabTool) -> codex::CollabAgentTool {
+    match tool {
+        CollabTool::SpawnAgent => codex::CollabAgentTool::SpawnAgent,
+        CollabTool::ResumeAgent => codex::CollabAgentTool::ResumeAgent,
+        CollabTool::Wait => codex::CollabAgentTool::Wait,
+        CollabTool::SendInput => codex::CollabAgentTool::SendInput,
+        CollabTool::CloseAgent => codex::CollabAgentTool::CloseAgent,
+    }
+}
+
+fn codex_child_status(status: ChildStatus) -> codex::CollabAgentStatus {
+    match status {
+        ChildStatus::Pending => codex::CollabAgentStatus::PendingInit,
+        ChildStatus::Running => codex::CollabAgentStatus::Running,
+        ChildStatus::Interrupted => codex::CollabAgentStatus::Interrupted,
+        ChildStatus::Completed => codex::CollabAgentStatus::Completed,
+        ChildStatus::Errored => codex::CollabAgentStatus::Errored,
+        ChildStatus::Shutdown => codex::CollabAgentStatus::Shutdown,
+        ChildStatus::NotFound => codex::CollabAgentStatus::NotFound,
+    }
+}
+
+fn codex_collab_status(status: ProjectionStatus) -> codex::CollabAgentToolCallStatus {
+    match status {
+        ProjectionStatus::InProgress => codex::CollabAgentToolCallStatus::InProgress,
+        ProjectionStatus::Completed => codex::CollabAgentToolCallStatus::Completed,
+        ProjectionStatus::Failed => codex::CollabAgentToolCallStatus::Failed,
+    }
+}
+
+pub(super) fn observed_collab_status(
+    status: &codex::CollabAgentToolCallStatus,
+) -> ProjectionStatus {
+    match status {
+        codex::CollabAgentToolCallStatus::InProgress => ProjectionStatus::InProgress,
+        codex::CollabAgentToolCallStatus::Completed => ProjectionStatus::Completed,
+        codex::CollabAgentToolCallStatus::Failed => ProjectionStatus::Failed,
+    }
+}
+
+pub(super) fn observed_collab_tool(tool: &codex::CollabAgentTool) -> CollabTool {
+    match tool {
+        codex::CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
+        codex::CollabAgentTool::ResumeAgent => CollabTool::ResumeAgent,
+        codex::CollabAgentTool::Wait => CollabTool::Wait,
+        codex::CollabAgentTool::SendInput => CollabTool::SendInput,
+        codex::CollabAgentTool::CloseAgent => CollabTool::CloseAgent,
+    }
+}
+
+pub(super) fn observed_child_status(status: &codex::CollabAgentStatus) -> ChildStatus {
+    match status {
+        codex::CollabAgentStatus::PendingInit => ChildStatus::Pending,
+        codex::CollabAgentStatus::Running => ChildStatus::Running,
+        codex::CollabAgentStatus::Interrupted => ChildStatus::Interrupted,
+        codex::CollabAgentStatus::Completed => ChildStatus::Completed,
+        codex::CollabAgentStatus::Errored => ChildStatus::Errored,
+        codex::CollabAgentStatus::Shutdown => ChildStatus::Shutdown,
+        codex::CollabAgentStatus::NotFound => ChildStatus::NotFound,
     }
 }
 
@@ -1018,45 +1071,21 @@ mod tests {
 
     #[test]
     fn lean_fenced_tool_and_status_mappings_match_codex_protocol() {
-        assert_eq!(
-            collab_tool("spawn_subagent"),
-            Some(codex::CollabAgentTool::SpawnAgent)
-        );
-        assert_eq!(
-            collab_tool("wait_subagent"),
-            Some(codex::CollabAgentTool::Wait)
-        );
-        assert_eq!(
-            collab_tool("steer_subagent"),
-            Some(codex::CollabAgentTool::SendInput)
-        );
-        assert_eq!(
-            collab_tool("cancel_subagent"),
-            Some(codex::CollabAgentTool::CloseAgent)
-        );
+        assert_eq!(collab_tool("spawn_subagent"), Some(CollabTool::SpawnAgent));
+        assert_eq!(collab_tool("wait_subagent"), Some(CollabTool::Wait));
+        assert_eq!(collab_tool("steer_subagent"), Some(CollabTool::SendInput));
+        assert_eq!(collab_tool("cancel_subagent"), Some(CollabTool::CloseAgent));
         assert_eq!(collab_tool("list_subagents"), None);
         assert_eq!(collab_tool("read_subagent"), None);
 
-        assert_eq!(
-            collab_agent_status("pending"),
-            codex::CollabAgentStatus::PendingInit
-        );
-        assert_eq!(
-            collab_agent_status("processing"),
-            codex::CollabAgentStatus::Running
-        );
-        assert_eq!(
-            collab_agent_status("completed"),
-            codex::CollabAgentStatus::Completed
-        );
-        assert_eq!(
-            collab_agent_status("failed"),
-            codex::CollabAgentStatus::Errored
-        );
-        assert_eq!(
-            collab_agent_status("interrupted"),
-            codex::CollabAgentStatus::Interrupted
-        );
+        assert_eq!(collab_agent_status("pending"), ChildStatus::Pending);
+        assert_eq!(collab_agent_status("claimed"), ChildStatus::Running);
+        assert_eq!(collab_agent_status("processing"), ChildStatus::Running);
+        assert_eq!(collab_agent_status("inputRequired"), ChildStatus::Running);
+        assert_eq!(collab_agent_status("running"), ChildStatus::Running);
+        assert_eq!(collab_agent_status("completed"), ChildStatus::Completed);
+        assert_eq!(collab_agent_status("failed"), ChildStatus::Errored);
+        assert_eq!(collab_agent_status("interrupted"), ChildStatus::Interrupted);
     }
 
     #[test]
@@ -1096,7 +1125,7 @@ mod tests {
         let projection = collab_projection(&tool).expect("authorized spawn projection");
         assert_eq!(
             projection.status,
-            codex::CollabAgentToolCallStatus::Completed,
+            ProjectionStatus::Completed,
             "the linked spawn operation completes while agentsStates tracks the running child"
         );
         let item = collab_tool_item("parent-thread", &tool, &projection);

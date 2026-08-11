@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -12,12 +12,14 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::command_projection::{
-    command_execution_item, command_output_payload, tool_projection_status, ToolProjectionStatus,
+    codex_command_status, command_execution_item, command_output_payload, tool_projection_status,
+    ToolProjectionStatus,
 };
 use super::progress::{
     decode_gents_tool_call_progress, gents_tool_progress_query, tool_completed_at_ms,
     GentsToolCallProgress,
 };
+use super::projection_state::ProjectionStatus;
 use super::protocol::{now_millis, send_notification};
 use super::store::query_node_json;
 use super::{ConnectionState, ShimState};
@@ -30,7 +32,7 @@ pub(super) fn spawn_background_tool_watcher(
     thread_id: String,
     turn_id: String,
     cwd: PathBuf,
-    running: BTreeMap<String, codex::CommandExecutionStatus>,
+    running: BTreeSet<String>,
 ) {
     let _ = spawn_background_tool_watcher_handle(
         connection, state, request_id, session_id, thread_id, turn_id, cwd, running, None,
@@ -45,7 +47,7 @@ fn spawn_background_tool_watcher_handle(
     thread_id: String,
     turn_id: String,
     cwd: PathBuf,
-    mut running: BTreeMap<String, codex::CommandExecutionStatus>,
+    mut running: BTreeSet<String>,
     mut first_query_observed: Option<oneshot::Sender<()>>,
 ) -> Option<JoinHandle<()>> {
     if running.is_empty() {
@@ -87,14 +89,14 @@ fn spawn_background_tool_watcher_handle(
                 .map(|tool| (tool.tool_call_key.clone(), tool))
                 .collect::<BTreeMap<_, _>>();
 
-            let tracked = running.keys().cloned().collect::<Vec<_>>();
+            let tracked = running.iter().cloned().collect::<Vec<_>>();
             for tool_key in tracked {
                 let Some(tool) = current_tools.get(&tool_key) else {
                     running.remove(&tool_key);
                     continue;
                 };
                 match tool_projection_status(tool) {
-                    ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress) => {}
+                    ToolProjectionStatus::Command(ProjectionStatus::InProgress) => {}
                     ToolProjectionStatus::Command(status) => {
                         if let Err(error) = send_background_tool_completion(
                             &connection.outbound,
@@ -102,7 +104,7 @@ fn spawn_background_tool_watcher_handle(
                             &thread_id,
                             &turn_id,
                             tool,
-                            status,
+                            codex_command_status(status),
                             &cwd,
                         )
                         .await
@@ -287,7 +289,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use gents_codex_protocol as codex;
     use tokio::sync::{mpsc, oneshot, Mutex};
 
     use super::super::{CodexSidecar, ConnectionState, ShimState};
@@ -368,8 +369,8 @@ mod tests {
             auth_token: None,
         };
 
-        let mut running = BTreeMap::new();
-        running.insert(tool_call_key, codex::CommandExecutionStatus::InProgress);
+        let mut running = BTreeSet::new();
+        running.insert(tool_call_key);
         let (observed_tx, observed_rx) = oneshot::channel();
         let handle = spawn_background_tool_watcher_handle(
             connection,

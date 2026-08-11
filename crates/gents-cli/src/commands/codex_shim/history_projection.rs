@@ -9,8 +9,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
 use super::command_projection::{
-    command_execution_item, file_change_item, tool_projection_status_with_settled,
-    ToolProjectionStatus,
+    codex_command_status, codex_mcp_status, codex_patch_status, command_execution_item,
+    file_change_item, tool_projection_status_with_settled, ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
@@ -707,16 +707,20 @@ fn project_tool(
     projection_settled: bool,
 ) -> Option<codex::ThreadItem> {
     match tool_projection_status_with_settled(tool, projection_settled, true) {
-        ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, status)),
-        ToolProjectionStatus::Command(status) => {
-            Some(command_execution_item(&record.cwd, tool, status))
-        }
+        ToolProjectionStatus::Mcp(status) => Some(gents_tool_item(tool, codex_mcp_status(status))),
+        ToolProjectionStatus::Command(status) => Some(command_execution_item(
+            &record.cwd,
+            tool,
+            codex_command_status(status),
+        )),
         ToolProjectionStatus::Collab(projection) => {
             Some(collab_tool_item(&record.session_id, tool, &projection))
         }
         ToolProjectionStatus::DeferredCollab => None,
         ToolProjectionStatus::DeferredFileChange => None,
-        ToolProjectionStatus::FileChange(status) => file_change_item(tool, status),
+        ToolProjectionStatus::FileChange(status) => {
+            file_change_item(tool, codex_patch_status(status))
+        }
     }
 }
 

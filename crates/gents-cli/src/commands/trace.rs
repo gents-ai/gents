@@ -1181,12 +1181,13 @@ fn build_records(
             let lifecycle_state = tool_call
                 .lifecycle_state
                 .as_deref()
-                .filter(|state| !state.trim().is_empty())
-                .unwrap_or(&tool_call.status);
+                .filter(|state| !state.trim().is_empty());
+            let observed_tool_status = lifecycle_state.unwrap_or(&tool_call.status);
             let analysis = analyze_tool_call_with_persisted_outcome(
                 &tool_call.tool_name,
                 &tool_call.args,
                 &tool_call.result,
+                &tool_call.status,
                 lifecycle_state,
                 tool_call.tool_failure_class.as_deref(),
             );
@@ -1266,8 +1267,8 @@ fn build_records(
                 tool_result: tool_call.result.clone(),
                 native_tool_output: analysis.native_tool_output,
                 tool_result_ok: analysis.tool_result_ok,
-                tool_call_completed: lifecycle_state.eq_ignore_ascii_case("completed"),
-                tool_status: lifecycle_state.to_string(),
+                tool_call_completed: observed_tool_status.eq_ignore_ascii_case("completed"),
+                tool_status: observed_tool_status.to_string(),
                 task_outcome: None,
                 tool_failure_class: analysis.tool_failure_class,
                 tool_error: analysis.tool_error,

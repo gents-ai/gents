@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::tool_call_lifecycle::ToolCallState;
+
 pub use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,18 +133,54 @@ pub fn analyze_tool_call(
     result: &str,
     status: &str,
 ) -> ToolCallTraceAnalysis {
-    analyze_tool_call_with_persisted_outcome(tool_name, raw_args, result, status, None)
+    analyze_tool_call_with_persisted_outcome(tool_name, raw_args, result, status, None, None)
 }
 
 pub fn analyze_tool_call_with_persisted_outcome(
     tool_name: &str,
     raw_args: &str,
     result: &str,
-    lifecycle_state: &str,
+    legacy_status: &str,
+    lifecycle_state: Option<&str>,
     persisted_failure_class: Option<&str>,
 ) -> ToolCallTraceAnalysis {
     let mut analysis = analyze_arguments(tool_name, raw_args);
     analysis.native_tool_output = native_tool_output_from_result(tool_name, result);
+
+    if let Some(lifecycle_state) = lifecycle_state.filter(|state| !state.trim().is_empty()) {
+        let lifecycle_state = ToolCallState::from_persisted(lifecycle_state.trim());
+        let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
+        let failure_class = persisted_failure_class.or_else(|| match lifecycle_state {
+            Some(ToolCallState::TimedOut) => Some(ToolFailureClass::External),
+            Some(ToolCallState::Failed) => Some(ToolFailureClass::ToolReturnedError),
+            _ => None,
+        });
+        let completed = lifecycle_state == Some(ToolCallState::Completed);
+
+        // Current rows carry their outcome explicitly. Keep result parsing useful
+        // for trace shape, but never let model-facing text override durable state.
+        analysis.tool_failure_class = failure_class;
+        analysis.tool_result_ok = completed && failure_class.is_none();
+        analysis.tool_error = failure_class.map(|failure_class| TraceToolError {
+            failure_class,
+            service_id: analysis.selected_service_id.clone(),
+            tool_name: analysis.selected_tool_name.clone(),
+            requested_tool_name: None,
+            path: analysis
+                .validation_errors
+                .first()
+                .map(|error| error.path.clone()),
+            message: analysis
+                .validation_errors
+                .first()
+                .map(|error| error.message.clone()),
+            retryable: retryable_for_failure_class(failure_class),
+            available_tools: None,
+            raw_error_text: raw_tool_error_text(result, &analysis),
+        });
+        return analysis;
+    }
+
     let structured_tool_error = structured_tool_error_from_result(result);
     if let Some(error) = &structured_tool_error {
         analysis.tool_failure_class = Some(error.failure_class);
@@ -167,12 +205,7 @@ pub fn analyze_tool_call_with_persisted_outcome(
         analysis.tool_failure_class = classify_result_text(result);
     }
 
-    let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
-    if let Some(failure_class) = persisted_failure_class {
-        analysis.tool_failure_class = Some(failure_class);
-    }
-
-    let completed = lifecycle_state.trim().eq_ignore_ascii_case("completed");
+    let completed = legacy_status.trim().eq_ignore_ascii_case("completed");
     if analysis.tool_failure_class.is_none()
         && analysis
             .native_tool_output
@@ -207,12 +240,6 @@ pub fn analyze_tool_call_with_persisted_outcome(
                 raw_error_text: raw_tool_error_text(result, &analysis),
             })
     });
-    if let (Some(error), Some(failure_class)) =
-        (analysis.tool_error.as_mut(), persisted_failure_class)
-    {
-        error.failure_class = failure_class;
-        error.retryable = retryable_for_failure_class(failure_class);
-    }
     analysis
 }
 

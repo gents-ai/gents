@@ -30,6 +30,10 @@ impl ToolError {
 
     pub(crate) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
         match self {
+            Self::PolicyDenial(denial) => crate::llm::tool::ToolError::ReportedFailure {
+                class: FailureClass::PolicyDenied,
+                text: denial.tool_error_payload(),
+            },
             Self::ReportedFailure { class, text } => {
                 crate::llm::tool::ToolError::ReportedFailure { class, text }
             }

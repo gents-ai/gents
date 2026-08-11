@@ -1,36 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use gents_codex_protocol as codex;
 use serde_json::Value;
 
 use super::progress::{
-    gents_exec_metadata, gents_tool_call_status, tool_duration_ms, GentsToolCallProgress,
+    gents_exec_metadata, observed_tool_status, tool_duration_ms, GentsToolCallProgress,
 };
-use super::subagent_projection::{collab_projection, is_subagent_control_tool, CollabProjection};
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) enum ToolProjectionStatus {
-    Mcp(codex::McpToolCallStatus),
-    Command(codex::CommandExecutionStatus),
-    Collab(CollabProjection),
-    DeferredCollab,
-    DeferredFileChange,
-    FileChange(codex::PatchApplyStatus),
-}
-
-impl ToolProjectionStatus {
-    pub(super) fn command_status(&self) -> codex::CommandExecutionStatus {
-        match self {
-            Self::Mcp(_) => codex::CommandExecutionStatus::InProgress,
-            Self::Command(status) => status.clone(),
-            Self::Collab(_)
-            | Self::DeferredCollab
-            | Self::DeferredFileChange
-            | Self::FileChange(_) => codex::CommandExecutionStatus::InProgress,
-        }
-    }
-}
+use super::projection_state::ProjectionStatus;
+pub(super) use super::projection_state::ToolProjectionStatus;
+use super::subagent_projection::{collab_projection, is_subagent_control_tool};
 
 pub(super) fn tool_projection_status(tool: &GentsToolCallProgress) -> ToolProjectionStatus {
     tool_projection_status_with_settled(tool, false, false)
@@ -41,14 +20,12 @@ pub(super) fn tool_projection_status_with_settled(
     projection_settled: bool,
     link_settle_expired: bool,
 ) -> ToolProjectionStatus {
-    let status = gents_tool_call_status(tool);
+    let status = observed_tool_status(tool);
     if is_subagent_control_tool(&tool.tool_name) {
         if let Some(projection) = collab_projection(tool) {
             ToolProjectionStatus::Collab(projection)
-        } else if status == codex::McpToolCallStatus::Failed
-            || (projection_settled
-                && link_settle_expired
-                && status == codex::McpToolCallStatus::Completed)
+        } else if status == ProjectionStatus::Failed
+            || (projection_settled && link_settle_expired && status == ProjectionStatus::Completed)
         {
             ToolProjectionStatus::Mcp(status)
         } else {
@@ -58,20 +35,64 @@ pub(super) fn tool_projection_status_with_settled(
         if file_update_change(tool).is_none() {
             ToolProjectionStatus::DeferredFileChange
         } else {
-            ToolProjectionStatus::FileChange(patch_status_from_mcp_status(status))
+            ToolProjectionStatus::FileChange(status)
         }
     } else if should_project_as_command_execution(tool) {
-        ToolProjectionStatus::Command(command_status_from_mcp_status(status))
+        ToolProjectionStatus::Command(status)
     } else {
         ToolProjectionStatus::Mcp(status)
     }
 }
 
-fn patch_status_from_mcp_status(status: codex::McpToolCallStatus) -> codex::PatchApplyStatus {
+pub(super) fn codex_patch_status(status: ProjectionStatus) -> codex::PatchApplyStatus {
     match status {
-        codex::McpToolCallStatus::InProgress => codex::PatchApplyStatus::InProgress,
-        codex::McpToolCallStatus::Completed => codex::PatchApplyStatus::Completed,
-        codex::McpToolCallStatus::Failed => codex::PatchApplyStatus::Failed,
+        ProjectionStatus::InProgress => codex::PatchApplyStatus::InProgress,
+        ProjectionStatus::Completed => codex::PatchApplyStatus::Completed,
+        ProjectionStatus::Failed => codex::PatchApplyStatus::Failed,
+    }
+}
+
+pub(super) fn codex_mcp_status(status: ProjectionStatus) -> codex::McpToolCallStatus {
+    match status {
+        ProjectionStatus::InProgress => codex::McpToolCallStatus::InProgress,
+        ProjectionStatus::Completed => codex::McpToolCallStatus::Completed,
+        ProjectionStatus::Failed => codex::McpToolCallStatus::Failed,
+    }
+}
+
+pub(super) fn codex_command_status(status: ProjectionStatus) -> codex::CommandExecutionStatus {
+    match status {
+        ProjectionStatus::InProgress => codex::CommandExecutionStatus::InProgress,
+        ProjectionStatus::Completed => codex::CommandExecutionStatus::Completed,
+        ProjectionStatus::Failed => codex::CommandExecutionStatus::Failed,
+    }
+}
+
+pub(super) fn observed_mcp_status(status: &codex::McpToolCallStatus) -> ProjectionStatus {
+    match status {
+        codex::McpToolCallStatus::InProgress => ProjectionStatus::InProgress,
+        codex::McpToolCallStatus::Completed => ProjectionStatus::Completed,
+        codex::McpToolCallStatus::Failed => ProjectionStatus::Failed,
+    }
+}
+
+pub(super) fn observed_command_status(status: &codex::CommandExecutionStatus) -> ProjectionStatus {
+    match status {
+        codex::CommandExecutionStatus::InProgress => ProjectionStatus::InProgress,
+        codex::CommandExecutionStatus::Completed => ProjectionStatus::Completed,
+        codex::CommandExecutionStatus::Failed | codex::CommandExecutionStatus::Declined => {
+            ProjectionStatus::Failed
+        }
+    }
+}
+
+pub(super) fn observed_patch_status(status: &codex::PatchApplyStatus) -> ProjectionStatus {
+    match status {
+        codex::PatchApplyStatus::InProgress => ProjectionStatus::InProgress,
+        codex::PatchApplyStatus::Completed => ProjectionStatus::Completed,
+        codex::PatchApplyStatus::Failed | codex::PatchApplyStatus::Declined => {
+            ProjectionStatus::Failed
+        }
     }
 }
 
@@ -99,29 +120,16 @@ fn is_gents_fs_command_tool(tool: &GentsToolCallProgress) -> bool {
     )
 }
 
-fn command_status_from_mcp_status(
-    status: codex::McpToolCallStatus,
-) -> codex::CommandExecutionStatus {
-    match status {
-        codex::McpToolCallStatus::InProgress => codex::CommandExecutionStatus::InProgress,
-        codex::McpToolCallStatus::Completed => codex::CommandExecutionStatus::Completed,
-        codex::McpToolCallStatus::Failed => codex::CommandExecutionStatus::Failed,
-    }
-}
-
 pub(super) fn update_running_background_tools(
-    running: &mut BTreeMap<String, codex::CommandExecutionStatus>,
+    running: &mut BTreeSet<String>,
     tool: &GentsToolCallProgress,
     status: &ToolProjectionStatus,
 ) {
     match status {
-        ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
+        ToolProjectionStatus::Command(ProjectionStatus::InProgress)
             if is_gents_background_tool(tool) =>
         {
-            running.insert(
-                tool.tool_call_key.clone(),
-                codex::CommandExecutionStatus::InProgress,
-            );
+            running.insert(tool.tool_call_key.clone());
         }
         ToolProjectionStatus::Mcp(_)
         | ToolProjectionStatus::Command(_)
@@ -156,9 +164,7 @@ fn file_update_change(tool: &GentsToolCallProgress) -> Option<codex::FileUpdateC
         "write_file" => {
             let content = args.get("content")?.as_str()?.to_string();
             let metadata = gents_fs_metadata(&tool.result);
-            if gents_tool_call_status(tool) == codex::McpToolCallStatus::InProgress
-                && metadata.is_none()
-            {
+            if observed_tool_status(tool) == ProjectionStatus::InProgress && metadata.is_none() {
                 return None;
             }
             let created = metadata
@@ -263,8 +269,10 @@ pub(super) fn command_execution_item(
     let command = command_execution_display(tool);
     let command_actions = command_actions_for_tool(cwd, tool, &command);
     let exit_code = match status {
-        codex::CommandExecutionStatus::Completed => gents_exec_exit_code(&tool.result).or(Some(0)),
-        codex::CommandExecutionStatus::Failed => gents_exec_exit_code(&tool.result).or(Some(1)),
+        codex::CommandExecutionStatus::Completed => Some(0),
+        codex::CommandExecutionStatus::Failed => gents_exec_exit_code(&tool.result)
+            .filter(|exit_code| *exit_code != 0)
+            .or(Some(1)),
         codex::CommandExecutionStatus::InProgress | codex::CommandExecutionStatus::Declined => None,
     };
     let is_background = is_gents_background_tool(tool);
@@ -450,7 +458,7 @@ mod tests {
         );
         assert_eq!(
             tool_projection_status_with_settled(&tool, true, true),
-            ToolProjectionStatus::Mcp(codex::McpToolCallStatus::Completed)
+            ToolProjectionStatus::Mcp(ProjectionStatus::Completed)
         );
     }
 
@@ -461,7 +469,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&tool),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
+            ToolProjectionStatus::Command(ProjectionStatus::InProgress)
         );
 
         let item = command_execution_item(
@@ -498,7 +506,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&tool),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::Completed)
+            ToolProjectionStatus::Command(ProjectionStatus::Completed)
         );
 
         let item = command_execution_item(
@@ -532,7 +540,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&tool),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::InProgress)
+            ToolProjectionStatus::Command(ProjectionStatus::InProgress)
         );
 
         let item = command_execution_item(
@@ -558,13 +566,11 @@ mod tests {
 
     #[test]
     fn gents_exec_exit_nonzero_projects_as_failed_command_execution() {
-        let tool = test_tool("bash_unrestricted", "completed", r#"{"command":"false"}"#)
+        let mut tool = test_tool("bash_unrestricted", "failed", r#"{"command":"false"}"#)
             .with_result(r#"gents_exec: {"ok":false,"status":"exit_nonzero","exit_code":42}"#);
+        tool.tool_failure_class = Some("toolReturnedError".to_string());
 
-        assert_eq!(
-            gents_tool_call_status(&tool),
-            codex::McpToolCallStatus::Failed
-        );
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Failed);
 
         let item = command_execution_item(
             Path::new("/tmp"),
@@ -582,6 +588,23 @@ mod tests {
     }
 
     #[test]
+    fn durable_completed_command_does_not_leak_failure_shaped_exit_code() {
+        let tool = test_tool("bash_unrestricted", "completed", r#"{"command":"true"}"#)
+            .with_result(r#"gents_exec: {"ok":false,"status":"exit_nonzero","exit_code":42}"#);
+
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Completed);
+        let item = command_execution_item(
+            Path::new("/tmp"),
+            &tool,
+            codex::CommandExecutionStatus::Completed,
+        );
+        let codex::ThreadItem::CommandExecution { exit_code, .. } = item else {
+            panic!("expected command execution item");
+        };
+        assert_eq!(exit_code, Some(0));
+    }
+
+    #[test]
     fn read_file_projects_as_native_exploring_command() {
         let tool = test_tool(
             "read_file",
@@ -591,7 +614,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&tool),
-            ToolProjectionStatus::Command(codex::CommandExecutionStatus::Completed)
+            ToolProjectionStatus::Command(ProjectionStatus::Completed)
         );
 
         let item = command_execution_item(
@@ -673,7 +696,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&write),
-            ToolProjectionStatus::FileChange(codex::PatchApplyStatus::Completed)
+            ToolProjectionStatus::FileChange(ProjectionStatus::Completed)
         );
 
         let write_item =
@@ -731,7 +754,7 @@ mod tests {
 
         assert_eq!(
             tool_projection_status(&edit),
-            ToolProjectionStatus::FileChange(codex::PatchApplyStatus::InProgress)
+            ToolProjectionStatus::FileChange(ProjectionStatus::InProgress)
         );
 
         let edit_item =

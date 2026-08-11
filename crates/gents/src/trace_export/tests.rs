@@ -28,6 +28,7 @@ fn persisted_outcome_is_authoritative_over_success_looking_result_text() {
         r#"{"service_id":"x-data","tool_name":"query","arguments":{}}"#,
         "ordinary model-facing detail",
         "failed",
+        Some("failed"),
         Some("serviceUnavailable"),
     );
 
@@ -42,6 +43,40 @@ fn persisted_outcome_is_authoritative_over_success_looking_result_text() {
             .as_ref()
             .map(|error| error.failure_class),
         Some(ToolFailureClass::ServiceUnavailable)
+    );
+}
+
+#[test]
+fn durable_completed_outcome_ignores_failure_shaped_result_text() {
+    let analysis = analyze_tool_call_with_persisted_outcome(
+        "read",
+        r#"{"path":"README.md"}"#,
+        "tool call failed: permission denied",
+        "completed",
+        Some("completed"),
+        None,
+    );
+
+    assert!(analysis.tool_result_ok);
+    assert_eq!(analysis.tool_failure_class, None);
+    assert_eq!(analysis.tool_error, None);
+}
+
+#[test]
+fn durable_timeout_uses_lifecycle_when_failure_class_is_absent() {
+    let analysis = analyze_tool_call_with_persisted_outcome(
+        "bash",
+        r#"{"command":"sleep"}"#,
+        "",
+        "failed",
+        Some("timedOut"),
+        None,
+    );
+
+    assert!(!analysis.tool_result_ok);
+    assert_eq!(
+        analysis.tool_failure_class,
+        Some(ToolFailureClass::External)
     );
 }
 

@@ -181,7 +181,10 @@ impl DefraSessionHook {
                 Ok(outcome) => match outcome {
                     crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
                         let won_terminal_compare = match lifecycle
-                            .bridge_failure(background_timeout_terminal())
+                            .bridge_failure_with_completion_reason(
+                                background_timeout_terminal(),
+                                BACKGROUND_TIMEOUT_COMPLETION_REASON,
+                            )
                             .await
                         {
                             Ok(updated) => updated,
@@ -716,6 +719,8 @@ fn background_timeout_terminal() -> ChildTerminal {
     }
 }
 
+const BACKGROUND_TIMEOUT_COMPLETION_REASON: &str = "deadline_exceeded";
+
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -728,7 +733,10 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod ownership_projection_tests {
-    use super::{background_timeout_terminal, project_background_completion_if_owned};
+    use super::{
+        background_timeout_terminal, project_background_completion_if_owned,
+        BACKGROUND_TIMEOUT_COMPLETION_REASON,
+    };
     use crate::tool_call_lifecycle::{ChildTerminal, FailureClass};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
@@ -767,6 +775,7 @@ mod ownership_projection_tests {
 
     #[test]
     fn background_timeout_preserves_failure_metadata() {
+        assert_eq!(BACKGROUND_TIMEOUT_COMPLETION_REASON, "deadline_exceeded");
         let terminal = background_timeout_terminal();
         assert_eq!(
             terminal,
