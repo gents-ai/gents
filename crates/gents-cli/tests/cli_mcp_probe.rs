@@ -2,7 +2,7 @@ mod support;
 use support::*;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 use uuid::Uuid;
@@ -11,16 +11,10 @@ use uuid::Uuid;
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
     let service_id = format!("fixture-mcp-{}", Uuid::new_v4().simple());
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, "online").await?;
     }
@@ -82,18 +76,12 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
     let missing_port_id = format!("a-fixture-mcp-{}", Uuid::new_v4().simple());
     let missing_address_id = format!("b-fixture-mcp-{}", Uuid::new_v4().simple());
     let offline_id = format!("z-fixture-mcp-{}", Uuid::new_v4().simple());
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-all").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, "online").await?;
         seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, "online").await?;
@@ -141,15 +129,9 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
 async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-missing").await?;
         ensure_runtime_schemas(&node).await?;
     }
 

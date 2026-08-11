@@ -12,6 +12,10 @@ fn schema_apply_registers_sdl_and_additive_patch_idempotently() -> Result<()> {
     let schema_dir = tempdir.path().join("schemas");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&schema_dir)?;
+    run_init_json(
+        &home_dir,
+        &["--identity-only", "--agent-name", "schema-apply"],
+    )?;
 
     fs::write(
         schema_dir.join("action_request.graphql"),

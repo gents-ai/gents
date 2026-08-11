@@ -2,7 +2,7 @@ mod support;
 use support::*;
 
 use anyhow::{Context, Result};
-use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::defra_node::EmbeddedNode;
 use gents::ensure_runtime_schemas;
 use serde_json::Value;
 
@@ -10,15 +10,9 @@ use serde_json::Value;
 async fn background_list_json_filters_and_lists_backgrounded_tool_calls() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_agent_node(tempdir.path(), &agent_home, "background-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_background_tool_calls(&node).await?;
     }

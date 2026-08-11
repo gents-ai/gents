@@ -448,7 +448,7 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
 /// Seed one request with two rendered-request captures (turn 0 attempts 0 and
 /// 1) carrying v3 provenance manifests with the admission join.
 async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
-    exec(
+    let request_doc_id = exec_doc_id(
         node,
         r#"mutation {
             create_AgentRequest(input: {
@@ -466,8 +466,34 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                 retry_count: 0
             }) { _docID }
         }"#,
+        "AgentRequest",
     )
     .await?;
+    let response = node
+        .execute(&format!(
+            r#"query {{ _commits(docID: "{}") {{ cid fieldName }} }}"#,
+            gents::graphql::escape_graphql_string(&request_doc_id)
+        ))
+        .await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying seeded request commits failed: {:?}",
+            response.errors
+        );
+    }
+    let request_commit_cid = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("_commits"))
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("fieldName").and_then(Value::as_str) == Some("_C"))
+        })
+        .and_then(|row| row.get("cid"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("seeded AgentRequest has no composite commit cid")?;
     for (suffix, attempt, call_id, call_seq, created_at) in [
         ("a0", 0, "call-cap-1", 1, "2026-08-07T12:00:02Z"),
         ("a1", 1, "call-cap-2", 2, "2026-08-07T12:00:04Z"),
@@ -499,7 +525,8 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                 r#"mutation {{
                     create_RenderedRequest(input: {{
                         capture_key: "rendered:v1:seeded-{suffix}",
-                        request_doc_id: "doc-req-cap",
+                        request_doc_id: "{request_doc_id}",
+                        request_commit_cid: "{request_commit_cid}",
                         request_id: "req-cap",
                         session_id: "session-cap",
                         agent_did: "did:test:amy",
@@ -529,15 +556,9 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
 async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let agent_home = tempdir.path().join("agent-home");
-    let data_dir = agent_home.join("data");
 
     {
-        let node = EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_storage_backend(StorageBackend::RocksDb)
-            .build()
-            .await
-            .context("opening embedded node")?;
+        let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_rendered_request_rows(&node).await?;
     }
