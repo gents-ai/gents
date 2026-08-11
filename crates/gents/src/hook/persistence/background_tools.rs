@@ -180,18 +180,20 @@ impl DefraSessionHook {
             match execution {
                 Ok(outcome) => match outcome {
                     crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
-                        let won_terminal_compare =
-                            match lifecycle.bridge_failure(ChildTerminal::Dead).await {
-                                Ok(updated) => updated,
-                                Err(error) => {
-                                    tracing::warn!(
-                                        tool_call_id = %execution_call_id,
-                                        error = %error,
-                                        "failed to terminalize timed-out background tool"
-                                    );
-                                    false
-                                }
-                            };
+                        let won_terminal_compare = match lifecycle
+                            .bridge_failure(background_timeout_terminal())
+                            .await
+                        {
+                            Ok(updated) => updated,
+                            Err(error) => {
+                                tracing::warn!(
+                                    tool_call_id = %execution_call_id,
+                                    error = %error,
+                                    "failed to terminalize timed-out background tool"
+                                );
+                                false
+                            }
+                        };
                         if let Some(Err(error)) = project_background_completion_if_owned(
                             won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
@@ -707,6 +709,13 @@ impl DefraSessionHook {
     }
 }
 
+fn background_timeout_terminal() -> ChildTerminal {
+    ChildTerminal::Failed {
+        reason: "background tool deadline exceeded".to_string(),
+        failure_class: FailureClass::External,
+    }
+}
+
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -719,7 +728,8 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 #[cfg(test)]
 mod ownership_projection_tests {
-    use super::project_background_completion_if_owned;
+    use super::{background_timeout_terminal, project_background_completion_if_owned};
+    use crate::tool_call_lifecycle::{ChildTerminal, FailureClass};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -753,5 +763,17 @@ mod ownership_projection_tests {
 
         assert!(matches!(output, Some(Ok(()))));
         assert!(projected.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn background_timeout_preserves_failure_metadata() {
+        let terminal = background_timeout_terminal();
+        assert_eq!(
+            terminal,
+            ChildTerminal::Failed {
+                reason: "background tool deadline exceeded".to_string(),
+                failure_class: FailureClass::External,
+            }
+        );
     }
 }

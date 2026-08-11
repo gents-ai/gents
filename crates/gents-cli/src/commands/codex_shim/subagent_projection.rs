@@ -88,7 +88,7 @@ pub(super) struct CollabProjection {
     pub(super) tool: codex::CollabAgentTool,
     pub(super) receiver_thread_id: String,
     pub(super) child_model: Option<String>,
-    pub(super) child_lifecycle_state: String,
+    pub(super) child_status: codex::CollabAgentStatus,
     pub(super) child_failure_reason: Option<String>,
 }
 
@@ -772,7 +772,7 @@ pub(super) fn collab_projection(tool: &GentsToolCallProgress) -> Option<CollabPr
         tool: collab_tool,
         receiver_thread_id: link.session_id.clone(),
         child_model: link.model.clone(),
-        child_lifecycle_state: link.lifecycle_state.clone(),
+        child_status: collab_agent_status(&link.lifecycle_state),
         child_failure_reason: link.failure_reason.clone(),
     })
 }
@@ -810,7 +810,7 @@ pub(super) fn collab_tool_item(
     agents_states.insert(
         projection.receiver_thread_id.clone(),
         codex::CollabAgentState {
-            status: collab_agent_status(&projection.child_lifecycle_state),
+            status: projection.child_status.clone(),
             message: projection.child_failure_reason.clone(),
         },
     );
@@ -1123,6 +1123,18 @@ mod tests {
                     .replace('/', "~1")
             )),
             Some(&Value::String("running".to_string()))
+        );
+
+        let mut claimed = tool.clone();
+        claimed
+            .subagent_link
+            .as_mut()
+            .expect("link")
+            .lifecycle_state = "claimed".to_string();
+        let claimed_projection = collab_projection(&claimed).expect("claimed projection");
+        assert_eq!(
+            projection, claimed_projection,
+            "storage lifecycle aliases with the same Codex status must not emit duplicate items"
         );
 
         let mut completed = tool.clone();

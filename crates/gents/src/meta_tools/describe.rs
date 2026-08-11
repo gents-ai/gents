@@ -76,35 +76,37 @@ impl Tool for DescribeToolTool {
             .ctx
             .blocked_service_error(&args.service_id, &args.tool_name)
         {
-            return Ok(error.to_result_text());
+            return Err(MetaToolError::structured(error));
         }
 
         if let Err(error) = enforce_health_gate(&self.ctx.health, &args.service_id).await {
-            return Ok(StructuredToolError::service_unavailable(
-                &args.service_id,
-                &args.tool_name,
-                format!(
-                    "service '{}' is currently unavailable: {error:#}",
-                    args.service_id
+            return Err(MetaToolError::structured(
+                StructuredToolError::service_unavailable(
+                    &args.service_id,
+                    &args.tool_name,
+                    format!(
+                        "service '{}' is currently unavailable: {error:#}",
+                        args.service_id
+                    ),
+                    true,
                 ),
-                true,
-            )
-            .to_result_text());
+            ));
         }
 
         let service = match lookup_service(&self.ctx, &args.service_id).await {
             Ok(service) => service,
             Err(error) => {
-                return Ok(StructuredToolError::service_unavailable(
-                    &args.service_id,
-                    &args.tool_name,
-                    format!(
-                        "service '{}' is not available for describe_tool: {error:#}",
-                        args.service_id
+                return Err(MetaToolError::structured(
+                    StructuredToolError::service_unavailable(
+                        &args.service_id,
+                        &args.tool_name,
+                        format!(
+                            "service '{}' is not available for describe_tool: {error:#}",
+                            args.service_id
+                        ),
+                        false,
                     ),
-                    false,
-                )
-                .to_result_text());
+                ));
             }
         };
 
@@ -120,16 +122,17 @@ impl Tool for DescribeToolTool {
         {
             Ok(result) => result,
             Err(error) => {
-                return Ok(StructuredToolError::service_unavailable(
-                    &args.service_id,
-                    &args.tool_name,
-                    format!(
-                        "service '{}' could not list tools for describe_tool: {error:#}",
-                        args.service_id
+                return Err(MetaToolError::structured(
+                    StructuredToolError::service_unavailable(
+                        &args.service_id,
+                        &args.tool_name,
+                        format!(
+                            "service '{}' could not list tools for describe_tool: {error:#}",
+                            args.service_id
+                        ),
+                        true,
                     ),
-                    true,
-                )
-                .to_result_text());
+                ));
             }
         };
 
@@ -140,8 +143,12 @@ impl Tool for DescribeToolTool {
             &list_result,
         ) {
             Ok(result) => Ok(result),
-            Err(error) => Ok(error.to_result_text()),
+            Err(error) => Err(MetaToolError::structured(error)),
         }
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }
 
@@ -965,15 +972,15 @@ mod tests {
             allowed_mcp_service_ids: vec!["x-data".to_string()],
         });
 
-        let output = tool
+        let error = tool
             .call(DescribeToolArgs {
                 service_id: "observability-mcp".to_string(),
                 tool_name: "query_metrics".to_string(),
                 raw_schema: false,
             })
             .await
-            .expect("disallowed service should be model-readable");
-        let value: Value = serde_json::from_str(&output).expect("structured json");
+            .expect_err("disallowed service should return a typed failure");
+        let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["failure_class"], "tool_not_allowed");
@@ -998,15 +1005,15 @@ mod tests {
             allowed_mcp_service_ids: Vec::new(),
         });
 
-        let output = tool
+        let error = tool
             .call(DescribeToolArgs {
                 service_id: "missing-service".to_string(),
                 tool_name: "search_posts".to_string(),
                 raw_schema: false,
             })
             .await
-            .expect("missing service should be model-readable");
-        let value: Value = serde_json::from_str(&output).expect("structured json");
+            .expect_err("missing service should return a typed failure");
+        let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["failure_class"], "service_unavailable");

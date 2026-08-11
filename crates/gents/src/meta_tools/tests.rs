@@ -61,6 +61,32 @@ fn blocked_mcp_service_returns_tool_not_allowed_error() {
 }
 
 #[test]
+fn structured_meta_tool_error_becomes_a_typed_dispatch_failure() {
+    let error = StructuredToolError::invalid_tool_arguments(
+        "x-data",
+        "query",
+        "/arguments/limit",
+        "limit must be an integer",
+    );
+    let dispatch_error = MetaToolError::structured(error).into_dispatch_error();
+    let outcome =
+        crate::tool_call_lifecycle::ToolOutcome::from_dispatch("call_tool", Err(dispatch_error));
+
+    match outcome {
+        crate::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
+            assert_eq!(
+                class,
+                crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+            );
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["failure_class"], "invalid_tool_arguments");
+        }
+        other => panic!("structured meta-tool error must be typed failed, got {other:?}"),
+    }
+}
+
+#[test]
 fn extract_text_empty_content() {
     let result = make_call_result(&[]);
     assert_eq!(extract_text(&result), "");

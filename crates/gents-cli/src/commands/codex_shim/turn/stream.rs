@@ -823,10 +823,9 @@ fn prime_projection_from_turn(
                             tool: tool.clone(),
                             receiver_thread_id: receiver_thread_id.clone(),
                             child_model: model.clone(),
-                            child_lifecycle_state: child
-                                .map(|state| collab_lifecycle_state(&state.status))
-                                .unwrap_or("")
-                                .to_string(),
+                            child_status: child
+                                .map(|state| state.status.clone())
+                                .unwrap_or(codex::CollabAgentStatus::NotFound),
                             child_failure_reason: child.and_then(|state| state.message.clone()),
                         },
                     ),
@@ -868,16 +867,6 @@ fn resumable_reasoning_item(turn: &codex::Turn, preferred_id: &str) -> Option<(S
         };
         (!text.trim().is_empty()).then(|| (id.clone(), text))
     })
-}
-
-fn collab_lifecycle_state(status: &codex::CollabAgentStatus) -> &'static str {
-    match status {
-        codex::CollabAgentStatus::PendingInit => "pending",
-        codex::CollabAgentStatus::Running => "processing",
-        codex::CollabAgentStatus::Completed | codex::CollabAgentStatus::Shutdown => "completed",
-        codex::CollabAgentStatus::Errored | codex::CollabAgentStatus::NotFound => "failed",
-        codex::CollabAgentStatus::Interrupted => "interrupted",
-    }
 }
 
 fn content_delta_from_cursor(cursor: &mut ContentCursor, current: &str) -> String {

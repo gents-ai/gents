@@ -23,8 +23,8 @@ use gents::run_timeline::{
 };
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::trace_export::{
-    analyze_request_failure, analyze_tool_call, extract_raw_tool_call_json, latency_ms,
-    raw_message_json, AmyToolCallTraceRecord,
+    analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
+    latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1178,11 +1178,17 @@ fn build_records(
             });
             let request_failure = combined_request_failure_text(request, response);
             let request_failure_class = analyze_request_failure(request_failure.as_deref());
-            let analysis = analyze_tool_call(
+            let lifecycle_state = tool_call
+                .lifecycle_state
+                .as_deref()
+                .filter(|state| !state.trim().is_empty())
+                .unwrap_or(&tool_call.status);
+            let analysis = analyze_tool_call_with_persisted_outcome(
                 &tool_call.tool_name,
                 &tool_call.args,
                 &tool_call.result,
-                &tool_call.status,
+                lifecycle_state,
+                tool_call.tool_failure_class.as_deref(),
             );
             let message = tool_call
                 .message_sequence
@@ -1260,8 +1266,8 @@ fn build_records(
                 tool_result: tool_call.result.clone(),
                 native_tool_output: analysis.native_tool_output,
                 tool_result_ok: analysis.tool_result_ok,
-                tool_call_completed: tool_call.status.eq_ignore_ascii_case("completed"),
-                tool_status: tool_call.status.clone(),
+                tool_call_completed: lifecycle_state.eq_ignore_ascii_case("completed"),
+                tool_status: lifecycle_state.to_string(),
                 task_outcome: None,
                 tool_failure_class: analysis.tool_failure_class,
                 tool_error: analysis.tool_error,
@@ -1306,6 +1312,8 @@ async fn load_tool_calls(
                 args
                 result
                 status
+                lifecycle_state
+                tool_failure_class
                 started_at
                 completed_at
             }}
@@ -1769,6 +1777,10 @@ struct ToolCallRow {
     result: String,
     #[serde(default)]
     status: String,
+    #[serde(default)]
+    lifecycle_state: Option<String>,
+    #[serde(default)]
+    tool_failure_class: Option<String>,
     #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
@@ -2472,6 +2484,8 @@ mod tests {
             args: String::new(),
             result: String::new(),
             status: String::new(),
+            lifecycle_state: None,
+            tool_failure_class: None,
             started_at: None,
             completed_at: None,
         }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::CommandPolicyDenial;
 
 #[derive(Clone)]
@@ -15,6 +16,7 @@ pub(crate) struct ToolContext {
 pub(crate) enum ToolError {
     Other(anyhow::Error),
     PolicyDenial(CommandPolicyDenial),
+    ReportedFailure { class: FailureClass, text: String },
 }
 
 impl ToolError {
@@ -22,11 +24,24 @@ impl ToolError {
         Self::PolicyDenial(denial)
     }
 
+    pub(crate) fn reported_failure(class: FailureClass, text: String) -> Self {
+        Self::ReportedFailure { class, text }
+    }
+
+    pub(crate) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
+        match self {
+            Self::ReportedFailure { class, text } => {
+                crate::llm::tool::ToolError::ReportedFailure { class, text }
+            }
+            other => crate::llm::tool::ToolError::ToolCallError(Box::new(other)),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn command_policy_denial(&self) -> Option<&CommandPolicyDenial> {
         match self {
             Self::PolicyDenial(denial) => Some(denial),
-            Self::Other(_) => None,
+            Self::Other(_) | Self::ReportedFailure { .. } => None,
         }
     }
 }
@@ -36,6 +51,7 @@ impl std::fmt::Display for ToolError {
         match self {
             Self::Other(error) => write!(f, "{error:#}"),
             Self::PolicyDenial(denial) => write!(f, "{}", denial.tool_error_payload()),
+            Self::ReportedFailure { text, .. } => f.write_str(text),
         }
     }
 }
@@ -44,7 +60,7 @@ impl std::error::Error for ToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Other(error) => Some(error.root_cause()),
-            Self::PolicyDenial(_) => None,
+            Self::PolicyDenial(_) | Self::ReportedFailure { .. } => None,
         }
     }
 }

@@ -291,7 +291,13 @@ pub(super) fn gents_tool_call_status(tool: &GentsToolCallProgress) -> codex::Mcp
     if matches!(
         status.as_str(),
         "cancelled" | "dead" | "error" | "failed" | "failure" | "timedout"
-    ) || tool_result_looks_error(&tool.result)
+    ) || tool
+        .tool_failure_class
+        .as_deref()
+        .is_some_and(|class| !class.trim().is_empty())
+        // Compatibility for rows written before trusted adapters persisted
+        // typed lifecycle failures and failure classes.
+        || tool_result_looks_error(&tool.result)
         || gents_exec_result_failed(&tool.result)
     {
         return codex::McpToolCallStatus::Failed;
@@ -463,6 +469,19 @@ mod tests {
         assert_eq!(
             error.expect("failed tool should carry error").message,
             "Toolset error: missing runner"
+        );
+    }
+
+    #[test]
+    fn persisted_failure_class_overrides_legacy_completed_status() {
+        let mut tool = test_tool("bash", "completed", r#"{"command":"false"}"#)
+            .with_result("legacy row without a parseable command envelope");
+        tool.lifecycle_state = Some("completed".to_string());
+        tool.tool_failure_class = Some("toolReturnedError".to_string());
+
+        assert_eq!(
+            gents_tool_call_status(&tool),
+            codex::McpToolCallStatus::Failed
         );
     }
 

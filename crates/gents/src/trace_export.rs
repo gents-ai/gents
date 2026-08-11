@@ -131,6 +131,16 @@ pub fn analyze_tool_call(
     result: &str,
     status: &str,
 ) -> ToolCallTraceAnalysis {
+    analyze_tool_call_with_persisted_outcome(tool_name, raw_args, result, status, None)
+}
+
+pub fn analyze_tool_call_with_persisted_outcome(
+    tool_name: &str,
+    raw_args: &str,
+    result: &str,
+    lifecycle_state: &str,
+    persisted_failure_class: Option<&str>,
+) -> ToolCallTraceAnalysis {
     let mut analysis = analyze_arguments(tool_name, raw_args);
     analysis.native_tool_output = native_tool_output_from_result(tool_name, result);
     let structured_tool_error = structured_tool_error_from_result(result);
@@ -157,7 +167,12 @@ pub fn analyze_tool_call(
         analysis.tool_failure_class = classify_result_text(result);
     }
 
-    let completed = status.trim().eq_ignore_ascii_case("completed");
+    let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
+    if let Some(failure_class) = persisted_failure_class {
+        analysis.tool_failure_class = Some(failure_class);
+    }
+
+    let completed = lifecycle_state.trim().eq_ignore_ascii_case("completed");
     if analysis.tool_failure_class.is_none()
         && analysis
             .native_tool_output
@@ -192,6 +207,12 @@ pub fn analyze_tool_call(
                 raw_error_text: raw_tool_error_text(result, &analysis),
             })
     });
+    if let (Some(error), Some(failure_class)) =
+        (analysis.tool_error.as_mut(), persisted_failure_class)
+    {
+        error.failure_class = failure_class;
+        error.retryable = retryable_for_failure_class(failure_class);
+    }
     analysis
 }
 

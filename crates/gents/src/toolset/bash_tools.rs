@@ -159,6 +159,10 @@ impl Tool for ReadOnlyBashTool {
         )
         .await
     }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
+    }
 }
 
 impl Tool for UnrestrictedBashTool {
@@ -181,7 +185,7 @@ impl Tool for UnrestrictedBashTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: format!(
-                "Run a write-capable command under the configured writable root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Current command policy: {policy_description}. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
+                "Run a write-capable command under the configured writable root. Relative cwd values resolve from the active request workspace when one is provided, otherwise from the root. Current command policy: {policy_description}. If args is empty, command may be a shell command string; if args is present, command is treated as an executable name or path. Shell pipelines normally report only their final command's exit status, so avoid pipelines that mask an upstream failure or invoke a shell with pipefail explicitly. Returns compact text with first-line gents_exec metadata. Set raw_json=true for structured JSON."
             ),
             parameters: serde_json::json!({
                 "type": "object",
@@ -236,5 +240,9 @@ impl Tool for UnrestrictedBashTool {
             args.raw_json,
         )
         .await
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+        error.into_dispatch_error()
     }
 }

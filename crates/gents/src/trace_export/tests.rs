@@ -22,6 +22,30 @@ fn successful_completed_result_has_no_failure_class() {
 }
 
 #[test]
+fn persisted_outcome_is_authoritative_over_success_looking_result_text() {
+    let analysis = analyze_tool_call_with_persisted_outcome(
+        "call_tool",
+        r#"{"service_id":"x-data","tool_name":"query","arguments":{}}"#,
+        "ordinary model-facing detail",
+        "failed",
+        Some("serviceUnavailable"),
+    );
+
+    assert!(!analysis.tool_result_ok);
+    assert_eq!(
+        analysis.tool_failure_class,
+        Some(ToolFailureClass::ServiceUnavailable)
+    );
+    assert_eq!(
+        analysis
+            .tool_error
+            .as_ref()
+            .map(|error| error.failure_class),
+        Some(ToolFailureClass::ServiceUnavailable)
+    );
+}
+
+#[test]
 fn compact_contract_text_that_mentions_unknown_fields_is_successful() {
     let result = "## coding_overview\n\nInput contract:\n- Unknown top-level fields: rejected (`additionalProperties: false`)\n\nCommon mistakes:\n- Do not add unlisted top-level fields; this schema rejects unknown arguments.";
     let result = format!("{result}\n- Use the exact field names and JSON types shown above.");
