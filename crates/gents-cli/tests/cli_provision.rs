@@ -74,7 +74,7 @@ async fn provision_initializes_home_binds_manifest_and_diff_exact() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn provision_accepts_initialized_home_did_without_file_key_path() -> Result<()> {
+async fn provision_rejects_initialized_home_without_loadable_identity() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_env = tempdir.path().join("home-env");
     let home = tempdir.path().join("secure-enclave-home");
@@ -102,7 +102,7 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
     )?;
     write_portable_manifest_root(tempdir.path(), &root, placeholder_did)?;
 
-    let report = run_cli_json(
+    let stderr = run_cli_failure_stderr(
         &home_env,
         &[
             "provision",
@@ -112,25 +112,13 @@ async fn provision_accepts_initialized_home_did_without_file_key_path() -> Resul
             root.to_str().expect("utf-8 root"),
         ],
     )?;
-    assert_eq!(
-        report.pointer("/identity/status").and_then(Value::as_str),
-        Some("existing")
-    );
-    assert_eq!(
-        report.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
-    );
-    assert_eq!(
-        report.pointer("/apply/ok").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        report.pointer("/diff/ok").and_then(Value::as_bool),
-        Some(true)
+    assert!(
+        stderr.contains("has no key_path and unsupported identity_backend"),
+        "expected fail-closed unloadable-identity error, got:\n{stderr}"
     );
     assert!(
         !home.join("keys").exists(),
-        "provision should not create a file-key identity when init.json already contains a real DID without key_path"
+        "provision must not mint a file-key identity for a home whose signer it cannot load"
     );
 
     Ok(())
