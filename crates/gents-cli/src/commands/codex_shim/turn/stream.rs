@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
+use gents_protocol::client_protocol::derive_persisted_attempt;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -17,8 +18,8 @@ use super::super::command_projection::{
 };
 use super::super::compaction_projection::decode_gents_compaction_progress;
 use super::super::progress::{
-    content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
-    response_field_is_blank, terminal_error_message, terminal_turn_status, timestamp_millis,
+    codex_turn_status, content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
+    response_field_is_blank, terminal_error_message, timestamp_millis,
 };
 use super::super::projection_state::{stabilize_projection_kind, ChildStatus, CollabProjection};
 use super::super::protocol::{
@@ -37,7 +38,7 @@ use super::super::thread_projection::{
 use super::super::turn_projection::TurnProjection;
 use super::super::{ConnectionState, ShimState};
 use super::active::next_steering_request_after;
-use crate::{is_terminal_lifecycle_state, request_diagnostic_hint, SubmittedRequest};
+use crate::{request_diagnostic_hint, SubmittedRequest};
 
 const SUBAGENT_LINK_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -284,8 +285,9 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 .and_then(response_terminal_timestamp)
                 .and_then(timestamp_millis),
         );
-        let projection_settled = is_terminal_lifecycle_state(lifecycle_state)
-            || matches!(response_status, "complete" | "completed" | "error");
+        let client_turn_state =
+            derive_persisted_attempt(lifecycle_state, false, Some(response_status));
+        let projection_settled = client_turn_state.is_some_and(|state| state.is_terminal());
 
         let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
         let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
@@ -466,10 +468,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(|row| row.get("failure_reason"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
-        let terminal_by_response = matches!(response_status, "complete" | "completed" | "error");
-
-        if (terminal_by_request || terminal_by_response) && !waiting_for_subagent_links {
+        if projection_settled && !waiting_for_subagent_links {
             let mut terminal_response = response_row.cloned().unwrap_or_else(|| {
                 json!({
                     "request_id": current.request_id.clone(),
@@ -525,7 +524,9 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 projection.append_agent_delta(outbound, &delta).await?;
             }
 
-            let turn_status = terminal_turn_status(lifecycle_state, response_status);
+            let turn_status = codex_turn_status(
+                client_turn_state.expect("settled client turn state must be present"),
+            );
             let error_message = if turn_status == codex::TurnStatus::Failed {
                 terminal_error_message(
                     response_status,

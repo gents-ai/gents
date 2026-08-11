@@ -121,6 +121,40 @@ pub enum ResponseStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidResponseStatus {
+    status: String,
+}
+
+impl InvalidResponseStatus {
+    pub fn value(&self) -> &str {
+        &self.status
+    }
+}
+
+impl Display for InvalidResponseStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid response status: {}", self.status)
+    }
+}
+
+impl Error for InvalidResponseStatus {}
+
+impl TryFrom<&str> for ResponseStatus {
+    type Error = InvalidResponseStatus;
+
+    fn try_from(value: &str) -> Result<Self, InvalidResponseStatus> {
+        match value {
+            "streaming" => Ok(Self::Streaming),
+            "complete" | "completed" => Ok(Self::Complete),
+            "error" | "failed" | "failure" => Ok(Self::Error),
+            _ => Err(InvalidResponseStatus {
+                status: value.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub request_id: String,
     pub retry_parent_request: Option<String>,
@@ -140,11 +174,38 @@ pub struct AttemptView {
 }
 
 pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
-    if view.request.is_superseded {
+    derive_observation(
+        view.request.lifecycle_state,
+        view.request.is_superseded,
+        view.response.as_ref().map(|response| response.status),
+    )
+}
+
+pub fn derive_persisted_attempt(
+    lifecycle_state: &str,
+    is_superseded: bool,
+    response_status: Option<&str>,
+) -> Option<ClientTurnState> {
+    let lifecycle_state = RequestLifecycleState::try_from(lifecycle_state.trim()).ok()?;
+    let response_status =
+        response_status.and_then(|status| ResponseStatus::try_from(status.trim()).ok());
+    Some(derive_observation(
+        lifecycle_state,
+        is_superseded,
+        response_status,
+    ))
+}
+
+fn derive_observation(
+    lifecycle_state: RequestLifecycleState,
+    is_superseded: bool,
+    response_status: Option<ResponseStatus>,
+) -> ClientTurnState {
+    if is_superseded {
         return ClientTurnState::Superseded;
     }
 
-    match view.request.lifecycle_state {
+    match lifecycle_state {
         RequestLifecycleState::Superseded => ClientTurnState::Superseded,
         RequestLifecycleState::Completed => ClientTurnState::Completed,
         RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
@@ -152,8 +213,8 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
         RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
         | RequestLifecycleState::Processing
-        | RequestLifecycleState::InputRequired => match &view.response {
-            Some(resp) => match resp.status {
+        | RequestLifecycleState::InputRequired => match response_status {
+            Some(status) => match status {
                 ResponseStatus::Complete => ClientTurnState::Completed,
                 ResponseStatus::Error => ClientTurnState::Failed,
                 ResponseStatus::Streaming => ClientTurnState::Streaming,

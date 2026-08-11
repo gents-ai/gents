@@ -72,9 +72,11 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(
         pending.lean_theorems,
         vec![
-            "CodexShim.project_pending_is_in_progress".to_string(),
-            "CodexShim.nonterminal_without_response_projects_in_progress".to_string(),
-            "CodexShim.request_transition_projection_monotonic".to_string(),
+            "deriveAttempt_total".to_string(),
+            "lifecycle_transition_monotonic".to_string(),
+            "terminal_coherence".to_string(),
+            "CodexShim.projectClientTurnState_terminal".to_string(),
+            "CodexShim.projection_without_local_interrupt".to_string(),
             "CodexShim.codex_turn_terminates_precisely".to_string(),
         ]
     );
@@ -89,7 +91,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert!(!completed.interruptible_request_state);
     assert!(completed
         .lean_theorems
-        .contains(&"CodexShim.terminal_request_overrides_response".to_string()));
+        .contains(&"terminal_coherence".to_string()));
 
     let local_interrupt = lean_codex_shim_projection_case(
         "codex_shim.projection.local_interrupt_preempts_core_state",

@@ -979,12 +979,7 @@ pub fn parse_session_shape_response(
 }
 
 fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    match row.status.as_deref().unwrap_or_default() {
-        "streaming" => Some(ResponseStatus::Streaming),
-        "complete" | "completed" => Some(ResponseStatus::Complete),
-        "error" | "failed" | "failure" => Some(ResponseStatus::Error),
-        _ => None,
-    }
+    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
 
 fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<serde_json::Value> {

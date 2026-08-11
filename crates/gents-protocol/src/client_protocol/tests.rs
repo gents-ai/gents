@@ -505,3 +505,52 @@ fn turn_replacement_supersession_rank() {
     };
     assert_eq!(derive_attempt(&view).rank(), 2);
 }
+
+#[test]
+fn persisted_response_status_aliases_share_one_decoder() {
+    assert_eq!(
+        ResponseStatus::try_from("streaming"),
+        Ok(ResponseStatus::Streaming)
+    );
+    assert_eq!(
+        ResponseStatus::try_from("complete"),
+        Ok(ResponseStatus::Complete)
+    );
+    assert_eq!(
+        ResponseStatus::try_from("completed"),
+        Ok(ResponseStatus::Complete)
+    );
+    for status in ["error", "failed", "failure"] {
+        assert_eq!(ResponseStatus::try_from(status), Ok(ResponseStatus::Error));
+    }
+    assert_eq!(
+        ResponseStatus::try_from("interrupted")
+            .expect_err("unsupported status should fail")
+            .value(),
+        "interrupted"
+    );
+}
+
+#[test]
+fn persisted_attempt_projection_uses_generic_client_precedence() {
+    assert_eq!(
+        derive_persisted_attempt("completed", false, Some("error")),
+        Some(ClientTurnState::Completed)
+    );
+    assert_eq!(
+        derive_persisted_attempt("processing", false, Some("error")),
+        Some(ClientTurnState::Failed)
+    );
+    assert_eq!(
+        derive_persisted_attempt("failed", false, Some("complete")),
+        Some(ClientTurnState::Failed)
+    );
+    assert_eq!(
+        derive_persisted_attempt("superseded", false, Some("error")),
+        Some(ClientTurnState::Superseded)
+    );
+    assert_eq!(
+        derive_persisted_attempt("processing", false, Some("streaming")),
+        Some(ClientTurnState::Streaming)
+    );
+}

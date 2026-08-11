@@ -1,6 +1,7 @@
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{FailureClass, ToolCallState};
 use gents_codex_protocol as codex;
+use gents_protocol::client_protocol::ClientTurnState;
 use serde_json::{json, Value};
 
 use super::projection_state::ProjectionStatus;
@@ -363,16 +364,16 @@ pub(super) fn response_field_is_blank(response: &Value, field: &str) -> bool {
         .is_empty()
 }
 
-pub(super) fn terminal_turn_status(
-    lifecycle_state: &str,
-    response_status: &str,
-) -> codex::TurnStatus {
-    match (lifecycle_state, response_status) {
-        ("interrupted" | "superseded", _) => codex::TurnStatus::Interrupted,
-        ("failed" | "dead", _) => codex::TurnStatus::Failed,
-        ("completed", _) => codex::TurnStatus::Completed,
-        (_, "error") => codex::TurnStatus::Failed,
-        _ => codex::TurnStatus::Completed,
+pub(super) fn codex_turn_status(state: ClientTurnState) -> codex::TurnStatus {
+    match state {
+        ClientTurnState::WaitingForClaim | ClientTurnState::Streaming => {
+            codex::TurnStatus::InProgress
+        }
+        ClientTurnState::Completed => codex::TurnStatus::Completed,
+        ClientTurnState::Failed => codex::TurnStatus::Failed,
+        ClientTurnState::Superseded | ClientTurnState::Interrupted => {
+            codex::TurnStatus::Interrupted
+        }
     }
 }
 
@@ -531,21 +532,21 @@ mod tests {
     }
 
     #[test]
-    fn terminal_turn_status_matches_codex_projection_request_precedence() {
+    fn codex_turn_status_is_only_a_wire_vocabulary_mapping() {
         assert_eq!(
-            terminal_turn_status("completed", "error"),
+            codex_turn_status(ClientTurnState::Completed),
             codex::TurnStatus::Completed
         );
         assert_eq!(
-            terminal_turn_status("processing", "error"),
+            codex_turn_status(ClientTurnState::Failed),
             codex::TurnStatus::Failed
         );
         assert_eq!(
-            terminal_turn_status("failed", "complete"),
-            codex::TurnStatus::Failed
+            codex_turn_status(ClientTurnState::Streaming),
+            codex::TurnStatus::InProgress
         );
         assert_eq!(
-            terminal_turn_status("superseded", "error"),
+            codex_turn_status(ClientTurnState::Superseded),
             codex::TurnStatus::Interrupted
         );
     }
