@@ -21,6 +21,28 @@ pub fn negotiate(server_encodings: &[String]) -> PositionEncoding {
     }
 }
 
+/// Resolve a hover/definition position. An omitted line searches every line
+/// for `symbol` instead of defaulting to line 1.
+pub fn position_for_symbol(
+    text: &str,
+    encoding: PositionEncoding,
+    line_1: Option<u32>,
+    symbol: &str,
+) -> Option<LspPosition> {
+    match line_1 {
+        Some(line) => offset_to_position(text, encoding, line, symbol),
+        None if symbol.is_empty() => None,
+        None => {
+            for line in 1..=u32::try_from(text.lines().count()).unwrap_or(u32::MAX) {
+                if let Some(pos) = offset_to_position(text, encoding, line, symbol) {
+                    return Some(pos);
+                }
+            }
+            None
+        }
+    }
+}
+
 pub fn offset_to_position(
     text: &str,
     encoding: PositionEncoding,
@@ -107,5 +129,13 @@ mod tests {
         let second = offset_to_position(text, PositionEncoding::Utf8, 1, "add#2").unwrap();
         assert_eq!(first.character, 4);
         assert_eq!(second.character, 10);
+    }
+
+    #[test]
+    fn omitted_line_searches_the_file() {
+        let text = "fn skip() {}\npub fn meet(self, other: Self) -> Self { self }\n";
+        let pos = position_for_symbol(text, PositionEncoding::Utf8, None, "meet").unwrap();
+        assert_eq!(pos.line, 1);
+        assert_eq!(pos.character, 7);
     }
 }

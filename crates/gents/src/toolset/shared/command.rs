@@ -269,6 +269,9 @@ pub(crate) fn admit_host_executable(
 /// rustup shims in `~/.cargo/bin` canonicalize to the `rustup` binary. An LSP
 /// workspace tempdir has no rust-toolchain.toml, so that shim exits before
 /// initialize. Prefer `rustup which <requested>` when it points at a host binary.
+///
+/// The helper is the already-admitted host `rustup`, never a PATH lookup
+/// that could run a workspace-local fake.
 fn resolve_rustup_proxy(requested: &str, admitted: PathBuf, tool_root: &Path) -> PathBuf {
     let Some(name) = Path::new(requested)
         .file_name()
@@ -276,7 +279,10 @@ fn resolve_rustup_proxy(requested: &str, admitted: PathBuf, tool_root: &Path) ->
     else {
         return admitted;
     };
-    let Ok(output) = std::process::Command::new("rustup")
+    let Some(rustup) = admitted_host_binary("rustup", tool_root) else {
+        return admitted;
+    };
+    let Ok(output) = std::process::Command::new(&rustup)
         .args(["which", name])
         .output()
     else {
@@ -294,6 +300,16 @@ fn resolve_rustup_proxy(requested: &str, admitted: PathBuf, tool_root: &Path) ->
         return admitted;
     }
     canonical
+}
+
+fn admitted_host_binary(name: &str, tool_root: &Path) -> Option<PathBuf> {
+    let candidate = which_on_host_path(name)?;
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    if canonical.starts_with(tool_root) || !canonical.is_file() {
+        None
+    } else {
+        Some(canonical)
+    }
 }
 
 fn which_on_host_path(name: &str) -> Option<PathBuf> {

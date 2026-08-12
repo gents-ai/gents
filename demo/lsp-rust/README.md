@@ -13,7 +13,7 @@ another OpenAI-compatible endpoint) is reachable.
 # rust-analyzer must resolve on PATH
 rust-analyzer --version
 
-# From the repo root so rust-analyzer sees the Cargo workspace
+# From the repo root so init.tool_root `.` is this Gents tree
 gents demo run lsp-rust
 
 # Or pin an absolute workspace
@@ -21,9 +21,10 @@ GENTS_LSP_WORKSPACE=/abs/path/to/gents \
   gents demo run lsp-rust --keep-home
 ```
 
-The stronger assertion (completed `AgentToolCall` hover rows whose results
-contain `FileToolMode` and `Disabled`/`Inherit`, plus `rust-analyzer (ready)`)
-lives in the ignored live test:
+`experiment.json` asks `gents demo run` for a **readonly** ceiling rooted
+at `tool_root` and then checks persisted `AgentToolCall` rows (symbols,
+both hovers, ready status). The ignored live test loads this same pack
+prompt and lsp_config:
 
 ```bash
 GENTS_LIVE_LSP=1 cargo test -p gents --test e2e_live \

@@ -10,7 +10,7 @@ use super::edits::{
     acquire_mutation_locks, apply_prepared_with_held_locks, apply_workspace_edit,
     redact_structured_uris, resolve_inbound_path, walk_uris, PreparedEdit,
 };
-use super::encoding::offset_to_position;
+use super::encoding::position_for_symbol;
 use super::pool::LspLease;
 
 pub(crate) const MAX_DIAGNOSTICS: usize = 50;
@@ -124,10 +124,10 @@ async fn run_file_action(
     let lang = language_id(servers, &path);
     let _ = client.ensure_open(&uri, &lang, &text).await;
     let encoding = client.position_encoding().await;
-    let pos = offset_to_position(
+    let pos = position_for_symbol(
         &text,
         encoding,
-        req.line.unwrap_or(1),
+        req.line,
         req.symbol.as_deref().unwrap_or(""),
     )
     .or_else(|| {
@@ -532,7 +532,13 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
                     + 1;
-                lines.push(format!("{uri}:{line}"));
+                let name = item.get("name").and_then(Value::as_str);
+                lines.push(match name {
+                    Some(name) => format!("{name} {uri}:{line}"),
+                    None => format!("{uri}:{line}"),
+                });
+            } else if item.get("name").is_some() {
+                collect_document_symbol_lines(item, &mut lines);
             } else if !item.is_null() {
                 lines.push(item.to_string());
             }
@@ -560,6 +566,23 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
         ));
     }
     text
+}
+
+fn collect_document_symbol_lines(item: &Value, lines: &mut Vec<String>) {
+    if let Some(name) = item.get("name").and_then(Value::as_str) {
+        let line = item
+            .pointer("/selectionRange/start/line")
+            .or_else(|| item.pointer("/range/start/line"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            + 1;
+        lines.push(format!("{name}:{line}"));
+    }
+    if let Some(children) = item.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_document_symbol_lines(child, lines);
+        }
+    }
 }
 
 fn finish_location_lines(lines: Vec<String>, omitted: usize) -> String {

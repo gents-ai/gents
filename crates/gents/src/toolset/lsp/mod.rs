@@ -160,7 +160,7 @@ impl Tool for LspTool {
                     },
                     "line": {
                         "type": "integer",
-                        "description": "1-indexed line for hover, definition, references, rename, and code_actions."
+                        "description": "1-indexed line for hover, definition, references, rename, and code_actions. Omit to search the whole file for symbol."
                     },
                     "symbol": {
                         "type": "string",

@@ -97,7 +97,7 @@ new required field on a public config struct breaks there first.
 | [`pipeline/`](pipeline/README.md) | **Canonical example** — job → finding create via surface → stage-2 |
 | [`code-review/`](code-review/README.md) | **Advanced graph example** — live-inference fan-out/fan-in with correlation propagation, source-field fills, exact cardinality, and one durable triage request |
 | [`background-continuation/`](background-continuation/README.md) | Two background subagents → durable notification → acknowledged parent wake |
-| [`lsp-rust/`](lsp-rust/README.md) | Native `lsp` + rust-analyzer on a tiny crate (not a CI gate) |
+| [`lsp-rust/`](lsp-rust/README.md) | Native `lsp` + rust-analyzer on this Gents tree (not a CI gate) |
 
 ## Model
 

@@ -3,17 +3,18 @@ use serde_json::Value;
 
 use super::catalog::{builtin_catalog, CatalogServer};
 
-const OPERATOR_FORBIDDEN: &[&str] = &["command", "args", "resolvedCommand", "createClient"];
-const SELF_CONFIG_FORBIDDEN: &[&str] = &[
-    "command",
-    "args",
-    "settings",
-    "init_options",
-    "initOptions",
+const OPERATOR_SERVER_KEYS: &[&str] = &[
+    "disabled",
+    "priority",
+    "warmup_timeout_ms",
     "capabilities",
     "workspace_ready_timings",
     "language_id",
+    "settings",
+    "init_options",
+    "initOptions",
 ];
+const SELF_CONFIG_SERVER_KEYS: &[&str] = &["disabled", "priority", "warmup_timeout_ms"];
 const TOP_LEVEL_KEYS: &[&str] = &[
     "idle_timeout_ms",
     "format_on_write",
@@ -75,9 +76,9 @@ fn parse_strict(raw: Option<&str>, self_config: bool) -> Result<LspConfigDocumen
         crate::toolset::CommandNetworkMode::parse(mode).map_err(|err| err.to_string())?;
     }
     if self_config {
-        reject_server_keys(&value, SELF_CONFIG_FORBIDDEN, "self-config")?;
+        allow_server_keys(&value, SELF_CONFIG_SERVER_KEYS, "self-config")?;
     } else {
-        reject_server_keys(&value, OPERATOR_FORBIDDEN, "lsp_config")?;
+        allow_server_keys(&value, OPERATOR_SERVER_KEYS, "lsp_config")?;
     }
     let parsed: LspConfigDocument =
         serde_json::from_value(value).map_err(|err| format!("invalid lsp_config JSON: {err}"))?;
@@ -92,16 +93,17 @@ fn parse_strict(raw: Option<&str>, self_config: bool) -> Result<LspConfigDocumen
     Ok(parsed)
 }
 
-fn reject_server_keys(value: &Value, forbidden: &[&str], origin: &str) -> Result<(), String> {
+fn allow_server_keys(value: &Value, allowed: &[&str], origin: &str) -> Result<(), String> {
     let Some(servers) = value.get("servers").and_then(Value::as_object) else {
         return Ok(());
     };
     for (name, server) in servers {
-        if let Some(fields) = server.as_object() {
-            for key in forbidden {
-                if fields.contains_key(*key) {
-                    return Err(format!("{origin} cannot set servers.{name}.{key}"));
-                }
+        let Some(fields) = server.as_object() else {
+            return Err(format!("{origin} servers.{name} must be an object"));
+        };
+        for key in fields.keys() {
+            if !allowed.contains(&key.as_str()) {
+                return Err(format!("{origin} cannot set servers.{name}.{key}"));
             }
         }
     }
@@ -192,5 +194,19 @@ mod tests {
         ))
         .unwrap_err();
         assert!(err.contains("command"), "{err}");
+    }
+
+    #[test]
+    fn self_config_rejects_unknown_server_keys() {
+        let err = LspConfigDocument::parse_self_config(Some(
+            r#"{"servers":{"rust-analyzer":{"resolvedCommand":"/tmp/evil"}}}"#,
+        ))
+        .unwrap_err();
+        assert!(err.contains("resolvedCommand"), "{err}");
+        let err = LspConfigDocument::parse_self_config(Some(
+            r#"{"servers":{"rust-analyzer":{"createClient":true}}}"#,
+        ))
+        .unwrap_err();
+        assert!(err.contains("createClient"), "{err}");
     }
 }

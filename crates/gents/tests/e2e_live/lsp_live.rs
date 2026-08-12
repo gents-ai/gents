@@ -14,7 +14,7 @@
 //!
 //! Uses the same DeepSeek V4 Flash backend as the other d4f live tests.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -57,14 +57,35 @@ fn repo_root() -> PathBuf {
         .expect("repo root")
 }
 
-fn first_line_containing(path: &Path, needle: &str) -> u32 {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|err| {
-        panic!("read {}: {err}", path.display());
+fn pack_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust")
+}
+
+fn pack_json_string(relative: &str, field: &str) -> String {
+    let raw = std::fs::read_to_string(pack_dir().join(relative)).unwrap_or_else(|err| {
+        panic!("read demo/lsp-rust/{relative}: {err}");
     });
-    text.lines()
-        .position(|line| line.contains(needle))
-        .map(|idx| u32::try_from(idx + 1).expect("line"))
-        .unwrap_or_else(|| panic!("{}: missing `{needle}`", path.display()))
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
+        panic!("parse demo/lsp-rust/{relative}: {err}");
+    });
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("demo/lsp-rust/{relative} missing string {field}"))
+        .to_string()
+}
+
+fn pack_default_prompt() -> String {
+    pack_json_string("experiment.json", "default_prompt")
+}
+
+fn pack_lsp_config() -> String {
+    pack_json_string("tool-selections/lsp-readonly/object.json", "lsp_config")
+}
+
+fn pack_system_prompt() -> String {
+    std::fs::read_to_string(pack_dir().join("agent-behaviors/lsp-coder/system_prompt.md"))
+        .expect("pack system prompt")
 }
 
 #[derive(Deserialize, Debug)]
@@ -122,10 +143,6 @@ async fn lsp_live_model_uses_rust_analyzer() {
 
     let workspace = repo_root();
     std::env::set_current_dir(&workspace).expect("chdir to Gents repo root");
-    let meet_line =
-        first_line_containing(&workspace.join(MEET_FILE), "pub fn meet(self, other: Self)");
-    let advertised_line =
-        first_line_containing(&workspace.join(ADVERTISED_FILE), "pub fn lsp_advertised");
 
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("lsp-live"));
@@ -142,10 +159,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
             file_tool_root: Some(workspace.display().to_string()),
             enable_bash: Some(false),
             enable_lsp: Some(true),
-            lsp_config: Some(
-                r#"{"servers":{"rust-analyzer":{"warmup_timeout_ms":60000,"workspace_ready_timings":{"initial":45000},"settings":{"rust-analyzer":{"checkOnSave":false}}}}}"#
-                    .into(),
-            ),
+            lsp_config: Some(pack_lsp_config()),
             ..Default::default()
         },
     )
@@ -156,6 +170,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         .expect("load behavior")
         .expect("behavior exists");
     behavior.tool_selection_id = Some("lsp-live-tools".to_string());
+    behavior.system_prompt = Some(pack_system_prompt());
     upsert_agent_behavior(db.node.as_ref(), &behavior)
         .await
         .expect("bind tool selection");
@@ -176,15 +191,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
 
     let request_id = "lsp-live-req-1";
-    let prompt = format!(
-        "This workspace is the Gents repository. Answer from rust-analyzer via the lsp tool only. Do not guess types or comments.\n\
-         \n\
-         1. What rank order does CommandNetworkMode::meet document? Call lsp action=hover on {MEET_FILE}, line={meet_line}, symbol=meet.\n\
-         2. What is the signature of lsp_advertised? Call lsp action=hover on {ADVERTISED_FILE}, line={advertised_line}, symbol=lsp_advertised.\n\
-         3. Call lsp action=status.\n\
-         \n\
-         Quote the hover text in your reply. End with DONE."
-    );
+    let prompt = pack_default_prompt();
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
@@ -208,6 +215,13 @@ async fn lsp_live_model_uses_rust_analyzer() {
         !lsp_calls.is_empty(),
         "model must persist at least one lsp tool call; calls: {:?}",
         summarize_calls(calls.iter())
+    );
+    assert!(
+        lsp_calls
+            .iter()
+            .any(|call| call_completed(call) && action_of(call).as_deref() == Some("symbols")),
+        "pack prompt requires action=symbols before hover; lsp calls: {:?}",
+        summarize_calls(lsp_calls.iter().copied())
     );
 
     let meet_hover = find_hover(&lsp_calls, MEET_FILE, "meet");

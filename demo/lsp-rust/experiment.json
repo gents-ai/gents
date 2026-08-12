@@ -5,16 +5,43 @@
     "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
     "model_name": "${GENTS_EXP_MODEL:-d4f}",
     "backend_preset": "vllm",
-    "openai_wire_api": "chat-completions"
+    "openai_wire_api": "chat-completions",
+    "tool_package": "readonly",
+    "tool_root": "${GENTS_LSP_WORKSPACE:-.}"
   },
   "seed": {
     "collection": "LspDemoJob",
     "job_id_field": "job_id",
     "prompt_field": "prompt"
   },
-  "default_prompt": "This is the Gents repository. Use the lsp tool only; do not guess. Hover CommandNetworkMode::meet in crates/gents/src/toolset/shared/command.rs and quote the documented rank order. Hover lsp_advertised in crates/gents/src/toolset/lsp/auth.rs and quote the signature. Then call lsp status. Reply DONE.",
+  "default_prompt": "This workspace is the Gents repository. The lsp tool is advertised. Do not guess types or comments.\n\n1. Call lsp action=symbols on crates/gents/src/toolset/shared/command.rs. Find the 1-indexed line for meet.\n2. Call lsp action=hover on that file with symbol=meet and the line from symbols. Quote the documented rank order.\n3. Call lsp action=symbols on crates/gents/src/toolset/lsp/auth.rs. Find the 1-indexed line for lsp_advertised.\n4. Call lsp action=hover on that file with symbol=lsp_advertised and the line from symbols. Quote the signature.\n5. Call lsp action=status.\n\nQuote the hover text. Reply DONE.",
   "expect": {
-    "trigger_ids": ["lsp-hover"]
+    "trigger_ids": ["lsp-hover"],
+    "tool_calls": [
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "symbols"
+      },
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "hover",
+        "result_contains": ["Disabled", "Inherit"]
+      },
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "hover",
+        "result_contains": ["FileToolMode"]
+      },
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "status",
+        "result_contains": ["rust-analyzer (ready)"]
+      }
+    ]
   },
   "await_timeout_secs": 300
 }
