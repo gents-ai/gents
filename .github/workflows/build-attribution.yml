@@ -76,14 +76,16 @@ jobs:
       - name: Measure cold release build and linked size
         env:
           ATTRIBUTION_CACHE_STATE: cold-target-no-compiler-cache
+          CARGO_BUILD_RUSTC_WRAPPER: .github/scripts/rustc-direct.sh
           ATTRIBUTION_OUTPUT_DIR: ${{ runner.temp }}/gents-build-attribution-${{ github.sha }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/gents-build-attribution-target-${{ github.run_id }}-${{ github.run_attempt }}
+          RUSTC_WRAPPER: .github/scripts/rustc-direct.sh
         run: |
           set -euo pipefail
-          unset CARGO_BUILD_RUSTC_WRAPPER RUSTC_WRAPPER SCCACHE_RECACHE
           scripts/measure-gents-build-attribution.sh
 
       - name: Upload attribution reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: gents-build-attribution-${{ github.sha }}
