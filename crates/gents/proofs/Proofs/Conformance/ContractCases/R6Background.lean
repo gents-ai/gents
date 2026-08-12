@@ -151,6 +151,29 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (some wake.source.toDefraDB)
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
+def r6FailedWakeRedriveCase
+    (name : String)
+    (wake : BackgroundCompletion.FailedWake) : R6BackgroundingCase :=
+  let post := BackgroundCompletion.redriveWake? wake
+  let legal := post.isSome
+  { r6Case
+      name
+      "completion_redrive"
+      "redrive_failed_background_wake"
+      legal
+      1
+      wake.ctx.state.toDefraDB
+      (if legal then some "successor_created" else none)
+      (if legal then some "bounded_retry" else some "ineligible")
+      none
+      (some wake.source.toDefraDB)
+      (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key) with
+      retryCount := some wake.ctx.retryCount
+      maxRetries := some wake.ctx.maxRetries
+      postRetryCount := post.map (·.retryCount)
+      isLatest := some wake.ctx.isLatest
+  }
+
 def r6LegacyQueueAliasCase : R6BackgroundingCase :=
   let legacy := "subagent_completion"
   let parsed := SessionQueue.QueueSource.fromDefraDB? legacy
@@ -225,6 +248,18 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
+  , r6FailedWakeRedriveCase
+      "failed_background_wake_with_budget_redrives"
+      (BackgroundCompletion.failedWakeFixture (retryCount := 1))
+  , r6FailedWakeRedriveCase
+      "failed_background_wake_exhausted_budget_stops"
+      (BackgroundCompletion.failedWakeFixture (retryCount := 3))
+  , r6FailedWakeRedriveCase
+      "generic_scheduled_failure_is_not_background_redrive"
+      (BackgroundCompletion.failedWakeFixture (source := .user))
+  , r6FailedWakeRedriveCase
+      "non_latest_background_wake_does_not_redrive"
+      (BackgroundCompletion.failedWakeFixture (isLatest := false))
   , r6LegacyQueueAliasCase
   , r6ProcessControlCase
       "list_processes_same_requester_next_turn_authorized"
@@ -314,6 +349,17 @@ theorem r6BackgroundingCases_pinned :
           some "background_completion:900")
       , ("terminal_completion_message_precedes_claimed_continuation", true,
           "background", none, "completed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_background_wake_with_budget_redrives", true,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("failed_background_wake_exhausted_budget_stops", false,
+          "background", none, "failed", some "background_completion",
+          some "background_completion:900")
+      , ("generic_scheduled_failure_is_not_background_redrive", false,
+          "background", none, "failed", some "user", some "user:900")
+      , ("non_latest_background_wake_does_not_redrive", false,
+          "background", none, "failed", some "background_completion",
           some "background_completion:900")
       , ("legacy_subagent_completion_source_aliases_canonical_key", true,
           "background", none, "completed", some "subagent_completion",

@@ -7,6 +7,7 @@ use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
 use crate::watcher::AgentRequest;
 
+mod background_wake_recovery;
 mod claim;
 mod lookup;
 pub mod manual;
@@ -342,6 +343,7 @@ impl RequestLifecycle {
 #[derive(Debug, Default)]
 pub struct RecoveryReport {
     pub requests_recovered: usize,
+    pub background_wakes_redriven: usize,
     pub responses_recovered: usize,
     pub conversations_recovered: usize,
     pub conversations_failed: usize,
@@ -354,6 +356,22 @@ pub struct TerminalRepairReport {
     pub repaired: usize,
     pub awaiting_outcome: usize,
     pub failed: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackgroundWakeRedriveReport {
+    pub scanned: usize,
+    pub redriven: usize,
+    pub already_redriven: usize,
+    pub coalesced: usize,
+    pub ineligible: usize,
+    pub failed: usize,
+}
+
+impl BackgroundWakeRedriveReport {
+    pub fn is_noop(&self) -> bool {
+        self.redriven == 0
+    }
 }
 
 impl TerminalRepairReport {

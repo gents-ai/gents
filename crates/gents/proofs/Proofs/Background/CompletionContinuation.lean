@@ -1,4 +1,5 @@
 import Proofs.Session.Properties.Executable
+import Proofs.Request
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
@@ -269,6 +270,116 @@ def canonicalWaitOrderingAccepted : Bool :=
 
 theorem canonical_wait_call_precedes_completion_notification :
     canonicalWaitOrderingAccepted = true := by
+  native_decide
+
+/-! ## Bounded failed-wake redrive
+
+Completion notifications remain durable when the scheduled continuation that
+was supposed to consume them fails.  The daemon may therefore create one
+fresh continuation attempt, but only for the canonical coalesced background
+queue shape and only while the persisted retry budget remains open.  This is a
+separate capability from the interactive client retry modeled by
+`SessionRecovery`: a generic scheduled request is not retryable merely because
+it was scheduled.
+-/
+
+structure FailedWake where
+  ctx : RequestContext
+  source : SessionQueue.QueueSource
+  policy : SessionQueue.QueuePolicy
+  queueKey : Option SessionId
+
+def CanRedriveWake (wake : FailedWake) : Prop :=
+  wake.ctx.state = .failed ∧
+    wake.ctx.admission = .released ∧
+    wake.ctx.origin = .scheduled ∧
+    wake.ctx.isLatest = true ∧
+    wake.ctx.retryCount < wake.ctx.maxRetries ∧
+    wake.source = .backgroundCompletion ∧
+    wake.policy = .coalesce ∧
+    wake.queueKey.isSome
+
+instance (wake : FailedWake) : Decidable (CanRedriveWake wake) := by
+  unfold CanRedriveWake
+  infer_instance
+
+def redrivenWakeContext (ctx : RequestContext) : RequestContext :=
+  { state := .pending
+  , origin := .scheduled
+  , backend := ctx.backend
+  , admission := .released
+  , deadline := ctx.currentTime + 1
+  , claimTime := ctx.currentTime
+  , currentTime := ctx.currentTime
+  , retryCount := ctx.retryCount + 1
+  , maxRetries := ctx.maxRetries
+  , progressSeq := 0
+  , messageSeq := 0
+  , isLatest := true
+  , persistence := .uncommitted
+  }
+
+def redriveWake? (wake : FailedWake) : Option RequestContext :=
+  if _h : CanRedriveWake wake then
+    some (redrivenWakeContext wake.ctx)
+  else
+    none
+
+theorem redriveWake?_bounded
+    {wake : FailedWake}
+    {post : RequestContext}
+    (h_redrive : redriveWake? wake = some post) :
+    post.state = .pending ∧
+      post.origin = .scheduled ∧
+      post.backend = wake.ctx.backend ∧
+      post.retryCount = wake.ctx.retryCount + 1 ∧
+      post.retryCount ≤ post.maxRetries := by
+  simp [redriveWake?] at h_redrive
+  rcases h_redrive with ⟨h_can, rfl⟩
+  rcases h_can with ⟨_, _, _, _, h_budget, _, _, _⟩
+  simp [redrivenWakeContext, Nat.succ_le_of_lt h_budget]
+
+def failedWakeFixture
+    (state : RequestState := .failed)
+    (origin : ExecutionOrigin := .scheduled)
+    (retryCount : Nat := 0)
+    (maxRetries : Nat := 3)
+    (isLatest : Bool := true)
+    (source : SessionQueue.QueueSource := .backgroundCompletion)
+    (policy : SessionQueue.QueuePolicy := .coalesce)
+    (queueKey : Option SessionId := some 900) : FailedWake :=
+  { ctx :=
+      { state := state
+      , origin := origin
+      , backend := { val := "background-wake-backend" }
+      , admission := .released
+      , deadline := 1
+      , claimTime := 0
+      , currentTime := 10
+      , retryCount := retryCount
+      , maxRetries := maxRetries
+      , progressSeq := 0
+      , messageSeq := 0
+      , isLatest := isLatest
+      , persistence := .committed
+      }
+  , source := source
+  , policy := policy
+  , queueKey := queueKey
+  }
+
+def canonicalFailedWakeRedriveAccepted : Bool :=
+  match redriveWake? (failedWakeFixture (retryCount := 1)) with
+  | none => false
+  | some post =>
+      decide
+        (post.state = .pending ∧
+         post.origin = .scheduled ∧
+         post.retryCount = 2 ∧
+         post.maxRetries = 3)
+
+theorem canonical_failed_wake_redrive_is_bounded :
+    canonicalFailedWakeRedriveAccepted = true := by
   native_decide
 
 end BackgroundCompletion

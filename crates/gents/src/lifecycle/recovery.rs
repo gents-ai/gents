@@ -13,11 +13,15 @@ impl RequestLifecycle {
         let requests_recovered = Self::repair_terminal_requests(node, agent_did)
             .await?
             .repaired;
+        let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, agent_did)
+            .await?
+            .redriven;
         let conversations = recover_stuck_conversations(node, agent_did).await?;
 
         Ok(RecoveryReport {
             responses_recovered,
             requests_recovered,
+            background_wakes_redriven,
             conversations_recovered: conversations.recovered,
             conversations_failed: conversations.failed,
             duplicate_conversation_sessions: conversations.duplicate_sessions,
