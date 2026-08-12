@@ -464,6 +464,7 @@ mod tests {
             &self,
             _collection_name: &str,
             _doc_ids: Vec<String>,
+            _timeout: Option<Duration>,
         ) -> P2PResult<()> {
             Ok(())
         }

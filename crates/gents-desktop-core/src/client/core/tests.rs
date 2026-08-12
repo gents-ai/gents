@@ -257,7 +257,12 @@ impl P2POps for RecordingP2P {
         Ok(())
     }
 
-    async fn sync_documents(&self, _collection_name: &str, _doc_ids: Vec<String>) -> P2PResult<()> {
+    async fn sync_documents(
+        &self,
+        _collection_name: &str,
+        _doc_ids: Vec<String>,
+        _timeout: Option<Duration>,
+    ) -> P2PResult<()> {
         Ok(())
     }
 
