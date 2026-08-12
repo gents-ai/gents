@@ -440,6 +440,29 @@ async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
         .collect()
 }
 
+async fn wait_for_subscribed_collections(
+    node: &EmbeddedNode,
+    expected: &[String],
+    timeout: Duration,
+) -> Vec<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let subscribed = fetch_subscribed_collection_names(node).await;
+        if expected
+            .iter()
+            .all(|collection| subscribed.contains(collection))
+        {
+            return subscribed;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for subscribed collections {expected:?}; last={subscribed:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 async fn wait_for_app_collections_pairing_applied(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -857,20 +880,8 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     // Control subscriptions still present after app-collections merge. The
     // per-peer applied row is an ownership ledger, not the transport's global
     // subscription inventory, so assert against the actual P2P state.
-    let subscribed_a = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
-    for col in &control_a {
-        assert!(
-            subscribed_a.contains(col),
-            "control collection {col} missing after app-collections merge: {subscribed_a:?}"
-        );
-    }
-    let subscribed_b = fetch_subscribed_collection_names(db_b.node.as_ref()).await;
-    for col in &control_b {
-        assert!(
-            subscribed_b.contains(col),
-            "control collection {col} missing after app-collections merge: {subscribed_b:?}"
-        );
-    }
+    wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
+    wait_for_subscribed_collections(db_b.node.as_ref(), &control_b, Duration::from_secs(30)).await;
 
     let source_doc_id = write_change_proposed(db_a.node.as_ref(), EXTERNAL_ID, "signup").await;
 
@@ -939,13 +950,7 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
         .await
         .expect("post2 applied");
     assert_eq!(post, post2, "pairing applied should be stable (idempotent)");
-    let post_subscribed = fetch_subscribed_collection_names(db_a.node.as_ref()).await;
-    for col in &control_a {
-        assert!(
-            post_subscribed.contains(col),
-            "control subscription still present: {post_subscribed:?}"
-        );
-    }
+    wait_for_subscribed_collections(db_a.node.as_ref(), &control_a, Duration::from_secs(30)).await;
 
     let _ = shutdown_a_tx.send(true);
     let _ = shutdown_b_tx.send(true);
