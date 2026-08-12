@@ -1,0 +1,37 @@
+name: issue-triage-hygiene
+
+on:
+  issues:
+    types: [opened, reopened, labeled, unlabeled]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  # contents: read is required for actions/checkout; declaring `permissions`
+  # at all drops every scope not listed here.
+  contents: read
+  issues: write
+
+concurrency:
+  # One global group, not a per-issue group with a unique fallback: a sweep and
+  # a per-issue run touching the same issue must not interleave, and two sweeps
+  # must not overlap. Queue rather than cancel so no event is dropped.
+  group: triage-hygiene
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Reconcile roadmap labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Absent on schedule/dispatch, which makes run.mjs sweep every open issue.
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: node scripts/triage-hygiene/run.mjs
