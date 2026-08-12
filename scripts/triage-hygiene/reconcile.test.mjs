@@ -127,6 +127,57 @@ test("requiresCommentContext: exempt issue 839 with two horizons does not requir
   );
 });
 
+// requiresCommentContext() is run.mjs's gate on fetching comments at all, so if
+// it ever says "no comments needed" for a label set that reconcile() would
+// comment on, the dedup check runs against an empty comment list and the bot
+// reposts the same conflict comment on every sweep. That exact pair drifted
+// apart once already. Five hand-picked examples cannot fence an equivalence;
+// enumerate the space instead.
+const ALPHABET = [
+  "roadmap: now",
+  "roadmap: next",
+  "roadmap: later",
+  "roadmap: parked",
+  "roadmap: soon", // unknown horizon: `roadmap:`-prefixed but not defined
+  "bug", // not roadmap-prefixed at all
+  NEEDS_TRIAGE,
+];
+
+const labelSetsUpToSize = (alphabet, maxSize) => {
+  const sets = [[]];
+  const extend = (prefix, start) => {
+    if (prefix.length === maxSize) return;
+    for (let i = start; i < alphabet.length; i += 1) {
+      const next = [...prefix, alphabet[i]];
+      sets.push(next);
+      extend(next, i + 1);
+    }
+  };
+  extend([], 0);
+  return sets;
+};
+
+test("property: not requiring comment context implies reconcile never comments", () => {
+  const sets = labelSetsUpToSize(ALPHABET, 3);
+  assert.equal(sets.length, 64, "expected every subset of size 0..3");
+  let checked = 0;
+  for (const number of [1, 839]) {
+    for (const labels of sets) {
+      if (requiresCommentContext({ number, labels })) continue;
+      const r = reconcile({ number, labels, comments: [] });
+      assert.equal(
+        r.comment,
+        null,
+        `#${number} with labels ${JSON.stringify(labels)}: requiresCommentContext() said ` +
+          `no comment context was needed, but reconcile() produced a comment. run.mjs would ` +
+          `post it without ever having read the existing comments, so it would repost forever.`,
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 0, "the property must actually exercise some label sets");
+});
+
 test("regression: single invalid roadmap label dedupes against a prior conflict comment", () => {
   const marker = conflictMarker(["roadmap: soon"]);
   const r = reconcile({

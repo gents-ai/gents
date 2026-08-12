@@ -493,3 +493,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
           path: apps/gents-desktop/test-results/bombadil
+
+  triage-hygiene:
+    # The issue-triage bot holds `issues: write` and runs on a daily cron. These
+    # tests are the only fence on its decision function, so every pull request
+    # must run them.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The triage scripts import `node:` built-ins only, so this job needs no
+      # `npm ci` and therefore no npm cache.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Run triage-hygiene tests
+        run: npm run test:triage

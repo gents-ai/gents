@@ -3,7 +3,12 @@ import { reconcile, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
-const DRY_RUN = process.env.DRY_RUN === "1";
+// Deliberately permissive: this bot holds `issues: write` on the production
+// tracker, so a typo'd truthy value (`DRY_RUN=true`, `DRY_RUN=yes`) must never
+// silently enable live writes. Only the explicit negatives disable dry-run;
+// an unset variable means disabled.
+const DRY_RUN_RAW = (process.env.DRY_RUN ?? "").trim().toLowerCase();
+const DRY_RUN = DRY_RUN_RAW !== "" && DRY_RUN_RAW !== "0" && DRY_RUN_RAW !== "false";
 if (!TOKEN) {
   console.error("GITHUB_TOKEN is required");
   process.exit(1);
@@ -37,11 +42,25 @@ const listOpenIssues = async () => {
   return out;
 };
 
+// Must be exhaustive, not just the first page: GitHub returns issue comments
+// oldest-first, so on an issue with more than 100 comments a prior conflict
+// marker sits on a later page. Missing it defeats the dedup check and reposts
+// the same conflict comment on every sweep, forever.
+const listComments = async (number) => {
+  const out = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await api(`/repos/${REPO}/issues/${number}/comments?per_page=100&page=${page}`);
+    out.push(...batch.map((c) => c.body ?? ""));
+    if (batch.length < 100) break;
+  }
+  return out;
+};
+
 const applyTo = async (issue) => {
   const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
   // Comments are only needed to dedupe conflict notices, so fetch them lazily.
   const comments = requiresCommentContext({ number: issue.number, labels })
-    ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
+    ? await listComments(issue.number)
     : [];
 
   const plan = reconcile({ number: issue.number, labels, comments });
@@ -85,4 +104,8 @@ for (const issue of targets) {
   if (issue.state !== "open" || issue.pull_request) continue;
   if (await applyTo(issue)) changed += 1;
 }
-console.log(`${NEEDS_TRIAGE} reconcile complete: ${targets.length} examined, ${changed} changed`);
+// Distinguish intent from effect: nothing was written in dry-run mode.
+console.log(
+  `${NEEDS_TRIAGE} reconcile complete: ${targets.length} examined, ` +
+    `${changed} ${DRY_RUN ? "would change" : "changed"}`,
+);

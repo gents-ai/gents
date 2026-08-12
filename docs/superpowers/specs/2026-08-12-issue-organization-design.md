@@ -235,14 +235,17 @@ roughly one quarter.
 
 A GitHub Action, `.github/workflows/issue-triage-hygiene.yml`.
 
-**One reconcile function, called identically from every trigger.** For an open issue, count its
-`roadmap:` labels:
+**One reconcile function, called identically from every trigger.** For an open issue, take its
+`roadmap:`-prefixed labels and count how many are **valid horizons** — one of the four the
+taxonomy defines. The rule keys on that count, not on the raw `roadmap:` count, because a
+misspelt label such as `roadmap: soon` is a typo rather than a horizon and must not be able to
+satisfy the rule:
 
-| Count | Action |
+| `roadmap:` labels | Action |
 |---|---|
-| 1 | Remove `needs-triage` if present. No comment. |
-| 0 | Add `needs-triage` if absent. No comment. |
-| ≥2 | Add `needs-triage` if absent. Comment naming the conflicting labels, unless a prior conflict comment already names the same set. |
+| Exactly one, and it is a valid horizon | Remove `needs-triage` if present. No comment. |
+| None | Add `needs-triage` if absent. No comment. |
+| Anything else — two or more labels, or any label that is not a valid horizon (including a lone `roadmap: soon`) | Add `needs-triage` if absent. Comment naming the offending labels and listing the valid horizons, unless a prior conflict comment already names the same set. |
 
 **Triggers:** `issues: [opened, reopened, labeled, unlabeled]`, `schedule` (daily), and
 `workflow_dispatch`. Event runs reconcile the single subject issue; scheduled and dispatch runs
@@ -263,8 +266,12 @@ Three properties this shape buys, each fixing a way the naive version fails:
    conflicting label set. Re-running against an unchanged conflict must stay silent; a *changed*
    conflict set posts once.
 
-Permissions: `issues: write` only. Concurrency is grouped per issue number so two events on the
-same issue cannot interleave.
+Permissions: `issues: write` only (plus `contents: read`, which declaring a `permissions` block
+at all makes necessary for `actions/checkout`). Concurrency uses a **single global group**, not
+a per-issue one: a per-issue group needs a unique fallback for scheduled runs, which have no
+issue number, and that fallback would let sweeps overlap each other and overlap per-issue runs —
+permitting duplicate conflict comments and decisions made from stale label state. One global
+group serializes every sweep against every per-issue run.
 
 **Scope.** The action enforces the `roadmap:` rule and nothing else. Milestone assignment is a
 judgment call and is deliberately not enforced — at most one milestone is a GitHub invariant

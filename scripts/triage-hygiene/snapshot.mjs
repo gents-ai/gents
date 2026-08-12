@@ -4,11 +4,14 @@
 // Deleting a label removes it from EVERY associated item, including closed
 // issues and pull requests, and discards the label's own definition. Renaming
 // is likewise not self-inverting. So the snapshot records label definitions,
-// the full label set of every item carrying a doomed label in any state,
-// existing milestones, and #839's title and body.
+// the full label set and milestone of every open issue plus every item
+// carrying a doomed label in any state, existing milestones, and #839's title
+// and body.
 import { writeFileSync, readFileSync } from "node:fs";
 
-const REPO = process.env.GH_REPO ?? "source-inc/gents";
+// GITHUB_REPOSITORY wins when both are set: it is the name Actions and run.mjs
+// use, so an ambient GH_REPO left over in a shell cannot redirect a restore.
+const REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 // Labels this migration renames or deletes; the blast radius to capture.
 const DOOMED = [
@@ -77,21 +80,35 @@ const capture = async (file) => {
     description: m.description ?? "",
   }));
 
-  // Any state, so closed issues and pull requests are covered too.
   const items = new Map();
+  const record = (it) => {
+    items.set(it.number, {
+      number: it.number,
+      isPullRequest: Boolean(it.pull_request),
+      // Informational only: restore deliberately never reopens or closes.
+      state: it.state,
+      labels: it.labels.map((l) => l.name).sort(),
+      milestone: it.milestone ? it.milestone.title : null,
+    });
+  };
+
+  // Every open issue. The migration also backfills `roadmap:` horizon labels
+  // and assigns milestones across the open backlog, and none of that is
+  // reachable from the doomed-label sweep below — an item can be relabelled
+  // without ever having carried a doomed label.
+  for (const it of await paginate(`/repos/${REPO}/issues?state=open`)) {
+    if (it.pull_request) continue;
+    record(it);
+  }
+  const openIssues = items.size;
+
+  // Any state, so closed issues and pull requests are covered too. The Map
+  // deduplicates against the open-issue sweep above by issue number.
   for (const label of DOOMED) {
     const hits = await paginate(
       `/repos/${REPO}/issues?state=all&labels=${encodeURIComponent(label)}`,
     );
-    for (const it of hits) {
-      items.set(it.number, {
-        number: it.number,
-        isPullRequest: Boolean(it.pull_request),
-        state: it.state,
-        labels: it.labels.map((l) => l.name).sort(),
-        milestone: it.milestone ? it.milestone.title : null,
-      });
-    }
+    for (const it of hits) record(it);
   }
 
   const roadmap = await api(`/repos/${REPO}/issues/${ROADMAP_ISSUE}`);
@@ -106,12 +123,23 @@ const capture = async (file) => {
   writeFileSync(file, `${JSON.stringify(snap, null, 2)}\n`);
   console.log(
     `captured ${snap.labels.length} labels, ${snap.milestones.length} milestones, ` +
-      `${snap.items.length} affected items (incl. closed and PRs), #${ROADMAP_ISSUE} -> ${file}`,
+      `${snap.items.length} affected items (${openIssues} open issues, the rest ` +
+      `doomed-label items in any state incl. closed and PRs), #${ROADMAP_ISSUE} -> ${file}`,
   );
 };
 
 const restore = async (file) => {
   const snap = JSON.parse(readFileSync(file, "utf8"));
+
+  // 0. This is the only destructive tool here: it deletes milestones and PUTs
+  // whole label sets onto issues by number. Against the wrong repository — a
+  // fork, or a mis-set GITHUB_REPOSITORY/GH_REPO — that is silent damage.
+  if (snap.capturedFrom !== REPO) {
+    throw new Error(
+      `refusing to restore: snapshot was captured from ${snap.capturedFrom}, ` +
+        `but the target repository is ${REPO}`,
+    );
+  }
 
   // 1. Recreate label definitions before any association can reference them.
   const live = new Set((await paginate(`/repos/${REPO}/labels`)).map((l) => l.name));
@@ -137,7 +165,8 @@ const restore = async (file) => {
     }
   }
 
-  // 3. Restore each affected item's full label set.
+  // 3. Restore each affected item's full label set. `state` is captured for
+  // diagnosis only: restore never reopens or closes an item.
   for (const it of snap.items) {
     await api(`/repos/${REPO}/issues/${it.number}/labels`, {
       method: "PUT",
@@ -154,7 +183,34 @@ const restore = async (file) => {
     console.log(`deleted milestone: ${m.title}`);
   }
 
-  // 5. Restore the roadmap issue's title and body.
+  // 5. Restore each item's milestone, clearing it when none was captured.
+  // Ordered after the deletion step so a captured title can never resolve to a
+  // milestone that is about to be deleted.
+  const byTitle = new Map(
+    (await paginate(`/repos/${REPO}/milestones?state=all`)).map((m) => [m.title, m.number]),
+  );
+  let milestoned = 0;
+  for (const it of snap.items) {
+    // `null` means the item held no milestone at capture time, and PATCHing
+    // null is what clears one the migration assigned.
+    const title = it.milestone ?? null;
+    let milestone = null;
+    if (title !== null) {
+      milestone = byTitle.get(title) ?? null;
+      if (milestone === null) {
+        console.log(`skipped #${it.number}: milestone "${title}" no longer exists`);
+        continue;
+      }
+    }
+    await api(`/repos/${REPO}/issues/${it.number}`, {
+      method: "PATCH",
+      body: JSON.stringify({ milestone }),
+    });
+    milestoned += 1;
+  }
+  console.log(`restored milestones on ${milestoned} items`);
+
+  // 6. Restore the roadmap issue's title and body.
   await api(`/repos/${REPO}/issues/${snap.roadmapIssue.number}`, {
     method: "PATCH",
     body: JSON.stringify({

@@ -16,7 +16,10 @@ permissions:
 concurrency:
   # One global group, not a per-issue group with a unique fallback: a sweep and
   # a per-issue run touching the same issue must not interleave, and two sweeps
-  # must not overlap. Queue rather than cancel so no event is dropped.
+  # must not overlap. `cancel-in-progress: false` lets the running job finish
+  # rather than being killed mid-write; GitHub still keeps only the newest
+  # PENDING run in the group, so an intermediate run during a bulk relabel can
+  # be dropped. That is safe: the next sweep reconciles the whole backlog.
   group: triage-hygiene
   cancel-in-progress: false
 

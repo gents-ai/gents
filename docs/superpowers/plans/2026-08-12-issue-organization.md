@@ -50,7 +50,7 @@ title and body.
 - Create: `scripts/triage-hygiene/snapshot.mjs`
 
 **Interfaces:**
-- Produces: `node scripts/triage-hygiene/snapshot.mjs capture <file>` writes `{labels[], milestones[], items[], roadmapIssue}`. `restore <file>` recreates label definitions, restores every affected item's full label set, deletes milestones absent at capture time, and restores #839's title and body — in that order, because associations cannot reference a label definition that does not exist yet.
+- Produces: `node scripts/triage-hygiene/snapshot.mjs capture <file>` writes `{capturedFrom, labels[], milestones[], items[], roadmapIssue}`, where `items` covers every open issue plus every item in any state carrying a doomed label. `restore <file>` first refuses to run unless `capturedFrom` matches the target repository, then recreates label definitions, restores every affected item's full label set, deletes milestones absent at capture time, restores each item's milestone, and restores #839's title and body — in that order, because associations cannot reference a label definition that does not exist yet, and a milestone cannot be restored to one that is about to be deleted. The repository comes from `GITHUB_REPOSITORY`, falling back to `GH_REPO`.
 
 - [ ] **Step 1: Create the directory, then write the snapshot script**
 
@@ -63,11 +63,14 @@ Run `mkdir -p scripts/triage-hygiene` first — the file below cannot be written
 // Deleting a label removes it from EVERY associated item, including closed
 // issues and pull requests, and discards the label's own definition. Renaming
 // is likewise not self-inverting. So the snapshot records label definitions,
-// the full label set of every item carrying a doomed label in any state,
-// existing milestones, and #839's title and body.
+// the full label set and milestone of every open issue plus every item
+// carrying a doomed label in any state, existing milestones, and #839's title
+// and body.
 import { writeFileSync, readFileSync } from "node:fs";
 
-const REPO = process.env.GH_REPO ?? "source-inc/gents";
+// GITHUB_REPOSITORY wins when both are set: it is the name Actions and run.mjs
+// use, so an ambient GH_REPO left over in a shell cannot redirect a restore.
+const REPO = process.env.GITHUB_REPOSITORY ?? process.env.GH_REPO ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 // Labels this migration renames or deletes; the blast radius to capture.
 const DOOMED = [
@@ -136,21 +139,35 @@ const capture = async (file) => {
     description: m.description ?? "",
   }));
 
-  // Any state, so closed issues and pull requests are covered too.
   const items = new Map();
+  const record = (it) => {
+    items.set(it.number, {
+      number: it.number,
+      isPullRequest: Boolean(it.pull_request),
+      // Informational only: restore deliberately never reopens or closes.
+      state: it.state,
+      labels: it.labels.map((l) => l.name).sort(),
+      milestone: it.milestone ? it.milestone.title : null,
+    });
+  };
+
+  // Every open issue. The migration also backfills `roadmap:` horizon labels
+  // and assigns milestones across the open backlog, and none of that is
+  // reachable from the doomed-label sweep below — an item can be relabelled
+  // without ever having carried a doomed label.
+  for (const it of await paginate(`/repos/${REPO}/issues?state=open`)) {
+    if (it.pull_request) continue;
+    record(it);
+  }
+  const openIssues = items.size;
+
+  // Any state, so closed issues and pull requests are covered too. The Map
+  // deduplicates against the open-issue sweep above by issue number.
   for (const label of DOOMED) {
     const hits = await paginate(
       `/repos/${REPO}/issues?state=all&labels=${encodeURIComponent(label)}`,
     );
-    for (const it of hits) {
-      items.set(it.number, {
-        number: it.number,
-        isPullRequest: Boolean(it.pull_request),
-        state: it.state,
-        labels: it.labels.map((l) => l.name).sort(),
-        milestone: it.milestone ? it.milestone.title : null,
-      });
-    }
+    for (const it of hits) record(it);
   }
 
   const roadmap = await api(`/repos/${REPO}/issues/${ROADMAP_ISSUE}`);
@@ -165,12 +182,23 @@ const capture = async (file) => {
   writeFileSync(file, `${JSON.stringify(snap, null, 2)}\n`);
   console.log(
     `captured ${snap.labels.length} labels, ${snap.milestones.length} milestones, ` +
-      `${snap.items.length} affected items (incl. closed and PRs), #${ROADMAP_ISSUE} -> ${file}`,
+      `${snap.items.length} affected items (${openIssues} open issues, the rest ` +
+      `doomed-label items in any state incl. closed and PRs), #${ROADMAP_ISSUE} -> ${file}`,
   );
 };
 
 const restore = async (file) => {
   const snap = JSON.parse(readFileSync(file, "utf8"));
+
+  // 0. This is the only destructive tool here: it deletes milestones and PUTs
+  // whole label sets onto issues by number. Against the wrong repository — a
+  // fork, or a mis-set GITHUB_REPOSITORY/GH_REPO — that is silent damage.
+  if (snap.capturedFrom !== REPO) {
+    throw new Error(
+      `refusing to restore: snapshot was captured from ${snap.capturedFrom}, ` +
+        `but the target repository is ${REPO}`,
+    );
+  }
 
   // 1. Recreate label definitions before any association can reference them.
   const live = new Set((await paginate(`/repos/${REPO}/labels`)).map((l) => l.name));
@@ -196,7 +224,8 @@ const restore = async (file) => {
     }
   }
 
-  // 3. Restore each affected item's full label set.
+  // 3. Restore each affected item's full label set. `state` is captured for
+  // diagnosis only: restore never reopens or closes an item.
   for (const it of snap.items) {
     await api(`/repos/${REPO}/issues/${it.number}/labels`, {
       method: "PUT",
@@ -213,7 +242,34 @@ const restore = async (file) => {
     console.log(`deleted milestone: ${m.title}`);
   }
 
-  // 5. Restore the roadmap issue's title and body.
+  // 5. Restore each item's milestone, clearing it when none was captured.
+  // Ordered after the deletion step so a captured title can never resolve to a
+  // milestone that is about to be deleted.
+  const byTitle = new Map(
+    (await paginate(`/repos/${REPO}/milestones?state=all`)).map((m) => [m.title, m.number]),
+  );
+  let milestoned = 0;
+  for (const it of snap.items) {
+    // `null` means the item held no milestone at capture time, and PATCHing
+    // null is what clears one the migration assigned.
+    const title = it.milestone ?? null;
+    let milestone = null;
+    if (title !== null) {
+      milestone = byTitle.get(title) ?? null;
+      if (milestone === null) {
+        console.log(`skipped #${it.number}: milestone "${title}" no longer exists`);
+        continue;
+      }
+    }
+    await api(`/repos/${REPO}/issues/${it.number}`, {
+      method: "PATCH",
+      body: JSON.stringify({ milestone }),
+    });
+    milestoned += 1;
+  }
+  console.log(`restored milestones on ${milestoned} items`);
+
+  // 6. Restore the roadmap issue's title and body.
   await api(`/repos/${REPO}/issues/${snap.roadmapIssue.number}`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -238,7 +294,8 @@ await (mode === "capture" ? capture(file) : restore(file));
 GITHUB_TOKEN=$(gh auth token) node scripts/triage-hygiene/snapshot.mjs capture /tmp/gents-triage-baseline.json
 ```
 
-Expected: `captured 33 labels, 0 milestones, 133 affected items (incl. closed and PRs), #839 -> ...`
+Expected: `captured 33 labels, 0 milestones, N affected items (M open issues, the rest
+doomed-label items in any state incl. closed and PRs), #839 -> ...`
 
 - [ ] **Step 3: Verify the snapshot covers the full blast radius**
 
@@ -250,10 +307,24 @@ jq '{labels:(.labels|length), milestones:(.milestones|length), items:(.items|len
 cp /tmp/gents-triage-baseline.json docs/superpowers/plans/triage-baseline-2026-08-12.json
 ```
 
-Expected: 33 labels, 0 milestones, 133 items of which 37 closed and 96 open, and a non-zero
+Expected: 33 labels, 0 milestones, at least 133 items of which 37 closed, and a non-zero
 `roadmapBody`. **If `milestones` is not 0, milestones already exist and Task 2 would collide —
-stop.** If `items` is far from 133, the issue set moved since planning and the manifests in
-Tasks 4–6 need re-derivation.
+stop.** If the doomed-label item count is far from 133, the issue set moved since planning and
+the manifests in Tasks 4–6 need re-derivation.
+
+> **Known limit of the committed baseline.** `docs/superpowers/plans/triage-baseline-2026-08-12.json`
+> was captured before `capture()` was widened to sweep every open issue, so its `items` list holds
+> only the 133 doomed-label items. It cannot be re-captured: the tracker is already migrated, so a
+> fresh capture would record post-migration state and invert nothing.
+>
+> Restoring **that specific file** therefore reverts cluster-label associations, label definitions,
+> milestones, and #839 — but leaves in place the 29 `roadmap:` horizon labels that Task 6 backfilled
+> onto issues absent from `items`. Those must be removed by hand after a rollback:
+>
+> 52, 884, 897, 980, 1035, 1036, 1041, 1044, 1045, 1047, 1048, 1049, 1054, 1063, 1064, 1071, 1072,
+> 1073, 1074, 1075, 1077, 1078, 1079, 1082, 1083, 1084, 1085, 1086, 1090
+>
+> Any snapshot captured with the current script does not have this gap.
 
 - [ ] **Step 4: Verify restore is a genuine inverse on one item**
 
@@ -577,7 +648,7 @@ Pure logic, no I/O, so the rules are testable without touching the API. This is 
 - Modify: `package.json`
 
 **Interfaces:**
-- Produces: `reconcile({ number, labels, comments }) -> { add: string[], remove: string[], comment: string|null }`, plus the constants `NEEDS_TRIAGE`, `ROADMAP_PREFIX`, `EXEMPT_ISSUES`, and `conflictMarker(labels)`. Task 9's runner consumes all of these.
+- Produces: `reconcile({ number, labels, comments }) -> { add: string[], remove: string[], comment: string|null }` and `requiresCommentContext({ number, labels }) -> boolean`, which tells a caller whether `reconcile()` could possibly return a comment so it knows whether fetching comment context is worthwhile; plus the constants `NEEDS_TRIAGE`, `ROADMAP_PREFIX`, `HORIZONS`, `EXEMPT_ISSUES`, and `conflictMarker(labels)`. Task 9's runner consumes all of these.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -711,6 +782,57 @@ test("requiresCommentContext: exempt issue 839 with two horizons does not requir
   );
 });
 
+// requiresCommentContext() is run.mjs's gate on fetching comments at all, so if
+// it ever says "no comments needed" for a label set that reconcile() would
+// comment on, the dedup check runs against an empty comment list and the bot
+// reposts the same conflict comment on every sweep. That exact pair drifted
+// apart once already. Five hand-picked examples cannot fence an equivalence;
+// enumerate the space instead.
+const ALPHABET = [
+  "roadmap: now",
+  "roadmap: next",
+  "roadmap: later",
+  "roadmap: parked",
+  "roadmap: soon", // unknown horizon: `roadmap:`-prefixed but not defined
+  "bug", // not roadmap-prefixed at all
+  NEEDS_TRIAGE,
+];
+
+const labelSetsUpToSize = (alphabet, maxSize) => {
+  const sets = [[]];
+  const extend = (prefix, start) => {
+    if (prefix.length === maxSize) return;
+    for (let i = start; i < alphabet.length; i += 1) {
+      const next = [...prefix, alphabet[i]];
+      sets.push(next);
+      extend(next, i + 1);
+    }
+  };
+  extend([], 0);
+  return sets;
+};
+
+test("property: not requiring comment context implies reconcile never comments", () => {
+  const sets = labelSetsUpToSize(ALPHABET, 3);
+  assert.equal(sets.length, 64, "expected every subset of size 0..3");
+  let checked = 0;
+  for (const number of [1, 839]) {
+    for (const labels of sets) {
+      if (requiresCommentContext({ number, labels })) continue;
+      const r = reconcile({ number, labels, comments: [] });
+      assert.equal(
+        r.comment,
+        null,
+        `#${number} with labels ${JSON.stringify(labels)}: requiresCommentContext() said ` +
+          `no comment context was needed, but reconcile() produced a comment. run.mjs would ` +
+          `post it without ever having read the existing comments, so it would repost forever.`,
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked > 0, "the property must actually exercise some label sets");
+});
+
 test("regression: single invalid roadmap label dedupes against a prior conflict comment", () => {
   const marker = conflictMarker(["roadmap: soon"]);
   const r = reconcile({
@@ -814,7 +936,9 @@ export function reconcile({ number, labels, comments = [] }) {
 node --test scripts/triage-hygiene/*.test.mjs
 ```
 
-Expected: PASS, 13/13.
+Expected: PASS, 21/21 — 20 example tests plus the property test that enumerates every label set of
+size 0–3 over a seven-label alphabet and asserts `requiresCommentContext()` never says "no comment
+context needed" for a set `reconcile()` would comment on.
 
 - [ ] **Step 5: Wire up the npm script and commit**
 
@@ -834,8 +958,8 @@ git commit -m "feat(triage): add pure roadmap-label reconcile logic with tests"
 - Create: `scripts/triage-hygiene/run.mjs`
 
 **Interfaces:**
-- Consumes: `reconcile`, `NEEDS_TRIAGE` from `./reconcile.mjs`.
-- Produces: `node scripts/triage-hygiene/run.mjs` — sweeps all open issues, or reconciles one when `ISSUE_NUMBER` is set. `DRY_RUN=1` prints without mutating.
+- Consumes: `reconcile`, `requiresCommentContext`, `NEEDS_TRIAGE` from `./reconcile.mjs`. `requiresCommentContext` gates the comment fetch, so the sweep pays for comment pages only on issues whose plan could include a comment.
+- Produces: `node scripts/triage-hygiene/run.mjs` — sweeps all open issues, or reconciles one when `ISSUE_NUMBER` is set. Setting `DRY_RUN` to anything other than `0`, `false`, or the empty string prints without mutating.
 
 - [ ] **Step 1: Implement**
 
@@ -845,7 +969,12 @@ import { reconcile, requiresCommentContext, NEEDS_TRIAGE } from "./reconcile.mjs
 
 const REPO = process.env.GITHUB_REPOSITORY ?? "source-inc/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
-const DRY_RUN = process.env.DRY_RUN === "1";
+// Deliberately permissive: this bot holds `issues: write` on the production
+// tracker, so a typo'd truthy value (`DRY_RUN=true`, `DRY_RUN=yes`) must never
+// silently enable live writes. Only the explicit negatives disable dry-run;
+// an unset variable means disabled.
+const DRY_RUN_RAW = (process.env.DRY_RUN ?? "").trim().toLowerCase();
+const DRY_RUN = DRY_RUN_RAW !== "" && DRY_RUN_RAW !== "0" && DRY_RUN_RAW !== "false";
 if (!TOKEN) {
   console.error("GITHUB_TOKEN is required");
   process.exit(1);
@@ -879,11 +1008,25 @@ const listOpenIssues = async () => {
   return out;
 };
 
+// Must be exhaustive, not just the first page: GitHub returns issue comments
+// oldest-first, so on an issue with more than 100 comments a prior conflict
+// marker sits on a later page. Missing it defeats the dedup check and reposts
+// the same conflict comment on every sweep, forever.
+const listComments = async (number) => {
+  const out = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await api(`/repos/${REPO}/issues/${number}/comments?per_page=100&page=${page}`);
+    out.push(...batch.map((c) => c.body ?? ""));
+    if (batch.length < 100) break;
+  }
+  return out;
+};
+
 const applyTo = async (issue) => {
   const labels = issue.labels.map((l) => (typeof l === "string" ? l : l.name));
   // Comments are only needed to dedupe conflict notices, so fetch them lazily.
   const comments = requiresCommentContext({ number: issue.number, labels })
-    ? (await api(`/repos/${REPO}/issues/${issue.number}/comments?per_page=100`)).map((c) => c.body ?? "")
+    ? await listComments(issue.number)
     : [];
 
   const plan = reconcile({ number: issue.number, labels, comments });
@@ -927,7 +1070,11 @@ for (const issue of targets) {
   if (issue.state !== "open" || issue.pull_request) continue;
   if (await applyTo(issue)) changed += 1;
 }
-console.log(`${NEEDS_TRIAGE} reconcile complete: ${targets.length} examined, ${changed} changed`);
+// Distinguish intent from effect: nothing was written in dry-run mode.
+console.log(
+  `${NEEDS_TRIAGE} reconcile complete: ${targets.length} examined, ` +
+    `${changed} ${DRY_RUN ? "would change" : "changed"}`,
+);
 ```
 
 - [ ] **Step 2: Dry-run the sweep against live state**
@@ -936,7 +1083,7 @@ console.log(`${NEEDS_TRIAGE} reconcile complete: ${targets.length} examined, ${c
 DRY_RUN=1 GITHUB_TOKEN=$(gh auth token) node scripts/triage-hygiene/run.mjs
 ```
 
-Expected: `127 examined, 0 changed`. Tasks 5 and 6 left the backlog clean, so a correct implementation finds nothing to do. **Any non-zero change count means either the backfill is incomplete or `reconcile()` is wrong — diagnose before landing the workflow.**
+Expected: `127 examined, 0 would change` — dry runs report intent, not effect. Tasks 5 and 6 left the backlog clean, so a correct implementation finds nothing to do. **Any non-zero change count means either the backfill is incomplete or `reconcile()` is wrong — diagnose before landing the workflow.**
 
 - [ ] **Step 3: Prove it detects a real violation**
 
@@ -986,7 +1133,10 @@ permissions:
 concurrency:
   # One global group, not a per-issue group with a unique fallback: a sweep and
   # a per-issue run touching the same issue must not interleave, and two sweeps
-  # must not overlap. Queue rather than cancel so no event is dropped.
+  # must not overlap. `cancel-in-progress: false` lets the running job finish
+  # rather than being killed mid-write; GitHub still keeps only the newest
+  # PENDING run in the group, so an intermediate run during a bulk relabel can
+  # be dropped. That is safe: the next sweep reconciles the whole backlog.
   group: triage-hygiene
   cancel-in-progress: false
 
