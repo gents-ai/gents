@@ -80,6 +80,11 @@ const DOOMED = [
   "cluster: clients-platform",
   "cluster: gents-cutover",
 ];
+// Labels this migration introduces. On restore they are removed if they were
+// not present at capture time, so a rollback leaves no orphaned definitions.
+// Deliberately a fixed list: deleting every live label absent from the
+// snapshot would destroy unrelated labels created after capture.
+const INTRODUCED = ["quality-ci", "needs-triage"];
 const ROADMAP_ISSUE = 839;
 
 if (!TOKEN) {
@@ -178,7 +183,20 @@ const restore = async (file) => {
     console.log(`recreated label: ${l.name}`);
   }
 
-  // 2. Restore each affected item's full label set.
+  // 2. Remove labels this migration introduces that were not present at
+  // capture time, so a rollback leaves no orphaned definitions.
+  const captured = new Set(snap.labels.map((l) => l.name));
+  for (const name of INTRODUCED) {
+    if (captured.has(name)) continue;
+    try {
+      await api(`/repos/${REPO}/labels/${encodeURIComponent(name)}`, { method: "DELETE" });
+      console.log(`deleted introduced label: ${name}`);
+    } catch (err) {
+      if (err.status !== 404) throw err;
+    }
+  }
+
+  // 3. Restore each affected item's full label set.
   for (const it of snap.items) {
     await api(`/repos/${REPO}/issues/${it.number}/labels`, {
       method: "PUT",
@@ -187,7 +205,7 @@ const restore = async (file) => {
   }
   console.log(`restored labels on ${snap.items.length} items`);
 
-  // 3. Delete milestones that did not exist at capture time.
+  // 4. Delete milestones that did not exist at capture time.
   const known = new Set(snap.milestones.map((m) => m.title));
   for (const m of await paginate(`/repos/${REPO}/milestones?state=all`)) {
     if (known.has(m.title)) continue;
@@ -195,7 +213,7 @@ const restore = async (file) => {
     console.log(`deleted milestone: ${m.title}`);
   }
 
-  // 4. Restore the roadmap issue's title and body.
+  // 5. Restore the roadmap issue's title and body.
   await api(`/repos/${REPO}/issues/${snap.roadmapIssue.number}`, {
     method: "PATCH",
     body: JSON.stringify({
