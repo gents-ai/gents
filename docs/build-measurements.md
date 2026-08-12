@@ -171,6 +171,64 @@ and no public-PR compiler artifacts enter the trusted release target. Raw
 workflows: https://github.com/source-inc/gents/actions/runs/31608891843 and
 https://github.com/source-inc/gents/actions/runs/31609716279.
 
+### Cold compile and linked-size attribution
+
+A manual attribution run at commit `ac11b9e0` used Rust 1.97.1, a fresh
+`aarch64-apple-darwin` target directory, direct rustc with no compiler cache,
+12 Cargo jobs, and `CARGO_INCREMENTAL=0`. The ordinary stripped release build
+took 1,788 seconds (29m48s) and peaked at 10,174,103,552 bytes RSS. It produced
+a 70,693,328-byte binary and 26,994,237-byte gzip payload with 819 target-scoped
+normal packages, 962 all-target normal packages, and 68 duplicate package
+names.
+
+This puts the v0.11.0 2,005-second release and the new 1,788-second cold build
+in the same regime. It also isolates the main reason they differ from the
+209--214-second profile experiment: the latter could read the host's warm
+shared compiler cache, whereas both cold measurements had to compile the
+native dependency graph. Signing and packaging are outside the 1,788-second
+Cargo measurement. The same-commit trusted-target retry above remains the
+representative warm/no-op result.
+
+Cargo timing durations are aggregated across every unit for a package and can
+overlap in wall time. The largest cold contributors were:
+
+| Package | Aggregate compile duration | Longest unit |
+|---|---:|---:|
+| `librocksdb-sys` | 519.58s | 494.09s |
+| `gents-cli` | 405.37s | 345.88s |
+| `aws-lc-sys` | 293.14s | 290.62s |
+| `cranelift-codegen` | 189.13s | 176.54s |
+| `gents` | 178.74s | 178.74s |
+| `iroh` | 158.03s | 131.48s |
+| `gents-migration` | 156.83s | 139.64s |
+| `rmcp` | 121.55s | 120.49s |
+| `wasmtime-internal-core` | 115.40s | 57.45s |
+| DefraDB `p2p` | 97.52s | 97.52s |
+
+`cargo-bloat` 0.12.1 then performed a separate 18m01s symbol-preserving
+rebuild. Its 122,703,208-byte inspection binary is not the shipped binary; the
+57,632,052-byte text section is useful only for linked-code attribution. The
+largest linked contributors were `gents_server` (7,106,696 bytes), `std`
+(6,201,385), `gents` (5,701,092), `librocksdb_sys` (3,189,724), DefraDB `db`
+(2,590,420), DefraDB `query` (2,155,308), `cranelift_codegen` (2,107,580), and
+DefraDB `p2p` (1,881,492).
+
+The cold timing and linked rankings independently point at the same upstream
+boundaries: SourceHub/AWS-LC, Wasmtime/Cranelift, and the combined Iroh plus
+legacy-libp2p graph. Those are tracked in DefraDB issues
+[1398](https://github.com/sourcenetwork/defradb.rs/issues/1398),
+[1400](https://github.com/sourcenetwork/defradb.rs/issues/1400), and
+[1399](https://github.com/sourcenetwork/defradb.rs/issues/1399) respectively.
+RocksDB remains the largest native cold-build contributor, but it is part of
+Gents' required runtime storage path rather than an optional surface identified
+for removal.
+
+Exact commands and tool versions are stored with the raw reports from
+https://github.com/source-inc/gents/actions/runs/31613287268. The full manual
+job took 51m29s because it intentionally measured both the stripped cold build
+and the separate symbol build; do not use that job duration as the release
+build time.
+
 Useful next investigations are to rank duplicate packages by compiled size,
 map features that pull each duplicate version, split optional desktop/provider
 surfaces from the runtime-critical CLI graph, and pursue DefraDB feature
