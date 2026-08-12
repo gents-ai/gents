@@ -203,8 +203,9 @@ impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
         timeout_override: Option<Duration>,
     ) -> RemoteP2pAdminResult<()> {
         let p2p = self.p2p()?;
-        let future = p2p.sync_documents(collection_name, doc_ids.to_vec());
-        match timeout(timeout_override.unwrap_or(self.timeout), future).await {
+        let sync_timeout = timeout_override.unwrap_or(self.timeout);
+        let future = p2p.sync_documents(collection_name, doc_ids.to_vec(), Some(sync_timeout));
+        match timeout(sync_timeout, future).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(map_p2p_error("sync_documents", error)),
             Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
