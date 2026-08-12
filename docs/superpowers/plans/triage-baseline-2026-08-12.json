@@ -1,0 +1,1747 @@
+{
+  "capturedFrom": "source-inc/gents",
+  "labels": [
+    {
+      "name": "adapter-interop",
+      "color": "5319e7",
+      "description": "Run gated Docker adapter interop workflow"
+    },
+    {
+      "name": "audit",
+      "color": "f7c6c7",
+      "description": "Audit / conformance investigation"
+    },
+    {
+      "name": "blocked",
+      "color": "b60205",
+      "description": "Blocked on another issue or upstream"
+    },
+    {
+      "name": "bug",
+      "color": "d73a4a",
+      "description": "Something isn't working"
+    },
+    {
+      "name": "cli",
+      "color": "5319e7",
+      "description": "defra-agent-cli surface"
+    },
+    {
+      "name": "cluster: clients-platform",
+      "color": "c5def5",
+      "description": "Desktop, mobile, Codex TUI, build flavors, and contributor platform"
+    },
+    {
+      "name": "cluster: context-memory",
+      "color": "6f42c1",
+      "description": "Memory, context assembly, compaction, token budgeting, and recoverable history"
+    },
+    {
+      "name": "cluster: gents-cutover",
+      "color": "fbca04",
+      "description": "Hard rename, repository cutover, release, and fleet re-provisioning"
+    },
+    {
+      "name": "cluster: inference-provider",
+      "color": "1d76db",
+      "description": "Provider wire contracts, inference routing, telemetry, and adapter fidelity"
+    },
+    {
+      "name": "cluster: network-fleet",
+      "color": "0052cc",
+      "description": "P2P networking, replication, pairing, discovery, and fleet convergence"
+    },
+    {
+      "name": "cluster: quality-ci",
+      "color": "b60205",
+      "description": "Flaky tests, CI infrastructure, and cross-suite reliability"
+    },
+    {
+      "name": "cluster: subagents-workflows",
+      "color": "d93f0b",
+      "description": "Delegation, subagent lifecycle, workflows, triggers, and orchestration"
+    },
+    {
+      "name": "cluster: tools-control-plane",
+      "color": "0e8a16",
+      "description": "Tools, authorization, identity, configuration, and control-plane operations"
+    },
+    {
+      "name": "design",
+      "color": "fbca04",
+      "description": "Design-only spec PR"
+    },
+    {
+      "name": "documentation",
+      "color": "0075ca",
+      "description": "Improvements or additions to documentation"
+    },
+    {
+      "name": "duplicate",
+      "color": "cfd3d7",
+      "description": "This issue or pull request already exists"
+    },
+    {
+      "name": "enhancement",
+      "color": "a2eeef",
+      "description": "New feature or request"
+    },
+    {
+      "name": "good first issue",
+      "color": "7057ff",
+      "description": "Good for newcomers"
+    },
+    {
+      "name": "help wanted",
+      "color": "008672",
+      "description": "Extra attention is needed"
+    },
+    {
+      "name": "icebox",
+      "color": "aaaaaa",
+      "description": ""
+    },
+    {
+      "name": "impl",
+      "color": "1d76db",
+      "description": "Implementation work following a design"
+    },
+    {
+      "name": "invalid",
+      "color": "e4e669",
+      "description": "This doesn't seem right"
+    },
+    {
+      "name": "lean",
+      "color": "8b5cf6",
+      "description": "Lean spec / proofs work"
+    },
+    {
+      "name": "meta",
+      "color": "6a737d",
+      "description": "Cross-cutting repository planning and governance"
+    },
+    {
+      "name": "question",
+      "color": "d876e3",
+      "description": "Further information is requested"
+    },
+    {
+      "name": "research",
+      "color": "5319e7",
+      "description": "Research note / external technique tracking"
+    },
+    {
+      "name": "roadmap: later",
+      "color": "1d76db",
+      "description": "Accepted work not yet committed to the next slice"
+    },
+    {
+      "name": "roadmap: next",
+      "color": "d93f0b",
+      "description": "Committed immediately after the active roadmap slice"
+    },
+    {
+      "name": "roadmap: now",
+      "color": "b60205",
+      "description": "Active critical path or correctness issue allowed to interrupt it"
+    },
+    {
+      "name": "roadmap: parked",
+      "color": "6a737d",
+      "description": "Blocked, research-only, icebox, or awaiting an explicit revisit"
+    },
+    {
+      "name": "runtime",
+      "color": "0e8a16",
+      "description": "Rust runtime / core implementation"
+    },
+    {
+      "name": "ui",
+      "color": "0075ca",
+      "description": "Desktop / frontend work"
+    },
+    {
+      "name": "wontfix",
+      "color": "ffffff",
+      "description": "This will not be worked on"
+    }
+  ],
+  "milestones": [],
+  "items": [
+    {
+      "number": 330,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 366,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "design",
+        "icebox",
+        "lean",
+        "roadmap: parked"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 378,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 391,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 438,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 439,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 461,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 498,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 509,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 514,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 523,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 527,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 539,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 540,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 543,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 564,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "cluster: subagents-workflows",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 580,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 606,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 608,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "cluster: clients-platform",
+        "impl",
+        "roadmap: later",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 621,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 630,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 647,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 652,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 654,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: tools-control-plane",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 660,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 673,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "blocked",
+        "cluster: network-fleet",
+        "lean",
+        "roadmap: parked",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 678,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 679,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 696,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 700,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 705,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 708,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 714,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: network-fleet",
+        "design",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 716,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cli",
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 717,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 718,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 719,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cli",
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 720,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 722,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 723,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "research",
+        "roadmap: parked",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 725,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 726,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "cluster: inference-provider",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 728,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cli",
+        "cluster: tools-control-plane",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 730,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 732,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "design",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 734,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: subagents-workflows",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 737,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 739,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "design",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 741,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 742,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 743,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 748,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 749,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 750,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 798,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "bug",
+        "cluster: network-fleet",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 800,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 802,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 803,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 811,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "audit",
+        "cluster: gents-cutover",
+        "design",
+        "enhancement",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 816,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 820,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "audit",
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 821,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "documentation",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 822,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "audit",
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 823,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cli",
+        "cluster: gents-cutover",
+        "impl",
+        "lean",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 824,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 825,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 826,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "documentation",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 827,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "audit",
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 828,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 829,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: gents-cutover",
+        "impl",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 832,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cli",
+        "cluster: subagents-workflows",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 833,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cli",
+        "cluster: tools-control-plane",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 834,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "documentation",
+        "enhancement",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 835,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "design",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 836,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cli",
+        "cluster: subagents-workflows",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 837,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: subagents-workflows",
+        "lean",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 838,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 840,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: context-memory",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 841,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 842,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: tools-control-plane",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 843,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "adapter-interop",
+        "cluster: inference-provider",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 844,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "adapter-interop",
+        "cli",
+        "cluster: inference-provider",
+        "enhancement",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 845,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: tools-control-plane",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 846,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "enhancement",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 847,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: tools-control-plane",
+        "enhancement",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 848,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 849,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cli",
+        "cluster: clients-platform",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 855,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "lean"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 868,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: subagents-workflows",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 872,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: clients-platform",
+        "cluster: network-fleet",
+        "enhancement",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 874,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "cluster: subagents-workflows",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 877,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: clients-platform",
+        "design",
+        "enhancement",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 882,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: tools-control-plane",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 890,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "cluster: quality-ci",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 891,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "question",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 892,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 893,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "cluster: network-fleet",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 894,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: clients-platform",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 895,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: clients-platform",
+        "cluster: inference-provider",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 896,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "cluster: tools-control-plane",
+        "enhancement",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 927,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 928,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 929,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 933,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 937,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "cluster: tools-control-plane",
+        "enhancement",
+        "lean",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 938,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: network-fleet",
+        "roadmap: later"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 973,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cli",
+        "cluster: inference-provider",
+        "enhancement",
+        "runtime",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 975,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: network-fleet",
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 977,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: network-fleet",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 984,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: network-fleet",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 986,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: clients-platform",
+        "cluster: tools-control-plane",
+        "enhancement",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 987,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: network-fleet",
+        "design",
+        "enhancement",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 989,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 990,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 991,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: inference-provider",
+        "enhancement",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1003,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: tools-control-plane",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1009,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "lean",
+        "roadmap: later",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1012,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: context-memory",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1015,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: context-memory",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1016,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: context-memory",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1017,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: context-memory",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1018,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1019,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: quality-ci",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1023,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: network-fleet",
+        "cluster: quality-ci",
+        "roadmap: next"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1025,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: context-memory",
+        "design",
+        "enhancement",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1031,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: tools-control-plane",
+        "roadmap: now",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1032,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "roadmap: now"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1060,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1066,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cli",
+        "cluster: context-memory",
+        "enhancement",
+        "roadmap: next",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1088,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "cluster: clients-platform",
+        "enhancement",
+        "ui"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1091,
+      "isPullRequest": false,
+      "state": "closed",
+      "labels": [
+        "bug",
+        "cluster: quality-ci"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1093,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "bug",
+        "cluster: quality-ci",
+        "runtime"
+      ],
+      "milestone": null
+    },
+    {
+      "number": 1096,
+      "isPullRequest": false,
+      "state": "open",
+      "labels": [
+        "cluster: subagents-workflows",
+        "design",
+        "enhancement",
+        "runtime"
+      ],
+      "milestone": null
+    }
+  ],
+  "roadmapIssue": {
+    "number": 839,
+    "title": "Roadmap: Gents cutover and post-cutover runtime programs",
+    "body": "## Purpose\n\nThis is the boardless roadmap for Gents. The issues remain the source of truth; this issue records ordering and operating rules without introducing a second status system.\n\nEvery ordinary open issue carries:\n\n1. exactly one `cluster: ...` label describing its primary architectural home; and\n2. exactly one `roadmap: ...` label describing its current planning horizon.\n\nThis roadmap issue is intentionally cross-cluster and is exempt from the cluster-label rule.\n\n## Horizon semantics\n\n- **`roadmap: now`** — active critical path, or a correctness/release problem allowed to interrupt it.\n- **`roadmap: next`** — committed immediately after the active slice. This is an ordered queue, not permission to start everything concurrently.\n- **`roadmap: later`** — accepted and categorized, but not committed to the next slice.\n- **`roadmap: parked`** — blocked, research-only, icebox, or awaiting an explicit revisit decision.\n\nClosing an issue removes it from roadmap queries naturally. Reprioritization is performed by replacing its one horizon label; this issue should not duplicate every issue checklist.\n\n## Live views\n\n- [Now](https://github.com/source-inc/defra-agent/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22roadmap%3A%20now%22)\n- [Next](https://github.com/source-inc/defra-agent/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22roadmap%3A%20next%22)\n- [Later](https://github.com/source-inc/defra-agent/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22roadmap%3A%20later%22)\n- [Parked](https://github.com/source-inc/defra-agent/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22roadmap%3A%20parked%22)\n\nCluster views are available through the `cluster: ...` labels.\n\n## Current program: hard cutover to Gents\n\nParent: #811\n\nCritical path:\n\n1. #816 and exact-main CI health must not leave the runway ambiguous.\n2. #820 freezes the base and branch/worktree dispositions.\n3. #821 and #822 land the archive cleanup and executable rename guard.\n4. #823 performs the core Rust/proof/runtime rename.\n5. #824 and #825 complete clients and release infrastructure.\n6. #826 documents the hard operational cut.\n7. #827 freezes the verified candidate.\n8. #828 renames the repository.\n9. #829 publishes the first Gents release and re-provisions the fleet.\n\n#833 and #837 may interrupt this sequence because they affect truthful authority diagnostics and lifecycle cleanup in the coordinator being used to execute the rename. They do not authorize unrelated platform expansion during the rename window.\n\n## Next program A: reliable agent-authored coordination\n\nParent architecture: #378 and #835  \nReliability epic: #832\n\nPreferred order:\n\n1. #837 closes the terminal-parent/running-composite invariant hole.\n2. #836 gives the parent one descendant graph across behaviors, await modes, deployments, and workflow roles.\n3. #716 and #722 make bounded results configurable and losslessly recoverable.\n4. #835 generalizes orchestration around durable spawn/join/control primitives.\n5. #838 adds enforceable per-child and group budgets.\n6. #834 ships the reference coordinator behavior and live canary.\n7. #734 is re-tested against the resulting ordinary cross-deployment handoff path.\n\n#728 is included in the next horizon because autonomous repository work needs the runtime to load workspace instructions rather than relying on bespoke prompt injection.\n\n## Next program B: long-context correctness\n\nFoundation sequence:\n\n1. #718 centralizes model-aware token estimation.\n2. #719 makes compaction budgets coherent and validated.\n3. #717 defines the budget-safe compaction failure path.\n4. #716 aligns model-facing tool-result policy.\n5. #722 makes trimmed evidence recoverable.\n\n#720, #725, #523, #723, and the broader memory decision in #391 remain later until the foundation above is stable or a concrete workload pulls them forward.\n\n## Next program C: fleet convergence\n\nIncident family:\n\n- #630 — hub PushLog backpressure under many pushers\n- #696 — fresh-store genesis pending-DAG growth\n- #798 — 19-node control mesh loses applied scope\n\nTreat these as one diagnosis/program rather than three unrelated fixes. Fresh-fleet evidence after #829 decides whether this program moves ahead of coordination/context work. #673 remains parked until the upstream DefraDB flood-safety contract exists.\n\n## Horizontal quality lane\n\n#848 is now because it reproduced in isolation on the exact frozen SHA and directly blocks #820. #803 remains next as a known main-health defect. Other flakes remain categorized under `cluster: quality-ci`; they move to now when they block the exact active SHA or reproduce deterministically.\n\nThe rule remains: flaky tests are defects. Horizon labels control scheduling, not whether they are legitimate.\n\n## Work-in-progress rules\n\nDuring the rename:\n\n- one program is active: the Gents cutover;\n- at most two proven correctness/release blockers may interrupt it;\n- no unrelated feature branch is promoted to `now`.\n\nAfter the rename:\n\n- at most one implementation issue per cluster is active;\n- at most three implementation issues are active across the repository;\n- design/proof work may overlap implementation only when it feeds the next executable slice;\n- moving an issue into `now` should move something else out unless it is a production invariant or release blocker.\n\n## Why there is no GitHub Project yet\n\nThe label pair `cluster + roadmap horizon` already answers:\n\n- what subsystem owns this;\n- whether it is now, next, later, or parked; and\n- which live query shows the queue.\n\nCreate a GitHub Project only when at least one of these becomes true:\n\n- multiple operators need independent assignee swimlanes;\n- cross-repository work must be scheduled in one view;\n- more than ten issues are simultaneously in progress;\n- custom numeric fields or iteration planning become necessary; or\n- label queries can no longer answer a concrete planning question.\n\nUntil then, a Project would duplicate state and create reconciliation work.\n\n## Post-cutover program D: durable trace, attribution, and trust\n\nImmediate trust-boundary gates in the next horizon:\n\n1. #842 binds the projection redaction floor to ACP so callers cannot request a more permissive export than policy allows.\n2. #845 makes approval decisions verifiable before approval surfaces or capability grants expand.\n\nDurable trace sequence in the later horizon:\n\n1. #846 stamps generation/configuration attribution across operational outputs.\n2. #840 persists the rendered provider input at the single PromptAssembly-fenced assembly point.\n3. #841 projects the complete durable request record, including compaction, approval, goal, and full inference data. Implement after #840/#846 where practical to avoid revisiting the projection shape.\n4. #843 completes Codex-format import.\n5. #844 promotes the interop import path to a supported CLI after #843 establishes complete format coverage.\n\n#847 is the later umbrella for policy directives, ACP/encryption/Orbis runtime wiring, full-chain verification, and placement semantics. Decompose it before promotion and reconcile its child work with #461 and #539 rather than building parallel authorization or encryption paths.\n"
+  }
+}
