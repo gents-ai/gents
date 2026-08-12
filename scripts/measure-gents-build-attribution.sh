@@ -139,6 +139,7 @@ export CARGO_INCREMENTAL=0
 export CARGO_TARGET_DIR="$target_dir"
 
 binary_path="$target_dir/$target_triple/release/gents"
+measured_binary="$output_dir/gents-release-stripped"
 timing_html="$target_dir/cargo-timings/cargo-timing.html"
 build_log="$output_dir/cargo-build.log"
 resource_usage="$output_dir/resource-usage.txt"
@@ -189,6 +190,18 @@ if [[ ! -f "$timing_html" ]]; then
   exit 1
 fi
 
+# cargo-bloat intentionally rebuilds with profile stripping disabled so it can
+# inspect symbols. Snapshot and measure the ordinary stripped release output
+# first; otherwise the inspection build would overwrite the binary whose size
+# this report claims to record.
+cp "$binary_path" "$measured_binary"
+BUILD_ELAPSED_SECONDS=$build_elapsed_seconds \
+  BINARY_PATH=$measured_binary \
+  OUTPUT_JSON="$output_dir/release-metrics.json" \
+  SKIP_BUILD=1 \
+  TARGET=$target_triple \
+  scripts/measure-gents-binary.sh > "$output_dir/release-metrics.txt"
+
 cp "$timing_html" "$output_dir/cargo-timing.html"
 extract_timing_units "$timing_html" "$output_dir/cargo-timing-units.json"
 rank_timing_packages "$output_dir/cargo-timing-units.json" "$output_dir/cargo-timing-packages.json"
@@ -210,13 +223,6 @@ jq -e '
   and (.crates | type) == "array"
   and all(.crates[]; (.name | type) == "string" and (.size | type) == "number")
 ' "$output_dir/cargo-bloat-crates.json" >/dev/null
-
-BUILD_ELAPSED_SECONDS=$build_elapsed_seconds \
-  BINARY_PATH=$binary_path \
-  OUTPUT_JSON="$output_dir/release-metrics.json" \
-  SKIP_BUILD=1 \
-  TARGET=$target_triple \
-  scripts/measure-gents-binary.sh > "$output_dir/release-metrics.txt"
 
 peak_rss_json=null
 if [[ -n "$peak_rss_bytes" && "$peak_rss_bytes" =~ ^[0-9]+$ ]]; then
