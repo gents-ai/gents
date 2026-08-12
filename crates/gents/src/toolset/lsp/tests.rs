@@ -1,6 +1,37 @@
 use super::*;
-use crate::tool_surface::{FileToolMode, ToolSelection, ToolCeiling, BehaviorToolConfig};
+use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
 use crate::toolset::shared::ToolContext;
+use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
+
+fn sample_config(
+    workspace: std::path::PathBuf,
+    file: FileToolMode,
+    session_id: &str,
+    servers: Vec<CatalogServer>,
+) -> LspToolConfig {
+    let constraints = CommandConstraints {
+        allowed_argv_prefixes: Vec::new(),
+        forbidden_argv_prefixes: Vec::new(),
+        network_mode: CommandNetworkMode::Inherit,
+        execution_mode: CommandExecutionMode::Unrestricted,
+        deny_all_argv: false,
+    };
+    LspToolConfig {
+        lsp: true,
+        file,
+        digest: config_digest(&workspace, &servers, &constraints),
+        workspace,
+        session_id: session_id.into(),
+        behavior_id: "b1".into(),
+        servers,
+        constraints,
+        format_on_write: false,
+        diagnostics_on_write: false,
+        diagnostics_on_edit: false,
+        diagnostics_deduplicate: false,
+        idle_timeout: std::time::Duration::from_secs(300),
+    }
+}
 
 #[test]
 fn advertised_only_when_enabled_and_file_tools_on() {
@@ -127,15 +158,12 @@ async fn fixture_hover_definition_and_rename_preview() {
         workspace_ready_timings: None,
     };
     let tool = LspTool::new(
-        LspToolConfig {
-            lsp: true,
-            file: FileToolMode::ReadWrite,
-            workspace: root.path().to_path_buf(),
-            session_id: "s1".into(),
-            behavior_id: "b1".into(),
-            digest: "d1".into(),
-            servers: vec![server],
-        },
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadWrite,
+            "s1",
+            vec![server],
+        ),
         LspPool::new(),
     )
     .unwrap();
@@ -187,15 +215,12 @@ async fn fixture_hover_definition_and_rename_preview() {
 async fn status_does_not_start_a_server() {
     let pool = LspPool::new();
     let tool = LspTool::new(
-        LspToolConfig {
-            lsp: true,
-            file: FileToolMode::ReadOnly,
-            workspace: std::env::temp_dir(),
-            session_id: "s-status".into(),
-            behavior_id: "b1".into(),
-            digest: "d1".into(),
-            servers: vec![],
-        },
+        sample_config(
+            std::env::temp_dir(),
+            FileToolMode::ReadOnly,
+            "s-status",
+            vec![],
+        ),
         pool.clone(),
     )
     .unwrap();
@@ -220,14 +245,11 @@ async fn writethrough_does_not_start_a_client() {
     let path = root.path().join("lib.rs");
     std::fs::write(&path, "fn x() {}\n").unwrap();
     let pool = LspPool::new();
-    let config = LspToolConfig {
-        lsp: true,
-        file: FileToolMode::ReadWrite,
-        workspace: root.path().to_path_buf(),
-        session_id: "s-wt".into(),
-        behavior_id: "b1".into(),
-        digest: "d1".into(),
-        servers: vec![CatalogServer {
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadWrite,
+        "s-wt",
+        vec![CatalogServer {
             name: "fixture".into(),
             command: "python3".into(),
             args: vec!["-c".into(), FIXTURE_PY.into()],
@@ -241,7 +263,7 @@ async fn writethrough_does_not_start_a_client() {
             capabilities: None,
             workspace_ready_timings: None,
         }],
-    };
+    );
     let writethrough = LspWritethrough::new(pool.clone(), config);
     let _ = writethrough.after_mutation(&path).await;
     assert_eq!(pool.live_count().await, 0);
@@ -298,14 +320,11 @@ while True:
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.0.1\"\n").unwrap();
     let tool = LspTool::new(
-        LspToolConfig {
-            lsp: true,
-            file: FileToolMode::ReadOnly,
-            workspace: root.path().to_path_buf(),
-            session_id: "s-redact".into(),
-            behavior_id: "b1".into(),
-            digest: "d1".into(),
-            servers: vec![CatalogServer {
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadOnly,
+            "s-redact",
+            vec![CatalogServer {
                 name: "fixture".into(),
                 command: "python3".into(),
                 args: vec!["-c".into(), fixture.into()],
@@ -319,7 +338,7 @@ while True:
                 capabilities: None,
                 workspace_ready_timings: None,
             }],
-        },
+        ),
         LspPool::new(),
     )
     .unwrap();
@@ -401,14 +420,11 @@ while True:
     std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
     std::fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"t\"\nversion=\"0.0.1\"\n").unwrap();
     let tool = LspTool::new(
-        LspToolConfig {
-            lsp: true,
-            file: FileToolMode::ReadWrite,
-            workspace: root.path().to_path_buf(),
-            session_id: "s-apply".into(),
-            behavior_id: "b1".into(),
-            digest: "d1".into(),
-            servers: vec![CatalogServer {
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadWrite,
+            "s-apply",
+            vec![CatalogServer {
                 name: "fixture".into(),
                 command: "python3".into(),
                 args: vec!["-c".into(), fixture],
@@ -422,7 +438,7 @@ while True:
                 capabilities: None,
                 workspace_ready_timings: None,
             }],
-        },
+        ),
         LspPool::new(),
     )
     .unwrap();
@@ -470,21 +486,21 @@ async fn request_cancel_does_not_kill_pooled_server() {
         capabilities: None,
         workspace_ready_timings: None,
     };
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadWrite,
+        "s-cancel",
+        vec![server.clone()],
+    );
     let key = PoolKey {
         session_id: "s-cancel".into(),
         behavior_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
-        config_digest: "d1".into(),
+        config_digest: config.digest.clone(),
     };
     let lease = pool
-        .get_or_start(
-            key.clone(),
-            &server,
-            root.path(),
-            root.path(),
-            Some(crate::toolset::build_shell_env()),
-        )
+        .get_or_start(key.clone(), &server, &config)
         .await
         .expect("start");
     let request_token = tokio_util::sync::CancellationToken::new();
@@ -493,5 +509,75 @@ async fn request_cancel_does_not_kill_pooled_server() {
     assert_eq!(pool.live_count().await, 1);
     drop(lease);
     assert!(pool.has_ready(&key).await);
+}
+
+#[test]
+fn tighter_ceiling_changes_digest() {
+    let root = tempfile::tempdir().unwrap();
+    let servers = vec![];
+    let loose = CommandConstraints {
+        allowed_argv_prefixes: Vec::new(),
+        forbidden_argv_prefixes: Vec::new(),
+        network_mode: CommandNetworkMode::Inherit,
+        execution_mode: CommandExecutionMode::Unrestricted,
+        deny_all_argv: false,
+    };
+    let tight = CommandConstraints {
+        forbidden_argv_prefixes: vec![vec!["rust-analyzer".into()]],
+        network_mode: CommandNetworkMode::Disabled,
+        ..loose.clone()
+    };
+    assert_ne!(
+        config_digest(root.path(), &servers, &loose),
+        config_digest(root.path(), &servers, &tight)
+    );
+}
+
+#[test]
+fn readonly_surface_uses_file_tool_root_not_cwd() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("Cargo.toml"), "[package]\nname=\"x\"\nversion=\"0.1.0\"\n")
+        .unwrap();
+    let mut selection = ToolSelection::default();
+    selection.enable_lsp = true;
+    selection.file_tools = FileToolMode::ReadOnly;
+    selection.file_tool_root = Some(root.path().to_path_buf());
+    let ceiling = ToolCeiling::readonly_at(root.path());
+    let config = BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+    let lsp = surface.lsp_config().expect("lsp advertised");
+    assert_eq!(
+        std::fs::canonicalize(&lsp.workspace).unwrap_or(lsp.workspace.clone()),
+        std::fs::canonicalize(root.path()).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn execute_command_is_argument_invalid() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    let tool = LspTool::new(
+        sample_config(root.path().to_path_buf(), FileToolMode::ReadWrite, "s-exec", vec![]),
+        LspPool::new(),
+    )
+    .unwrap();
+    let err = tool
+        .call(LspArgs {
+            action: "request".into(),
+            file: None,
+            line: None,
+            symbol: None,
+            query: Some("workspace/executeCommand".into()),
+            new_name: None,
+            apply: None,
+            payload: Some(r#"{"command":"evil"}"#.into()),
+        })
+        .await
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("executeCommand") || text.contains("unknown") || text.contains("not supported"),
+        "{text}"
+    );
 }
 

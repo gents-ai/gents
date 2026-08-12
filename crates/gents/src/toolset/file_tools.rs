@@ -15,7 +15,7 @@ use super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::native_runner::NativeFsRunner;
 use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 
-fn content_hash(bytes: &[u8]) -> String {
+pub(crate) fn content_hash(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
@@ -56,7 +56,7 @@ fn canonical_lock_key(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-pub(super) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn file_mutation_lock_for(path: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     let key = canonical_lock_key(path);
     let mut locks = FILE_MUTATION_LOCKS
         .lock()

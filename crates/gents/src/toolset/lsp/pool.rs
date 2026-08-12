@@ -1,18 +1,16 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::sync::{Mutex, Notify};
 
-use crate::managed_exec::{
-    spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest,
-};
+use crate::managed_exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
+use crate::toolset::prepare_managed_command;
 
-use super::admit::admit_command;
 use super::catalog::CatalogServer;
 use super::client::LspClient;
+use super::LspToolConfig;
 
 const MAX_PER_SESSION: usize = 4;
 const MAX_GLOBAL: usize = 16;
@@ -21,7 +19,7 @@ const MAX_GLOBAL: usize = 16;
 pub struct PoolKey {
     pub session_id: String,
     pub behavior_id: String,
-    pub workspace_root: PathBuf,
+    pub workspace_root: std::path::PathBuf,
     pub server_name: String,
     pub config_digest: String,
 }
@@ -35,7 +33,7 @@ enum EntryState {
 
 struct PoolEntry {
     state: EntryState,
-    leases: AtomicUsize,
+    leases: Arc<AtomicUsize>,
     last_used: Instant,
     client: Option<Arc<LspClient>>,
     ready: Arc<Notify>,
@@ -44,7 +42,7 @@ struct PoolEntry {
 
 pub(crate) struct LspLease {
     client: Arc<LspClient>,
-    entry: Arc<Mutex<PoolEntry>>,
+    leases: Arc<AtomicUsize>,
 }
 
 impl LspLease {
@@ -55,9 +53,7 @@ impl LspLease {
 
 impl Drop for LspLease {
     fn drop(&mut self) {
-        if let Ok(entry) = self.entry.try_lock() {
-            entry.leases.fetch_sub(1, Ordering::SeqCst);
-        }
+        self.leases.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -75,15 +71,16 @@ impl LspPool {
         let map = self.inner.lock().await;
         let slot = map.get(key)?.clone();
         drop(map);
-        let entry = slot.lock().await;
+        let mut entry = slot.lock().await;
         if entry.state != EntryState::Ready {
             return None;
         }
         let client = entry.client.clone()?;
         entry.leases.fetch_add(1, Ordering::SeqCst);
+        entry.last_used = Instant::now();
         Some(LspLease {
             client,
-            entry: slot.clone(),
+            leases: entry.leases.clone(),
         })
     }
 
@@ -91,21 +88,19 @@ impl LspPool {
         &self,
         key: PoolKey,
         server: &CatalogServer,
-        tool_root: &Path,
-        cwd: &Path,
-        env: Option<std::collections::HashMap<String, String>>,
+        config: &LspToolConfig,
     ) -> Result<LspLease, String> {
         let (slot, starter) = {
             let mut map = self.inner.lock().await;
             if let Some(existing) = map.get(&key) {
                 (existing.clone(), false)
             } else {
-                if !self.has_zero_lease_capacity(&map, &key) {
+                if !self.evict_or_has_capacity(&mut map, &key).await {
                     return Err("language-server client cap reached".into());
                 }
                 let slot = Arc::new(Mutex::new(PoolEntry {
                     state: EntryState::Starting,
-                    leases: AtomicUsize::new(0),
+                    leases: Arc::new(AtomicUsize::new(0)),
                     last_used: Instant::now(),
                     client: None,
                     ready: Arc::new(Notify::new()),
@@ -118,53 +113,43 @@ impl LspPool {
 
         if !starter {
             loop {
-                {
-                    let entry = slot.lock().await;
-                    if entry.state == EntryState::Ready {
-                        if let Some(client) = &entry.client {
-                            entry.leases.fetch_add(1, Ordering::SeqCst);
-                            return Ok(LspLease {
-                                client: client.clone(),
-                                entry: slot.clone(),
-                            });
-                        }
+                let mut entry = slot.lock().await;
+                if entry.state == EntryState::Ready {
+                    if let Some(client) = entry.client.clone() {
+                        entry.leases.fetch_add(1, Ordering::SeqCst);
+                        entry.last_used = Instant::now();
+                        return Ok(LspLease {
+                            client,
+                            leases: entry.leases.clone(),
+                        });
                     }
-                    if let Some(error) = &entry.start_error {
-                        return Err(error.clone());
-                    }
-                    if entry.state == EntryState::Retiring {
-                        return Err("language-server client is retiring".into());
-                    }
-                    let ready = entry.ready.clone();
-                    drop(entry);
-                    ready.notified().await;
                 }
+                if let Some(error) = &entry.start_error {
+                    return Err(error.clone());
+                }
+                if entry.state == EntryState::Retiring {
+                    return Err("language-server client is retiring".into());
+                }
+                let ready = entry.ready.clone();
+                let notified = ready.notified();
+                drop(entry);
+                notified.await;
             }
         }
 
-        let admitted = admit_command(&server.command, tool_root).map_err(|err| err.diagnostic())?;
-        let mut argv = vec![admitted.to_string_lossy().into_owned()];
-        argv.extend(server.args.iter().cloned());
-        let process = spawn_managed_process(SpawnManagedProcessRequest {
-            argv,
-            cwd: cwd.to_path_buf(),
-            environment: env,
-            tool_name: Some("lsp".into()),
-            kind: ManagedExecKind::PersistentService,
-        })
-        .await?;
-        let client = LspClient::start(process, server.name.clone())?;
-        match client.initialize().await {
-            Ok(_) => {
+        let started = self.start_client(&key, server, config).await;
+        match started {
+            Ok(client) => {
+                let client = Arc::new(client);
                 let mut entry = slot.lock().await;
-                entry.client = Some(Arc::new(client));
+                entry.client = Some(client.clone());
                 entry.state = EntryState::Ready;
                 entry.last_used = Instant::now();
                 entry.leases.fetch_add(1, Ordering::SeqCst);
                 entry.ready.notify_waiters();
                 Ok(LspLease {
-                    client: entry.client.clone().expect("just set"),
-                    entry: slot.clone(),
+                    client,
+                    leases: entry.leases.clone(),
                 })
             }
             Err(error) => {
@@ -172,22 +157,78 @@ impl LspPool {
                 entry.start_error = Some(error.clone());
                 entry.state = EntryState::Retiring;
                 entry.ready.notify_waiters();
+                drop(entry);
                 self.inner.lock().await.remove(&key);
                 Err(error)
             }
         }
     }
 
-    fn has_zero_lease_capacity(
+    async fn start_client(
         &self,
-        map: &HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
+        _key: &PoolKey,
+        server: &CatalogServer,
+        config: &LspToolConfig,
+    ) -> Result<LspClient, String> {
+        let (program, argv, env, _sandbox) = prepare_managed_command(
+            &config.workspace,
+            &server.command,
+            &server.args,
+            &config.constraints,
+        )
+        .map_err(|err| err.to_string())?;
+        let mut full_argv = vec![program.to_string_lossy().into_owned()];
+        full_argv.extend(argv);
+        let process = spawn_managed_process(SpawnManagedProcessRequest {
+            argv: full_argv,
+            cwd: config.workspace.clone(),
+            environment: Some(env),
+            tool_name: Some("lsp".into()),
+            kind: ManagedExecKind::PersistentService,
+        })
+        .await?;
+        let client = LspClient::start(process, server.name.clone(), config, server)?;
+        client.initialize().await?;
+        Ok(client)
+    }
+
+    async fn evict_or_has_capacity(
+        &self,
+        map: &mut HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
         incoming: &PoolKey,
     ) -> bool {
         let session_count = map
             .keys()
-            .filter(|key| key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id)
+            .filter(|key| {
+                key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id
+            })
             .count();
-        session_count < MAX_PER_SESSION && map.len() < MAX_GLOBAL
+        if session_count < MAX_PER_SESSION && map.len() < MAX_GLOBAL {
+            return true;
+        }
+        let mut victim: Option<(PoolKey, Instant)> = None;
+        for (key, slot) in map.iter() {
+            let entry = slot.lock().await;
+            if entry.state == EntryState::Ready && entry.leases.load(Ordering::SeqCst) == 0 {
+                if victim
+                    .as_ref()
+                    .is_none_or(|(_, used)| entry.last_used < *used)
+                {
+                    victim = Some((key.clone(), entry.last_used));
+                }
+            }
+        }
+        if let Some((key, _)) = victim {
+            if let Some(slot) = map.remove(&key) {
+                let mut entry = slot.lock().await;
+                entry.state = EntryState::Retiring;
+                if let Some(client) = entry.client.take() {
+                    client.shutdown_exit().await;
+                }
+            }
+            return true;
+        }
+        false
     }
 
     pub async fn retire(&self, key: &PoolKey) {
@@ -241,6 +282,28 @@ impl LspPool {
     pub async fn live_count(&self) -> usize {
         self.inner.lock().await.len()
     }
+
+    pub async fn inspect_session(
+        &self,
+        session_id: &str,
+        behavior_id: &str,
+        workspace: &std::path::Path,
+        digest: &str,
+    ) -> Vec<String> {
+        let map = self.inner.lock().await;
+        let mut names = Vec::new();
+        for (key, slot) in map.iter() {
+            if key.session_id == session_id
+                && key.behavior_id == behavior_id
+                && key.workspace_root == workspace
+                && key.config_digest == digest
+            {
+                let entry = slot.lock().await;
+                if entry.state == EntryState::Ready {
+                    names.push(key.server_name.clone());
+                }
+            }
+        }
+        names
+    }
 }
-
-

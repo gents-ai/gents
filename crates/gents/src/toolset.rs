@@ -54,7 +54,10 @@ pub use session_history::{
 };
 pub(crate) use shared::parse_argv_prefixes;
 pub(crate) use shared::build_shell_env;
-pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
+pub use shared::{
+    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+};
+pub(crate) use shared::{admit_host_executable, prepare_managed_command};
 pub use lsp::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
@@ -183,6 +186,10 @@ impl ToolSet {
 
     pub fn native_tools(&self) -> &[NativeTool] {
         &self.tools
+    }
+
+    pub fn read_root(&self) -> Option<&std::path::Path> {
+        self.read_root.as_deref()
     }
 
     pub fn tool_names(&self) -> Vec<String> {

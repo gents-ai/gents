@@ -32,12 +32,16 @@ impl LspWritethrough {
         };
         let lease = self.pool.get_ready(&key).await?;
         let uri = format!("file://{}", path.display());
+        let version = lease.client().tracked_version(&uri).await.unwrap_or(1) + 1;
+        let text = std::fs::read_to_string(path).ok()?;
+        let _ = lease.client().track_open(&uri, version).await;
         let _ = lease
             .client()
             .notify(
                 "textDocument/didChange",
                 serde_json::json!({
-                    "textDocument": { "uri": uri }
+                    "textDocument": { "uri": uri, "version": version },
+                    "contentChanges": [{ "text": text }]
                 }),
             )
             .await;

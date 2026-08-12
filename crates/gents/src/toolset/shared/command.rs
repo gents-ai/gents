@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -155,6 +155,99 @@ impl CommandExecutionPolicy {
         self.network_mode = network_mode;
         self
     }
+}
+
+/// Bash-independent spawn constraints projected from the effective policy meet.
+/// Ignores `bash.tool` and the read-only command allowlist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandConstraints {
+    pub allowed_argv_prefixes: Vec<Vec<String>>,
+    pub forbidden_argv_prefixes: Vec<Vec<String>>,
+    pub network_mode: CommandNetworkMode,
+    pub execution_mode: CommandExecutionMode,
+    pub deny_all_argv: bool,
+}
+
+impl CommandConstraints {
+    pub fn to_spawn_policy(&self) -> CommandExecutionPolicy {
+        CommandExecutionPolicy {
+            mode: self.execution_mode,
+            allowed_argv_prefixes: self.allowed_argv_prefixes.clone(),
+            forbidden_argv_prefixes: self.forbidden_argv_prefixes.clone(),
+            network_mode: self.network_mode,
+            read_only_allowlist: Vec::new(),
+            deny_all_argv: self.deny_all_argv,
+        }
+    }
+}
+
+/// PATH lookup + canonicalize. Never admits a path under `tool_root`.
+pub(crate) fn admit_host_executable(
+    command: &str,
+    tool_root: &Path,
+) -> std::result::Result<PathBuf, crate::toolset::denial::DenialReason> {
+    use crate::toolset::denial::DenialReason;
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    let candidate = if trimmed.contains('/') || trimmed.contains('\\') || Path::new(trimmed).is_absolute()
+    {
+        PathBuf::from(trimmed)
+    } else {
+        which_on_host_path(trimmed).ok_or(DenialReason::WorkspaceExecutable)?
+    };
+    let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+    let root = std::fs::canonicalize(tool_root).unwrap_or_else(|_| tool_root.to_path_buf());
+    if canonical.starts_with(&root) {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    if !canonical.is_file() {
+        return Err(DenialReason::WorkspaceExecutable);
+    }
+    Ok(canonical)
+}
+
+fn which_on_host_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Shared PATH / prefix / network / sandbox preparation for bash and LSP.
+pub(crate) fn prepare_managed_command(
+    root: &Path,
+    command: &str,
+    args: &[String],
+    constraints: &CommandConstraints,
+) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError>
+{
+    let admitted = admit_host_executable(command, root)
+        .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
+    let mut validate_policy = constraints.to_spawn_policy();
+    // enable_lsp is the grant; do not apply bash's read-only command allowlist.
+    if matches!(validate_policy.mode, CommandExecutionMode::ReadOnly) {
+        validate_policy.mode = CommandExecutionMode::Unrestricted;
+    }
+    validate_command_policy(command, args, &validate_policy)?;
+    let spawn_policy = constraints.to_spawn_policy();
+    let (program, argv, sandbox) = sandboxed_command_for_policy(
+        root,
+        &admitted.to_string_lossy(),
+        args,
+        &spawn_policy,
+    )?;
+    Ok((
+        PathBuf::from(program),
+        argv,
+        build_shell_env(),
+        sandbox,
+    ))
 }
 
 pub(crate) async fn run_command(

@@ -21,14 +21,16 @@ pub use pool::{LspPool, PoolKey};
 pub use writethrough::LspWritethrough;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::llm::tool::{Tool, ToolDefinition};
 use crate::tool_call_lifecycle::FailureClass;
-use crate::tool_surface::FileToolMode;
+use crate::tool_surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
 use crate::toolset::shared::{ToolContext, ToolError};
+use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
 use actions::ActionRequest;
 use config::apply_overrides;
@@ -44,6 +46,41 @@ pub struct LspToolConfig {
     pub behavior_id: String,
     pub digest: String,
     pub servers: Vec<CatalogServer>,
+    pub constraints: CommandConstraints,
+    pub format_on_write: bool,
+    pub diagnostics_on_write: bool,
+    pub diagnostics_on_edit: bool,
+    pub diagnostics_deduplicate: bool,
+    pub idle_timeout: Duration,
+}
+
+pub fn constraints_from_effective_policy(
+    policy: &ToolPolicySurface,
+    lsp_network_overlay: Option<CommandNetworkMode>,
+) -> CommandConstraints {
+    constraints_from_effective_bash(&policy.bash, lsp_network_overlay)
+}
+
+pub fn constraints_from_effective_bash(
+    bash: &ToolPolicyBash,
+    lsp_network_overlay: Option<CommandNetworkMode>,
+) -> CommandConstraints {
+    let (allowed, deny_all) = match &bash.allowed_argv_prefixes {
+        crate::tool_surface::EndpointScope::All => (Vec::new(), false),
+        crate::tool_surface::EndpointScope::None => (Vec::new(), true),
+        crate::tool_surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
+    };
+    CommandConstraints {
+        allowed_argv_prefixes: allowed,
+        forbidden_argv_prefixes: bash.forbidden_argv_prefixes.iter().cloned().collect(),
+        network_mode: lsp_network_overlay.unwrap_or(bash.network_mode),
+        execution_mode: if matches!(bash.execution_mode, CommandExecutionMode::ReadOnly) {
+            CommandExecutionMode::Unrestricted
+        } else {
+            bash.execution_mode
+        },
+        deny_all_argv: deny_all,
+    }
 }
 
 #[derive(Clone)]
@@ -120,19 +157,26 @@ impl Tool for LspTool {
         if matches!(action, LspAction::CodeActionsList) && args.apply == Some(true) {
             action = LspAction::CodeActionsApply;
         }
-        if matches!(action, LspAction::RequestRead)
-            && args
-                .query
-                .as_deref()
-                .is_some_and(|method| !actions::READ_REQUEST_METHODS.contains(&method))
-        {
-            action = LspAction::RequestWrite;
-        }
         if !lsp_action_authorized(self.config.lsp, self.config.file, action) {
             return Err(ToolError::reported_failure(
                 FailureClass::PolicyDenied,
                 "lsp action is not authorized for this file-tool mode".into(),
             ));
+        }
+        if matches!(action, LspAction::RequestRead | LspAction::RequestWrite) {
+            let method = args.query.as_deref().unwrap_or("");
+            if method == "workspace/executeCommand" {
+                return Err(ToolError::reported_failure(
+                    FailureClass::ArgumentInvalid,
+                    "workspace/executeCommand is not supported".into(),
+                ));
+            }
+            if !actions::READ_REQUEST_METHODS.contains(&method) {
+                return Err(ToolError::reported_failure(
+                    FailureClass::ArgumentInvalid,
+                    format!("unknown request method {method}"),
+                ));
+            }
         }
         let detected: Vec<CatalogServer> = self
             .config
@@ -155,8 +199,12 @@ impl Tool for LspTool {
                 .or_else(|| detected.iter().find(|s| !s.is_linter))
                 .cloned();
             if let Some(server) = server {
+                let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                    .and_then(|scope| scope.session_id)
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
-                    session_id: self.config.session_id.clone(),
+                    session_id,
                     behavior_id: self.config.behavior_id.clone(),
                     workspace_root: self.config.workspace.clone(),
                     server_name: server.name.clone(),
@@ -164,13 +212,7 @@ impl Tool for LspTool {
                 };
                 Some(
                     self.pool
-                        .get_or_start(
-                            key,
-                            &server,
-                            &self.config.workspace,
-                            &self.config.workspace,
-                            Some(crate::toolset::build_shell_env()),
-                        )
+                        .get_or_start(key, &server, &self.config)
                         .await
                         .map_err(|err| {
                             ToolError::reported_failure(FailureClass::ServiceUnavailable, err)
@@ -180,8 +222,12 @@ impl Tool for LspTool {
                 None
             }
         } else if matches!(action, LspAction::Reload) {
+            let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .and_then(|scope| scope.session_id)
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| self.config.session_id.clone());
             let key_prefix = (
-                self.config.session_id.clone(),
+                session_id,
                 self.config.behavior_id.clone(),
                 self.config.workspace.clone(),
                 self.config.digest.clone(),
@@ -202,7 +248,9 @@ impl Tool for LspTool {
         };
         actions::dispatch(
             &self.context,
-            lease,
+            lease.as_ref(),
+            &self.pool,
+            &self.config,
             &detected,
             ActionRequest {
                 action,
@@ -228,15 +276,48 @@ pub fn merge_catalog(raw_config: Option<&str>) -> Vec<CatalogServer> {
     apply_overrides(builtin_catalog(), &doc)
 }
 
-pub fn config_digest(workspace: &std::path::Path, servers: &[CatalogServer], extra: &str) -> String {
+pub fn config_digest(
+    workspace: &std::path::Path,
+    servers: &[CatalogServer],
+    constraints: &CommandConstraints,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(workspace.to_string_lossy().as_bytes());
-    hasher.update(extra.as_bytes());
+    hasher.update(format!("{:?}", constraints.execution_mode).as_bytes());
+    hasher.update(format!("{:?}", constraints.network_mode).as_bytes());
+    hasher.update(constraints.deny_all_argv.to_string().as_bytes());
+    for prefix in &constraints.allowed_argv_prefixes {
+        hasher.update(prefix.join("\0").as_bytes());
+    }
+    for prefix in &constraints.forbidden_argv_prefixes {
+        hasher.update(prefix.join("\0").as_bytes());
+    }
     for server in servers {
         hasher.update(server.name.as_bytes());
-        hasher.update(server.command.as_bytes());
-        hasher.update(server.priority.to_le_bytes());
+        if let Ok(canonical) = admit_command(&server.command, workspace) {
+            hasher.update(canonical.to_string_lossy().as_bytes());
+        } else {
+            hasher.update(server.command.as_bytes());
+        }
+        for arg in &server.args {
+            hasher.update(arg.as_bytes());
+        }
+        if let Some(language_id) = &server.language_id {
+            hasher.update(language_id.as_bytes());
+        }
+        if let Some(init) = &server.init_options {
+            hasher.update(init.to_string().as_bytes());
+        }
+        if let Some(settings) = &server.settings {
+            hasher.update(settings.to_string().as_bytes());
+        }
+        if let Some(caps) = &server.capabilities {
+            hasher.update(caps.to_string().as_bytes());
+        }
+        if let Some(timings) = &server.workspace_ready_timings {
+            hasher.update(timings.to_string().as_bytes());
+        }
     }
     format!("{:x}", hasher.finalize())
 }

@@ -54,7 +54,7 @@ use super::stream_processor::AssistantTurnAccumulator;
 use crate::hook::DefraSessionHook;
 use crate::tool_call_lifecycle::runtime::{
     current_tool_runtime_context, deadline_remaining,
-    scope_request_tool_execution_with_workspace_and_live_output, ToolOutcome,
+    scope_request_tool_execution_with_session, ToolOutcome,
 };
 use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLimits};
 
@@ -763,11 +763,16 @@ where
                                     ),
                                     None => None,
                                 };
+                                let session_id = match hook.as_ref() {
+                                    Some(hook) => hook.session_id().await,
+                                    None => None,
+                                };
                                 let outcome = dispatch_tool(
                                     tools.as_slice(),
                                     &tool_name,
                                     tool_args.clone(),
                                     live_output,
+                                    session_id,
                                 )
                                 .await;
 
@@ -1321,6 +1326,7 @@ pub(crate) async fn dispatch_tool(
     name: &str,
     args: String,
     live_output: Option<crate::background_tools::LiveToolOutputWriter>,
+    session_id: Option<String>,
 ) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         // An unresolved tool name is a dispatch FAILURE, not tool output.
@@ -1350,11 +1356,12 @@ pub(crate) async fn dispatch_tool(
         }
     });
 
-    let call = scope_request_tool_execution_with_workspace_and_live_output(
+    let call = scope_request_tool_execution_with_session(
         scope.deadline_at,
         scope.cancellation_token.clone(),
         scope.workspace_cwd.clone(),
         live_output,
+        session_id.or(scope.session_id.clone()),
         tool.call(args),
     );
     tokio::select! {

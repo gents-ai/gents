@@ -7,8 +7,7 @@ use super::auth::LspAction;
 use super::catalog::{primary_for_file, CatalogServer};
 use super::client::LspClient;
 use super::edits::{
-    apply_prepared, file_uri_to_path, prepare_workspace_edit, redact_outside_root,
-    resolve_inbound_path,
+    apply_workspace_edit, redact_outside_root, resolve_inbound_path, walk_uris,
 };
 use super::encoding::{offset_to_position, PositionEncoding};
 use super::pool::LspLease;
@@ -38,25 +37,32 @@ pub struct ActionRequest {
 
 pub async fn dispatch(
     context: &ToolContext,
-    lease: Option<LspLease>,
+    lease: Option<&LspLease>,
+    pool: &super::pool::LspPool,
+    config: &super::LspToolConfig,
     servers: &[CatalogServer],
     req: ActionRequest,
 ) -> Result<String, ToolError> {
     match req.action {
-        LspAction::Status => Ok(status_text(lease, servers)),
+        LspAction::Status => {
+            let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .and_then(|scope| scope.session_id)
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| config.session_id.clone());
+            let ready = pool
+                .inspect_session(
+                    &session_id,
+                    &config.behavior_id,
+                    &config.workspace,
+                    &config.digest,
+                )
+                .await;
+            Ok(status_text(ready, servers))
+        }
         LspAction::Reload => Ok("reload requested for current snapshot".into()),
         LspAction::Capabilities => {
             let lease = lease.ok_or_else(|| unavailable("no language server"))?;
-            let caps = lease
-                .client()
-                .request("workspace/executeCommand", json!({"command": "__unused"}))
-                .await;
-            let _ = caps;
-            let raw = lease.client().request("initialize", json!({})).await;
-            match raw {
-                Ok(value) => Ok(value.to_string()),
-                Err(_) => Ok(format!("{}: capabilities available", lease.client().server_name)),
-            }
+            Ok(lease.client().capabilities().await.to_string())
         }
         action => {
             let lease = lease.ok_or_else(|| unavailable("no language server"))?;
@@ -80,7 +86,7 @@ async fn run_file_action(
         .as_deref()
         .ok_or_else(|| arg_invalid("file parameter required"))?;
     if file == "*" {
-        return workspace_action(client, action, req).await;
+        return workspace_action(context, client, action, req).await;
     }
     let path = resolve_inbound_path(context, file).map_err(|err| policy(err))?;
     let text = std::fs::read_to_string(&path)
@@ -99,9 +105,11 @@ async fn run_file_action(
             }),
         )
         .await;
+    let encoding = client.position_encoding().await;
+    let _ = client.track_open(&uri, 1).await;
     let pos = offset_to_position(
         &text,
-        PositionEncoding::Utf16,
+        encoding,
         req.line.unwrap_or(1),
         req.symbol.as_deref().unwrap_or(""),
     )
@@ -122,6 +130,7 @@ async fn run_file_action(
         LspAction::Symbols => "textDocument/documentSymbol",
         LspAction::Diagnostics => "textDocument/diagnostic",
         LspAction::Rename => "textDocument/rename",
+        LspAction::RenameFile => "workspace/willRenameFiles",
         LspAction::CodeActionsList | LspAction::CodeActionsApply => "textDocument/codeAction",
         _ => return Err(arg_invalid("unsupported action")),
     };
@@ -145,16 +154,31 @@ async fn run_file_action(
         .request(method, params)
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-    if matches!(action, LspAction::Rename) && req.apply != Some(false) {
-        let prepared = prepare_workspace_edit(context, &result).map_err(policy)?;
-        apply_prepared(&prepared)
-            .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-        return Ok(format!("Applied rename to {} file(s)", prepared.len()));
+    if matches!(
+        action,
+        LspAction::Rename | LspAction::RenameFile | LspAction::CodeActionsApply
+    ) && req.apply != Some(false)
+    {
+        if !super::lsp_apply_authorized(
+            true,
+            crate::tool_surface::FileToolMode::ReadWrite,
+            super::LspMutationSource::ForegroundReturnedEdit,
+        ) {
+            return Err(policy("lsp apply is not authorized"));
+        }
+        let edit = if matches!(action, LspAction::CodeActionsApply) {
+            extract_code_action_edit(&result)?
+        } else {
+            result.clone()
+        };
+        let applied = apply_workspace_edit(context, client, &edit).await?;
+        return Ok(format!("Applied edit to {applied} file(s)"));
     }
-    Ok(format_result(context, action, result))
+    Ok(truncate_model_output(format_result(context, action, result)))
 }
 
 async fn workspace_action(
+    context: &ToolContext,
     client: &LspClient,
     action: LspAction,
     req: &ActionRequest,
@@ -169,14 +193,18 @@ async fn workspace_action(
                 .request("workspace/symbol", json!({ "query": query }))
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-            Ok(result.to_string())
+            Ok(truncate_model_output(format_result(
+                context,
+                action,
+                result,
+            )))
         }
         LspAction::Diagnostics => {
             match client
                 .request("workspace/diagnostic", json!({ "identifier": "gents" }))
                 .await
             {
-                Ok(result) => Ok(result.to_string()),
+                Ok(result) => Ok(truncate_model_output(format_result(context, action, result))),
                 Err(_) => Ok(
                     "workspace diagnostics require workspace/diagnostic; pass a file or glob"
                         .into(),
@@ -196,20 +224,19 @@ async fn raw_request(
         .query
         .as_deref()
         .ok_or_else(|| arg_invalid("query (method) required for request"))?;
-    if matches!(req.action, LspAction::RequestRead) && !READ_REQUEST_METHODS.contains(&method) {
-        return Err(policy(format!(
-            "method {method} is not on the read-method allowlist"
-        )));
+    if method == "workspace/executeCommand" {
+        return Err(arg_invalid(
+            "workspace/executeCommand is not supported",
+        ));
+    }
+    if !READ_REQUEST_METHODS.contains(&method) {
+        return Err(arg_invalid(format!("unknown request method {method}")));
     }
     let params = if let Some(payload) = &req.payload {
-        if matches!(req.action, LspAction::RequestRead) {
-            let parsed: Value = serde_json::from_str(payload)
-                .map_err(|err| arg_invalid(err.to_string()))?;
-            validate_read_params(context, &parsed)?;
-            parsed
-        } else {
-            serde_json::from_str(payload).map_err(|err| arg_invalid(err.to_string()))?
-        }
+        let parsed: Value =
+            serde_json::from_str(payload).map_err(|err| arg_invalid(err.to_string()))?;
+        validate_payload_uris(context, &parsed)?;
+        parsed
     } else {
         json!({})
     };
@@ -217,17 +244,42 @@ async fn raw_request(
         .request(method, params)
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-    Ok(result.to_string())
+    Ok(truncate_model_output(format_result(context, req.action, result)))
 }
 
-fn validate_read_params(context: &ToolContext, params: &Value) -> Result<(), ToolError> {
-    if let Some(uri) = params
-        .pointer("/textDocument/uri")
-        .and_then(Value::as_str)
-    {
-        resolve_inbound_path(context, uri).map_err(policy)?;
+fn validate_payload_uris(context: &ToolContext, params: &Value) -> Result<(), ToolError> {
+    for uri in walk_uris(params) {
+        resolve_inbound_path(context, &uri).map_err(policy)?;
     }
     Ok(())
+}
+
+fn extract_code_action_edit(result: &Value) -> Result<Value, ToolError> {
+    let action = if let Some(arr) = result.as_array() {
+        arr.iter()
+            .find(|item| item.get("edit").is_some())
+            .ok_or_else(|| arg_invalid("no CodeAction.edit to apply"))?
+    } else {
+        result
+    };
+    if action.get("command").is_some() && action.get("edit").is_none() {
+        return Err(arg_invalid(
+            "bare Command code actions are not executed",
+        ));
+    }
+    action
+        .get("edit")
+        .cloned()
+        .ok_or_else(|| arg_invalid("code action has no edit"))
+}
+
+fn truncate_model_output(text: String) -> String {
+    crate::truncation::truncate_text(
+        &text,
+        crate::truncation::TruncationMode::Tail,
+        &crate::truncation::TruncationLimits::default(),
+    )
+    .0
 }
 
 fn format_result(context: &ToolContext, action: LspAction, result: Value) -> String {
@@ -301,14 +353,11 @@ fn language_id(servers: &[CatalogServer], path: &std::path::Path) -> String {
         })
 }
 
-fn status_text(lease: Option<LspLease>, servers: &[CatalogServer]) -> String {
-    let started = lease
-        .as_ref()
-        .map(|lease| lease.client().server_name.clone());
+fn status_text(ready: Vec<String>, servers: &[CatalogServer]) -> String {
     let names: Vec<String> = servers
         .iter()
         .map(|s| {
-            if started.as_deref() == Some(s.name.as_str()) {
+            if ready.iter().any(|name| name == &s.name) {
                 format!("{} (ready)", s.name)
             } else {
                 format!("{} (configured, not started)", s.name)

@@ -3265,14 +3265,14 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     })];
 
     assert_eq!(
-        super::dispatch_tool(&tools, "echo", "{}".to_string(), None).await,
+        super::dispatch_tool(&tools, "echo", "{}".to_string(), None, None).await,
         crate::tool_call_lifecycle::ToolOutcome::Completed("ECHOED".to_string())
     );
     // An unresolved tool name is a dispatch FAILURE carried as typed data.
     // Classifying it `Completed` would durably record a hallucinated tool name
     // as a successful call (fenced end-to-end by
     // `hook::tests::hook_maps_unknown_tool_dispatch_to_failed_lifecycle`).
-    let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None).await;
+    let unknown = super::dispatch_tool(&tools, "missing", "{}".to_string(), None, None).await;
     match &unknown {
         crate::tool_call_lifecycle::ToolOutcome::Failed {
             denial: None, text, ..
@@ -3324,7 +3324,7 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     // UnparseableArgs and dispatch types it `Failed(ArgumentInvalid)` carrying
     // the model-facing notice — not the tool output.
     let result =
-        super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string(), None).await;
+        super::dispatch_tool(&tools, "strict", r#"{"body":"cut off"#.to_string(), None, None).await;
     match &result {
         crate::tool_call_lifecycle::ToolOutcome::Failed {
             class,

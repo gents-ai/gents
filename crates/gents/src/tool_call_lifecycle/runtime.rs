@@ -244,22 +244,48 @@ pub(crate) async fn scope_request_tool_execution_with_workspace_and_live_output<
 where
     F: Future<Output = T>,
 {
-    let inherited = current_tool_runtime_context();
-    scope_request_tool_execution_with_trigger_context(
+    scope_request_tool_execution_with_session(
         deadline_at,
         cancellation_token,
         workspace_cwd,
         live_output,
-        inherited
-            .as_ref()
-            .and_then(|scope| scope.correlation.clone()),
-        inherited
-            .map(|scope| scope.source_fields)
-            .unwrap_or_default(),
-        false,
+        current_tool_runtime_context().and_then(|scope| scope.session_id),
         future,
     )
     .await
+}
+
+pub(crate) async fn scope_request_tool_execution_with_session<F, T>(
+    deadline_at: Option<DateTime<Utc>>,
+    cancellation_token: CancellationToken,
+    workspace_cwd: Option<PathBuf>,
+    live_output: Option<LiveToolOutputWriter>,
+    session_id: Option<String>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    let inherited = current_tool_runtime_context();
+    TOOL_RUNTIME_SCOPE
+        .scope(
+            ToolRuntimeScope {
+                deadline_at,
+                cancellation_token,
+                workspace_cwd,
+                session_id,
+                live_output,
+                background: false,
+                correlation: inherited
+                    .as_ref()
+                    .and_then(|scope| scope.correlation.clone()),
+                source_fields: inherited
+                    .map(|scope| scope.source_fields)
+                    .unwrap_or_default(),
+            },
+            future,
+        )
+        .await
 }
 
 pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
@@ -275,13 +301,14 @@ pub(crate) async fn scope_request_tool_execution_with_trigger_context<F, T>(
 where
     F: Future<Output = T>,
 {
+    let session_id = current_tool_runtime_context().and_then(|scope| scope.session_id);
     TOOL_RUNTIME_SCOPE
         .scope(
             ToolRuntimeScope {
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
-                session_id: None,
+                session_id,
                 live_output,
                 background,
                 correlation,

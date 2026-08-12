@@ -182,6 +182,10 @@ impl ToolSurface {
         build::dedupe_strings(names)
     }
 
+    pub(crate) fn lsp_config(&self) -> Option<&crate::toolset::lsp::LspToolConfig> {
+        self.lsp.as_ref()
+    }
+
     pub fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::toolset::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())

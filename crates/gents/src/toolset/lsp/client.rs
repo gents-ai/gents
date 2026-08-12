@@ -12,6 +12,11 @@ use crate::managed_exec::ManagedProcess;
 
 const MAX_CONTENT_LENGTH: usize = 8 * 1024 * 1024;
 
+const MAX_PENDING: usize = 32;
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_HEADER_BYTES: usize = 8 * 1024;
+
 pub(crate) struct LspClient {
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
@@ -19,12 +24,25 @@ pub(crate) struct LspClient {
     pub server_name: String,
     process: Arc<Mutex<ManagedProcess>>,
     reader: tokio::task::JoinHandle<()>,
+    stderr_task: tokio::task::JoinHandle<()>,
+    encoding: Mutex<super::encoding::PositionEncoding>,
+    capabilities: Mutex<Value>,
+    workspace: std::path::PathBuf,
+    init_options: Option<Value>,
+    settings: Option<Value>,
+    versions: Mutex<HashMap<String, i64>>,
 }
 
 impl LspClient {
-    pub fn start(mut process: ManagedProcess, server_name: String) -> Result<Self, String> {
+    pub fn start(
+        mut process: ManagedProcess,
+        server_name: String,
+        config: &super::LspToolConfig,
+        server: &super::catalog::CatalogServer,
+    ) -> Result<Self, String> {
         let stdin = process.stdin.take().ok_or("process stdin missing")?;
         let stdout = process.stdout.take().ok_or("process stdout missing")?;
+        let stderr = process.stderr.take();
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let pending_reader = pending.clone();
@@ -35,6 +53,17 @@ impl LspClient {
                 tracing::warn!(%error, "lsp reader exited");
             }
         });
+        let stderr_task = tokio::spawn(async move {
+            if let Some(mut stderr) = stderr {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match tokio::io::AsyncReadExt::read(&mut stderr, &mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            }
+        });
         Ok(Self {
             stdin,
             pending,
@@ -42,23 +71,36 @@ impl LspClient {
             server_name,
             process: Arc::new(Mutex::new(process)),
             reader,
+            stderr_task,
+            encoding: Mutex::new(super::encoding::PositionEncoding::Utf8),
+            capabilities: Mutex::new(Value::Null),
+            workspace: config.workspace.clone(),
+            init_options: server.init_options.clone(),
+            settings: server.settings.clone(),
+            versions: Mutex::new(HashMap::new()),
         })
     }
 
     pub async fn initialize(&self) -> Result<Value, String> {
+        let root_uri = format!("file://{}", self.workspace.display());
         let params = json!({
             "processId": null,
+            "rootUri": root_uri,
+            "rootPath": self.workspace,
+            "initializationOptions": self.init_options.clone().unwrap_or(Value::Null),
             "capabilities": {
                 "workspace": {
                     "applyEdit": false,
                     "workspaceEdit": {
                         "documentChanges": true,
                         "resourceOperations": ["create", "rename", "delete"]
-                    }
+                    },
+                    "configuration": true
                 },
                 "textDocument": {
                     "hover": { "contentFormat": ["plaintext", "markdown"] },
-                    "definition": { "linkSupport": true }
+                    "definition": { "linkSupport": true },
+                    "synchronization": { "didSave": true }
                 },
                 "general": {
                     "positionEncodings": ["utf-8", "utf-16"]
@@ -66,26 +108,112 @@ impl LspClient {
             },
             "clientInfo": { "name": "gents", "version": "0" }
         });
-        let result = self.request("initialize", params).await?;
+        let result = self
+            .request_with_timeout("initialize", params, INITIALIZE_TIMEOUT)
+            .await?;
+        let encodings = result
+            .pointer("/capabilities/positionEncoding")
+            .and_then(Value::as_str)
+            .map(|enc| vec![enc.to_string()])
+            .unwrap_or_else(|| {
+                result
+                    .pointer("/capabilities/general/positionEncodings")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            });
+        *self.encoding.lock().await = super::encoding::negotiate(&encodings);
+        *self.capabilities.lock().await = result.clone();
         let _ = self.notify("initialized", json!({})).await;
+        if let Some(settings) = &self.settings {
+            let _ = self
+                .notify(
+                    "workspace/didChangeConfiguration",
+                    json!({ "settings": settings }),
+                )
+                .await;
+        }
         Ok(result)
     }
 
+    pub async fn track_open(&self, uri: &str, version: i64) {
+        self.versions.lock().await.insert(uri.to_string(), version);
+    }
+
+    pub async fn tracked_version(&self, uri: &str) -> Option<i64> {
+        self.versions.lock().await.get(uri).copied()
+    }
+
+    pub async fn position_encoding(&self) -> super::encoding::PositionEncoding {
+        *self.encoding.lock().await
+    }
+
+    pub async fn capabilities(&self) -> Value {
+        self.capabilities.lock().await.clone()
+    }
+
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_timeout(method, params, REQUEST_TIMEOUT)
+            .await
+    }
+
+    pub async fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        {
+            let mut pending = self.pending.lock().await;
+            if pending.len() >= MAX_PENDING {
+                return Err("pending LSP request cap reached".into());
+            }
+            pending.insert(id, tx);
+        }
         let payload = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params
         });
-        write_message(&mut *self.stdin.lock().await, &payload).await?;
-        tokio::time::timeout(Duration::from_secs(30), rx)
-            .await
-            .map_err(|_| format!("LSP request {method} timed out"))?
-            .map_err(|_| format!("LSP request {method} dropped"))?
+        if let Err(error) = write_message(&mut *self.stdin.lock().await, &payload).await {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
+        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let cancel = runtime.map(|scope| scope.cancellation_token);
+        tokio::select! {
+            biased;
+            _ = async {
+                if let Some(token) = &cancel {
+                    token.cancelled().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                self.cancel(id).await;
+                self.pending.lock().await.remove(&id);
+                Err(format!("LSP request {method} cancelled"))
+            }
+            result = tokio::time::timeout(timeout, rx) => {
+                match result {
+                    Ok(Ok(value)) => value,
+                    Ok(Err(_)) => Err(format!("LSP request {method} dropped")),
+                    Err(_) => {
+                        self.cancel(id).await;
+                        self.pending.lock().await.remove(&id);
+                        Err(format!("LSP request {method} timed out"))
+                    }
+                }
+            }
+        }
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -109,6 +237,11 @@ impl LspClient {
         let mut process = self.process.lock().await;
         process.terminate().await;
         self.reader.abort();
+        self.stderr_task.abort();
+        let mut pending = self.pending.lock().await;
+        for (_, tx) in pending.drain() {
+            let _ = tx.send(Err("language server closed".into()));
+        }
     }
 }
 
@@ -141,7 +274,14 @@ async fn read_loop(
                 .await
                 .map_err(|err| err.to_string())?;
             if n == 0 {
+                let mut pending = pending.lock().await;
+                for (_, tx) in pending.drain() {
+                    let _ = tx.send(Err("language server stdout closed".into()));
+                }
                 return Ok(());
+            }
+            if headers.len() + line.len() > MAX_HEADER_BYTES {
+                return Err("LSP header exceeded bound".into());
             }
             if line == "\r\n" || line == "\n" {
                 break;

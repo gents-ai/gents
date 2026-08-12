@@ -345,31 +345,46 @@ impl BehaviorToolConfig {
                 ..self.self_config.clone()
             },
             lsp: effective_policy.lsp.then(|| {
+                let doc = crate::toolset::lsp::LspConfigDocument::parse_operator(
+                    self.lsp_config.as_deref(),
+                );
                 let servers = crate::toolset::lsp::merge_catalog(self.lsp_config.as_deref());
                 let workspace = self
                     .host_tools
-                    .native_tools()
-                    .iter()
-                    .find_map(|tool| match tool {
-                        crate::toolset::NativeTool::WriteFile { root }
-                        | crate::toolset::NativeTool::EditFile { root }
-                        | crate::toolset::NativeTool::BashUnrestricted { root, .. } => {
-                            Some(root.clone())
-                        }
-                        _ => None,
-                    })
+                    .read_root()
+                    .map(ToOwned::to_owned)
                     .or_else(|| {
-                        std::env::current_dir().ok()
+                        self.host_tools.native_tools().iter().find_map(|tool| match tool {
+                            crate::toolset::NativeTool::WriteFile { root }
+                            | crate::toolset::NativeTool::EditFile { root }
+                            | crate::toolset::NativeTool::BashUnrestricted { root, .. } => {
+                                Some(root.clone())
+                            }
+                            _ => None,
+                        })
                     })
                     .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let overlay = doc.network_mode.as_deref().and_then(|mode| {
+                    crate::toolset::CommandNetworkMode::parse(mode).ok()
+                });
+                let constraints = crate::toolset::lsp::constraints_from_effective_policy(
+                    &effective_policy,
+                    overlay,
+                );
                 crate::toolset::lsp::LspToolConfig {
                     lsp: true,
                     file: effective_policy.file,
-                    digest: crate::toolset::lsp::config_digest(&workspace, &servers, ""),
+                    digest: crate::toolset::lsp::config_digest(&workspace, &servers, &constraints),
                     workspace,
                     session_id: String::new(),
                     behavior_id: self.self_config.behavior_id.clone(),
                     servers,
+                    constraints,
+                    format_on_write: doc.format_on_write.unwrap_or(false),
+                    diagnostics_on_write: doc.diagnostics_on_write.unwrap_or(false),
+                    diagnostics_on_edit: doc.diagnostics_on_edit.unwrap_or(false),
+                    diagnostics_deduplicate: doc.diagnostics_deduplicate.unwrap_or(false),
+                    idle_timeout: doc.idle_timeout(),
                 }
             }),
         }
