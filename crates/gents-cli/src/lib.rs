@@ -593,17 +593,18 @@ pub(crate) async fn resolve_config_access(
     Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
 }
 
-pub(crate) fn persistent_node_builder(data_dir: &Path) -> NodeBuilder {
-    EmbeddedNode::builder()
+pub(crate) fn persistent_node_builder(data_dir: &Path) -> Result<NodeBuilder> {
+    gents::storage_backend::reject_legacy_rocksdb_store(data_dir)?;
+    Ok(EmbeddedNode::builder()
         .data_path(data_dir)
-        .with_storage_backend(StorageBackend::RocksDb)
+        .with_storage_backend(StorageBackend::Lark))
 }
 
 pub(crate) fn persistent_node_builder_with_stored_identity(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
-    let mut builder = persistent_node_builder(data_dir);
+    let mut builder = persistent_node_builder(data_dir)?;
     let config = read_init_config(home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
             "gents home {} is not initialized; run `gents init --home {}` first",

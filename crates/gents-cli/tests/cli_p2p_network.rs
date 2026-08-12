@@ -844,7 +844,7 @@ async fn configure_remote_subagent_target(
     let data_dir = home.join(".gents").join("data");
     let node = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::RocksDb)
+        .with_storage_backend(StorageBackend::Lark)
         .build()
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;

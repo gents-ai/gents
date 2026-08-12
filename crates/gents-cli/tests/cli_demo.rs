@@ -543,7 +543,7 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     let coordinator_data_dir = home.join("data");
     let node_a = EmbeddedNode::builder()
         .data_path(&coordinator_data_dir)
-        .with_storage_backend(StorageBackend::RocksDb)
+        .with_storage_backend(StorageBackend::Lark)
         .build()
         .await
         .with_context(|| {
@@ -612,7 +612,7 @@ async fn demo_pair_delegate_materializes_remote_worker() -> Result<()> {
     let data_dir = home.join("node-b").join("data");
     let node_b = EmbeddedNode::builder()
         .data_path(&data_dir)
-        .with_storage_backend(StorageBackend::RocksDb)
+        .with_storage_backend(StorageBackend::Lark)
         .build()
         .await
         .with_context(|| format!("opening worker store at {}", data_dir.display()))?;

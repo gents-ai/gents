@@ -7,9 +7,9 @@ repository.workspace = true
 description = "Core DefraDB-backed agent runtime for Gents"
 
 [features]
-default = ["defra-node/http", "defra-node/p2p", "rocksdb"]
+default = ["defra-node/http", "defra-node/p2p", "lark"]
 agent-memory = []
-rocksdb = ["defra-node/rocksdb"]
+lark = ["defra-node/lark"]
 
 [dependencies]
 anyhow.workspace = true

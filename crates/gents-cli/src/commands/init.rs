@@ -144,7 +144,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         .await
         .context("creating or loading agent identity key")?;
 
-    let mut node_builder = crate::persistent_node_builder(&data_dir);
+    let mut node_builder = crate::persistent_node_builder(&data_dir)?;
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }

@@ -424,7 +424,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
         session_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", self.session_id or "trial")
         # Harbor retries retain the trial/session identity. A per-run suffix
         # guarantees that a cancelled attempt can never leave the next attempt
-        # contending on the same RocksDB LOCK file.
+        # contending on the same persistent store.
         run_slug = f"{session_slug}-{uuid.uuid4().hex[:12]}"
         instruction_path = f"/tmp/gents-harbor-{run_slug}.instruction.md"
         with tempfile.TemporaryDirectory(prefix="gents-harbor-instruction-") as temp_dir:

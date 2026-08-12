@@ -94,8 +94,8 @@ or preempt rather than behaving like infinite KV.
 `run_with_cleanup.sh` contains controller-level cancellation: Harbor normally
 runs `docker compose down` after each trial, and the wrapper removes only new
 Harbor `__env` Compose projects if the controller is interrupted. Each Gents
-attempt also gets a UUID-suffixed `/tmp` home, so a cancelled attempt's RocksDB
-lock cannot affect a retry. When `HARBOR_HEALTHCHECK_URL` is set, the wrapper
+attempt also gets a UUID-suffixed `/tmp` home, so a cancelled attempt's open
+store cannot affect a retry. When `HARBOR_HEALTHCHECK_URL` is set, the wrapper
 also checks the inference service every 15 seconds and stops Harbor after three
 consecutive failures; both values can be changed with
 `HARBOR_HEALTHCHECK_INTERVAL_SECS` and `HARBOR_HEALTHCHECK_FAILURE_LIMIT`.

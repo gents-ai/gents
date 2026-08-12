@@ -48,13 +48,14 @@ impl ClientCore {
         options: ClientCoreOptions,
     ) -> Result<Self> {
         paths.ensure_root_dirs().await?;
+        gents::storage_backend::reject_legacy_rocksdb_store(paths.node_data_dir())?;
 
         let principal = PrincipalIdentity::load_or_create(&paths).await?;
         let bootstrap_errors = Vec::new();
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
-                .with_storage_backend(StorageBackend::RocksDb)
+                .with_storage_backend(StorageBackend::Lark)
                 .with_p2p(desktop_p2p_config(&paths, &options))
                 .with_node_identity_did(principal.did())
                 .build()

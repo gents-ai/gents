@@ -13,19 +13,13 @@ needs the Codex CLI on `PATH`. Building from source or developing also needs:
   workspace is developed and built against current stable (1.96). Install via
   [rustup](https://rustup.rs); `rustup update stable` keeps you current.
 - **C/C++ toolchain** — `cc`/`gcc`, `g++`, and `make`. Several transitive
-  dependencies build native code (`aws-lc-sys`, `ring`, and RocksDB).
+  cryptography dependencies build native code (`aws-lc-sys` and `ring`).
 - **protoc** — the protobuf compiler, required by the `prost-build` step in
   DefraDB's P2P stack (`iroh-bitswap`). Build fails with "Could not find
   `protoc` installation" without it.
   - Debian/Ubuntu: `sudo apt-get install protobuf-compiler`
   - Fedora: `sudo dnf install protobuf-compiler`
   - macOS: `brew install protobuf`
-- **libclang** — `librocksdb-sys` runs `bindgen`, which needs the C-API
-  `libclang.so` (the C++ `libclang-cpp` is not sufficient). The build fails with
-  "Unable to find libclang" without it.
-  - Debian/Ubuntu: `sudo apt-get install libclang-dev`
-  - Fedora: `sudo dnf install clang-devel`
-  - macOS: provided by the Xcode Command Line Tools
 - **OpenSSL development headers** — required by the transitive `openssl-sys`
   build (pulled in regardless of CLI features), along with `pkg-config` and
   `perl`. The build fails early without them.
