@@ -67,10 +67,18 @@ sha256_file() {
   fi
 }
 
-git_sha=$(git rev-parse HEAD)
 git_dirty=false
-if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
-  git_dirty=true
+if [[ -n "${GITHUB_SHA:-}" ]]; then
+  # Actions checks out the immutable workflow SHA. Prefer that authoritative
+  # value because container jobs can intentionally have a different uid than
+  # the host-owned checkout, which makes Git reject repository inspection as
+  # dubious ownership even though the checked-out sources are valid.
+  git_sha=$GITHUB_SHA
+else
+  git_sha=$(git rev-parse HEAD)
+  if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+    git_dirty=true
+  fi
 fi
 cargo_lock_sha256=$(sha256_file Cargo.lock)
 rust_version=$(rustc --version)
