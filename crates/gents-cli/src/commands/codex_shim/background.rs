@@ -369,7 +369,7 @@ mod tests {
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
-                .with_storage_backend(gents::defra_node::StorageBackend::RocksDb)
+                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -439,7 +439,7 @@ mod tests {
                 // (`persistent_node_builder`): the builder's default is Redb,
                 // whose defra-node feature is only transitively enabled — the
                 // CI cli shard builds without it.
-                .with_storage_backend(gents::defra_node::StorageBackend::RocksDb)
+                .with_storage_backend(gents::defra_node::StorageBackend::Lark)
                 .build()
                 .await
                 .expect("embedded node"),

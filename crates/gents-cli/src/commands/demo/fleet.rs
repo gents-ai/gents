@@ -175,7 +175,7 @@ pub(super) async fn pair(fleet: &mut Fleet) -> Result<()> {
             Ok(()) => break (server_b, graphql_b),
             Err(error) if attempt < 3 => {
                 // kill() waits for exit so the replacement cannot race the old
-                // process's RocksDB lock on the shared node B home.
+                // process's persistent store on the shared node B home.
                 let _ = server_b.kill().await;
                 println!("  node B did not come up ({error}); retrying with a fresh port…");
             }

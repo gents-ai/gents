@@ -120,6 +120,17 @@ strip = false
 [profile.dev.package."*"]
 opt-level = 1
 
+# Agent and batch worktrees generally need actionable backtraces, not complete
+# dependency DWARF. Keep the default dev profile available for debugger-heavy
+# work while giving repeated build/link loops a smaller opt-in artifact set.
+[profile.fast-dev]
+inherits = "dev"
+debug = "line-tables-only"
+
+[profile.fast-dev.package."*"]
+opt-level = 1
+debug = 0
+
 [profile.test]
 # At opt-level 1 Cargo's implicit `lto = false` still performs local ThinLTO.
 # CI enables incremental compilation on persistent runner target trees; keeping

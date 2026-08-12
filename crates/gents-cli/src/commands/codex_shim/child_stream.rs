@@ -76,38 +76,37 @@ async fn watch_loaded_subagent_thread(
     let mut updates = state.node.subscribe_updates();
     let mut updates_closed = false;
     let subagent_update_filter = SubagentProjectionUpdateFilter::from_state(state);
+    let fallback_poll = Duration::from_millis(state.poll_interval.as_millis().max(250) as u64);
     loop {
         if !state.is_thread_loaded(&child_thread_id).await {
             return Ok(());
         }
         if updates_closed {
-            tokio::time::sleep(Duration::from_millis(
-                state.poll_interval.as_millis().max(250) as u64,
-            ))
-            .await;
+            tokio::time::sleep(fallback_poll).await;
         } else {
-            loop {
-                let Some(message) = updates.recv().await else {
-                    updates_closed = true;
-                    tracing::warn!(
-                        child_thread_id,
-                        "Codex shim loaded-child update subscription closed; polling"
-                    );
-                    break;
-                };
-                let dropped = updates.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(
-                        child_thread_id,
-                        dropped,
-                        "Codex shim loaded-child update subscription dropped messages"
-                    );
-                    break;
-                }
-                if message.as_update().is_some_and(|update| {
-                    subagent_update_filter.affects_collection_id(&update.collection_id)
-                }) {
-                    break;
+            tokio::select! {
+                _ = tokio::time::sleep(fallback_poll) => {}
+                message = updates.recv() => {
+                    let Some(message) = message else {
+                        updates_closed = true;
+                        tracing::warn!(
+                            child_thread_id,
+                            "Codex shim loaded-child update subscription closed; polling"
+                        );
+                        continue;
+                    };
+                    let dropped = updates.check_and_reset_dropped();
+                    if dropped > 0 {
+                        tracing::warn!(
+                            child_thread_id,
+                            dropped,
+                            "Codex shim loaded-child update subscription dropped messages"
+                        );
+                    } else if !message.as_update().is_some_and(|update| {
+                        subagent_update_filter.affects_collection_id(&update.collection_id)
+                    }) {
+                        continue;
+                    }
                 }
             }
         }

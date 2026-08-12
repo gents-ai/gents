@@ -431,7 +431,7 @@ pub(crate) async fn serve_with_control(
                 reason: "the Codex shim has not bound yet".to_string(),
             }
         }));
-    let mut node_builder = crate::persistent_node_builder(&data_dir).with_http(
+    let mut node_builder = crate::persistent_node_builder(&data_dir)?.with_http(
         defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(runtime_contract_router(
             graphql_url.clone(),
             agent_name.clone(),

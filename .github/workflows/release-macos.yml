@@ -39,6 +39,13 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Keep release provenance stable without making the CLI build script watch
+  # checkout-managed Git files. Re-running the same workflow commit can then
+  # reuse the trusted final-crate artifact as well as its dependencies.
+  GENTS_BUILD_GIT_SHA: ${{ github.sha }}
+  GENTS_BUILD_GIT_REF: ${{ github.ref }}
+  GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+  GENTS_BUILD_GIT_DIRTY: "false"
   # Do not reuse linked artifacts from the target trees populated by PR jobs.
   CARGO_TARGET_ROOT: ${{ vars.CARGO_RELEASE_TARGET_ROOT || '/Users/admin/.cache/gents-cargo-target-release' }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -59,7 +66,13 @@ env:
 jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # Release artifacts remain isolated under CARGO_RELEASE_TARGET_ROOT. Pin the
+    # job to the registration that owns the trusted release target tree so a
+    # normal source edit reuses prior release artifacts instead of randomly
+    # landing on one of three cold Studio registrations. SCCACHE_RECACHE stays
+    # enabled below: rustc invocations still cannot consume PR-populated cache
+    # objects.
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
     timeout-minutes: 120
 
     steps:

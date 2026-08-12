@@ -15,7 +15,7 @@ crypto.workspace = true
 gents = { path = "../gents" }
 gents-migration = { path = "../gents-migration" }
 gents-protocol.workspace = true
-defra-node = { workspace = true, features = ["p2p", "rocksdb"] }
+defra-node = { workspace = true, features = ["p2p", "lark"] }
 defra-p2p-adapter.workspace = true
 dirs.workspace = true
 events.workspace = true

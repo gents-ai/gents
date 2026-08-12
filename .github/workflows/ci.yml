@@ -80,11 +80,16 @@ jobs:
         run: |
           bash -n scripts/harbor/run_gents.sh
           bash -n scripts/measure-gents-binary.sh
+          bash -n scripts/measure-gents-build-attribution.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
+          shellcheck scripts/measure-gents-build-attribution.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
+
+      - name: Run build attribution parser self-test
+        run: scripts/measure-gents-build-attribution.sh self-test
 
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
@@ -200,7 +205,16 @@ jobs:
         env:
           MEASURE_MODE: graph
           OUTPUT_JSON: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
-        run: scripts/measure-gents-binary.sh
+        run: |
+          scripts/measure-gents-binary.sh
+          jq -e '
+            .schema_version == 2
+            and .dependencies.root_package == "gents-cli"
+            and .dependencies.target == .target_triple
+            and .dependencies.normal_packages > 0
+            and .dependencies.all_target_normal_packages >= .dependencies.normal_packages
+            and (.dependencies.duplicate_packages | length) == .dependencies.duplicate_package_names
+          ' "${OUTPUT_JSON}" >/dev/null
 
       - name: Upload Rust dependency graph metrics
         if: matrix.suite == 'support'

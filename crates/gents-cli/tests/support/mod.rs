@@ -70,7 +70,7 @@ pub async fn initialized_agent_node(
 
     gents::defra_node::EmbeddedNode::builder()
         .data_path(agent_home.join("data"))
-        .with_storage_backend(gents::defra_node::StorageBackend::RocksDb)
+        .with_storage_backend(gents::defra_node::StorageBackend::Lark)
         .with_node_identity_did(&agent_did)
         .build()
         .await

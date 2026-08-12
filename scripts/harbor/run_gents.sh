@@ -585,7 +585,7 @@ wait_for_server_ready() {
     # The persisted status file can still describe the bootstrap server for a
     # brief window after restart. Requiring the new process's serving marker
     # prevents a concurrent home-opening CLI (notably `tools explain`) from
-    # racing the restarted server for RocksDB's exclusive LOCK.
+    # racing the restarted server for the persistent store.
     if grep -qF 'gents server is running with' "${server_log}" &&
       "${GENTS_BINARY}" status --home "${GENTS_HOME}" >"${status_log}" 2>/dev/null &&
       grep -q '"process_state": "ready"' "${status_log}" &&
