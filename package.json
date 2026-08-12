@@ -1,7 +1,7 @@
 {
   "name": "gents-desktop-workspace",
   "private": true,
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "npm workspaces for Gents desktop reusable packages",
   "workspaces": [
     "packages/*",
