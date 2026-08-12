@@ -26,6 +26,48 @@ aggregate per-package compile duration, and linked contribution as separate
 signals. The raw reports are retained as workflow artifacts rather than checked
 into the repository.
 
+For local agent and batch worktrees, `make fast-dev-cli` uses the opt-in
+`fast-dev` profile. It retains line-table backtraces for workspace crates while
+omitting dependency debug info. The ordinary dev profile remains unchanged for
+debugger-heavy work. Do not compare `fast-dev` artifacts to release binaries;
+the profile addresses edit/build time and retained worktree disk space only.
+
+### Opt-in fast dev profile
+
+Host: Apple M4 Max (16 cores, 128 GB), macOS 26.6, Rust 1.97.1,
+`aarch64-apple-darwin`. Base commit: `69acf8b1`. `Cargo.lock` SHA-256:
+`72e775bf1cf70e186f1afa5d0ca314267973b68739995664fa8d0604ad5e1be6`.
+
+Both builds used all available CPUs, fresh target directories, direct rustc
+without sccache, and `CARGO_INCREMENTAL=0`. Rust sources and the lockfile were
+identical; only the candidate profile settings differed. Commands were:
+
+```sh
+CARGO_BUILD_RUSTC_WRAPPER=.github/scripts/rustc-direct.sh \
+  RUSTC_WRAPPER=.github/scripts/rustc-direct.sh CARGO_INCREMENTAL=0 \
+  /usr/bin/time -l cargo build -p gents-cli --locked --target-dir <fresh-target>
+CARGO_BUILD_RUSTC_WRAPPER=.github/scripts/rustc-direct.sh \
+  RUSTC_WRAPPER=.github/scripts/rustc-direct.sh CARGO_INCREMENTAL=0 \
+  /usr/bin/time -l cargo build -p gents-cli --profile fast-dev --locked \
+  --target-dir <fresh-target>
+```
+
+| Signal | Default dev | `fast-dev` | Delta |
+|---|---:|---:|---:|
+| Cold wall time | 212.10s | 177.11s | -16.5% |
+| Peak RSS | 4,506,910,720 | 3,967,090,688 | -12.0% |
+| Target size (KiB) | 11,669,916 | 5,144,180 | -55.9% |
+| `deps/` size (KiB) | 8,694,172 | 4,041,368 | -53.5% |
+| rlib size (KiB) | 4,546,124 | 2,006,892 | -55.9% |
+| loose object size (KiB) | 2,638,220 | 558,200 | -78.8% |
+| Unstripped dev CLI bytes | 328,694,312 | 312,358,584 | -5.0% |
+
+An identical one-line `gents-cli` source edit rebuilt and linked in 1.58s under
+default dev and 1.34s under `fast-dev` (-15.2%). These are dev artifacts, not
+release-size measurements. The default dev profile remains the debugger-rich
+escape hatch; `fast-dev` trades dependency DWARF for materially smaller agent
+worktrees while retaining workspace file-and-line backtraces.
+
 ## 2026-08-11 release-profile experiment
 
 Host: Apple M4 Max (16 cores, 128 GB), macOS 26.6, Rust 1.97.1,

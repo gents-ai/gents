@@ -16,6 +16,7 @@ help:
 	@echo "  make build                 Build default Rust workspace members"
 	@echo "  make build-cli             Build the Gents CLI"
 	@echo "  make build-cli-headless    Build CLI without embedded Codex TUI"
+	@echo "  make fast-dev-cli          Build CLI with lean dev debug artifacts"
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
 	@echo
@@ -103,12 +104,15 @@ TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { pr
 RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/gents
 RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
-.PHONY: release-cli release-cli-headless dist-cli measure-build-graph measure-release-cli measure-build-attribution
+.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
 	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
 	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
+
+fast-dev-cli:
+	$(CARGO) build -p gents-cli --profile fast-dev --locked $(CARGO_TARGET_FLAG)
 
 measure-build-graph:
 	MEASURE_MODE=graph scripts/measure-gents-binary.sh
