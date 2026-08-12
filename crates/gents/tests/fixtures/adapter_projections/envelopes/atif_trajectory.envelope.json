@@ -10,7 +10,7 @@
         },
         "model_name": "deepseek-ai/DeepSeek-V4-Flash-0731",
         "name": "terminal-bench",
-        "version": "0.10.1"
+        "version": "0.11.0"
       },
       "extra": {
         "source_projection_id": "run_timeline",

@@ -6,6 +6,55 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.11.0 - 2026-08-11
+
+### Bridge contract
+
+- Advance the additive desktop bridge contract from 0.5 to 0.9: Grok OAuth
+  login, managed local-server lifecycle and tray events, and provider-account
+  inventory/disconnect controls (#973, #1013, #1089).
+- Advance the Rust and npm desktop package train together to 0.11.0.
+
+### Runtime and formal foundation
+
+- Make schema provenance and signing DefraDB-native, and persist the exact
+  rendered provider request before send (#1087, #1059).
+- Add deterministic inference seeds and request-wide token budgets (#1062).
+- Extend the Lean-fenced runtime foundation across prompt assembly, compaction,
+  admission slot accounting, tool-call CAS transitions, recovery, and
+  background/subagent lifecycle convergence (#999, #998, #1007, #1006).
+- Align durable tool outcomes across timeline projections and add
+  Harbor-compatible ATIF trace export (#1095, #1098, #988).
+
+### Agents, configuration, and automation
+
+- Add persona request flows, reusable directory persona and inference-profile
+  catalogs, and safer self-configuration ergonomics (#1028, #1014, #1050,
+  #1052, #1056, #1057).
+- Add document-driven EventTrigger graph experiments and capture consumers
+  for persisted runtime facts (#1081, #1080).
+
+### Providers, CLI, and desktop
+
+- Add Grok/xAI subscription OAuth across the runtime, CLI, and desktop (#973,
+  #974), plus provider-account settings and disconnect controls (#1089).
+- Make local desktop agent onboarding optional and add managed-server controls
+  (#1013).
+- Align CLI initialization and lineage behavior with signed provenance, while
+  retaining compatibility with older provenance JSON (#1094, #1092).
+
+### Build and reliability
+
+- Split and cache Rust CI workloads, slim the CLI dependency graph, and add
+  release dependency/binary metrics (#1011, #1024, #1097).
+- Favor faster local and release builds with non-LTO profiles and parallel code
+  generation; harden runtime cancellation, bridge reconciliation, and
+  resource-contended conformance startup (#1097).
+
+### Dependencies
+
+- Advance DefraDB to v0.18.0 (`61e429fc`).
+
 ## 0.10.1 - 2026-07-30
 
 ### Dependencies
@@ -91,6 +140,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.11.0    | 0.11.0       | 0.11.0       | 0.9              | DefraDB v0.18.0; signed provenance and build metrics |
 | v0.10.1    | 0.10.1       | 0.10.1       | 0.5              | DefraDB v0.17.4; mobile/subagent/migration fixes |
 | v0.10.0    | 0.10.0       | 0.10.0       | 0.5              | Reusable desktop packages implemented in #878 |
 
