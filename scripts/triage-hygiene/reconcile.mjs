@@ -15,13 +15,24 @@ export const EXEMPT_ISSUES = new Set([839]);
 export const ROADMAP_ISSUE = 839;
 
 // Every comment this bot writes opens with MARKER_PREFIX. The two families
-// below extend it. Deletion matches on the *conflict* prefix rather than a
-// whole marker so a comment written for any prior conflict set is recognised.
+// below extend it. Deletion matches on a *prefix* rather than a whole marker so
+// a comment written for any prior conflict set is recognised.
 export const MARKER_PREFIX = "<!-- triage-hygiene:";
 export const CONFLICT_MARKER_PREFIX = `${MARKER_PREFIX}conflict:`;
 // The missing-horizon notice is the same for every issue, so it needs no
 // payload — one fixed marker dedupes it to at most one per issue.
-export const MISSING_HORIZON_MARKER = `${MARKER_PREFIX}missing-horizon -->`;
+export const MISSING_HORIZON_MARKER_PREFIX = `${MARKER_PREFIX}missing-horizon`;
+export const MISSING_HORIZON_MARKER = `${MISSING_HORIZON_MARKER_PREFIX} -->`;
+
+// Both notices are statements about a state the issue is no longer in, so both
+// are retracted when it goes clean. Enumerated explicitly rather than matching
+// MARKER_PREFIX: a future third marker must be added here deliberately, after
+// someone has decided it is safe to delete, rather than inheriting deletion by
+// accident of its name.
+export const RETRACTABLE_MARKER_PREFIXES = [
+  CONFLICT_MARKER_PREFIX,
+  MISSING_HORIZON_MARKER_PREFIX,
+];
 
 // The identity a GitHub Actions run acts as when it uses the default
 // GITHUB_TOKEN. run.mjs overrides this with the authenticated user when
@@ -47,23 +58,23 @@ const hasMarker = (comments, marker) =>
   comments.map(normalizeComment).some((c) => c.body.includes(marker));
 
 // The single guard on the one destructive capability in this bot. A comment is
-// a deletion candidate only if BOTH hold: it carries this bot's own conflict
-// marker prefix, AND its author is one of the identities this run is acting as.
-// A human comment quoting the marker fails the author test; a bot comment
-// without the marker fails the marker test.
-function deletableConflictComments(comments, botLogins) {
+// a deletion candidate only if BOTH hold: it carries one of this bot's own
+// retractable marker prefixes, AND its author is one of the identities this run
+// is acting as. A human comment quoting a marker fails the author test; a bot
+// comment carrying no retractable marker fails the marker test.
+function deletableBotNotices(comments, botLogins) {
   const logins = new Set([...botLogins].filter(Boolean).map((l) => l.toLowerCase()));
   return comments
     .map(normalizeComment)
     .filter((c) => c.id !== null && c.id !== undefined)
-    .filter((c) => c.body.includes(CONFLICT_MARKER_PREFIX))
+    .filter((c) => RETRACTABLE_MARKER_PREFIXES.some((p) => c.body.includes(p)))
     .filter((c) => typeof c.author === "string" && logins.has(c.author.toLowerCase()))
     .map((c) => c.id);
 }
 
 // Tells a caller whether reconcile() could possibly need comment context for
 // this issue — either to dedupe a comment it is about to post, or to find its
-// own stale conflict comments to delete. Mirrors reconcile()'s branches
+// own stale notices to retract. Mirrors reconcile()'s branches
 // exactly; kept here so run.mjs never re-derives the rule and risks drifting
 // from it. The property test in reconcile.test.mjs fences the equivalence.
 export function requiresCommentContext({ number, labels, state = "open" }) {
@@ -76,8 +87,8 @@ export function requiresCommentContext({ number, labels, state = "open" }) {
   // Zero horizons posts the missing-horizon notice, which must be deduped.
   if (roadmap.length === 0) return true;
   if (roadmap.length === 1 && HORIZONS.has(roadmap[0])) {
-    // Clean. The only reason to read comments is to clean up after a conflict
-    // this bot flagged earlier, and `needs-triage` is the record that it did.
+    // Clean. The only reason to read comments is to retract a notice this bot
+    // posted earlier, and `needs-triage` is the record that it posted one.
     return labels.includes(NEEDS_TRIAGE);
   }
   return true;
@@ -107,9 +118,13 @@ export function reconcile({
 
   // Clean iff exactly one roadmap label AND it is a defined horizon.
   if (roadmap.length === 1 && unknown.length === 0) {
-    // Re-prioritizing through the label dropdown is two API calls, so a
-    // transient two-horizon state is ordinary rather than a mistake. Retract
-    // the accusation along with the flag instead of leaving it forever.
+    // Both notices this bot writes describe a state the issue has now left:
+    // the conflict comment accuses it of a horizon clash it no longer has, and
+    // the missing-horizon notice says it carries none. Leaving either behind
+    // leaves a false statement on a correctly-labelled issue forever — and
+    // re-prioritizing through the label dropdown is two API calls, so the
+    // transient states that trigger them are ordinary rather than mistakes.
+    // Retract both along with the flag.
     //
     // Gated on `flagged`, which is the bot's own record that it complained:
     // an unflagged clean issue has nothing to retract, and reading its comments
@@ -119,7 +134,7 @@ export function reconcile({
       add: [],
       remove: [NEEDS_TRIAGE],
       comment: null,
-      deleteComments: deletableConflictComments(comments, botLogins),
+      deleteComments: deletableBotNotices(comments, botLogins),
     };
   }
 

@@ -4,8 +4,11 @@ import {
   reconcile,
   conflictMarker,
   requiresCommentContext,
+  MARKER_PREFIX,
   CONFLICT_MARKER_PREFIX,
   MISSING_HORIZON_MARKER,
+  MISSING_HORIZON_MARKER_PREFIX,
+  RETRACTABLE_MARKER_PREFIXES,
   DEFAULT_BOT_LOGINS,
   NEEDS_TRIAGE,
 } from "./reconcile.mjs";
@@ -181,16 +184,77 @@ test("a human comment containing the marker is NEVER deleted", () => {
   assert.deepEqual(r.deleteComments, []);
 });
 
-test("a bot comment WITHOUT the conflict marker is not deleted", () => {
+test("a bot comment carrying no retractable marker is not deleted", () => {
   const r = reconcile({
     ...base,
     labels: ["roadmap: later", NEEDS_TRIAGE],
     comments: [
       botComment(7, "unrelated automation output"),
-      botComment(8, `welcome ${MISSING_HORIZON_MARKER}`),
+      botComment(8, "<!-- some-other-bot:note -->"),
+      botComment(9, `mentions ${MARKER_PREFIX} but no known marker`),
     ],
   });
   assert.deepEqual(r.deleteComments, []);
+});
+
+test("a clean issue also retracts the bot's missing-horizon notice", () => {
+  // It said "this one has none yet", which is now false. Same defect H4 fixed
+  // for the conflict comment, and it fires on every newly filed issue that
+  // later gets a horizon — the common path.
+  const r = reconcile({
+    ...base,
+    labels: ["roadmap: now", NEEDS_TRIAGE],
+    comments: [botComment(31, `welcome ${MISSING_HORIZON_MARKER} tail`)],
+  });
+  assert.deepEqual(r.remove, [NEEDS_TRIAGE]);
+  assert.deepEqual(r.deleteComments, [31]);
+});
+
+test("a clean issue retracts both notice types at once", () => {
+  // The observed live sequence: filed with no horizon (explainer), then two
+  // horizons added (conflict), then resolved. Both statements are now false.
+  const r = reconcile({
+    ...base,
+    labels: ["roadmap: now", NEEDS_TRIAGE],
+    comments: [
+      botComment(41, `welcome ${MISSING_HORIZON_MARKER}`),
+      humanComment(42, "thanks, labelled it"),
+      botComment(43, `conflict ${conflictMarker(["roadmap: now", "roadmap: later"])}`),
+    ],
+  });
+  assert.deepEqual(r.deleteComments, [41, 43]);
+});
+
+test("a HUMAN comment quoting the missing-horizon marker is NEVER deleted", () => {
+  const r = reconcile({
+    ...base,
+    labels: ["roadmap: now", NEEDS_TRIAGE],
+    comments: [humanComment(51, `why did I get ${MISSING_HORIZON_MARKER} on this?`)],
+  });
+  assert.deepEqual(r.remove, [NEEDS_TRIAGE]);
+  assert.deepEqual(r.deleteComments, []);
+});
+
+test("a clean UNFLAGGED issue retracts nothing and needs no comment fetch", () => {
+  const labels = ["roadmap: now"];
+  assert.equal(requiresCommentContext({ number: 1, labels }), false);
+  assert.deepEqual(
+    reconcile({ ...base, labels, comments: [botComment(61, MISSING_HORIZON_MARKER)] }),
+    noop,
+  );
+});
+
+test("the retractable prefixes are enumerated, not inferred from MARKER_PREFIX", () => {
+  assert.deepEqual(RETRACTABLE_MARKER_PREFIXES, [
+    CONFLICT_MARKER_PREFIX,
+    MISSING_HORIZON_MARKER_PREFIX,
+  ]);
+  // Every retractable prefix must be a strict extension of the family prefix,
+  // and the family prefix itself must never be retractable on its own.
+  for (const p of RETRACTABLE_MARKER_PREFIXES) {
+    assert.ok(p.startsWith(MARKER_PREFIX) && p.length > MARKER_PREFIX.length);
+  }
+  assert.ok(!RETRACTABLE_MARKER_PREFIXES.includes(MARKER_PREFIX));
 });
 
 test("a comment with no author is never a deletion candidate", () => {

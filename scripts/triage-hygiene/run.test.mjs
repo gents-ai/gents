@@ -9,7 +9,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { run, makeApi, resolveBotLogins, MAX_COMMENTS_PER_RUN, MAX_RETRIES } from "./run.mjs";
-import { conflictMarker, DEFAULT_BOT_LOGINS, NEEDS_TRIAGE } from "./reconcile.mjs";
+import {
+  conflictMarker,
+  MISSING_HORIZON_MARKER,
+  DEFAULT_BOT_LOGINS,
+  NEEDS_TRIAGE,
+} from "./reconcile.mjs";
 
 const REPO = "source-inc/gents";
 const BOT = DEFAULT_BOT_LOGINS[0];
@@ -298,6 +303,29 @@ test("the runner deletes the bot's stale conflict comment when an issue goes cle
   assert.equal(of(calls, "DELETE", /\/issues\/comments\/555$/).length, 1);
   assert.equal(of(calls, "DELETE", /\/labels\/needs-triage$/).length, 1);
   assert.equal(of(calls, "POST", /./).length, 0, "nothing is added or commented");
+});
+
+test("the runner retracts both notice types but leaves the human's comment", async () => {
+  // The sequence observed live: filed with no horizon (explainer posted), two
+  // horizons added (conflict posted), conflict resolved. Both bot statements
+  // are now false; the human's is not the bot's to touch.
+  const stale = conflictMarker(["roadmap: now", "roadmap: later"]);
+  const { api, calls } = fakeApi({
+    issues: [issue(14, [{ name: "roadmap: now" }, { name: NEEDS_TRIAGE }])],
+    comments: {
+      14: [
+        { id: 601, body: `welcome ${MISSING_HORIZON_MARKER}`, user: { login: BOT } },
+        { id: 602, body: `quoting ${MISSING_HORIZON_MARKER}`, user: { login: "a-human" } },
+        { id: 603, body: `conflict ${stale}`, user: { login: BOT } },
+      ],
+    },
+  });
+  await run({ api, repo: REPO, botLogins: [BOT], log: () => {}, error: () => {} });
+
+  assert.deepEqual(
+    of(calls, "DELETE", /\/issues\/comments\/\d+$/).map((c) => c.path.split("/").pop()),
+    ["601", "603"],
+  );
 });
 
 test("the runner never deletes a human's comment carrying the marker", async () => {
