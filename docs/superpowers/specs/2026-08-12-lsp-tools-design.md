@@ -1,7 +1,7 @@
 # Native `lsp` tool (design)
 
 **Date:** 2026-08-12
-**Status:** Draft, architecture aligned to existing runtime abstractions
+**Status:** Draft, ready for an implementation plan once this pass is accepted
 **Issue:** #1106
 **Branch:** `feat/lsp-tools`
 **Worktree:** `../gents-lsp-tools`
@@ -49,19 +49,19 @@ Earlier drafts of this spec bolted LSP onto the wrong seams:
 | Gate | `ToolSelection.enable_lsp`, default false, never backfilled |
 | What the gate *is* | Advertisement + host-exec grant for the **built-in catalog** only, plus file-tier `FileCap` |
 | Custom servers | **Not in v1.** Ceiling `lsp_servers` (CLI-tool shaped) is a later extension |
-| `lsp_config` | Disable / settings / priority / timeouts / flags. Never `command` or `args` |
+| `lsp_config` | Operator may set settings / init options. Self-config may not. Never `command` or `args` |
 | Assembly | `LspToolConfig` on `ToolSurface`; `LspTool` built in `ToolSurface::build_tools` with `runtime.lsp_pool` — not `NativeTool` / `ToolSet::build_native_tools` |
 | Spawn primitive | Extract `spawn_managed_process` from `managed_exec`; rebuild `run_managed_exec` on it |
-| Command constraints | Extract from `BashMode`; bash and LSP each derive an execution policy; one prepare helper |
+| Command constraints | Project `CommandConstraints` from **effective** `static_policy` after meet; ignore only `bash.tool` and the read-only command allowlist |
 | Config path | Reconcile only. `reload` uses the current `ToolSurface` snapshot |
-| Start policy | Only an explicit `lsp` action starts a server. Writethrough never cold-starts |
-| Idle | Default 5 minutes. Per-session and global LRU caps |
+| Start policy | Action start matrix. Writethrough never cold-starts. Biome/SwiftLint only on explicit `diagnostics` |
+| Idle | Default 5 minutes. Leased clients; LRU only among zero-lease Ready entries |
 | Mutations | `applyEdit: false`. Apply only foreground-returned edits |
-| File IO | Shared file-mutation module; `ToolContext` on **inbound URIs and outbound locations** |
-| Network default | `disabled` under enforceable `workspace_write` (macOS); `inherit` elsewhere |
-| Policy | `Surface.lsp : Bool` and `lspActionAuthorized lsp file action` |
+| File IO | Shared file-mutation module; inbound / WorkspaceEdit / read-output URI rules are distinct |
+| Network default | Omitted: `disabled` under seatbelt, `inherit` elsewhere. **Explicit `disabled` is never coerced** |
+| Policy | `Surface.lsp : Bool` and `lspActionAuthorized` as `Prop` |
 | Failures | Existing `FailureClass` via `ReportedFailure` |
-| Lifecycle | Existing `nativeCommand`. No new tool-call states |
+| Lifecycle | Existing `nativeCommand`. No slot-drain callback. `session::close_session` stays persistence-only |
 
 ## Non-goals
 
@@ -73,13 +73,20 @@ Earlier drafts of this spec bolted LSP onto the wrong seams:
 - Backgrounding `lsp`.
 - New `ToolExecution` states or a new `FailureClass`.
 - Pointing a language server at Gents `--home`.
-- Hidden compiler subprocesses for workspace diagnostics.
-- Workspace-local binaries (`node_modules/.bin`, `.venv/bin`, …).
+- A separate compiler-based workspace-diagnostics fallback (`cargo check`,
+  `tsc`, `go build`, `pyright`). Language servers **may** spawn compilers
+  and other descendants; Gents does not add a second diagnostics path.
+- Resolving the **initial** language-server executable from workspace-local
+  bins (`node_modules/.bin`, `.venv/bin`, …). Descendants are not similarly
+  fenced.
 - `workspace/executeCommand` and server-initiated `workspace/applyEdit`.
 - Re-reading ToolSelection (or any other document) from `reload`.
 - Invoking `GlobTool` and parsing its model-facing text.
 - A POSIX multi-file transaction. Same honesty as #724.
 - Claiming `network: disabled` is enforceable under `Unrestricted`.
+- Silently coercing an explicit `network_mode: disabled` to `inherit`.
+- A reconcile “slot drained” callback, or putting process teardown in
+  `session::close_session`.
 
 ## Architecture
 
@@ -94,20 +101,23 @@ ToolSurface::build_tools(runtime)
                 │
                 └─ LspTool { config, pool: runtime.lsp_pool }
 
-explicit lsp action
+explicit lsp action  (see start matrix)
                 │
                 ▼
-LspPool.get_or_start  (MCP-style: no map lock across initialize)
+LspPool.get_or_start
+  (MCP no-lock-across-I/O + explicit per-key Starting/singleflight)
                 │
                 ▼
 spawn_managed_process  (pool-owned cancel token, persistent stdio)
+  spawn the admitted canonical path, not the bare catalog name
                 │
 run_managed_exec  = spawn + write stdin + wait + terminate
-  (bash / CLI / fs-runner unchanged at the call site)
+  (bash and the fs-runner stay callers; CLI tools do not)
 
-reload          → terminate clients of *this* ToolSurface digest
-reconcile       → new surface + new digest; old clients idle/LRU
-                  after the old behavior slot drains
+reload   → retire entries matching this
+           (session_id, behavior_id, workspace_root, config_digest)
+reconcile → new surface + new digest; old clients become Retiring
+            and die via zero-lease LRU / 5-minute TTL
 ```
 
 ## Components
@@ -123,25 +133,45 @@ reconcile       → new surface + new digest; old clients idle/LRU
 
 `from_selection` sets `surface.lsp = enable_lsp && file != Off`. Meet is AND.
 
-`lsp_config` may contain:
+`lsp_config` is a JSON **string** column, not a GraphQL struct, so
+excluding `command`/`args` is a decoder rule, not a schema guarantee.
+Server `settings` / `init_options` can still name interpreters, plugins,
+or extra commands. Treat those objects as opaque executable-adjacent
+config.
 
-- `idle_timeout_ms` (default **300000**)
-- `format_on_write` (default false)
-- `diagnostics_on_write` (default true)
-- `diagnostics_on_edit` (default false)
-- `diagnostics_deduplicate` (default true)
-- `network_mode` (`disabled` or `inherit` — see Network)
-- `servers`: map of **catalog name** → `{ disabled, settings, priority, warmup_timeout_ms, capabilities, workspace_ready_timings, language_id }`
+**Operator-authored** `lsp_config` (apply / CLI / desktop preserve) may
+carry:
 
-Rejected keys (dropped with `tools explain` warning; never honored):
-`command`, `args`, `resolvedCommand`, `createClient`. A `servers` entry
-whose name is not in the built-in catalog is dropped.
+- scalars: `idle_timeout_ms` (default **300000**), `format_on_write`,
+  `diagnostics_on_write`, `diagnostics_on_edit`,
+  `diagnostics_deduplicate`, `network_mode`
+- per catalog name: `disabled`, `priority`, `warmup_timeout_ms`,
+  `capabilities`, `workspace_ready_timings`, `language_id`,
+  **`settings`, `init_options`**
 
-Self-config category `tools` (default on when self-config is enabled) may
-patch `enable_lsp` and the allowed `lsp_config` keys. It must not be able
-to introduce or change an executable. That is automatic if `command`/`args`
-are not in the schema. Lean `SelfConfig` field lists gain `enable_lsp` and
-`lsp_config`; the `lsp_config` decoder still strips executable keys.
+Always rejected: `command`, `args`, `resolvedCommand`, `createClient`,
+and any server name not in the built-in catalog.
+
+**SelfConfig** (`configure_tools`) may patch only:
+
+- `enable_lsp`
+- the scalar controls listed above
+- per-server `disabled`, `priority`, `warmup_timeout_ms`
+
+It must **not** patch `settings`, `init_options`, `command`, `args`, or
+any other object-valued server field. Lean `writableFields` for
+`.toolSelection` gains `enable_lsp` and a constrained `lsp_config`; the
+Rust patch decoder enforces the key allowlist. Tests must reject a
+self-config patch that smuggles `settings.rust-analyzer.server.path`
+(or equivalent).
+
+If `enable_lsp` is self-configurable — and the default `tools` category
+makes it so whenever self-config is on — **enabling that category
+delegates authority to activate any detected built-in catalog server**.
+It is no longer solely a direct operator grant. `tools explain` must say
+this. Operators who want the grant to stay exclusive leave
+`enable_self_config` off, or omit `tools` from
+`self_config_categories`.
 
 ### 2. No custom servers in v1
 
@@ -168,7 +198,9 @@ ones.
 
 Detection: a `root_markers` entry exists in the `ToolContext` workspace
 root (one-level wildcard; no parent walk) **and** `command` resolves on
-the **host PATH** to a path that is **not** under the tool root.
+the **host PATH** to a canonical path that is **not** under the tool
+root. After admission, spawn that **canonical path**, not the original
+bare name. `config_digest` hashes the canonical path.
 
 Family rules (first eligible by `priority`, then catalog order):
 
@@ -181,8 +213,13 @@ Family rules (first eligible by `priority`, then catalog order):
 | Nix | `nixd`, then `nil` |
 | PHP | `intelephense`, then `phpactor` |
 
-Linters never win primary routing. Biome / SwiftLint adapters are still
-catalog binaries on PATH, spawned through the same process primitive.
+Linters never win primary routing.
+
+Biome and SwiftLint are **single-shot adapters**, not pooled language
+servers. They may run only during an explicit `lsp` `diagnostics` call
+(admitted PATH binary, `prepare_managed_command` + `run_managed_exec`).
+They do **not** participate in writethrough: there is no already-Ready
+pooled client, and invoking them would violate no-cold-start.
 
 ### 4. Extract `spawn_managed_process`
 
@@ -206,6 +243,16 @@ run_managed_exec(request) =
 `env_clear`, `ActiveExecGuard`, and Lean `ManagedExec` states. The Lean
 machine still describes one child (`pendingSpawn → running → terminal`).
 This is a Rust extract, not a new lifecycle.
+
+`ActiveExecGuard` stays, but the snapshot must distinguish kinds:
+
+- `ForegroundCommand` — bash / fs-runner; long age is a wedged tool call
+- `PersistentService` — pooled LSP (and later anything like it); a
+  five-minute rust-analyzer is healthy, not wedged
+
+`active_executor_snapshots` (and any status UI that consumes it) must
+surface that kind. Do not report a live language server as a stuck
+foreground execution.
 
 **Ownership of cancellation:**
 
@@ -231,26 +278,38 @@ Extract a bash-independent `CommandConstraints`:
 - sandbox selection (`workspace_write` seatbelt vs none)
 - environment filter (`build_shell_env`)
 
-`BashMode` plus the selection's command-policy fields **derive** a
-`CommandExecutionPolicy` for bash. `enable_lsp` plus the same constraint
-fields **derive** a spawn policy for language servers. They are two
-consumers, not one policy object reused by pretending LSP is bash.
+The runtime already computes
+
+`static_policy = behavior ∩ ceiling ∩ runtime`
+
+(`behavior_config.rs`: `ToolPolicySurface::effective`). Bash then
+projects `ToolPolicyBash` off that meet. LSP must project
+`CommandConstraints` from the **same effective policy**, not from raw
+ToolSelection fields. Otherwise a ceiling's prefixes, network, or
+sandbox never reach the spawn and a tighter ceiling does not change the
+digest.
+
+Ignore only:
+
+- `bash.tool` (`BashMode`) — LSP is not bash
+- `read_only_allowlist` — `enable_lsp` is the grant, not
+  `default_read_only_commands`
+
+Take from the effective policy: `allowed_argv_prefixes`,
+`forbidden_argv_prefixes`, `network_mode`, `sandbox` /
+`execution_mode` (for seatbelt vs unrestricted). Environment is always
+`build_shell_env()`.
+
+`BashMode` plus those same effective fields still derive bash's
+`CommandExecutionPolicy`. Two consumers of one meet.
 
 One helper prepares a spawn:
 
-`prepare_managed_command(root, command, args, constraints) -> (program, argv, env, sandbox)`
+`prepare_managed_command(root, command, args, constraints) -> (canonical_program, argv, env, sandbox)`
 
-Sandbox wrapping, `CORE_ENV_VARS`, PATH lookup, and
-`DenialReason.workspaceExecutable` (path under the tool root) live only
-there. Bash `run_command` and LSP spawn both call it. No drift.
-
-LSP spawn constraints in v1:
-
-- Forbidden / allowed prefixes from the selection, when set (those fields
-  exist independently of whether bash is on).
-- Not the `default_read_only_commands` allowlist.
-- Sandbox / network: see Network below.
-- Environment: `build_shell_env()` only.
+PATH lookup, canonicalize, `workspaceExecutable`, sandbox wrap, and
+`CORE_ENV_VARS` live only there. The returned program is the canonical
+path. Bash `run_command` and LSP spawn both call it.
 
 ### 6. Network and platform honesty
 
@@ -259,23 +318,28 @@ Existing `validate_network_mode` rejects `network: disabled` under
 can enforce disabled network via seatbelt. Off macOS, write-capable bash
 is already `Unrestricted`.
 
-**Default:**
+**When `network_mode` is omitted:**
 
 | Platform | Spawn sandbox | Network |
 | --- | --- | --- |
-| macOS with `sandbox-exec` | `workspace_write` | `disabled` (unless `lsp_config.network_mode = inherit`) |
+| macOS with `sandbox-exec` | `workspace_write` | `disabled` |
 | anything else | unsandboxed (`Unrestricted`) | **`inherit`** |
 
-`tools explain` and `RuntimeToolAvailability` must state, off macOS:
+Linux stays available. That is the product call.
 
-- network cannot be disabled
-- the server can **write outside the tool root**, not merely analysis
-  caches under it
+**When `network_mode` is explicitly `disabled`:** do **not** coerce it
+to `inherit`. Use the existing command-policy idiom
+`DisabledNetworkUnenforceable` under `Unrestricted`. The tool is then
+unavailable / `policyDenied` on that host, and `tools explain` reports
+that the requested restriction cannot be enforced.
 
-Do not fail-closed and hide `lsp` on Linux. That would make the tool
-useless on the hosts that already run Unrestricted bash. An explicit
-`lsp_config.network_mode: disabled` off macOS is coerced to `inherit`
-and called out in `tools explain`, not turned into a hard denial.
+`inherit` remains a valid explicit setting everywhere.
+
+`tools explain` and `RuntimeToolAvailability` must also state, off
+macOS, that the **server process and its descendants** can write
+outside the tool root and can use the inherited network. The macOS
+seatbelt profile allows `process-exec` / `process-fork`; it does not
+stop rust-analyzer from launching `cargo` / `rustc`.
 
 macOS without `sandbox-exec`: existing `workspaceWriteSandboxUnavailable`.
 
@@ -316,36 +380,60 @@ holds the path lock (non-reentrant `tokio::sync::Mutex`):
 Format-on-write calls `prepare` then `apply_with_held_locks` on the
 locks it already owns. The ordinary rename path calls all three.
 
-### 8. On-demand start, idle, caps
+### 8. On-demand start, idle, leases, caps
 
-- **Only** an explicit `lsp` action may `get_or_start` a server.
-- File writethrough uses **already-active** clients only. If none match,
+- File writethrough uses **already-Ready** clients only. If none match,
   skip format/diagnostics and do not start anything.
-- Default `idle_timeout_ms` is **300_000** (5 minutes), not “disabled”.
+- Default `idle_timeout_ms` is **300_000** (5 minutes).
 - Caps: **4** live clients per `(session_id, behavior_id)`; **16** live
-  clients per host `LspPool`. Evict idle first, then LRU.
-- MCP pattern (`mcp_pool.rs` `get_or_connect`): look up under the map
-  lock, **drop the lock**, initialize outside it, publish only on
-  success. Singleflight per key so two concurrent `lsp` calls do not
-  spawn two rust-analyzers. A failed initialize never publishes.
+  clients per host `LspPool`. Starting entries **count**.
 
-`close_session` / runtime shutdown still drain. Do not rely on them for
-steady-state hygiene; daemon sessions stay open.
+Pool entry states: `Starting`, `Ready`, `Retiring`.
+
+A borrow returns a **lease** that covers the foreground JSON-RPC
+request. Dropping the lease may complete retirement.
+
+**Non-destructive eviction** (reload, idle sweep, cap eviction,
+generation retirement — one rule):
+
+- Retirement removes the entry from future lookup and marks `Retiring`.
+- The process is terminated only when the last lease drops.
+- LRU considers **zero-lease `Ready` entries only**.
+- If every candidate is `Starting` or leased, return
+  `serviceUnavailable`. Do not kill an active request.
+
+`reload` (file or `*`) retires entries whose key matches the current
+`(session_id, behavior_id, workspace_root, config_digest)` — not every
+host entry that happens to share a digest.
+
+**Connect discipline:** reuse MCP's *no lock across I/O* (`get_or_connect`
+drops the map lock before dialing). Do **not** call that singleflight.
+MCP only serializes keys already in the parking map; a fresh key can
+still start two connections. LSP adds an explicit per-key `Starting`
+state / waiters. Tests: two simultaneous first calls spawn one process;
+failed initialize wakes all waiters; a later call after backoff retries.
 
 ### 9. Snapshot ownership
 
-`reload` (file or `*`) restarts clients that belong to the **current**
-`LspToolConfig` digest. It does not read DefraDB.
+`reload` uses the current `LspToolConfig` digest. It does not read
+DefraDB.
 
-Document changes flow only through reconcile:
+Document changes flow only through reconcile. A new surface gets a new
+digest and a new `LspTool`. Old-generation clients are marked `Retiring`
+and die via the lease / LRU / 5-minute TTL rule above.
 
-1. Reconcile builds a new `ToolSurface` / `LspToolConfig` with a new digest.
-2. New requests get the new `LspTool` instance.
-3. Old-generation clients are **not** killed under an in-flight request
-   still using that surface. They retire when the old behavior slot
-   drains, or by idle / LRU.
+There is **no** “after old slot drained” hook today:
+`retire_slot` detaches a join, and `on_slot_retired` runs separately
+before that join finishes (`reconcile.rs`, `reconcile/slot.rs`). Do not
+invent a reconcile-specific LSP callback in v1.
 
-`reload "*"` on the new surface does not shoot the old generation.
+`session::close_session` stays persistence-only. The runtime or oneshot
+owner that has **both** the session id and the pool calls
+`LspPool::close_session`. `run_agent` explicitly awaits
+`lsp_pool.shutdown()` after behavior slots finish
+(`shutdown_slots` in `reconcile.rs`, then pool shutdown). Oneshot calls
+`LspPool::close_session` after `hook.close()` (which only writes the
+session row).
 
 ### 10. Pool identity
 
@@ -356,8 +444,9 @@ Key:
 `config_digest` covers **authority and client state**, not just argv:
 
 - effective tool root / writable root
-- full `CommandConstraints` (prefixes, network, sandbox)
-- resolved command path
+- full **effective** `CommandConstraints` (post-meet prefixes, network,
+  sandbox)
+- resolved **canonical** command path
 - fixed catalog args
 - `language_id`
 - `init_options`, `settings`, `capabilities`, readiness timings
@@ -369,16 +458,16 @@ under a looser generation cannot be reused.
 
 ### 11. Native tool actions
 
-Same action set as the previous revision, with these bindings:
-
-| Action | Mutates files? | Notes |
-| --- | --- | --- |
-| `diagnostics` | no | File, typed glob, or `file: "*"`. |
-| `definition` / `type_definition` / `implementation` / `references` / `hover` / `symbols` | no | Returned locations go through `ToolContext` before context read or display. |
-| `status` / `capabilities` / `reload` | no | `reload` uses the current snapshot only. |
-| `rename` / `rename_file` | yes | Foreground-returned edits only. |
-| `code_actions` | list no; apply yes | Apply `CodeAction.edit` only. Bare `Command` → `argumentInvalid`. |
-| `request` | see below | |
+| Action | Mutates files? | May cold-start? | Notes |
+| --- | --- | --- | --- |
+| `status` | no | **no** | Inspect existing clients only. |
+| `reload` | no | **no** | Retire matching current-key clients. Does not start a replacement. |
+| `capabilities` | no | yes | |
+| `diagnostics` | no | yes (pooled servers). Biome/SwiftLint single-shot only here. | File, typed glob, or `file: "*"`. |
+| `definition` / `type_definition` / `implementation` / `references` / `hover` / `symbols` | no | yes | Returned **structured** locations go through `ToolContext`. |
+| `rename` / `rename_file` | yes | yes | Foreground-returned edits only. |
+| `code_actions` | list no; apply yes | yes | Apply `CodeAction.edit` only. Bare `Command` → `argumentInvalid`. |
+| `request` | see below | yes | |
 
 `request` on ReadOnly: only the read-method allowlist. Deserialize the
 **known** parameter shape for that method (`textDocument`, `position`,
@@ -397,16 +486,26 @@ URI in it is validated the same way. Unknown methods are
 - `positionEncodings = ["utf-8", "utf-16"]`; prefer utf-8.
 - `didOpen` / `didChange` / `didClose`, diagnostics cache, `$/cancelRequest`.
 
-### 13. Reads and outputs stay inside the file boundary
+### 13. File-boundary URI rules
 
-Every model-supplied path or `file:` URI — action `file`, glob root,
-`request` params — is resolved with `ToolContext` first.
+Three distinct rules:
 
-Every **returned** location (definition, references, diagnostics,
-workspace symbol, hover contents that embed URIs) is resolved the same
-way **before** reading source context or rendering a host path.
-Outside-root hits are reported as outside the allowed workspace (no
-absolute host path, no file read). They do not fail the whole call.
+1. **Inbound / model-supplied** path or `file:` URI (action `file`, glob
+   root, `request` params) that escapes `ToolContext` → terminal
+   `policyDenied`.
+2. **WorkspaceEdit** URI that escapes → abort preflight with
+   `policyDenied`, no writes.
+3. **Read-output** structured location (definition, references,
+   diagnostic range, workspace symbol, `Location` / `LocationLink`) that
+   escapes → omit/redact that result, append a note, **complete** the
+   call. Do not fail the whole lookup.
+
+The hard no-escape guarantee applies to **structured URI/location
+fields** only. Free-form hover Markdown and diagnostic `message` text
+can still mention host paths. If we need “no absolute host path reaches
+the model,” that is a **separate text redactor** over those strings, not
+the location preflight. v1 ships the structured-field rules; the text
+redactor is optional and called out in `tools explain` if omitted.
 
 ### 14. WorkspaceEdit
 
@@ -427,14 +526,20 @@ Stop on first write failure; report applied vs pending.
 
 ### 15. Writethrough
 
-Inside the existing `write_file` / `edit_file` lock, after bytes hit
-disk, before release:
+Keep **didChange, formatting, re-hash, and format apply** under the
+existing mutation lock. Release the lock **before** waiting for
+diagnostics. A multi-second diagnostic wait does not protect a mutation
+and must not block concurrent `write_file` / `edit_file`.
 
-1. If no **already-active** client matches the file, return. No start.
-2. `didChange` on those clients.
-3. Format-on-write (`write_file` only): `prepare` + `apply_with_held_locks`.
-   Re-hash before apply; mismatch → skip + note.
-4. Diagnostics flags: wait briefly, append, dedup.
+1. If no **already-Ready** pooled client matches, return. No start.
+   Biome/SwiftLint are not consulted here.
+2. Under the lock: `didChange`; if `format_on_write` on `write_file`,
+   `prepare` + `apply_with_held_locks` (re-hash; mismatch → skip +
+   note). Capture the document version / `content_hash`.
+3. **Release the lock.**
+4. If diagnostics-on-write/edit: wait briefly off the lock. Render only
+   diagnostics whose document version is **at least** the captured
+   version. Dedup when configured.
 
 Failures never fail the original write.
 
@@ -460,8 +565,9 @@ Add `session_id` (and, for the pool key, `behavior_id`) to
 `ToolRuntimeScope` — the existing task-local. Dispatchers already have
 both.
 
-`LspPool` is host-owned on `ToolRuntimeContext`. `close_session` and
-runtime shutdown drain. Idle / LRU are the steady-state control.
+`LspPool` is host-owned on `ToolRuntimeContext`. The owner that holds
+the pool calls `LspPool::close_session` / `shutdown` (section 9). Idle /
+zero-lease LRU / TTL are the steady-state control.
 
 ## Formal model
 
@@ -475,18 +581,21 @@ Rust vocab aligned.
 ### LspAction
 
 ```lean
-def lspAdvertised (lsp : Bool) (file : FileCap) : Bool :=
-  lsp && file ≠ .off
+def lspAdvertised (lsp : Bool) (file : FileCap) : Prop :=
+  lsp = true ∧ file ≠ FileCap.off
 
-def lspActionAuthorized (lsp : Bool) (file : FileCap) (action : LspAction) : Bool :=
-  lspAdvertised lsp file &&
-    (!action.mutates || file = .readWrite)
+def lspActionAuthorized (lsp : Bool) (file : FileCap) (action : LspAction) : Prop :=
+  lspAdvertised lsp file ∧
+    (¬action.mutates ∨ file = FileCap.readWrite)
 
-def lspApplyAuthorized (lsp : Bool) (file : FileCap) (src : LspMutationSource) : Bool :=
-  lspAdvertised lsp file &&
-    file = .readWrite &&
-    src = .foregroundReturnedEdit
+def lspApplyAuthorized (lsp : Bool) (file : FileCap) (src : LspMutationSource) : Prop :=
+  lspAdvertised lsp file ∧
+    file = FileCap.readWrite ∧
+    src = LspMutationSource.foregroundReturnedEdit
 ```
+
+Do not mix `Bool` and `Prop`. If a `Bool` is needed for JSON contracts,
+define `decide` instances; the theorems quantify over `Prop`.
 
 The first draft hardcoded `lspAdvertised true file`. That did not require
 the effective gate. Do not.
@@ -512,21 +621,23 @@ No new states. `spawn_managed_process` is how Rust enters `running`;
 
 ### SelfConfig
 
-Add `enable_lsp` and `lsp_config` to the ToolSelection patch field list.
-Decoder rejects `command` / `args` inside `lsp_config`.
+Add `enable_lsp` and `lsp_config` to `allFields` / `writableFields`.
+The writable `lsp_config` decoder accepts only the SelfConfig key
+allowlist (scalars + per-server `disabled` / `priority` /
+`warmup_timeout_ms`). `settings` and `init_options` are not writable.
 
 ## Failures
 
 | Situation | Class | Terminal |
 | --- | --- | --- |
 | Bad args, overlapping ranges, version mismatch, unknown `request` method, bare `Command` code action | `argumentInvalid` | `failed` |
-| Path / URI / returned-location escape; under-root executable; mutating action without ReadWrite; `lsp = false` | `policyDenied` | `failed` |
-| No matching server, binary missing, initialize failure | `serviceUnavailable` | `failed` |
+| Inbound URI escape; WorkspaceEdit URI escape; under-root executable; mutating action without ReadWrite; `lsp = false`; explicit `network_mode: disabled` under `Unrestricted` | `policyDenied` | `failed` |
+| No matching server, binary missing, initialize failure, cap hit with no zero-lease candidate | `serviceUnavailable` | `failed` |
 | Stdio / process death mid-request | `transport` | `failed` |
 | LSP error response | `toolReturnedError` | `failed` |
 | Request deadline / tool timeout | `external` / `timedOut` | does **not** kill the pooled server |
 | Approval deny | `approvalDenied` | `failed` |
-| Empty navigation / clean diagnostics / no active client for writethrough | none | `completed` |
+| Empty navigation / clean diagnostics / no Ready client for writethrough / read-output location redacted | none | `completed` |
 
 ## Limits
 
@@ -568,21 +679,34 @@ Decoder rejects `command` / `args` inside `lsp_config`.
   published; request cancel sends `$/cancelRequest` only.
 - `prepare_managed_command` shared by bash and LSP; PATH-only; under-root
   denied.
-- `enable_lsp` default false; `lsp_config` cannot set `command`/`args`;
-  unknown server names dropped; self-config patch of `command` rejected.
+- Constraints come from `static_policy` after meet; a ceiling prefix /
+  network / sandbox change flips the digest. Spawn uses the canonical
+  path.
+- `enable_lsp` default false; operator `lsp_config` may include
+  `settings`; self-config patch of `settings` / `command` / `args`
+  rejected.
 - `LspTool` built from `build_tools` with `runtime.lsp_pool`.
-- Writethrough does not start a server; explicit `lsp` does.
-- Idle 5 min + LRU at 4 / 16.
-- `reload` does not touch DefraDB; digest change does not kill an
-  in-flight old-generation call.
+- `status` / `reload` do not start a server. Writethrough does not.
+  Biome only on explicit `diagnostics`.
+- Simultaneous first calls: one process. Failed initialize wakes
+  waiters. Retry after backoff starts again.
+- Lease: reload / LRU do not terminate a leased client. All-busy cap
+  returns `serviceUnavailable`.
+- `reload` scopes to the current session/behavior/workspace/digest.
+- `session::close_session` does not touch the pool; the owner calls
+  `LspPool::close_session`.
 - `applyEdit: false`; fake `workspace/applyEdit` is a no-op.
-- Inbound URI + outbound location redaction.
+- Inbound URI → `policyDenied`. Edit URI → no writes. Read-output URI →
+  redact + complete.
 - ReadOnly `request` rejects verbatim `payload` and unknown shapes.
-- Format-on-write does not deadlock (held-lock apply).
+- Format-on-write does not deadlock; diagnostics wait is off the lock.
 - Hash check: documents the preflight-to-write window only.
 - UTF-8 / UTF-16 with `😀`.
 - Typed glob helper, not `GlobTool` text.
-- Off-macOS explain text: inherit network, writes may escape the root.
+- Explicit `network_mode: disabled` off macOS is
+  `DisabledNetworkUnenforceable`, not coerced.
+- `ActiveExecGuard` kind distinguishes persistent LSP from foreground
+  commands.
 - `cargo test -p gents` then `cargo check --workspace --all-targets`.
 
 No live rust-analyzer in CI.
@@ -599,9 +723,10 @@ No live rust-analyzer in CI.
    `apply_with_held_locks`.
 5. Schema: `enable_lsp`, `lsp_config` (no command/args). Catalog +
    admission. Policy + vocab + explain.
-6. `LspPool` (MCP get-or-start, idle, LRU, digest). `session_id` /
-   `behavior_id` on `ToolRuntimeScope`. `lsp_pool` on
-   `ToolRuntimeContext`.
+6. `LspPool` (Starting/Ready/Retiring, leases, per-key singleflight,
+   digest). `session_id` / `behavior_id` on `ToolRuntimeScope`.
+   `lsp_pool` on `ToolRuntimeContext`. `run_agent` awaits
+   `lsp_pool.shutdown()`.
 7. `LspToolConfig` + `LspTool` in `build_tools`. Read actions.
 8. Write actions + location redaction + encoding.
 9. `LspWritethrough` injection; never cold-start.
@@ -615,18 +740,18 @@ helper), `toolset/file_mutation`, `toolset/lsp/{mod,catalog,config,admit,encodin
 
 | Pass | Resolution |
 | --- | --- |
-| First 1–10 | Host-exec grant, `LspAction`, `applyEdit: false`, preflight, encoding, lock-held format, digest, session scope, caps, routing |
-| This 1 | Extract `spawn_managed_process`; pool owns process cancel; request cancel is `$/cancelRequest` only |
-| This 2 | No custom servers in v1; `lsp_config` cannot carry `command`/`args`; self-config cannot introduce executables |
-| This 3 | `CommandConstraints` extracted from `BashMode`; one prepare helper |
-| This 4 | `reload` uses the current `ToolSurface`; reconcile is the only document path |
-| This 5 | Writethrough never starts a server; 5 min idle; 4 / 16 LRU; MCP singleflight |
-| This 6 | `LspTool` in `build_tools`; shared file-mutation module; three-stage apply |
-| This 7 | `ToolContext` on inbound URIs and outbound locations; no verbatim ReadOnly payloads |
-| This 8 | `disabled` network only under seatbelt; `inherit` elsewhere; explain writes-escape off macOS |
-| This 9 | Digest includes root, constraints, language_id, readiness; key includes `behavior_id` |
-| This 10 | `lspActionAuthorized` / `lspApplyAuthorized` take `lsp`; hash-check window stated |
-| This 11 | Typed fs-runner glob helper, not `GlobTool` |
+| First 1–10 | Host-exec grant, `LspAction`, `applyEdit: false`, preflight, encoding |
+| Second 1–11 | Persistent process primitive, no custom servers, constraints extract, snapshot reload, on-demand start, `build_tools`, URI preflight, platform network default, digest, Lean gate, typed glob |
+| This 1 | Constraints from effective `static_policy` after meet; spawn canonical path |
+| This 2 | Self-config cannot patch `settings` / `init_options`; enabling `tools` delegates catalog activation |
+| This 3 | Starting/Ready/Retiring + leases; LRU only zero-lease Ready; reload scoped to current key |
+| This 4 | MCP no-lock-across-I/O plus explicit per-key Starting/singleflight; not “MCP already singleflights” |
+| This 5 | No slot-drain callback; `close_session` stays persistence; owner/`run_agent` shut the pool |
+| This 6 | Explicit `disabled` → `DisabledNetworkUnenforceable`; omitted default stays inherit off macOS |
+| This 7 | Inbound / edit / read-output URI rules split; structured fields only |
+| This 8 | Diagnostics wait released from the file lock |
+| This 9 | Descendants honesty; Biome/SwiftLint explicit-diagnostics only |
+| Small | Start matrix; CLI off the `run_managed_exec` diagram; Lean `Prop`; `ActiveExecGuard` kind |
 
 ## Related
 
