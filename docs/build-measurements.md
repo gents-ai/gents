@@ -26,6 +26,41 @@ aggregate per-package compile duration, and linked contribution as separate
 signals. The raw reports are retained as workflow artifacts rather than checked
 into the repository.
 
+## 2026-08-12 DefraDB feature boundaries
+
+Host: Apple M4 Max (16 cores, 128 GB), macOS 26.6, Rust 1.97.1,
+`aarch64-apple-darwin`. Baseline commit: `020b17db` (post-#1109).
+The candidate updates DefraDB from `61e429fc` to `e28586b0`, selects its
+Iroh-only P2P graph, omits SourceHub ACP, and explicitly retains Wasmtime for
+Gents' Lens migrations. The baseline and candidate `Cargo.lock` SHA-256 values
+were `24084c8c7f95aab736845127ec51358a7eb5db79cf5cb2d99d7c2b674267a988`
+and `869ef1fae3b67d9c22a8ace91471f730f6c50373f01a6603da42d250026b0bfa`,
+respectively.
+
+Both release builds used all 16 CPUs, separate fresh target directories,
+direct rustc without sccache, and `CARGO_INCREMENTAL=0`:
+
+```sh
+CARGO_BUILD_RUSTC_WRAPPER=.github/scripts/rustc-direct.sh \
+  RUSTC_WRAPPER=.github/scripts/rustc-direct.sh CARGO_INCREMENTAL=0 \
+  CARGO_BUILD_JOBS=16 CARGO_TARGET_DIR=<fresh-target> \
+  /usr/bin/time -l make release-cli
+```
+
+Graph counts came from `scripts/measure-gents-binary.sh` on the same host and
+target. `sourcehub` and `libp2p` are absent from the candidate normal CLI graph;
+`wasmtime` remains present.
+
+| Signal | #1109 baseline | Candidate | Delta |
+|---|---:|---:|---:|
+| Cold release wall time | 169s | 146s | -13.6% |
+| Peak RSS | 9,705,799,680 | 9,484,025,856 | -2.3% |
+| Raw binary | 64,678,432 bytes | 64,194,400 bytes | -0.75% |
+| gzip -9 payload | 24,467,976 bytes | 24,265,634 bytes | -0.83% |
+| macOS normal packages | 819 | 588 | -231 (-28.2%) |
+| all-target normal packages | 962 | 698 | -264 (-27.4%) |
+| duplicate package names | 68 | 38 | -30 (-44.1%) |
+
 For local agent and batch worktrees, `make fast-dev-cli` uses the opt-in
 `fast-dev` profile. It retains line-table backtraces for workspace crates while
 omitting dependency debug info. The ordinary dev profile remains unchanged for
