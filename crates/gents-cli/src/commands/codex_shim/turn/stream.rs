@@ -180,6 +180,29 @@ impl TurnStreamOptions {
             enforce_timeout: false,
         }
     }
+
+    pub(in crate::commands::codex_shim) fn fresh_background_completion(
+        root_session_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            projection_root_session_id: root_session_id.into(),
+            baseline_turn: None,
+            follow_steering: true,
+            enforce_timeout: false,
+        }
+    }
+
+    pub(in crate::commands::codex_shim) fn resumed_background_completion(
+        root_session_id: impl Into<String>,
+        baseline_turn: codex::Turn,
+    ) -> Self {
+        Self {
+            projection_root_session_id: root_session_id.into(),
+            baseline_turn: Some(baseline_turn),
+            follow_steering: true,
+            enforce_timeout: false,
+        }
+    }
 }
 
 pub(in crate::commands::codex_shim) async fn stream_gents_turn(

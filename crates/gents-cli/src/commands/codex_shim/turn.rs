@@ -8,9 +8,9 @@ use tokio::sync::watch;
 
 pub(super) use active::interrupt_active_turn;
 
-use active::{
-    cancel_abandoned_steering_request, clear_stream_control_if_current, install_stream_control,
-    load_active_codex_turn,
+use active::{cancel_abandoned_steering_request, load_active_codex_turn};
+pub(super) use active::{
+    clear_stream_control_if_current, codex_turn_id_for_request, install_stream_control,
 };
 pub(super) use stream::{stream_gents_turn, TurnStreamOptions};
 use submission::create_agent_request_with_retry;

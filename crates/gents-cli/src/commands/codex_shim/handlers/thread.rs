@@ -6,6 +6,7 @@ use super::super::bound_behavior::{
     load_bound_context_window, load_bound_model_selection_id_for_state,
 };
 use super::super::child_stream::ensure_loaded_subagent_stream;
+use super::super::continuation_stream::ensure_loaded_root_continuation_stream;
 use super::super::history_projection::{
     conversation_summary_json, load_thread_turns, thread_turn_items_list_response,
     thread_turns_list_response,
@@ -48,7 +49,10 @@ pub(super) async fn handle_thread_request(
                 request_id,
                 thread_start_response_json(&record, &bound_model_id),
             )
-            .await
+            .await?;
+            ensure_loaded_root_continuation_stream(connection, state, &record, Some(Vec::new()))
+                .await;
+            Ok(())
         }
         codex::ClientRequest::ThreadResume {
             request_id, params, ..
@@ -87,6 +91,7 @@ pub(super) async fn handle_thread_request(
             } else {
                 load_thread_turns(state, &record).await?
             };
+            let continuation_baseline = (!params.exclude_turns).then(|| turns.clone());
             let child_stream_baseline = record.subagent.as_ref().and_then(|link| {
                 turns
                     .iter()
@@ -194,6 +199,13 @@ pub(super) async fn handle_thread_request(
             )
             .await?;
             ensure_loaded_subagent_stream(connection, state, &record, child_stream_baseline).await;
+            ensure_loaded_root_continuation_stream(
+                connection,
+                state,
+                &record,
+                continuation_baseline,
+            )
+            .await;
             Ok(())
         }
         codex::ClientRequest::ThreadList {
@@ -228,7 +240,9 @@ pub(super) async fn handle_thread_request(
                         thread: thread_for_notification,
                     }),
                 )
-                .await
+                .await?;
+                ensure_loaded_root_continuation_stream(connection, state, &record, None).await;
+                Ok(())
             }
             Err(err) => send_error(outbound, request_id, err.code, err.message).await,
         },
@@ -340,6 +354,9 @@ pub(super) async fn handle_thread_request(
         } => {
             set_codex_thread_loaded(state, &params.thread_id, false).await?;
             connection.stop_child_stream(&params.thread_id).await;
+            connection
+                .stop_root_continuation_stream(&params.thread_id)
+                .await;
             send_result(
                 outbound,
                 request_id,
@@ -354,6 +371,9 @@ pub(super) async fn handle_thread_request(
         } => {
             set_codex_thread_archived(state, &params.thread_id, true).await?;
             connection.stop_child_stream(&params.thread_id).await;
+            connection
+                .stop_root_continuation_stream(&params.thread_id)
+                .await;
             send_result(outbound, request_id, codex::ThreadArchiveResponse {}).await
         }
         codex::ClientRequest::ThreadUnarchive {
@@ -379,6 +399,7 @@ pub(super) async fn handle_thread_request(
             )
             .await?;
             ensure_loaded_subagent_stream(connection, state, &record, None).await;
+            ensure_loaded_root_continuation_stream(connection, state, &record, None).await;
             Ok(())
         }
         codex::ClientRequest::ThreadSetName {

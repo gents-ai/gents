@@ -40,7 +40,7 @@ struct RequestRow {
     created_at: String,
 }
 
-pub(super) async fn install_stream_control(
+pub(in crate::commands::codex_shim) async fn install_stream_control(
     connection: &ConnectionState,
     thread_id: String,
     turn_id: String,
@@ -52,7 +52,7 @@ pub(super) async fn install_stream_control(
     );
 }
 
-pub(super) async fn clear_stream_control_if_current(
+pub(in crate::commands::codex_shim) async fn clear_stream_control_if_current(
     connection: &ConnectionState,
     thread_id: &str,
     turn_id: &str,
@@ -95,6 +95,22 @@ pub(super) async fn next_steering_request_after(
         &rows,
         queued_after_request_id,
     ))
+}
+
+pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
+    state: &ShimState,
+    thread_id: &str,
+    request_id: &str,
+) -> Result<String> {
+    let rows = load_thread_request_rows(state, thread_id).await?;
+    let by_id = rows
+        .iter()
+        .map(|row| (row.request_id.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let Some(request) = by_id.get(request_id).copied() else {
+        return Ok(request_id.to_string());
+    };
+    codex_turn_root_and_depth(request, &by_id).map(|(root_id, _)| root_id)
 }
 
 fn next_steering_request_after_from_rows(
