@@ -67,7 +67,23 @@ pub async fn dispatch(
                 .await;
             Ok(status_text(ready, servers))
         }
-        LspAction::Reload => Ok("reload requested for current snapshot".into()),
+        LspAction::Reload => {
+            let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .and_then(|scope| scope.session_id)
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| config.session_id.clone());
+            let retired = pool
+                .reload_snapshot(
+                    &session_id,
+                    &config.behavior_id,
+                    &config.workspace,
+                    &config.digest,
+                )
+                .await;
+            Ok(format!(
+                "retired {retired} language-server client(s) for the current snapshot"
+            ))
+        }
         LspAction::Capabilities => {
             let lease = lease.ok_or_else(|| unavailable("no language server"))?;
             Ok(lease.client().capabilities().await.to_string())
@@ -104,22 +120,10 @@ async fn run_file_action(
     let text = std::fs::read_to_string(&path).map_err(|err| {
         ToolError::reported_failure(FailureClass::ArgumentInvalid, err.to_string())
     })?;
-    let uri = format!("file://{}", path.display());
-    let _ = client
-        .notify(
-            "textDocument/didOpen",
-            json!({
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": language_id(servers, &path),
-                    "version": 1,
-                    "text": text
-                }
-            }),
-        )
-        .await;
+    let uri = super::uri::path_to_file_uri(&path);
+    let lang = language_id(servers, &path);
+    let _ = client.ensure_open(&uri, &lang, &text).await;
     let encoding = client.position_encoding().await;
-    let _ = client.track_open(&uri, 1).await;
     let pos = offset_to_position(
         &text,
         encoding,
@@ -187,14 +191,32 @@ async fn run_file_action(
         params = json!({
             "files": [{
                 "oldUri": uri,
-                "newUri": format!("file://{}", dest_path.display())
+                "newUri": super::uri::path_to_file_uri(&dest_path)
             }]
         });
     }
-    let result = client
-        .request_with_timeout(method, params, request_timeout(req))
-        .await
-        .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
+    let retry_empty = matches!(action, LspAction::Hover | LspAction::Definition);
+    let result = match request_maybe_retry(
+        client,
+        method,
+        params,
+        request_timeout(req),
+        retry_empty,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) if matches!(action, LspAction::Diagnostics) => client
+            .cached_diagnostics(&uri)
+            .await
+            .ok_or_else(|| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?,
+        Err(err) => {
+            return Err(ToolError::reported_failure(
+                FailureClass::ToolReturnedError,
+                err,
+            ))
+        }
+    };
     if matches!(
         action,
         LspAction::Rename | LspAction::RenameFile | LspAction::CodeActionsApply
@@ -208,7 +230,7 @@ async fn run_file_action(
             return Err(policy("lsp apply is not authorized"));
         }
         let edit = if matches!(action, LspAction::CodeActionsApply) {
-            extract_code_action_edit(&result)?
+            resolve_code_action_edit(client, &result, req.query.as_deref()).await?
         } else {
             result.clone()
         };
@@ -384,14 +406,48 @@ fn validate_payload_uris(context: &ToolContext, params: &Value) -> Result<(), To
     Ok(())
 }
 
-fn extract_code_action_edit(result: &Value) -> Result<Value, ToolError> {
-    let action = if let Some(arr) = result.as_array() {
-        arr.iter()
-            .find(|item| item.get("edit").is_some())
-            .ok_or_else(|| arg_invalid("no CodeAction.edit to apply"))?
+async fn request_maybe_retry(
+    client: &LspClient,
+    method: &str,
+    params: Value,
+    timeout: std::time::Duration,
+    retry_empty: bool,
+) -> Result<Value, String> {
+    let mut result = client
+        .request_with_timeout(method, params.clone(), timeout)
+        .await?;
+    if !retry_empty || !result.is_null() {
+        return Ok(result);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        result = client
+            .request_with_timeout(method, params.clone(), timeout)
+            .await?;
+        if !result.is_null() {
+            break;
+        }
+    }
+    Ok(result)
+}
+
+async fn resolve_code_action_edit(
+    client: &LspClient,
+    result: &Value,
+    query: Option<&str>,
+) -> Result<Value, ToolError> {
+    let mut action = if let Some(arr) = result.as_array() {
+        select_code_action(arr, query)?.clone()
     } else {
-        result
+        result.clone()
     };
+    if action.get("edit").is_none() && action.get("data").is_some() {
+        action = client
+            .request("codeAction/resolve", action.clone())
+            .await
+            .map_err(|err| arg_invalid(format!("code action resolve failed: {err}")))?;
+    }
     if action.get("command").is_some() && action.get("edit").is_none() {
         return Err(arg_invalid("bare Command code actions are not executed"));
     }
@@ -399,6 +455,37 @@ fn extract_code_action_edit(result: &Value) -> Result<Value, ToolError> {
         .get("edit")
         .cloned()
         .ok_or_else(|| arg_invalid("code action has no edit"))
+}
+
+pub(crate) fn select_code_action<'a>(
+    actions: &'a [Value],
+    query: Option<&str>,
+) -> Result<&'a Value, ToolError> {
+    let selected = match query.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(query) => {
+            if let Ok(index) = query.parse::<usize>() {
+                actions
+                    .get(index)
+                    .or_else(|| index.checked_sub(1).and_then(|idx| actions.get(idx)))
+            } else {
+                let needle = query.to_ascii_lowercase();
+                actions.iter().find(|item| {
+                    item.get("title")
+                        .and_then(Value::as_str)
+                        .is_some_and(|title| title.to_ascii_lowercase().contains(&needle))
+                })
+            }
+        }
+        None => actions
+            .iter()
+            .find(|item| item.get("edit").is_some())
+            .or_else(|| {
+                actions
+                    .iter()
+                    .find(|item| item.get("data").is_some() && item.get("command").is_none())
+            }),
+    };
+    selected.ok_or_else(|| arg_invalid("no matching CodeAction.edit to apply"))
 }
 
 fn truncate_model_output(text: String) -> String {
@@ -505,11 +592,7 @@ fn flatten_hover(contents: &Value) -> String {
 fn language_id(servers: &[CatalogServer], path: &std::path::Path) -> String {
     primary_for_file(servers, path)
         .and_then(|s| s.language_id.clone())
-        .unwrap_or_else(|| {
-            path.extension()
-                .map(|e| e.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "plaintext".into())
-        })
+        .unwrap_or_else(|| super::catalog::language_id_for_path(path))
 }
 
 fn looks_like_glob(file: &str) -> bool {
@@ -538,20 +621,10 @@ async fn glob_action(
     let mut sections = Vec::new();
     for path in paths.into_iter().take(MAX_GLOB_TARGETS) {
         let display = context.display_path(&path);
-        let uri = format!("file://{}", path.display());
+        let uri = super::uri::path_to_file_uri(&path);
         let text = std::fs::read_to_string(&path).unwrap_or_default();
         let _ = client
-            .notify(
-                "textDocument/didOpen",
-                json!({
-                    "textDocument": {
-                        "uri": uri,
-                        "languageId": language_id(servers, &path),
-                        "version": 1,
-                        "text": text
-                    }
-                }),
-            )
+            .ensure_open(&uri, &language_id(servers, &path), &text)
             .await;
         let result = client
             .request(

@@ -3,10 +3,13 @@ Job {{ doc.job_id }} fired by trigger {{ event.trigger_id }} on
 
 {{ doc.prompt }}
 
-Use the `lsp` tool. Required sequence:
+This workspace is the Gents repository. Answer from rust-analyzer via the
+`lsp` tool only. Do not guess types or comments.
 
-1. `action=hover` on `src/lib.rs`, line 4, symbol `add`
-2. `action=definition` on the same file and symbol
-3. `action=status`
+1. Hover `CommandNetworkMode::meet` in `crates/gents/src/toolset/shared/command.rs`
+   (`action=hover`, symbol `meet`). Quote the documented rank order.
+2. Hover `lsp_advertised` in `crates/gents/src/toolset/lsp/auth.rs`
+   (`action=hover`, symbol `lsp_advertised`). Quote the signature.
+3. Call `lsp` `action=status`.
 
-Quote the hover signature. Reply DONE when those three calls have completed.
+Quote the hover text. Reply DONE when those calls have completed.

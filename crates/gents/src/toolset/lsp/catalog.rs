@@ -70,6 +70,16 @@ fn glob_one_level(root: &Path, pattern: &str) -> bool {
         .any(|entry| entry.file_name().to_string_lossy().ends_with(suffix))
 }
 
+pub fn detect_admitted_servers(workspace: &Path, servers: &[CatalogServer]) -> Vec<CatalogServer> {
+    servers
+        .iter()
+        .filter(|server| marker_matches(workspace, &server.root_markers))
+        .filter(|server| family_eligible(server, workspace))
+        .filter(|server| super::admit::admit_command(&server.command, workspace).is_ok())
+        .cloned()
+        .collect()
+}
+
 pub fn family_eligible(server: &CatalogServer, root: &Path) -> bool {
     match server.name.as_str() {
         "typescript-language-server" => !marker_matches(
@@ -119,4 +129,33 @@ pub fn file_type_matches(server: &CatalogServer, file: &Path) -> bool {
         .file_types
         .iter()
         .any(|ft| ft.eq_ignore_ascii_case(&ext) || ft.eq_ignore_ascii_case(&name))
+}
+
+/// LSP `languageId` for `textDocument/didOpen`. Extension fallback is not
+/// the same as the protocol id (`rs` is not `rust`).
+pub fn language_id_for_path(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "rs" => "rust",
+        "go" => "go",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "typescriptreact",
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "javascriptreact",
+        "py" | "pyi" => "python",
+        "rb" | "rake" | "gemspec" | "erb" => "ruby",
+        "ex" | "exs" => "elixir",
+        "heex" | "eex" => "phoenix-heex",
+        "nix" => "nix",
+        "php" | "phtml" => "php",
+        "swift" => "swift",
+        "json" => "json",
+        other if !other.is_empty() => other,
+        _ => "plaintext",
+    }
+    .to_string()
 }

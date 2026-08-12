@@ -17,8 +17,22 @@ const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const CORE_ENV_VARS: &[&str] = &[
-    "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
     "USER",
+    "RUSTUP_HOME",
+    "CARGO_HOME",
+    "RUSTUP_TOOLCHAIN",
+    "SDKROOT",
+    "DEVELOPER_DIR",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -78,6 +92,23 @@ impl CommandNetworkMode {
 
     fn allows_network(self) -> bool {
         !matches!(self, Self::Disabled)
+    }
+
+    /// More restrictive mode wins: Disabled < Inherit < Enabled.
+    pub fn meet(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Disabled => 0,
+            Self::Inherit => 1,
+            Self::Enabled => 2,
+        }
     }
 }
 
@@ -232,7 +263,37 @@ pub(crate) fn admit_host_executable(
     if !canonical.is_file() {
         return Err(DenialReason::WorkspaceExecutable);
     }
-    Ok(canonical)
+    Ok(resolve_rustup_proxy(trimmed, canonical, &root))
+}
+
+/// rustup shims in `~/.cargo/bin` canonicalize to the `rustup` binary. An LSP
+/// workspace tempdir has no rust-toolchain.toml, so that shim exits before
+/// initialize. Prefer `rustup which <requested>` when it points at a host binary.
+fn resolve_rustup_proxy(requested: &str, admitted: PathBuf, tool_root: &Path) -> PathBuf {
+    let Some(name) = Path::new(requested)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return admitted;
+    };
+    let Ok(output) = std::process::Command::new("rustup")
+        .args(["which", name])
+        .output()
+    else {
+        return admitted;
+    };
+    if !output.status.success() {
+        return admitted;
+    }
+    let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if resolved.is_empty() {
+        return admitted;
+    }
+    let canonical = std::fs::canonicalize(&resolved).unwrap_or_else(|_| PathBuf::from(resolved));
+    if canonical.starts_with(tool_root) || !canonical.is_file() {
+        return admitted;
+    }
+    canonical
 }
 
 fn which_on_host_path(name: &str) -> Option<PathBuf> {
@@ -628,7 +689,14 @@ fn executable_name_lookup_key(raw: &str) -> Option<String> {
 
 fn is_secret_env_name(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
-    key.contains("KEY") || key.contains("SECRET") || key.contains("TOKEN")
+    key.contains("SECRET")
+        || key.contains("PASSWORD")
+        || key.ends_with("_TOKEN")
+        || key.ends_with("_KEY")
+        || key.contains("_TOKEN_")
+        || key.contains("_KEY_")
+        || key == "TOKEN"
+        || key == "KEY"
 }
 
 fn validate_network_mode(

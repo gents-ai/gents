@@ -374,6 +374,9 @@ impl LspPool {
             client.shutdown_exit().await;
             return Err(error);
         }
+        client
+            .wait_until_ready(server.workspace_ready_timings.as_ref())
+            .await;
         Ok(client)
     }
 
@@ -409,6 +412,32 @@ impl LspPool {
             }
         }
         Some(victims)
+    }
+
+    pub async fn reload_snapshot(
+        &self,
+        session_id: &str,
+        behavior_id: &str,
+        workspace: &std::path::Path,
+        digest: &str,
+    ) -> usize {
+        let keys: Vec<PoolKey> = {
+            let map = self.inner.lock().await;
+            map.keys()
+                .filter(|key| {
+                    key.session_id == session_id
+                        && key.behavior_id == behavior_id
+                        && key.workspace_root == workspace
+                        && key.config_digest == digest
+                })
+                .cloned()
+                .collect()
+        };
+        let count = keys.len();
+        for key in keys {
+            self.retire(&key).await;
+        }
+        count
     }
 
     pub async fn retire(&self, key: &PoolKey) {

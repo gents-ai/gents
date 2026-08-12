@@ -1,6 +1,6 @@
 {
   "name": "lsp-rust",
-  "description": "Least-privilege lsp tool against rust-analyzer on a tiny Rust crate. Not a CI gate.",
+  "description": "Least-privilege lsp tool against rust-analyzer on the Gents workspace. Not a CI gate.",
   "init": {
     "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
     "model_name": "${GENTS_EXP_MODEL:-d4f}",
@@ -12,7 +12,7 @@
     "job_id_field": "job_id",
     "prompt_field": "prompt"
   },
-  "default_prompt": "Use the lsp tool on src/lib.rs. Hover the add function (line 4, symbol add), then request its definition, then call lsp status. Quote the hover signature. Do not guess types. Reply DONE when you have used lsp.",
+  "default_prompt": "This is the Gents repository. Use the lsp tool only; do not guess. Hover CommandNetworkMode::meet in crates/gents/src/toolset/shared/command.rs and quote the documented rank order. Hover lsp_advertised in crates/gents/src/toolset/lsp/auth.rs and quote the signature. Then call lsp status. Reply DONE.",
   "expect": {
     "trigger_ids": ["lsp-hover"]
   },

@@ -132,7 +132,7 @@ pub async fn apply_prepared_with_held_locks(
             }
         }
         if let Some(version) = edit.version {
-            let uri = format!("file://{}", edit.path.display());
+            let uri = super::uri::path_to_file_uri(&edit.path);
             if let Some(tracked) = client.tracked_version(&uri).await {
                 if tracked != version {
                     return Err(ToolError::reported_failure(
@@ -259,10 +259,7 @@ fn prepare_uri(
 }
 
 pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, String> {
-    let rest = uri
-        .strip_prefix("file://")
-        .ok_or_else(|| format!("unsupported URI scheme: {uri}"))?;
-    Ok(PathBuf::from(rest))
+    super::uri::file_uri_to_path(uri)
 }
 
 fn apply_text_edits(
@@ -330,12 +327,14 @@ pub fn resolve_inbound_path(
     context: &ToolContext,
     file: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let path = if let Some(rest) = file.strip_prefix("file://") {
-        rest
+    let path = if file.starts_with("file:") {
+        super::uri::file_uri_to_path(file)?
     } else {
-        file
+        std::path::PathBuf::from(file)
     };
-    context.resolve_path(path).map_err(|err| err.to_string())
+    context
+        .resolve_path(&path.to_string_lossy())
+        .map_err(|err| err.to_string())
 }
 
 pub fn redact_outside_root(context: &ToolContext, uri: &str) -> Option<String> {

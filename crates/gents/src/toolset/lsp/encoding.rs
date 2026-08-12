@@ -28,7 +28,22 @@ pub fn offset_to_position(
     symbol: &str,
 ) -> Option<LspPosition> {
     let line = text.lines().nth(line_1.saturating_sub(1) as usize)?;
-    let byte = line.find(symbol)?;
+    let (needle, nth) = split_symbol_nth(symbol);
+    if needle.is_empty() {
+        return Some(LspPosition {
+            line: line_1.saturating_sub(1),
+            character: 0,
+        });
+    }
+    let mut from = 0;
+    let mut byte = None;
+    for _ in 0..nth {
+        let rel = line.get(from..)?.find(needle)?;
+        let abs = from + rel;
+        byte = Some(abs);
+        from = abs + needle.len();
+    }
+    let byte = byte?;
     let character = match encoding {
         PositionEncoding::Utf8 => byte as u32,
         PositionEncoding::Utf16 => line[..byte].encode_utf16().count() as u32,
@@ -37,6 +52,19 @@ pub fn offset_to_position(
         line: line_1.saturating_sub(1),
         character,
     })
+}
+
+fn split_symbol_nth(symbol: &str) -> (&str, usize) {
+    if let Some((name, rest)) = symbol.rsplit_once('#') {
+        if !name.is_empty() {
+            if let Ok(n) = rest.parse::<usize>() {
+                if n >= 1 {
+                    return (name, n);
+                }
+            }
+        }
+    }
+    (symbol, 1)
 }
 
 pub fn position_to_byte_offset(line: &str, encoding: PositionEncoding, character: u32) -> usize {
@@ -70,5 +98,14 @@ mod tests {
             position_to_byte_offset(line, PositionEncoding::Utf16, pos.character),
             line.find("there").unwrap()
         );
+    }
+
+    #[test]
+    fn symbol_hash_selects_nth_match() {
+        let text = "let add = add(1, add(2, 3));\n";
+        let first = offset_to_position(text, PositionEncoding::Utf8, 1, "add").unwrap();
+        let second = offset_to_position(text, PositionEncoding::Utf8, 1, "add#2").unwrap();
+        assert_eq!(first.character, 4);
+        assert_eq!(second.character, 10);
     }
 }

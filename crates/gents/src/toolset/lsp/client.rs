@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 
 use crate::managed_exec::ManagedProcess;
 
@@ -32,6 +32,15 @@ pub(crate) struct LspClient {
     settings: Option<Value>,
     versions: Mutex<HashMap<String, i64>>,
     initialize_timeout: Duration,
+    diagnostics: Arc<Mutex<HashMap<String, Value>>>,
+    language_ids: Mutex<HashMap<String, String>>,
+    server_status: Arc<Mutex<Option<ServerStatus>>>,
+    progress: Arc<Mutex<HashSet<String>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ServerStatus {
+    quiescent: bool,
 }
 
 impl LspClient {
@@ -49,9 +58,31 @@ impl LspClient {
         let pending_reader = pending.clone();
         let stdin = Arc::new(Mutex::new(stdin));
         let stdin_reader = stdin.clone();
+        let diagnostics: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+        let diagnostics_reader = diagnostics.clone();
+        let server_status: Arc<Mutex<Option<ServerStatus>>> = Arc::new(Mutex::new(None));
+        let server_status_reader = server_status.clone();
+        let progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let progress_reader = progress.clone();
+        let workspace = config.workspace.clone();
+        let settings = server.settings.clone();
         let reader = tokio::spawn(async move {
-            if let Err(error) = read_loop(stdout, pending_reader, stdin_reader).await {
+            if let Err(error) = read_loop(
+                stdout,
+                ReaderShared {
+                    pending: pending_reader.clone(),
+                    stdin: stdin_reader,
+                    diagnostics: diagnostics_reader,
+                    workspace,
+                    settings,
+                    server_status: server_status_reader,
+                    progress: progress_reader,
+                },
+            )
+            .await
+            {
                 tracing::warn!(%error, "lsp reader exited");
+                fail_pending(&pending_reader, &error).await;
             }
         });
         let stderr_task = tokio::spawn(async move {
@@ -85,15 +116,23 @@ impl LspClient {
                 .unwrap_or(INITIALIZE_TIMEOUT)
                 .max(INITIALIZE_TIMEOUT)
                 .min(Duration::from_secs(60)),
+            diagnostics,
+            language_ids: Mutex::new(HashMap::new()),
+            server_status,
+            progress,
         })
     }
 
     pub async fn initialize(&self) -> Result<Value, String> {
-        let root_uri = format!("file://{}", self.workspace.display());
+        let root_uri = super::uri::path_to_file_uri(&self.workspace);
         let params = json!({
             "processId": null,
             "rootUri": root_uri,
             "rootPath": self.workspace,
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": self.workspace.file_name().and_then(|n| n.to_str()).unwrap_or("workspace")
+            }],
             "initializationOptions": self.init_options.clone().unwrap_or(Value::Null),
             "capabilities": {
                 "workspace": {
@@ -111,6 +150,12 @@ impl LspClient {
                 },
                 "general": {
                     "positionEncodings": ["utf-8", "utf-16"]
+                },
+                "window": {
+                    "workDoneProgress": true
+                },
+                "experimental": {
+                    "serverStatusNotification": true
                 }
             },
             "clientInfo": { "name": "gents", "version": "0" }
@@ -148,12 +193,142 @@ impl LspClient {
         Ok(result)
     }
 
+    pub async fn wait_until_ready(&self, timings: Option<&Value>) {
+        let budget = ready_wait(timings);
+        if budget.is_zero() {
+            return;
+        }
+        if self.server_name == "rust-analyzer" {
+            self.wait_for_rust_analyzer(budget).await;
+            return;
+        }
+        self.wait_for_server_status(budget).await;
+    }
+
+    async fn wait_for_rust_analyzer(&self, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        let poll = Duration::from_millis(200);
+        let status_timeout = Duration::from_millis(1_000);
+        let mut seen_workspace = false;
+        while Instant::now() < deadline {
+            if self.is_quiescent().await && self.progress.lock().await.is_empty() {
+                return;
+            }
+            match self
+                .request_with_timeout("rust-analyzer/analyzerStatus", json!({}), status_timeout)
+                .await
+            {
+                Ok(Value::String(status)) if !status.starts_with("No workspaces") => {
+                    if seen_workspace {
+                        return;
+                    }
+                    seen_workspace = true;
+                }
+                _ => {}
+            }
+            tokio::time::sleep(poll).await;
+        }
+    }
+
+    async fn wait_for_server_status(&self, budget: Duration) {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            if self.is_quiescent().await && self.progress.lock().await.is_empty() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn is_quiescent(&self) -> bool {
+        self.server_status
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|status| status.quiescent)
+    }
+
     pub async fn track_open(&self, uri: &str, version: i64) {
         self.versions.lock().await.insert(uri.to_string(), version);
     }
 
     pub async fn tracked_version(&self, uri: &str) -> Option<i64> {
         self.versions.lock().await.get(uri).copied()
+    }
+
+    pub async fn ensure_open(
+        &self,
+        uri: &str,
+        language_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        {
+            let versions = self.versions.lock().await;
+            if versions.contains_key(uri) {
+                return Ok(());
+            }
+        }
+        self.language_ids
+            .lock()
+            .await
+            .insert(uri.to_string(), language_id.to_string());
+        self.track_open(uri, 1).await;
+        self.notify(
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text
+                }
+            }),
+        )
+        .await
+    }
+
+    pub async fn sync_document(
+        &self,
+        uri: &str,
+        language_id: &str,
+        text: &str,
+    ) -> Result<i64, String> {
+        let version = {
+            let mut versions = self.versions.lock().await;
+            if let Some(current) = versions.get_mut(uri) {
+                *current += 1;
+                *current
+            } else {
+                drop(versions);
+                self.ensure_open(uri, language_id, text).await?;
+                return Ok(1);
+            }
+        };
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri, "version": version },
+                "contentChanges": [{ "text": text }]
+            }),
+        )
+        .await?;
+        Ok(version)
+    }
+
+    pub async fn close_document(&self, uri: &str) {
+        if self.versions.lock().await.remove(uri).is_some() {
+            self.language_ids.lock().await.remove(uri);
+            let _ = self
+                .notify(
+                    "textDocument/didClose",
+                    json!({ "textDocument": { "uri": uri } }),
+                )
+                .await;
+        }
+    }
+
+    pub async fn cached_diagnostics(&self, uri: &str) -> Option<Value> {
+        self.diagnostics.lock().await.get(uri).cloned()
     }
 
     pub async fn position_encoding(&self) -> super::encoding::PositionEncoding {
@@ -245,6 +420,10 @@ impl LspClient {
     }
 
     pub async fn shutdown_exit(&self) {
+        let open: Vec<String> = self.versions.lock().await.keys().cloned().collect();
+        for uri in open {
+            self.close_document(&uri).await;
+        }
         let _ = self.request("shutdown", Value::Null).await;
         let _ = self.notify("exit", Value::Null).await;
         let mut process = self.process.lock().await;
@@ -304,11 +483,56 @@ async fn write_message(stdin: &mut ChildStdin, value: &Value) -> Result<(), Stri
     stdin.flush().await.map_err(|err| err.to_string())
 }
 
-async fn read_loop(
-    stdout: ChildStdout,
+fn configuration_result(params: Option<&Value>, settings: &Option<Value>) -> Value {
+    let items = params
+        .and_then(|params| params.get("items"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if items.is_empty() {
+        return json!([settings.clone().unwrap_or(Value::Null)]);
+    }
+    Value::Array(
+        items
+            .iter()
+            .map(|_| settings.clone().unwrap_or(Value::Null))
+            .collect(),
+    )
+}
+
+fn ready_wait(timings: Option<&Value>) -> Duration {
+    let Some(timings) = timings else {
+        return Duration::ZERO;
+    };
+    let ms = timings
+        .as_u64()
+        .or_else(|| timings.get("initial").and_then(Value::as_u64))
+        .or_else(|| timings.get("projectLoad").and_then(Value::as_u64))
+        .unwrap_or(0);
+    Duration::from_millis(ms).min(Duration::from_secs(60))
+}
+
+async fn fail_pending(
+    pending: &Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>,
+    error: &str,
+) {
+    let mut pending = pending.lock().await;
+    for (_, tx) in pending.drain() {
+        let _ = tx.send(Err(error.to_string()));
+    }
+}
+
+struct ReaderShared {
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
     stdin: Arc<Mutex<ChildStdin>>,
-) -> Result<(), String> {
+    diagnostics: Arc<Mutex<HashMap<String, Value>>>,
+    workspace: std::path::PathBuf,
+    settings: Option<Value>,
+    server_status: Arc<Mutex<Option<ServerStatus>>>,
+    progress: Arc<Mutex<HashSet<String>>>,
+}
+
+async fn read_loop(stdout: ChildStdout, shared: ReaderShared) -> Result<(), String> {
     let mut reader = BufReader::new(stdout);
     loop {
         let mut headers = String::new();
@@ -319,13 +543,11 @@ async fn read_loop(
                 .await
                 .map_err(|err| err.to_string())?;
             if n == 0 {
-                let mut pending = pending.lock().await;
-                for (_, tx) in pending.drain() {
-                    let _ = tx.send(Err("language server stdout closed".into()));
-                }
+                fail_pending(&shared.pending, "language server stdout closed").await;
                 return Ok(());
             }
             if headers.len() + line.len() > MAX_HEADER_BYTES {
+                fail_pending(&shared.pending, "LSP header exceeded bound").await;
                 return Err("LSP header exceeded bound".into());
             }
             if line == "\r\n" || line == "\n" {
@@ -339,27 +561,30 @@ async fn read_loop(
             .and_then(|v| v.trim().parse::<usize>().ok())
             .ok_or_else(|| "missing Content-Length".to_string())?;
         if length > MAX_CONTENT_LENGTH {
+            fail_pending(&shared.pending, "incoming Content-Length exceeds cap").await;
             return Err("incoming Content-Length exceeds cap".into());
         }
         let mut body = vec![0u8; length];
-        reader
-            .read_exact(&mut body)
-            .await
-            .map_err(|err| err.to_string())?;
-        let value: Value = serde_json::from_slice(&body).map_err(|err| err.to_string())?;
+        if let Err(error) = reader.read_exact(&mut body).await {
+            fail_pending(&shared.pending, &error.to_string()).await;
+            return Err(error.to_string());
+        }
+        let value: Value = match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                fail_pending(&shared.pending, &error.to_string()).await;
+                return Err(error.to_string());
+            }
+        };
         if let Some(method) = value.get("method").and_then(Value::as_str) {
-            if let Some(id) = value.get("id").cloned() {
-                let result = if method == "workspace/applyEdit" {
-                    json!({ "applied": false })
-                } else {
-                    json!(null)
-                };
-                let reply = json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": result
-                });
-                write_message(&mut *stdin.lock().await, &reply).await?;
+            handle_server_message(&shared, method, &value).await?;
+            if value.get("id").is_some()
+                && value.get("result").is_none()
+                && value.get("error").is_none()
+            {
+                continue;
+            }
+            if value.get("id").is_none() {
                 continue;
             }
         }
@@ -369,9 +594,96 @@ async fn read_loop(
             } else {
                 Ok(value.get("result").cloned().unwrap_or(Value::Null))
             };
-            if let Some(tx) = pending.lock().await.remove(&id) {
+            if let Some(tx) = shared.pending.lock().await.remove(&id) {
                 let _ = tx.send(result);
             }
         }
+    }
+}
+
+async fn handle_server_message(
+    shared: &ReaderShared,
+    method: &str,
+    value: &Value,
+) -> Result<(), String> {
+    match method {
+        "textDocument/publishDiagnostics" => {
+            if let Some(uri) = value.pointer("/params/uri").and_then(Value::as_str) {
+                shared.diagnostics.lock().await.insert(
+                    uri.to_string(),
+                    value.get("params").cloned().unwrap_or(Value::Null),
+                );
+            }
+            return Ok(());
+        }
+        "experimental/serverStatus" => {
+            let quiescent = value
+                .pointer("/params/quiescent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            return Ok(());
+        }
+        "$/progress" => {
+            let token = progress_token(value.pointer("/params/token"));
+            let kind = value
+                .pointer("/params/value/kind")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let mut progress = shared.progress.lock().await;
+            match kind {
+                "begin" => {
+                    progress.insert(token);
+                }
+                "end" => {
+                    progress.remove(&token);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+    let Some(id) = value.get("id").cloned() else {
+        return Ok(());
+    };
+    let result = match method {
+        "workspace/applyEdit" => json!({ "applied": false }),
+        "workspace/configuration" => configuration_result(value.get("params"), &shared.settings),
+        "workspace/workspaceFolders" => json!([{
+            "uri": super::uri::path_to_file_uri(&shared.workspace),
+            "name": shared.workspace.file_name().and_then(|n| n.to_str()).unwrap_or("workspace")
+        }]),
+        "window/workDoneProgress/create"
+        | "client/registerCapability"
+        | "client/unregisterCapability"
+        | "window/showMessageRequest"
+        | "workspace/semanticTokens/refresh"
+        | "workspace/inlayHint/refresh"
+        | "workspace/codeLens/refresh"
+        | "workspace/codeAction/refresh"
+        | "workspace/inlineValue/refresh"
+        | "workspace/foldingRange/refresh"
+        | "workspace/diagnostic/refresh" => json!(null),
+        "window/showDocument" => json!({ "success": false }),
+        _ => json!(null),
+    };
+    let reply = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    });
+    if let Err(error) = write_message(&mut *shared.stdin.lock().await, &reply).await {
+        fail_pending(&shared.pending, &error).await;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn progress_token(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(token)) => token.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => "progress".into(),
     }
 }

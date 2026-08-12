@@ -9,15 +9,14 @@ mod encoding;
 mod pool;
 #[cfg(test)]
 mod tests;
+mod uri;
 mod writethrough;
 
 pub use admit::admit_command;
 pub use auth::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
-pub use catalog::{
-    builtin_catalog, family_eligible, marker_matches, primary_for_file, CatalogServer,
-};
+pub use catalog::{builtin_catalog, primary_for_file, CatalogServer};
 pub use config::LspConfigDocument;
 pub use pool::{LspPool, PoolKey};
 pub use writethrough::{LspWritethrough, MutationKind};
@@ -72,7 +71,8 @@ pub fn constraints_from_effective_bash(
         crate::tool_surface::EndpointScope::None => (Vec::new(), true),
         crate::tool_surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
     };
-    let network_mode = lsp_network_overlay.unwrap_or_else(crate::toolset::default_lsp_network_mode);
+    let desired = lsp_network_overlay.unwrap_or_else(crate::toolset::default_lsp_network_mode);
+    let network_mode = desired.meet(bash.network_mode);
     CommandConstraints {
         allowed_argv_prefixes: allowed,
         forbidden_argv_prefixes: bash.forbidden_argv_prefixes.iter().cloned().collect(),
@@ -131,7 +131,7 @@ impl Tool for LspTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: LSP_TOOL_NAME.to_string(),
-            description: "Query language servers for diagnostics, navigation, symbols, renames, code actions, capabilities, and raw requests.".into(),
+            description: "Language-server intelligence: hover, definition, references, diagnostics, symbols, rename, and code actions. Lines are 1-indexed. Prefer lsp over text search for cross-file symbols. reload retires the current snapshot's clients without starting replacements. workspace/executeCommand is never sent.".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -154,13 +154,34 @@ impl Tool for LspTool {
                             "request"
                         ]
                     },
-                    "file": { "type": "string" },
-                    "line": { "type": "integer" },
-                    "symbol": { "type": "string" },
-                    "query": { "type": "string" },
-                    "new_name": { "type": "string" },
-                    "apply": { "type": "boolean" },
-                    "payload": { "type": "string" },
+                    "file": {
+                        "type": "string",
+                        "description": "Path relative to the file-tool root. For diagnostics also a glob; use \"*\" for workspace symbols/diagnostics/reload."
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "1-indexed line for hover, definition, references, rename, and code_actions."
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Substring on that line used to pick the column. Use name#N for the Nth match (1-indexed)."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Workspace symbol query; code-action title substring or 0/1-based index when apply=true; or raw LSP method for action=request."
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "Required for rename and rename_file."
+                    },
+                    "apply": {
+                        "type": "boolean",
+                        "description": "rename/rename_file apply unless false. code_actions lists unless true."
+                    },
+                    "payload": {
+                        "type": "string",
+                        "description": "JSON object for action=request. Only allowlisted read methods; every file URI is validated."
+                    },
                     "timeout": {
                         "type": "integer",
                         "minimum": 5,
@@ -193,26 +214,19 @@ impl Tool for LspTool {
             let method = args.query.as_deref().unwrap_or("");
             actions::validate_raw_request(&self.context, method, args.payload.as_deref())?;
         }
-        let detected: Vec<CatalogServer> = self
-            .config
-            .servers
-            .iter()
-            .filter(|server| marker_matches(&self.config.workspace, &server.root_markers))
-            .filter(|server| family_eligible(server, &self.config.workspace))
-            .cloned()
-            .collect();
+        let detected =
+            catalog::detect_admitted_servers(&self.config.workspace, &self.config.servers);
         let lease = if action.may_cold_start() {
             let file = args.file.as_deref().unwrap_or("");
-            let path = if file.is_empty() || file == "*" {
+            let path = if file.is_empty() || file == "*" || file.contains(['*', '?', '{', '[']) {
                 None
             } else {
                 edits::resolve_inbound_path(&self.context, file).ok()
             };
-            let server = path
-                .as_ref()
-                .and_then(|path| primary_for_file(&detected, path))
-                .or_else(|| detected.iter().find(|s| !s.is_linter))
-                .cloned();
+            let server = match path.as_ref() {
+                Some(path) => primary_for_file(&detected, path).cloned(),
+                None => detected.iter().find(|server| !server.is_linter).cloned(),
+            };
             if let Some(server) = server {
                 let session_id =
                     crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
@@ -237,28 +251,6 @@ impl Tool for LspTool {
             } else {
                 None
             }
-        } else if matches!(action, LspAction::Reload) {
-            let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-                .and_then(|scope| scope.session_id)
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| self.config.session_id.clone());
-            let key_prefix = (
-                session_id,
-                self.config.behavior_id.clone(),
-                self.config.workspace.clone(),
-                self.config.digest.clone(),
-            );
-            for server in &detected {
-                let key = PoolKey {
-                    session_id: key_prefix.0.clone(),
-                    behavior_id: key_prefix.1.clone(),
-                    workspace_root: key_prefix.2.clone(),
-                    server_name: server.name.clone(),
-                    config_digest: key_prefix.3.clone(),
-                };
-                self.pool.retire(&key).await;
-            }
-            None
         } else {
             None
         };

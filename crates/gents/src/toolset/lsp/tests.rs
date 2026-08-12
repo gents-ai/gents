@@ -3,6 +3,73 @@ use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSel
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
+fn first_line_containing(path: &std::path::Path, needle: &str) -> u32 {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!("read {}: {err}", path.display());
+    });
+    text.lines()
+        .position(|line| line.contains(needle))
+        .map(|idx| u32::try_from(idx + 1).expect("line"))
+        .unwrap_or_else(|| panic!("{}: missing `{needle}`", path.display()))
+}
+
+fn rustc_sysroot() -> Option<String> {
+    let output = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sysroot = String::from_utf8(output.stdout).ok()?;
+    let sysroot = sysroot.trim();
+    if sysroot.is_empty() {
+        None
+    } else {
+        Some(sysroot.to_string())
+    }
+}
+
+fn write_isolated_rust_project(root: &std::path::Path) {
+    let Some(sysroot) = rustc_sysroot() else {
+        return;
+    };
+    let lib =
+        std::fs::canonicalize(root.join("src/lib.rs")).unwrap_or_else(|_| root.join("src/lib.rs"));
+    let doc = serde_json::json!({
+        "sysroot": sysroot,
+        "crates": [{
+            "display_name": "lsp_demo_fixture",
+            "root_module": lib,
+            "edition": "2021",
+            "deps": [],
+            "is_workspace_member": true,
+            "cfg": ["unix"]
+        }]
+    });
+    std::fs::write(root.join("rust-project.json"), doc.to_string()).unwrap();
+}
+
+fn rust_analyzer_server(timings_ms: u64) -> CatalogServer {
+    CatalogServer {
+        name: "rust-analyzer".into(),
+        command: "rust-analyzer".into(),
+        args: vec![],
+        file_types: vec![".rs".into()],
+        root_markers: vec!["Cargo.toml".into(), "rust-project.json".into()],
+        is_linter: false,
+        priority: 1,
+        language_id: Some("rust".into()),
+        init_options: None,
+        settings: Some(serde_json::json!({
+            "rust-analyzer": { "checkOnSave": false }
+        })),
+        capabilities: None,
+        workspace_ready_timings: Some(serde_json::json!({ "initial": timings_ms })),
+        warmup_timeout_ms: Some(30_000),
+    }
+}
+
 fn sample_config(
     workspace: std::path::PathBuf,
     file: FileToolMode,
@@ -909,6 +976,195 @@ fn glob_match_parser_reads_structured_paths() {
     assert_eq!(paths, vec![root.join("src/lib.rs")]);
 }
 
+#[tokio::test]
+async fn rust_analyzer_starts_and_reports_ready() {
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let src =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust/workspace");
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("src")).unwrap();
+    // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated
+    // temp crate has no lockfile/target, so cargo loading yields empty hover.
+    std::fs::copy(src.join("src/lib.rs"), root.path().join("src/lib.rs")).unwrap();
+    write_isolated_rust_project(root.path());
+    assert!(
+        rustc_sysroot().is_some(),
+        "rustc --print sysroot is required for the isolated rust-project.json fixture"
+    );
+    let server = rust_analyzer_server(8_000);
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-ra",
+        vec![server.clone()],
+    );
+    let tool = LspTool::new(config, LspPool::new()).unwrap();
+    let hover = tool
+        .call(LspArgs {
+            action: "hover".into(),
+            file: Some("src/lib.rs".into()),
+            line: Some(4),
+            symbol: Some("add".into()),
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: Some(40),
+        })
+        .await
+        .expect("rust-analyzer must accept hover after start");
+    assert!(
+        hover.contains("add")
+            && (hover.contains("u32") || hover.contains("fn add") || hover.contains("left")),
+        "hover must include the add signature, got: {hover}"
+    );
+    let status = tool
+        .call(LspArgs {
+            action: "status".into(),
+            file: None,
+            line: None,
+            symbol: None,
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: None,
+        })
+        .await
+        .expect("status");
+    assert!(
+        status.contains("rust-analyzer (ready)"),
+        "expected a started rust-analyzer, got: {status}"
+    );
+}
+
+/// rust-analyzer against this crate — the same facts the live e2e checks.
+#[tokio::test]
+#[ignore = "rust-analyzer on the gents crate graph; run with --ignored"]
+async fn rust_analyzer_hover_on_gents_crate() {
+    if !std::process::Command::new("rust-analyzer")
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let crate_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let auth = crate_root.join("src/toolset/lsp/auth.rs");
+    let command = crate_root.join("src/toolset/shared/command.rs");
+    let advertised_line = first_line_containing(&auth, "pub fn lsp_advertised");
+    let meet_line = first_line_containing(&command, "pub fn meet(self, other: Self)");
+    let tool = LspTool::new(
+        sample_config(
+            crate_root,
+            FileToolMode::ReadOnly,
+            "s-ra-gents",
+            vec![rust_analyzer_server(45_000)],
+        ),
+        LspPool::new(),
+    )
+    .unwrap();
+
+    let advertised = tool
+        .call(LspArgs {
+            action: "hover".into(),
+            file: Some("src/toolset/lsp/auth.rs".into()),
+            line: Some(advertised_line),
+            symbol: Some("lsp_advertised".into()),
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: Some(60),
+        })
+        .await
+        .expect("hover lsp_advertised");
+    assert!(
+        advertised.contains("FileToolMode"),
+        "lsp_advertised hover must name FileToolMode, got: {advertised}"
+    );
+
+    let meet = tool
+        .call(LspArgs {
+            action: "hover".into(),
+            file: Some("src/toolset/shared/command.rs".into()),
+            line: Some(meet_line),
+            symbol: Some("meet".into()),
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: Some(60),
+        })
+        .await
+        .expect("hover meet");
+    assert!(
+        meet.contains("Disabled") && meet.contains("Inherit"),
+        "meet hover must document Disabled < Inherit, got: {meet}"
+    );
+
+    let status = tool
+        .call(LspArgs {
+            action: "status".into(),
+            file: None,
+            line: None,
+            symbol: None,
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: None,
+        })
+        .await
+        .expect("status");
+    assert!(
+        status.contains("rust-analyzer (ready)"),
+        "expected a started rust-analyzer, got: {status}"
+    );
+}
+
+#[test]
+fn language_id_maps_extensions_to_protocol_ids() {
+    assert_eq!(
+        catalog::language_id_for_path(std::path::Path::new("src/lib.rs")),
+        "rust"
+    );
+    assert_eq!(
+        catalog::language_id_for_path(std::path::Path::new("main.py")),
+        "python"
+    );
+    let rust = builtin_catalog()
+        .into_iter()
+        .find(|server| server.name == "rust-analyzer")
+        .expect("rust-analyzer catalog entry");
+    assert_eq!(rust.language_id.as_deref(), Some("rust"));
+}
+
+#[test]
+fn code_action_query_selects_title_or_index() {
+    let actions = vec![
+        serde_json::json!({"title":"Extract function","edit":{"changes":{}}}),
+        serde_json::json!({"title":"Inline variable","edit":{"changes":{"a":[]}}}),
+        serde_json::json!({"title":"Need resolve","data":{"id":1}}),
+    ];
+    let by_title = super::actions::select_code_action(&actions, Some("inline")).unwrap();
+    assert_eq!(by_title["title"], "Inline variable");
+    let by_zero = super::actions::select_code_action(&actions, Some("0")).unwrap();
+    assert_eq!(by_zero["title"], "Extract function");
+    let by_one = super::actions::select_code_action(&actions, Some("1")).unwrap();
+    assert_eq!(by_one["title"], "Inline variable");
+    let unresolved = super::actions::select_code_action(&actions[2..], None).unwrap();
+    assert_eq!(unresolved["title"], "Need resolve");
+}
+
 #[test]
 fn action_caps_are_the_spec_values() {
     assert_eq!(super::actions::MAX_DIAGNOSTICS, 50);
@@ -1141,6 +1397,125 @@ while True:
     .await;
     assert!(seen.is_ok(), "expected $/cancelRequest");
     assert!(pool.has_ready(&key).await);
+}
+
+#[test]
+fn effective_disabled_network_is_not_replaced_by_lsp_default() {
+    let mut bash = crate::tool_surface::ToolPolicyBash::off();
+    bash.network_mode = CommandNetworkMode::Disabled;
+    let omitted = constraints_from_effective_bash(&bash, None);
+    assert_eq!(omitted.network_mode, CommandNetworkMode::Disabled);
+    let explicit_enabled =
+        constraints_from_effective_bash(&bash, Some(CommandNetworkMode::Enabled));
+    assert_eq!(explicit_enabled.network_mode, CommandNetworkMode::Disabled);
+    let explicit_inherit =
+        constraints_from_effective_bash(&bash, Some(CommandNetworkMode::Inherit));
+    assert_eq!(explicit_inherit.network_mode, CommandNetworkMode::Disabled);
+}
+
+#[test]
+fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
+    let root = tempfile::tempdir().unwrap();
+    let constraints = CommandConstraints {
+        allowed_argv_prefixes: Vec::new(),
+        forbidden_argv_prefixes: Vec::new(),
+        network_mode: CommandNetworkMode::Disabled,
+        execution_mode: CommandExecutionMode::Unrestricted,
+        sandbox: CommandExecutionMode::Unrestricted,
+        deny_all_argv: false,
+    };
+    let err = crate::toolset::prepare_managed_command(root.path(), "true", &[], &constraints)
+        .or_else(|_| {
+            crate::toolset::prepare_managed_command(root.path(), "/bin/true", &[], &constraints)
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("disabled")
+            || err.to_string().contains("unenforceable")
+            || err.to_string().contains("network"),
+        "{err}"
+    );
+}
+
+#[test]
+fn missing_host_executable_is_not_detected() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname=\"t\"\nversion=\"0.0.1\"\n",
+    )
+    .unwrap();
+    let missing = CatalogServer {
+        name: "ghost-ls".into(),
+        command: "definitely-not-an-lsp-binary-xyz".into(),
+        args: vec![],
+        file_types: vec![".rs".into()],
+        root_markers: vec!["Cargo.toml".into()],
+        is_linter: false,
+        priority: 1,
+        language_id: None,
+        init_options: None,
+        settings: None,
+        capabilities: None,
+        workspace_ready_timings: None,
+        warmup_timeout_ms: None,
+    };
+    let detected = catalog::detect_admitted_servers(root.path(), &[missing]);
+    assert!(detected.is_empty());
+}
+
+#[tokio::test]
+async fn reload_retires_current_snapshot_clients() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname=\"t\"\nversion=\"0.0.1\"\n",
+    )
+    .unwrap();
+    let pool = LspPool::new();
+    let server = fixture_server(FIXTURE_PY.into());
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadWrite,
+        "s-reload",
+        vec![server.clone()],
+    );
+    let tool = LspTool::new(config, pool.clone()).unwrap();
+    let _ = tool
+        .call(LspArgs {
+            action: "hover".into(),
+            file: Some("lib.rs".into()),
+            line: Some(1),
+            symbol: Some("x".into()),
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: None,
+        })
+        .await
+        .expect("hover starts client");
+    assert_eq!(pool.live_count().await, 1);
+    let out = tool
+        .call(LspArgs {
+            action: "reload".into(),
+            file: None,
+            line: None,
+            symbol: None,
+            query: None,
+            new_name: None,
+            apply: None,
+            payload: None,
+            timeout: None,
+        })
+        .await
+        .expect("reload");
+    assert!(out.contains("retired"), "{out}");
+    assert_eq!(pool.live_count().await, 0);
 }
 
 #[test]

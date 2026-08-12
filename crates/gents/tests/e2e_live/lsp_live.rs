@@ -1,9 +1,9 @@
 //! Live qualification: a real model uses the native `lsp` tool against
-//! rust-analyzer on the checked-in `demo/lsp-rust` fixture crate.
+//! rust-analyzer on **this** Gents workspace.
 //!
 //! Offline and required CI skip this. The spec still says no live
-//! rust-analyzer in CI. Run it when you want proof the model actually
-//! called `lsp` and got rust-analyzer output:
+//! rust-analyzer in CI. Run it when you want proof the model asked
+//! rust-analyzer a checkable question about the runtime crate:
 //!
 //! ```bash
 //! rust-analyzer --version
@@ -28,10 +28,15 @@ use serde::Deserialize;
 
 use gents::AgentIdentity;
 
-use crate::steward_loop_live::{bind_d4f_backend, wait_for_request_terminal};
+use crate::steward_loop_live::{
+    bind_d4f_backend, wait_for_assistant_answer, wait_for_request_terminal,
+};
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
+
+const MEET_FILE: &str = "crates/gents/src/toolset/shared/command.rs";
+const ADVERTISED_FILE: &str = "crates/gents/src/toolset/lsp/auth.rs";
 
 fn live_lsp_enabled() -> bool {
     std::env::var("GENTS_LIVE_LSP").as_deref() == Ok("1")
@@ -45,18 +50,21 @@ fn rust_analyzer_on_path() -> bool {
         .unwrap_or(false)
 }
 
-fn copy_demo_workspace() -> tempfile::TempDir {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust/workspace");
-    let dir = tempfile::tempdir().expect("workspace tempdir");
-    std::fs::create_dir_all(dir.path().join("src")).unwrap();
-    copy_file(&src.join("Cargo.toml"), &dir.path().join("Cargo.toml"));
-    copy_file(&src.join("src/lib.rs"), &dir.path().join("src/lib.rs"));
-    dir
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root")
 }
 
-fn copy_file(from: &Path, to: &Path) {
-    std::fs::copy(from, to)
-        .unwrap_or_else(|err| panic!("copy {} -> {}: {err}", from.display(), to.display()));
+fn first_line_containing(path: &Path, needle: &str) -> u32 {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!("read {}: {err}", path.display());
+    });
+    text.lines()
+        .position(|line| line.contains(needle))
+        .map(|idx| u32::try_from(idx + 1).expect("line"))
+        .unwrap_or_else(|| panic!("{}: missing `{needle}`", path.display()))
 }
 
 #[derive(Deserialize, Debug)]
@@ -112,9 +120,15 @@ async fn lsp_live_model_uses_rust_analyzer() {
         "rust-analyzer must be on PATH (rust-analyzer --version)"
     );
 
+    let workspace = repo_root();
+    std::env::set_current_dir(&workspace).expect("chdir to Gents repo root");
+    let meet_line =
+        first_line_containing(&workspace.join(MEET_FILE), "pub fn meet(self, other: Self)");
+    let advertised_line =
+        first_line_containing(&workspace.join(ADVERTISED_FILE), "pub fn lsp_advertised");
+
     let db = test_db("lsp-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("lsp-live"));
-    let workspace = copy_demo_workspace();
 
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
 
@@ -125,10 +139,13 @@ async fn lsp_live_model_uses_rust_analyzer() {
             agent_did: agent_did.clone(),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
-            file_tool_root: Some(workspace.path().display().to_string()),
+            file_tool_root: Some(workspace.display().to_string()),
             enable_bash: Some(false),
             enable_lsp: Some(true),
-            lsp_config: Some(r#"{"servers":{"rust-analyzer":{"warmup_timeout_ms":30000}}}"#.into()),
+            lsp_config: Some(
+                r#"{"servers":{"rust-analyzer":{"warmup_timeout_ms":60000,"workspace_ready_timings":{"initial":45000},"settings":{"rust-analyzer":{"checkOnSave":false}}}}}"#
+                    .into(),
+            ),
             ..Default::default()
         },
     )
@@ -147,7 +164,7 @@ async fn lsp_live_model_uses_rust_analyzer() {
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::readonly_at(workspace.path()),
+            tool_ceiling: ToolCeiling::readonly_at(&workspace),
             ..Default::default()
         },
     )
@@ -159,22 +176,27 @@ async fn lsp_live_model_uses_rust_analyzer() {
     let booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
 
     let request_id = "lsp-live-req-1";
+    let prompt = format!(
+        "This workspace is the Gents repository. Answer from rust-analyzer via the lsp tool only. Do not guess types or comments.\n\
+         \n\
+         1. What rank order does CommandNetworkMode::meet document? Call lsp action=hover on {MEET_FILE}, line={meet_line}, symbol=meet.\n\
+         2. What is the signature of lsp_advertised? Call lsp action=hover on {ADVERTISED_FILE}, line={advertised_line}, symbol=lsp_advertised.\n\
+         3. Call lsp action=status.\n\
+         \n\
+         Quote the hover text in your reply. End with DONE."
+    );
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
         &behavior_id,
         request_id,
         "lsp-live-session-1",
-        "The workspace is a tiny Rust crate. You must use the lsp tool — do not guess types.\n\
-         1. Call lsp with action=hover, file=src/lib.rs, line=4, symbol=add.\n\
-         2. Call lsp with action=definition on the same file and symbol.\n\
-         3. Call lsp with action=status.\n\
-         Quote the hover signature for add. Reply DONE when those three calls have completed.",
+        &prompt,
     )
     .await;
 
     let terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(300)).await;
+        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(600)).await;
     assert_eq!(terminal, "completed", "live lsp run must complete");
 
     let calls = fetch_tool_calls(db.node.as_ref(), request_id).await;
@@ -185,46 +207,123 @@ async fn lsp_live_model_uses_rust_analyzer() {
     assert!(
         !lsp_calls.is_empty(),
         "model must persist at least one lsp tool call; calls: {:?}",
-        calls
-            .iter()
-            .map(|call| (
-                call.tool_name.clone(),
-                call.status.clone(),
-                call.args.clone()
-            ))
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        lsp_calls.iter().any(|call| {
-            call.status.as_deref() == Some("completed")
-                || call.lifecycle_state.as_deref() == Some("completed")
-        }),
-        "at least one lsp call must complete; lsp calls: {:?}",
-        lsp_calls
-            .iter()
-            .map(|call| {
-                (
-                    call.status.clone(),
-                    call.lifecycle_state.clone(),
-                    call.args.clone(),
-                    call.result.clone(),
-                )
-            })
-            .collect::<Vec<_>>()
+        summarize_calls(calls.iter())
     );
 
-    let results = lsp_calls
-        .iter()
-        .filter_map(|call| call.result.as_deref())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let saw_analyzer = results.to_lowercase().contains("rust-analyzer");
-    let saw_add_sig = results.contains("add")
-        && (results.contains("u32") || results.contains("fn add") || results.contains("left"));
+    let meet_hover = find_hover(&lsp_calls, MEET_FILE, "meet");
+    let meet_text = meet_hover.result.as_deref().unwrap_or("");
     assert!(
-        saw_analyzer || saw_add_sig,
-        "lsp results must mention rust-analyzer or the add signature; results:\n{results}"
+        !result_is_error(meet_hover)
+            && meet_text.contains("Disabled")
+            && meet_text.contains("Inherit"),
+        "hover on CommandNetworkMode::meet must quote Disabled < Inherit; got:\n{meet_text}\nall: {:?}",
+        summarize_calls(lsp_calls.iter().copied())
+    );
+
+    let advertised_hover = find_hover(&lsp_calls, ADVERTISED_FILE, "lsp_advertised");
+    let advertised_text = advertised_hover.result.as_deref().unwrap_or("");
+    assert!(
+        !result_is_error(advertised_hover) && advertised_text.contains("FileToolMode"),
+        "hover on lsp_advertised must include FileToolMode; got:\n{advertised_text}\nall: {:?}",
+        summarize_calls(lsp_calls.iter().copied())
+    );
+
+    let status = lsp_calls
+        .iter()
+        .find(|call| call_completed(call) && action_of(call).as_deref() == Some("status"));
+    let status_result = status.and_then(|call| call.result.as_deref()).unwrap_or("");
+    assert!(
+        status_result.contains("rust-analyzer (ready)"),
+        "status must show rust-analyzer (ready); got:\n{status_result}\nall: {:?}",
+        summarize_calls(lsp_calls.iter().copied())
+    );
+
+    let answer =
+        wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(10)).await;
+    assert!(
+        answer.contains("FileToolMode")
+            || (answer.contains("Disabled") && answer.contains("Inherit")),
+        "assistant must report a rust-analyzer fact; got:\n{answer}"
     );
 
     booted.shutdown().await;
+}
+
+fn find_hover<'a>(calls: &'a [&ToolCallRow], file: &str, symbol: &str) -> &'a ToolCallRow {
+    calls
+        .iter()
+        .copied()
+        .find(|call| {
+            call_completed(call)
+                && action_of(call).as_deref() == Some("hover")
+                && file_of(call).is_some_and(|path| path.ends_with(file) || path.contains(file))
+                && symbol_of(call).as_deref() == Some(symbol)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "need a completed hover on {file} symbol={symbol}; lsp calls: {:?}",
+                summarize_calls(calls.iter().copied())
+            )
+        })
+}
+
+fn call_completed(call: &ToolCallRow) -> bool {
+    call.status.as_deref() == Some("completed")
+        || call.lifecycle_state.as_deref() == Some("completed")
+}
+
+fn args_json(call: &ToolCallRow) -> Option<serde_json::Value> {
+    serde_json::from_str(call.args.as_deref()?).ok()
+}
+
+fn action_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("action")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn file_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("file")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn symbol_of(call: &ToolCallRow) -> Option<String> {
+    args_json(call)?
+        .get("symbol")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+fn result_is_error(call: &ToolCallRow) -> bool {
+    let result = call.result.as_deref().unwrap_or("");
+    result.contains("error")
+        || result.contains("failed")
+        || result.contains("unavailable")
+        || result.contains("stdout closed")
+        || result.contains("timed out")
+        || result.contains("No hover information")
+}
+
+fn summarize_calls<'a>(
+    calls: impl IntoIterator<Item = &'a ToolCallRow>,
+) -> Vec<(
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    calls
+        .into_iter()
+        .map(|call| {
+            (
+                call.tool_name.clone(),
+                action_of(call),
+                call.status.clone(),
+                call.result.clone(),
+            )
+        })
+        .collect()
 }

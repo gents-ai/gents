@@ -50,19 +50,14 @@ impl LspWritethrough {
         kind: MutationKind,
     ) -> Option<String> {
         let lease = self.ready_lease(path).await?;
-        let uri = format!("file://{}", path.display());
-        let version = lease.client().tracked_version(&uri).await.unwrap_or(1) + 1;
+        let uri = super::uri::path_to_file_uri(path);
         let text = std::fs::read_to_string(path).ok()?;
-        let _ = lease.client().track_open(&uri, version).await;
+        let language_id = primary_for_file(&self.config.servers, path)
+            .and_then(|server| server.language_id.clone())
+            .unwrap_or_else(|| super::catalog::language_id_for_path(path));
         let _ = lease
             .client()
-            .notify(
-                "textDocument/didChange",
-                json!({
-                    "textDocument": { "uri": uri, "version": version },
-                    "contentChanges": [{ "text": text }]
-                }),
-            )
+            .sync_document(&uri, &language_id, &text)
             .await;
         if kind != MutationKind::Write || !self.config.format_on_write {
             return None;
@@ -113,7 +108,7 @@ impl LspWritethrough {
             return None;
         }
         let lease = self.ready_lease(path).await?;
-        let uri = format!("file://{}", path.display());
+        let uri = super::uri::path_to_file_uri(path);
         let captured = lease.client().tracked_version(&uri).await.unwrap_or(1);
         let result = lease
             .client()
