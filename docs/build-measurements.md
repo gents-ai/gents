@@ -115,22 +115,24 @@ without weakening the sccache boundary. Record cold, unchanged-source warm,
 and representative source-edit timings separately; the pin trades automatic
 runner failover for deterministic trusted-cache reuse.
 
-An unsigned workflow dispatch at commit `d0e1ca3b` measured the representative
-trusted-target rebuild after this change. Cargo rebuilt only `gents-cli`; all
-dependencies and the core `gents` runtime remained reusable. The changed Git
-revision still invalidated the final crate's compile/link, so this is not an
-unchanged-source no-op measurement:
+Two unsigned workflow dispatches at commit `d0e1ca3b` measured the
+representative trusted-target rebuild after this change. Cargo rebuilt only
+`gents-cli`; all dependencies and the core `gents` runtime remained reusable.
+Each clean checkout still invalidated the final crate's compile/link, so these
+are not unchanged-source no-op measurements:
 
 | Cache state | Cargo build | Raw binary | gzip -9 | Archive |
 |---|---:|---:|---:|---:|
 | v0.11.0 cold trusted target | 2,005s | 70,300,272 | 26,580,064 | 26,641,927 |
-| pinned trusted target, new revision | 524s | 70,299,648 | 26,577,430 | 26,639,171 |
+| pinned trusted target, clean checkout 1 | 524s | 70,299,648 | 26,577,430 | 26,639,171 |
+| pinned trusted target, clean checkout 2 | 426s | 70,299,648 | 26,577,430 | 26,639,171 |
 
-The representative new-revision build is 73.9% faster (3.83x) than the cold
-v0.11.0 release. The second row came from an unsigned dry run, so its size
+The representative clean-checkout builds are 73.9–78.8% faster (3.83–4.71x)
+than the cold v0.11.0 release. The dry runs were unsigned, so their size
 differences include the missing Developer ID signature and are not a claim of
-binary-size improvement. Raw workflow:
-https://github.com/source-inc/gents/actions/runs/31601223603.
+binary-size improvement. Raw workflows:
+https://github.com/source-inc/gents/actions/runs/31601223603 and
+https://github.com/source-inc/gents/actions/runs/31602179888.
 
 Useful next investigations are to rank duplicate packages by compiled size,
 map features that pull each duplicate version, split optional desktop/provider
