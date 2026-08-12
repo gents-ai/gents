@@ -28,6 +28,8 @@ pub struct CatalogServer {
     pub capabilities: Option<serde_json::Value>,
     #[serde(default)]
     pub workspace_ready_timings: Option<serde_json::Value>,
+    #[serde(default)]
+    pub warmup_timeout_ms: Option<u64>,
 }
 
 fn default_priority() -> u16 {

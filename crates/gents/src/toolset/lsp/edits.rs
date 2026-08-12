@@ -164,6 +164,50 @@ pub async fn apply_prepared_with_held_locks(
     Ok(applied)
 }
 
+const URI_KEYS: &[&str] = &["uri", "targetUri", "newUri", "oldUri"];
+
+/// Rewrite structured `file:` URI fields. Out-of-root URIs are omitted.
+/// Returns the rewritten value and how many locations were dropped.
+pub fn redact_structured_uris(context: &ToolContext, value: &Value) -> (Value, usize) {
+    let mut omitted = 0usize;
+    let redacted = redact_value(context, value, &mut omitted);
+    (redacted, omitted)
+}
+
+fn redact_value(context: &ToolContext, value: &Value, omitted: &mut usize) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (key, child) in map {
+                if URI_KEYS.contains(&key.as_str()) {
+                    if let Some(uri) = child.as_str() {
+                        if uri.starts_with("file:") {
+                            match redact_outside_root(context, uri) {
+                                Some(display) => {
+                                    out.insert(key.clone(), Value::String(display));
+                                }
+                                None => {
+                                    *omitted += 1;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                out.insert(key.clone(), redact_value(context, child, omitted));
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact_value(context, item, omitted))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 pub fn walk_uris(value: &Value) -> Vec<String> {
     let mut out = Vec::new();
     walk_uris_inner(value, &mut out);
@@ -174,7 +218,7 @@ fn walk_uris_inner(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, child) in map {
-                if key == "uri" || key == "targetUri" || key == "newUri" || key == "oldUri" {
+                if URI_KEYS.contains(&key.as_str()) {
                     if let Some(uri) = child.as_str() {
                         if uri.starts_with("file:") {
                             out.push(uri.to_string());

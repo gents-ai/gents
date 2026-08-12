@@ -1,7 +1,28 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::catalog::CatalogServer;
+use super::catalog::{builtin_catalog, CatalogServer};
+
+const OPERATOR_FORBIDDEN: &[&str] = &["command", "args", "resolvedCommand", "createClient"];
+const SELF_CONFIG_FORBIDDEN: &[&str] = &[
+    "command",
+    "args",
+    "settings",
+    "init_options",
+    "initOptions",
+    "capabilities",
+    "workspace_ready_timings",
+    "language_id",
+];
+const TOP_LEVEL_KEYS: &[&str] = &[
+    "idle_timeout_ms",
+    "format_on_write",
+    "diagnostics_on_write",
+    "diagnostics_on_edit",
+    "diagnostics_deduplicate",
+    "network_mode",
+    "servers",
+];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspConfigDocument {
@@ -22,17 +43,12 @@ pub struct LspConfigDocument {
 }
 
 impl LspConfigDocument {
-    pub fn parse_operator(raw: Option<&str>) -> Self {
-        parse_with_allowlist(raw, false)
+    pub fn parse_operator(raw: Option<&str>) -> Result<Self, String> {
+        parse_strict(raw, false)
     }
 
     pub fn parse_self_config(raw: Option<&str>) -> Result<Self, String> {
-        if let Some(raw) = raw {
-            if let Ok(value) = serde_json::from_str::<Value>(raw) {
-                reject_self_config_keys(&value)?;
-            }
-        }
-        Ok(parse_with_allowlist(raw, true))
+        parse_strict(raw, true)
     }
 
     pub fn idle_timeout(&self) -> std::time::Duration {
@@ -41,64 +57,50 @@ impl LspConfigDocument {
     }
 }
 
-fn parse_with_allowlist(raw: Option<&str>, self_config: bool) -> LspConfigDocument {
+fn parse_strict(raw: Option<&str>, self_config: bool) -> Result<LspConfigDocument, String> {
     let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return LspConfigDocument::default();
+        return Ok(LspConfigDocument::default());
     };
-    let Ok(mut parsed) = serde_json::from_str::<LspConfigDocument>(raw) else {
-        return LspConfigDocument::default();
+    let value: Value =
+        serde_json::from_str(raw).map_err(|err| format!("invalid lsp_config JSON: {err}"))?;
+    let Some(obj) = value.as_object() else {
+        return Err("lsp_config must be a JSON object".into());
     };
+    for key in obj.keys() {
+        if !TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            return Err(format!("unknown lsp_config field {key}"));
+        }
+    }
+    if let Some(mode) = obj.get("network_mode").and_then(Value::as_str) {
+        crate::toolset::CommandNetworkMode::parse(mode).map_err(|err| err.to_string())?;
+    }
     if self_config {
-        if let Some(servers) = parsed.servers.as_mut() {
-            for value in servers.values_mut() {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.remove("settings");
-                    obj.remove("init_options");
-                    obj.remove("initOptions");
-                    obj.remove("command");
-                    obj.remove("args");
-                    obj.remove("capabilities");
-                    obj.remove("workspace_ready_timings");
-                    obj.remove("language_id");
-                }
+        reject_server_keys(&value, SELF_CONFIG_FORBIDDEN, "self-config")?;
+    } else {
+        reject_server_keys(&value, OPERATOR_FORBIDDEN, "lsp_config")?;
+    }
+    let parsed: LspConfigDocument =
+        serde_json::from_value(value).map_err(|err| format!("invalid lsp_config JSON: {err}"))?;
+    if let Some(servers) = &parsed.servers {
+        let catalog = builtin_catalog();
+        for name in servers.keys() {
+            if !catalog.iter().any(|server| &server.name == name) {
+                return Err(format!("unknown language server {name}"));
             }
         }
     }
-    if let Some(servers) = parsed.servers.as_mut() {
-        for value in servers.values_mut() {
-            if let Some(obj) = value.as_object_mut() {
-                obj.remove("command");
-                obj.remove("args");
-                obj.remove("resolvedCommand");
-                obj.remove("createClient");
-            }
-        }
-    }
-    parsed
+    Ok(parsed)
 }
 
-fn reject_self_config_keys(value: &Value) -> Result<(), String> {
-    let Some(obj) = value.as_object() else {
+fn reject_server_keys(value: &Value, forbidden: &[&str], origin: &str) -> Result<(), String> {
+    let Some(servers) = value.get("servers").and_then(Value::as_object) else {
         return Ok(());
     };
-    if let Some(servers) = obj.get("servers").and_then(Value::as_object) {
-        for (name, server) in servers {
-            if let Some(fields) = server.as_object() {
-                for forbidden in [
-                    "command",
-                    "args",
-                    "settings",
-                    "init_options",
-                    "initOptions",
-                    "capabilities",
-                    "workspace_ready_timings",
-                    "language_id",
-                ] {
-                    if fields.contains_key(forbidden) {
-                        return Err(format!(
-                            "self-config cannot patch servers.{name}.{forbidden}"
-                        ));
-                    }
+    for (name, server) in servers {
+        if let Some(fields) = server.as_object() {
+            for key in forbidden {
+                if fields.contains_key(*key) {
+                    return Err(format!("{origin} cannot set servers.{name}.{key}"));
                 }
             }
         }
@@ -131,9 +133,20 @@ pub fn apply_overrides(
             if let Some(init) = over.get("init_options").or_else(|| over.get("initOptions")) {
                 server.init_options = Some(init.clone());
             }
+            if let Some(caps) = over.get("capabilities") {
+                server.capabilities = Some(caps.clone());
+            }
+            if let Some(timings) = over.get("workspace_ready_timings") {
+                server.workspace_ready_timings = Some(timings.clone());
+            }
+            if let Some(language_id) = over.get("language_id").and_then(Value::as_str) {
+                server.language_id = Some(language_id.to_string());
+            }
+            if let Some(warmup) = over.get("warmup_timeout_ms").and_then(Value::as_u64) {
+                server.warmup_timeout_ms = Some(warmup);
+            }
         }
     }
-    catalog.retain(|server| overrides.keys().any(|k| k == &server.name) || true);
     catalog
 }
 
@@ -151,7 +164,7 @@ mod tests {
     #[test]
     fn operator_config_may_include_settings() {
         let raw = r#"{"servers":{"rust-analyzer":{"settings":{"x":1}}}}"#;
-        let parsed = LspConfigDocument::parse_operator(Some(raw));
+        let parsed = LspConfigDocument::parse_operator(Some(raw)).expect("operator");
         let settings = parsed
             .servers
             .as_ref()
@@ -160,5 +173,24 @@ mod tests {
             .unwrap()
             .get("settings");
         assert!(settings.is_some());
+    }
+
+    #[test]
+    fn operator_rejects_invalid_json_and_unknown_server() {
+        assert!(LspConfigDocument::parse_operator(Some("{")).is_err());
+        assert!(
+            LspConfigDocument::parse_operator(Some(r#"{"servers":{"not-a-server":{}}}"#))
+                .unwrap_err()
+                .contains("unknown language server")
+        );
+    }
+
+    #[test]
+    fn operator_rejects_command_override() {
+        let err = LspConfigDocument::parse_operator(Some(
+            r#"{"servers":{"rust-analyzer":{"command":"/tmp/evil"}}}"#,
+        ))
+        .unwrap_err();
+        assert!(err.contains("command"), "{err}");
     }
 }

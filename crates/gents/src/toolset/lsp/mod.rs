@@ -32,7 +32,7 @@ use crate::llm::tool::{Tool, ToolDefinition};
 use crate::tool_call_lifecycle::FailureClass;
 use crate::tool_surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
 use crate::toolset::shared::{ToolContext, ToolError};
-use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
+use crate::toolset::{CommandConstraints, CommandNetworkMode};
 
 use actions::ActionRequest;
 use config::apply_overrides;
@@ -72,15 +72,13 @@ pub fn constraints_from_effective_bash(
         crate::tool_surface::EndpointScope::None => (Vec::new(), true),
         crate::tool_surface::EndpointScope::Only(_) => (bash.allowed_argv_prefixes.keys(), false),
     };
+    let network_mode = lsp_network_overlay.unwrap_or_else(crate::toolset::default_lsp_network_mode);
     CommandConstraints {
         allowed_argv_prefixes: allowed,
         forbidden_argv_prefixes: bash.forbidden_argv_prefixes.iter().cloned().collect(),
-        network_mode: lsp_network_overlay.unwrap_or(bash.network_mode),
-        execution_mode: if matches!(bash.execution_mode, CommandExecutionMode::ReadOnly) {
-            CommandExecutionMode::Unrestricted
-        } else {
-            bash.execution_mode
-        },
+        network_mode,
+        execution_mode: bash.execution_mode,
+        sandbox: crate::toolset::lsp_sandbox_for_effective(bash.execution_mode),
         deny_all_argv: deny_all,
     }
 }
@@ -120,6 +118,8 @@ pub(crate) struct LspArgs {
     apply: Option<bool>,
     #[serde(default)]
     payload: Option<String>,
+    #[serde(default)]
+    timeout: Option<u32>,
 }
 
 impl Tool for LspTool {
@@ -135,14 +135,38 @@ impl Tool for LspTool {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string" },
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "status",
+                            "reload",
+                            "capabilities",
+                            "diagnostics",
+                            "definition",
+                            "type_definition",
+                            "implementation",
+                            "references",
+                            "hover",
+                            "symbols",
+                            "rename",
+                            "rename_file",
+                            "code_actions",
+                            "request"
+                        ]
+                    },
                     "file": { "type": "string" },
                     "line": { "type": "integer" },
                     "symbol": { "type": "string" },
                     "query": { "type": "string" },
                     "new_name": { "type": "string" },
                     "apply": { "type": "boolean" },
-                    "payload": { "type": "string" }
+                    "payload": { "type": "string" },
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 5,
+                        "maximum": 300,
+                        "description": "Tool timeout in seconds (default 20)."
+                    }
                 },
                 "required": ["action"]
             }),
@@ -167,18 +191,7 @@ impl Tool for LspTool {
         }
         if matches!(action, LspAction::RequestRead | LspAction::RequestWrite) {
             let method = args.query.as_deref().unwrap_or("");
-            if method == "workspace/executeCommand" {
-                return Err(ToolError::reported_failure(
-                    FailureClass::ArgumentInvalid,
-                    "workspace/executeCommand is not supported".into(),
-                ));
-            }
-            if !actions::READ_REQUEST_METHODS.contains(&method) {
-                return Err(ToolError::reported_failure(
-                    FailureClass::ArgumentInvalid,
-                    format!("unknown request method {method}"),
-                ));
-            }
+            actions::validate_raw_request(&self.context, method, args.payload.as_deref())?;
         }
         let detected: Vec<CatalogServer> = self
             .config
@@ -264,6 +277,7 @@ impl Tool for LspTool {
                 new_name: args.new_name,
                 apply: args.apply,
                 payload: args.payload,
+                timeout: args.timeout,
             },
         )
         .await
@@ -275,7 +289,7 @@ impl Tool for LspTool {
 }
 
 pub fn merge_catalog(raw_config: Option<&str>) -> Vec<CatalogServer> {
-    let doc = LspConfigDocument::parse_operator(raw_config);
+    let doc = LspConfigDocument::parse_operator(raw_config).unwrap_or_default();
     apply_overrides(builtin_catalog(), &doc)
 }
 
@@ -288,6 +302,7 @@ pub fn config_digest(
     let mut hasher = Sha256::new();
     hasher.update(workspace.to_string_lossy().as_bytes());
     hasher.update(format!("{:?}", constraints.execution_mode).as_bytes());
+    hasher.update(format!("{:?}", constraints.sandbox).as_bytes());
     hasher.update(format!("{:?}", constraints.network_mode).as_bytes());
     hasher.update(constraints.deny_all_argv.to_string().as_bytes());
     for prefix in &constraints.allowed_argv_prefixes {

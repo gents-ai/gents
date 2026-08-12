@@ -165,18 +165,45 @@ pub struct CommandConstraints {
     pub forbidden_argv_prefixes: Vec<Vec<String>>,
     pub network_mode: CommandNetworkMode,
     pub execution_mode: CommandExecutionMode,
+    /// Seatbelt vs none. Never `ReadOnly`. Hashed into the LSP config digest.
+    pub sandbox: CommandExecutionMode,
     pub deny_all_argv: bool,
 }
 
 impl CommandConstraints {
     pub fn to_spawn_policy(&self) -> CommandExecutionPolicy {
         CommandExecutionPolicy {
-            mode: self.execution_mode,
+            mode: self.sandbox,
             allowed_argv_prefixes: self.allowed_argv_prefixes.clone(),
             forbidden_argv_prefixes: self.forbidden_argv_prefixes.clone(),
             network_mode: self.network_mode,
             read_only_allowlist: Vec::new(),
             deny_all_argv: self.deny_all_argv,
+        }
+    }
+}
+
+/// Platform default for an omitted `lsp_config.network_mode`.
+pub fn default_lsp_network_mode() -> CommandNetworkMode {
+    if workspace_write_sandbox_enforced() {
+        CommandNetworkMode::Disabled
+    } else {
+        CommandNetworkMode::Inherit
+    }
+}
+
+/// Seatbelt vs none for an LSP spawn. `ReadOnly` (bash Off) uses the platform
+/// default: macOS `workspace_write`, elsewhere `Unrestricted`.
+pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
+    match execution_mode {
+        CommandExecutionMode::WorkspaceWrite => CommandExecutionMode::WorkspaceWrite,
+        CommandExecutionMode::Unrestricted => CommandExecutionMode::Unrestricted,
+        CommandExecutionMode::ReadOnly => {
+            if workspace_write_sandbox_enforced() {
+                CommandExecutionMode::WorkspaceWrite
+            } else {
+                CommandExecutionMode::Unrestricted
+            }
         }
     }
 }
@@ -228,13 +255,8 @@ pub(crate) fn prepare_managed_command(
 ) -> std::result::Result<(PathBuf, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
-    let mut validate_policy = constraints.to_spawn_policy();
-    // enable_lsp is the grant; do not apply bash's read-only command allowlist.
-    if matches!(validate_policy.mode, CommandExecutionMode::ReadOnly) {
-        validate_policy.mode = CommandExecutionMode::Unrestricted;
-    }
-    validate_command_policy(command, args, &validate_policy)?;
     let spawn_policy = constraints.to_spawn_policy();
+    validate_command_policy(command, args, &spawn_policy)?;
     let (program, argv, sandbox) =
         sandboxed_command_for_policy(root, &admitted.to_string_lossy(), args, &spawn_policy)?;
     Ok((PathBuf::from(program), argv, build_shell_env(), sandbox))
@@ -678,12 +700,12 @@ pub(in crate::toolset) fn select_sandbox_for_policy(
 }
 
 #[cfg(target_os = "macos")]
-fn workspace_write_sandbox_enforced() -> bool {
+pub(crate) fn workspace_write_sandbox_enforced() -> bool {
     Path::new(SANDBOX_EXEC).exists()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn workspace_write_sandbox_enforced() -> bool {
+pub(crate) fn workspace_write_sandbox_enforced() -> bool {
     false
 }
 

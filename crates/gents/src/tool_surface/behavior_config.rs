@@ -115,6 +115,10 @@ impl BehaviorToolConfig {
         subagent_tools: SubagentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
+        if selection.enable_lsp {
+            crate::toolset::lsp::LspConfigDocument::parse_operator(selection.lsp_config.as_deref())
+                .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;
+        }
         let behavior_policy = ToolPolicySurface::from_selection(&selection, &subagent_tools);
         let ceiling_policy = ceiling.policy().clone();
         let static_policy = ToolPolicySurface::effective(
@@ -347,7 +351,8 @@ impl BehaviorToolConfig {
             lsp: effective_policy.lsp.then(|| {
                 let doc = crate::toolset::lsp::LspConfigDocument::parse_operator(
                     self.lsp_config.as_deref(),
-                );
+                )
+                .unwrap_or_default();
                 let servers = crate::toolset::lsp::merge_catalog(self.lsp_config.as_deref());
                 let workspace = self
                     .host_tools

@@ -6,7 +6,10 @@ use crate::toolset::shared::{ToolContext, ToolError};
 use super::auth::LspAction;
 use super::catalog::{family_eligible, marker_matches, primary_for_file, CatalogServer};
 use super::client::LspClient;
-use super::edits::{apply_workspace_edit, redact_outside_root, resolve_inbound_path, walk_uris};
+use super::edits::{
+    acquire_mutation_locks, apply_prepared_with_held_locks, apply_workspace_edit,
+    redact_structured_uris, resolve_inbound_path, walk_uris, PreparedEdit,
+};
 use super::encoding::offset_to_position;
 use super::pool::LspLease;
 
@@ -37,6 +40,7 @@ pub struct ActionRequest {
     pub new_name: Option<String>,
     pub apply: Option<bool>,
     pub payload: Option<String>,
+    pub timeout: Option<u32>,
 }
 
 pub async fn dispatch(
@@ -147,6 +151,23 @@ async fn run_file_action(
     if let Some(pos) = pos {
         params["position"] = json!({ "line": pos.line, "character": pos.character });
     }
+    if matches!(
+        action,
+        LspAction::CodeActionsList | LspAction::CodeActionsApply
+    ) {
+        let start = pos.unwrap_or(super::encoding::LspPosition {
+            line: req.line.unwrap_or(1).saturating_sub(1),
+            character: 0,
+        });
+        params["range"] = json!({
+            "start": { "line": start.line, "character": start.character },
+            "end": { "line": start.line, "character": start.character }
+        });
+        params["context"] = json!({
+            "diagnostics": [],
+            "triggerKind": 1
+        });
+    }
     if matches!(action, LspAction::References) {
         params["context"] = json!({ "includeDeclaration": true });
     }
@@ -171,7 +192,7 @@ async fn run_file_action(
         });
     }
     let result = client
-        .request(method, params)
+        .request_with_timeout(method, params, request_timeout(req))
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
     if matches!(
@@ -191,17 +212,23 @@ async fn run_file_action(
         } else {
             result.clone()
         };
-        let applied = apply_workspace_edit(context, client, &edit).await?;
+        let mut applied = apply_workspace_edit(context, client, &edit).await?;
         if matches!(action, LspAction::RenameFile) {
-            if let Some(dest) = req.new_name.as_deref() {
-                if let Ok(dest_path) = resolve_inbound_path(context, dest) {
-                    if path.exists() && path != dest_path {
-                        if let Some(parent) = dest_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let _ = std::fs::rename(&path, &dest_path);
-                    }
-                }
+            let dest = req
+                .new_name
+                .as_deref()
+                .ok_or_else(|| arg_invalid("new_name required for rename_file"))?;
+            let dest_path = resolve_inbound_path(context, dest).map_err(policy)?;
+            if path.exists() && path != dest_path {
+                let prepared = vec![PreparedEdit {
+                    path: dest_path,
+                    new_bytes: Vec::new(),
+                    expected_hash: None,
+                    version: None,
+                    rename_from: Some(path.clone()),
+                }];
+                let _guards = acquire_mutation_locks(&prepared).await;
+                applied += apply_prepared_with_held_locks(context, client, &prepared).await?;
             }
         }
         return Ok(format!("Applied edit to {applied} file(s)"));
@@ -228,7 +255,11 @@ async fn workspace_action(
                 .as_deref()
                 .ok_or_else(|| arg_invalid("query required for workspace symbols"))?;
             let result = client
-                .request("workspace/symbol", json!({ "query": query }))
+                .request_with_timeout(
+                    "workspace/symbol",
+                    json!({ "query": query }),
+                    request_timeout(req),
+                )
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
             Ok(truncate_model_output(format_result(
@@ -237,7 +268,11 @@ async fn workspace_action(
         }
         LspAction::Diagnostics => {
             match client
-                .request("workspace/diagnostic", json!({ "identifier": "gents" }))
+                .request_with_timeout(
+                    "workspace/diagnostic",
+                    json!({ "identifier": "gents" }),
+                    request_timeout(req),
+                )
                 .await
             {
                 Ok(result) => Ok(truncate_model_output(format_result(
@@ -264,27 +299,82 @@ async fn raw_request(
         .query
         .as_deref()
         .ok_or_else(|| arg_invalid("query (method) required for request"))?;
+    let params = validate_raw_request(context, method, req.payload.as_deref())?;
+    let result = client
+        .request_with_timeout(method, params, request_timeout(req))
+        .await
+        .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
+    Ok(truncate_model_output(format_result(
+        context, req.action, result,
+    )))
+}
+
+fn request_timeout(req: &ActionRequest) -> std::time::Duration {
+    std::time::Duration::from_secs(req.timeout.unwrap_or(20).clamp(5, 300) as u64)
+}
+
+pub fn validate_raw_request(
+    context: &ToolContext,
+    method: &str,
+    payload: Option<&str>,
+) -> Result<Value, ToolError> {
     if method == "workspace/executeCommand" {
         return Err(arg_invalid("workspace/executeCommand is not supported"));
     }
     if !READ_REQUEST_METHODS.contains(&method) {
         return Err(arg_invalid(format!("unknown request method {method}")));
     }
-    let params = if let Some(payload) = &req.payload {
-        let parsed: Value =
-            serde_json::from_str(payload).map_err(|err| arg_invalid(err.to_string()))?;
-        validate_payload_uris(context, &parsed)?;
-        parsed
-    } else {
-        json!({})
+    let params = match payload {
+        Some(raw) => serde_json::from_str(raw).map_err(|err| arg_invalid(err.to_string()))?,
+        None => json!({}),
     };
-    let result = client
-        .request(method, params)
-        .await
-        .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-    Ok(truncate_model_output(format_result(
-        context, req.action, result,
-    )))
+    if !params.is_object() {
+        return Err(arg_invalid("request payload must be a JSON object"));
+    }
+    validate_known_request_shape(method, &params)?;
+    validate_payload_uris(context, &params)?;
+    Ok(params)
+}
+
+fn validate_known_request_shape(method: &str, params: &Value) -> Result<(), ToolError> {
+    let allowed = match method {
+        "textDocument/hover"
+        | "textDocument/definition"
+        | "textDocument/typeDefinition"
+        | "textDocument/implementation"
+        | "textDocument/documentSymbol"
+        | "textDocument/diagnostic" => &["textDocument", "position", "workDoneToken"][..],
+        "textDocument/references" => &["textDocument", "position", "context", "workDoneToken"][..],
+        "workspace/symbol" => &["query", "workDoneToken"][..],
+        "workspace/diagnostic" => &["identifier", "previousResultId", "workDoneToken"][..],
+        _ => return Err(arg_invalid(format!("unknown request method {method}"))),
+    };
+    let obj = params
+        .as_object()
+        .ok_or_else(|| arg_invalid("request payload must be a JSON object"))?;
+    for key in obj.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(arg_invalid(format!("unknown field {key} for {method}")));
+        }
+    }
+    match method {
+        "workspace/symbol" => {
+            if params.get("query").and_then(Value::as_str).is_none() {
+                return Err(arg_invalid("query required for workspace/symbol"));
+            }
+        }
+        m if m.starts_with("textDocument/") => {
+            if params
+                .pointer("/textDocument/uri")
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                return Err(arg_invalid("textDocument.uri required"));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn validate_payload_uris(context: &ToolContext, params: &Value) -> Result<(), ToolError> {
@@ -331,7 +421,8 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
     if let Some(contents) = result.pointer("/contents") {
         return flatten_hover(contents);
     }
-    if let Some(arr) = result.as_array() {
+    let (redacted, omitted) = redact_structured_uris(context, &result);
+    if let Some(arr) = redacted.as_array() {
         let cap = match action {
             LspAction::Diagnostics => MAX_DIAGNOSTICS,
             LspAction::Symbols => MAX_WORKSPACE_SYMBOLS,
@@ -340,44 +431,65 @@ fn format_result(context: &ToolContext, action: LspAction, result: Value) -> Str
             _ => usize::MAX,
         };
         let mut lines = Vec::new();
-        let mut omitted = 0usize;
         for item in arr.iter().take(cap) {
             if let Some(uri) = item
                 .pointer("/uri")
                 .or_else(|| item.pointer("/targetUri"))
+                .or_else(|| item.pointer("/location/uri"))
                 .and_then(Value::as_str)
             {
-                match redact_outside_root(context, uri) {
-                    Some(display) => {
-                        let line = item
-                            .pointer("/range/start/line")
-                            .or_else(|| item.pointer("/targetSelectionRange/start/line"))
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0)
-                            + 1;
-                        lines.push(format!("{display}:{line}"));
-                    }
-                    None => omitted += 1,
-                }
-            } else {
+                let line = item
+                    .pointer("/range/start/line")
+                    .or_else(|| item.pointer("/targetSelectionRange/start/line"))
+                    .or_else(|| item.pointer("/location/range/start/line"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    + 1;
+                lines.push(format!("{uri}:{line}"));
+            } else if !item.is_null() {
                 lines.push(item.to_string());
             }
         }
-        if lines.is_empty() && omitted > 0 {
-            return format!("omitted {omitted} location(s) outside the allowed workspace");
-        }
-        if omitted > 0 {
-            lines.push(format!(
-                "omitted {omitted} location(s) outside the allowed workspace"
-            ));
-        }
-        return if lines.is_empty() {
-            "No result".into()
-        } else {
-            format!("Found {} result(s):\n{}", lines.len(), lines.join("\n"))
-        };
+        return finish_location_lines(lines, omitted);
     }
-    result.to_string()
+    if let Some(uri) = redacted
+        .pointer("/uri")
+        .or_else(|| redacted.pointer("/targetUri"))
+        .or_else(|| redacted.pointer("/location/uri"))
+        .and_then(Value::as_str)
+    {
+        let line = redacted
+            .pointer("/range/start/line")
+            .or_else(|| redacted.pointer("/location/range/start/line"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            + 1;
+        return finish_location_lines(vec![format!("{uri}:{line}")], omitted);
+    }
+    let mut text = redacted.to_string();
+    if omitted > 0 {
+        text.push_str(&format!(
+            "\nomitted {omitted} location(s) outside the allowed workspace"
+        ));
+    }
+    text
+}
+
+fn finish_location_lines(lines: Vec<String>, omitted: usize) -> String {
+    if lines.is_empty() && omitted > 0 {
+        return format!("omitted {omitted} location(s) outside the allowed workspace");
+    }
+    let mut lines = lines;
+    if omitted > 0 {
+        lines.push(format!(
+            "omitted {omitted} location(s) outside the allowed workspace"
+        ));
+    }
+    if lines.is_empty() {
+        "No result".into()
+    } else {
+        format!("Found {} result(s):\n{}", lines.len(), lines.join("\n"))
+    }
 }
 
 fn flatten_hover(contents: &Value) -> String {

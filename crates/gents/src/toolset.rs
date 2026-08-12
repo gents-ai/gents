@@ -57,7 +57,10 @@ pub use session_history::{
 };
 pub(crate) use shared::build_shell_env;
 pub(crate) use shared::parse_argv_prefixes;
-pub(crate) use shared::{admit_host_executable, prepare_managed_command};
+pub(crate) use shared::{
+    admit_host_executable, default_lsp_network_mode, lsp_sandbox_for_effective,
+    prepare_managed_command,
+};
 pub use shared::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
 };

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,6 +31,7 @@ pub(crate) struct LspClient {
     init_options: Option<Value>,
     settings: Option<Value>,
     versions: Mutex<HashMap<String, i64>>,
+    initialize_timeout: Duration,
 }
 
 impl LspClient {
@@ -78,6 +79,12 @@ impl LspClient {
             init_options: server.init_options.clone(),
             settings: server.settings.clone(),
             versions: Mutex::new(HashMap::new()),
+            initialize_timeout: server
+                .warmup_timeout_ms
+                .map(Duration::from_millis)
+                .unwrap_or(INITIALIZE_TIMEOUT)
+                .max(INITIALIZE_TIMEOUT)
+                .min(Duration::from_secs(60)),
         })
     }
 
@@ -109,7 +116,7 @@ impl LspClient {
             "clientInfo": { "name": "gents", "version": "0" }
         });
         let result = self
-            .request_with_timeout("initialize", params, INITIALIZE_TIMEOUT)
+            .request_with_timeout("initialize", params, self.initialize_timeout)
             .await?;
         let encodings = result
             .pointer("/capabilities/positionEncoding")
@@ -187,9 +194,15 @@ impl LspClient {
             self.pending.lock().await.remove(&id);
             return Err(error);
         }
+        let inflight = InflightRequest {
+            stdin: self.stdin.clone(),
+            pending: self.pending.clone(),
+            id,
+            completed: Arc::new(AtomicBool::new(false)),
+        };
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let cancel = runtime.map(|scope| scope.cancellation_token);
-        tokio::select! {
+        let outcome = tokio::select! {
             biased;
             _ = async {
                 if let Some(token) = &cancel {
@@ -213,7 +226,9 @@ impl LspClient {
                     }
                 }
             }
-        }
+        };
+        inflight.completed.store(true, Ordering::SeqCst);
+        outcome
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -239,6 +254,35 @@ impl LspClient {
         let mut pending = self.pending.lock().await;
         for (_, tx) in pending.drain() {
             let _ = tx.send(Err("language server closed".into()));
+        }
+    }
+}
+
+struct InflightRequest {
+    stdin: Arc<Mutex<ChildStdin>>,
+    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>,
+    id: i64,
+    completed: Arc<AtomicBool>,
+}
+
+impl Drop for InflightRequest {
+    fn drop(&mut self) {
+        if self.completed.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let stdin = self.stdin.clone();
+        let pending = self.pending.clone();
+        let id = self.id;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                pending.lock().await.remove(&id);
+                let payload = json!({
+                    "jsonrpc": "2.0",
+                    "method": "$/cancelRequest",
+                    "params": { "id": id }
+                });
+                let _ = write_message(&mut *stdin.lock().await, &payload).await;
+            });
         }
     }
 }

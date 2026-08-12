@@ -69,6 +69,75 @@ impl Drop for LspLease {
     }
 }
 
+struct StartingCleanup {
+    pool: LspPool,
+    key: PoolKey,
+    slot: Arc<Mutex<PoolEntry>>,
+    disarm: Arc<AtomicBool>,
+}
+
+impl Drop for StartingCleanup {
+    fn drop(&mut self) {
+        if self.disarm.load(Ordering::SeqCst) {
+            return;
+        }
+        let pool = self.pool.clone();
+        let key = self.key.clone();
+        let slot = self.slot.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                {
+                    let mut entry = slot.lock().await;
+                    if entry.state == EntryState::Starting {
+                        entry.start_error = Some("language-server start cancelled".into());
+                        entry.state = EntryState::Retiring;
+                        entry.ready.notify_waiters();
+                    }
+                }
+                pool.inner.lock().await.remove(&key);
+            });
+        }
+    }
+}
+
+async fn retire_slot(slot: Arc<Mutex<PoolEntry>>) {
+    let client = {
+        let mut entry = slot.lock().await;
+        entry.state = EntryState::Retiring;
+        entry.ready.notify_waiters();
+        if entry.leases.load(Ordering::SeqCst) == 0 {
+            entry.client.take()
+        } else {
+            None
+        }
+    };
+    if let Some(client) = client {
+        client.shutdown_exit().await;
+    }
+}
+
+async fn lru_idle_ready(
+    map: &HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
+    pred: impl Fn(&PoolKey) -> bool,
+) -> Option<PoolKey> {
+    let mut victim: Option<(PoolKey, Instant)> = None;
+    for (key, slot) in map.iter() {
+        if !pred(key) {
+            continue;
+        }
+        let entry = slot.lock().await;
+        if entry.state == EntryState::Ready && entry.leases.load(Ordering::SeqCst) == 0 {
+            if victim
+                .as_ref()
+                .is_none_or(|(_, used)| entry.last_used < *used)
+            {
+                victim = Some((key.clone(), entry.last_used));
+            }
+        }
+    }
+    victim.map(|(key, _)| key)
+}
+
 async fn complete_retirement_if_idle(slot: Arc<Mutex<PoolEntry>>) {
     let client = {
         let mut entry = slot.lock().await;
@@ -181,14 +250,14 @@ impl LspPool {
             }
         }
 
-        let (slot, starter) = {
+        let (slot, starter, evicted) = {
             let mut map = self.inner.lock().await;
             if let Some(existing) = map.get(&key) {
-                (existing.clone(), false)
+                (existing.clone(), false, Vec::new())
             } else {
-                if !self.evict_or_has_capacity(&mut map, &key).await {
+                let Some(evicted) = self.take_eviction_victims(&mut map, &key).await else {
                     return Err("language-server client cap reached".into());
-                }
+                };
                 let slot = Arc::new(Mutex::new(PoolEntry {
                     state: EntryState::Starting,
                     leases: Arc::new(AtomicUsize::new(0)),
@@ -199,9 +268,12 @@ impl LspPool {
                     start_error: None,
                 }));
                 map.insert(key.clone(), slot.clone());
-                (slot, true)
+                (slot, true, evicted)
             }
         };
+        for victim in evicted {
+            retire_slot(victim).await;
+        }
 
         if !starter {
             loop {
@@ -230,7 +302,14 @@ impl LspPool {
             }
         }
 
+        let cleanup = StartingCleanup {
+            pool: self.clone(),
+            key: key.clone(),
+            slot: slot.clone(),
+            disarm: Arc::new(AtomicBool::new(false)),
+        };
         let started = self.start_client(&key, server, config).await;
+        cleanup.disarm.store(true, Ordering::SeqCst);
         match started {
             Ok(client) => {
                 let client = Arc::new(client);
@@ -298,46 +377,38 @@ impl LspPool {
         Ok(client)
     }
 
-    async fn evict_or_has_capacity(
+    async fn take_eviction_victims(
         &self,
         map: &mut HashMap<PoolKey, Arc<Mutex<PoolEntry>>>,
         incoming: &PoolKey,
-    ) -> bool {
+    ) -> Option<Vec<Arc<Mutex<PoolEntry>>>> {
         let session_count = map
             .keys()
             .filter(|key| {
                 key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id
             })
             .count();
-        if session_count < MAX_PER_SESSION && map.len() < MAX_GLOBAL {
-            return true;
-        }
-        let mut victim: Option<(PoolKey, Instant)> = None;
-        for (key, slot) in map.iter() {
-            let entry = slot.lock().await;
-            if entry.state == EntryState::Ready && entry.leases.load(Ordering::SeqCst) == 0 {
-                if victim
-                    .as_ref()
-                    .is_none_or(|(_, used)| entry.last_used < *used)
-                {
-                    victim = Some((key.clone(), entry.last_used));
-                }
+        let mut victims = Vec::new();
+        if session_count >= MAX_PER_SESSION {
+            let victim = lru_idle_ready(map, |key| {
+                key.session_id == incoming.session_id && key.behavior_id == incoming.behavior_id
+            })
+            .await?;
+            if let Some(slot) = map.remove(&victim) {
+                victims.push(slot);
+            } else {
+                return None;
             }
         }
-        if let Some((key, _)) = victim {
-            if let Some(slot) = map.remove(&key) {
-                let mut entry = slot.lock().await;
-                entry.state = EntryState::Retiring;
-                if entry.leases.load(Ordering::SeqCst) == 0 {
-                    if let Some(client) = entry.client.take() {
-                        drop(entry);
-                        client.shutdown_exit().await;
-                    }
-                }
+        if map.len() >= MAX_GLOBAL {
+            let victim = lru_idle_ready(map, |_| true).await?;
+            if let Some(slot) = map.remove(&victim) {
+                victims.push(slot);
+            } else {
+                return None;
             }
-            return true;
         }
-        false
+        Some(victims)
     }
 
     pub async fn retire(&self, key: &PoolKey) {
@@ -346,15 +417,7 @@ impl LspPool {
             map.remove(key)
         };
         if let Some(slot) = slot {
-            let mut entry = slot.lock().await;
-            entry.state = EntryState::Retiring;
-            entry.ready.notify_waiters();
-            if entry.leases.load(Ordering::SeqCst) == 0 {
-                if let Some(client) = entry.client.take() {
-                    drop(entry);
-                    client.shutdown_exit().await;
-                }
-            }
+            retire_slot(slot).await;
         }
     }
 

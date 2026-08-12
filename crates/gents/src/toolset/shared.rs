@@ -4,7 +4,10 @@ mod filesystem;
 
 pub(crate) use command::build_shell_env;
 pub(crate) use command::parse_argv_prefixes;
-pub(crate) use command::{admit_host_executable, prepare_managed_command};
+pub(crate) use command::{
+    admit_host_executable, default_lsp_network_mode, lsp_sandbox_for_effective,
+    prepare_managed_command,
+};
 #[cfg(test)]
 pub(super) use command::{
     build_shell_env_from_vars, select_sandbox_for_policy, validate_read_only_command,
