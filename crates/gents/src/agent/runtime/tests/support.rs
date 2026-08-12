@@ -168,7 +168,7 @@ pub(super) async fn wait_for_runtime_process_state(
     // when the full package suite is saturating the host. The assertion is on
     // the eventual state, not startup latency; production readiness has its
     // own health and timeout boundaries.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let query = format!(
             r#"{{
