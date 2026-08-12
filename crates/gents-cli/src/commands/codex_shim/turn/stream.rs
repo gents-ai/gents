@@ -671,7 +671,11 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
 
         tokio::select! {
             _ = tokio::time::sleep(state.poll_interval) => {
-                if updates_closed {
+                // Subscription delivery is an acceleration, not a correctness
+                // boundary. Periodically refresh linked child state so a
+                // dropped or backend-specific update cannot strand a parent
+                // CollabAgentToolCall in Running after the child settles.
+                if has_subagent_control {
                     subagent_links_dirty = true;
                 }
             }
