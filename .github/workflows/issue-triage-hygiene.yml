@@ -2,7 +2,10 @@ name: issue-triage-hygiene
 
 on:
   issues:
-    types: [opened, reopened, labeled, unlabeled]
+    # `closed` is here so an issue flagged while open can have `needs-triage`
+    # cleared on the way out: the sweep is state=open and would never see it
+    # again. The runner reconciles a closed issue by removing the flag only.
+    types: [opened, reopened, labeled, unlabeled, closed]
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
@@ -14,13 +17,20 @@ permissions:
   issues: write
 
 concurrency:
-  # One global group, not a per-issue group with a unique fallback: a sweep and
-  # a per-issue run touching the same issue must not interleave, and two sweeps
-  # must not overlap. `cancel-in-progress: false` lets the running job finish
-  # rather than being killed mid-write; GitHub still keeps only the newest
-  # PENDING run in the group, so an intermediate run during a bulk relabel can
-  # be dropped. That is safe: the next sweep reconciles the whole backlog.
-  group: triage-hygiene
+  # Two kinds of group, because GitHub keeps only the newest PENDING run per
+  # group: a queued run is silently superseded, not failed. With one global
+  # group an issue event at 06:18 would discard the queued 06:17 sweep and a
+  # whole day of reconciliation with it, leaving no red X behind.
+  #
+  # So the sweep (schedule / workflow_dispatch) gets its own group that no
+  # per-issue run can ever land in, and each issue gets its own group keyed by
+  # number: two events on the SAME issue still serialize, while events on
+  # different issues no longer contend. `cancel-in-progress: false` lets a
+  # running job finish its writes rather than being killed mid-write.
+  group: >-
+    triage-hygiene-${{ github.event_name == 'issues'
+    && format('issue-{0}', github.event.issue.number)
+    || 'sweep' }}
   cancel-in-progress: false
 
 jobs:
