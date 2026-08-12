@@ -22,6 +22,12 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Explicit provenance avoids checkout metadata invalidating the final CLI
+  # crate when a trusted release job retries the same commit.
+  GENTS_BUILD_GIT_SHA: ${{ github.sha }}
+  GENTS_BUILD_GIT_REF: ${{ github.ref }}
+  GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+  GENTS_BUILD_GIT_DIRTY: "false"
   # Keep the workspace's no-LTO/16-CGU release shape explicit on Linux. Cargo
   # parallelism remains per architecture: workstation-1 (x86_64) has ample
   # RAM, while the sparks (aarch64) serve a resident model and need a low cap.
