@@ -1,22 +1,23 @@
 # Native `lsp` tool (design)
 
 **Date:** 2026-08-12
-**Status:** Draft, awaiting implementation
+**Status:** Draft, review findings 1–10 incorporated
 **Issue:** #1106
 **Branch:** `feat/lsp-tools`
 **Worktree:** `../gents-lsp-tools`
 
-Capability port of oh-my-pi language-server support into Gents. The model-facing
-behavior matches OMP's single `lsp` tool. The wiring is Gents-native:
-ToolSelection documents, the existing file-tool sandbox, session-scoped
-processes, and the Lean `ToolPolicy` / `ToolExecution` contracts.
+Capability port of oh-my-pi language-server **actions** into Gents. Wiring is
+Gents-native: ToolSelection documents, `CommandExecutionPolicy` +
+`managed_exec` for spawn, `ToolContext` + `file_mutation_lock_for` +
+`content_hash` for edits, session-scoped processes, and the Lean
+`ToolPolicy` / `CommandPolicy` / `ToolExecution` contracts.
 
-OMP sources of truth (behavior only; do not import their file/config layout):
+OMP is a behavior reference, not a client to copy:
 
-- `packages/coding-agent/src/lsp/` (client, config, defaults, actions, edits)
-- `packages/coding-agent/src/prompts/tools/lsp.md`
-- `docs/tools/lsp.md`, `docs/lsp-config.md`
-- `packages/coding-agent/src/lsp/defaults.json`
+- `packages/coding-agent/src/lsp/` and `docs/tools/lsp.md` — action set,
+  catalog, numeric caps
+- Do **not** import `lsp.json`, lspmux, workspace-local bin search, or
+  `workspace.applyEdit: true`
 
 ## Problem
 
@@ -25,12 +26,11 @@ tools cannot follow shadowing, re-exports, or cross-file callsites. There is no
 issue or native tool that talks to rust-analyzer, gopls, typescript-language-server,
 or the rest of a project's language servers.
 
-OMP already has this: one `lsp` tool, auto-detect from root markers plus
-`$PATH`, and a full action set including rename and code actions. Dropping
-OMP's `lsp.json` / lspmux / plugin merge into Gents would add a parallel
-config world. Gents already gates optional tools on `ToolSelection`
-(`enable_memory`, `enable_defra_query`, `enable_self_config`) and already
-scopes host IO through `ToolContext`.
+The first draft of this spec treated `enable_lsp` like a file-read add-on and
+said "port OMP client semantics." That is wrong in this codebase: starting a
+language server is host execution, and OMP's client applies server-initiated
+edits. Gents already has the patterns this needs (CLI-tool admission,
+`CommandExecutionPolicy`, `managed_exec`, `FileCap`, `expected_content_hash`).
 
 ## Decision
 
@@ -40,16 +40,20 @@ One optional native `lsp` tool.
 | --- | --- |
 | Model surface | One tool named `lsp`, OMP action enum |
 | Gate | `ToolSelection.enable_lsp`, default false, never backfilled |
-| Config | `ToolSelection.lsp_config` JSON string + compiled-in catalog |
+| What the gate *is* | Host-exec grant for **operator-admitted** language-server binaries (CLI-tool class), **plus** file-tier authorization from existing `FileCap` |
+| Config | `ToolSelection.lsp_config` JSON string + compiled-in **ordered** catalog |
 | Workspace | Existing file-tool workspace (`file_tool_root`, request `workspace_cwd`) |
-| Process lifetime | Per `AgentSession`; start on first use; tear down on session close |
-| Writes | `WorkspaceEdit` / rename apply through `ToolContext` |
-| Policy | Lean `ToolPolicy.Surface.lsp : Bool` |
+| Spawn | `managed_exec` + `CommandExecutionPolicy` + `build_shell_env()` — never workspace-local bins |
+| Process lifetime | Per `AgentSession`; start on first use; tear down on session close / idle / digest change |
+| Client mutations | `workspace.applyEdit: false`. Apply only edits returned by the foreground call |
+| Writes | Preflight every URI through `ToolContext`, then apply under `file_mutation_lock_for` |
+| Policy | Lean `Surface.lsp : Bool` **and** an `LspAction` authorization model against `FileCap` |
 | Failures | Existing `FailureClass` via `ReportedFailure` |
 | Lifecycle | Existing `nativeCommand` — no new tool-call states |
 
 Not chosen: a new `LspConfig` collection, filesystem `lsp.json`, host-wide
-or lspmux sharing, or per-server / per-capability tool names.
+or lspmux sharing, per-server tool names, or treating `enable_lsp` as
+file-read authority.
 
 ## Non-goals
 
@@ -57,15 +61,18 @@ or lspmux sharing, or per-server / per-capability tool names.
   tool-selection bridge; UI is #580.
 - Sharing one language-server process across sessions (OMP `lsp.shared` /
   lspmux / broker mux).
-- Filesystem or plugin LSP config (`~/lsp.json`, `<cwd>/.omp/lsp.json`,
-  Claude/Codex/Gemini config dirs).
+- Filesystem or plugin LSP config (`~/lsp.json`, `<cwd>/.omp/lsp.json`).
 - Advertising `lsp` when file tools are `Off` (no workspace to bind).
-- Backgrounding `lsp` (OMP is single-shot; v1 stays foreground).
+- Backgrounding `lsp` (v1 stays foreground).
 - New `ToolExecution` states or a new `FailureClass`.
-- Pointing a language server at Gents `--home`. That directory is the node
-  data dir, not the project under edit.
+- Pointing a language server at Gents `--home`.
 - Hidden compiler subprocesses for workspace diagnostics (`cargo check`,
   `tsc --noEmit`, `go build`, `pyright`). Those stay on `bash`.
+- Resolving `node_modules/.bin`, `.venv/bin`, or other workspace-controlled
+  executables.
+- `workspace/executeCommand` and server-initiated `workspace/applyEdit`.
+- A POSIX multi-file transaction. Preflight + ordered locks + hash check +
+  stop-on-first-failure is the same honesty as #724.
 
 ## Architecture
 
@@ -73,33 +80,39 @@ or lspmux sharing, or per-server / per-capability tool names.
 ToolSelection.enable_lsp + lsp_config
         │
         ▼
-ToolPolicy.Surface.lsp  ⊓  file ≠ Off  ⊓  ceiling
+ToolPolicy.Surface.lsp  ⊓  file ≠ Off  ⊓  ceiling     (advertise)
+        │
+        ├─ read  LspAction  ⇔  file ∈ {readOnly, readWrite}
+        └─ write LspAction  ⇔  file = readWrite
         │
         ▼
-advertise native tool `lsp`     (toolset/lsp/)
+admit server argv  (CommandPolicy + PATH/absolute-outside-root)
         │
         ▼
-session LspPool[(session_id, workspace, server)]
-        │  stdio JSON-RPC
+managed_exec spawn  (process group, build_shell_env, sandbox, network)
+        │
         ▼
-language server (rust-analyzer, gopls, …)
+session LspPool[session_id, workspace, server, config_digest]
         │
         ├─ read actions → formatted text, completed
-        └─ write actions → WorkspaceEdit via ToolContext
+        └─ write actions → foreground WorkspaceEdit only
+              preflight ToolContext → lock sorted paths → hash check → apply
 ```
 
-`write_file` / `edit_file` optionally run format + diagnostics after a
-successful mutation when `enable_lsp` is on and the corresponding
-`lsp_config` flags are set. That is a post-step on existing tools, not a
-new hook subsystem.
+`enable_lsp` does **not** mean "this is a read tool." It means the operator
+admitted language-server binaries for this behavior. File-tier read vs write
+is still `FileCap`, proven in Lean, enforced at dispatch.
+
+`write_file` / `edit_file` optionally format + report diagnostics **inside
+the existing per-path lock**, after the mutation, before release.
 
 ## Components
 
 ### 1. ToolSelection
 
-Add two columns to `ToolSelection` (`crates/gents-schemas/schemas/agent/tool_selection.graphql`)
-and thread them through document_config, apply/desired-state, CLI validate,
-`tools explain`, protocol rows, and desktop-core **preserve-on-absent**.
+Add two columns to `ToolSelection` and thread them through document_config,
+apply/desired-state, CLI validate, `tools explain`, protocol rows, and
+desktop-core **preserve-on-absent**.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
@@ -111,14 +124,17 @@ and thread them through document_config, apply/desired-state, CLI validate,
 `from_selection` sets `surface.lsp = enable_lsp && file != Off`. Ceiling and
 runtime meet with AND, identical to `memory` / `defraQuery`.
 
-Write actions additionally require `file == ReadWrite` at dispatch. A
-ReadOnly file-tool selection may use diagnostics, navigation, hover, symbols,
-status, and capabilities only.
+That boolean is **advertisement only**. Action authorization is
+`lspActionAuthorized(file, action)` in Lean (section Formal model).
+
+Custom `command` / `args` in `lsp_config` are operator document fields, the
+same class as `CliToolConfig.binary_path`. The model cannot change them
+unless `enable_self_config` allows the `tools` category.
 
 ### 2. `lsp_config` JSON
 
 One object. Unknown keys are ignored. Object-valued server fields replace
-wholesale (OMP shallow merge).
+wholesale.
 
 ```json
 {
@@ -127,13 +143,15 @@ wholesale (OMP shallow merge).
   "diagnostics_on_write": true,
   "diagnostics_on_edit": false,
   "diagnostics_deduplicate": true,
+  "network_mode": "disabled",
   "servers": {
     "rust-analyzer": { "disabled": true },
     "my-lsp": {
       "command": "my-lsp-server",
       "args": ["--stdio"],
       "file_types": [".xyz"],
-      "root_markers": [".xyz-project"]
+      "root_markers": [".xyz-project"],
+      "priority": 100
     }
   }
 }
@@ -142,240 +160,507 @@ wholesale (OMP shallow merge).
 | Field | Default when omitted | Meaning |
 | --- | --- | --- |
 | `idle_timeout_ms` | unset / 0 / negative = disabled | Shut down an idle client in this session. Session close always tears down. |
-| `format_on_write` | `false` | After `write_file`, apply LSP formatting when a server matches |
-| `diagnostics_on_write` | `true` | After `write_file`, append diagnostics |
+| `format_on_write` | `false` | After `write_file`, format **while still holding** that path's mutation lock |
+| `diagnostics_on_write` | `true` | After `write_file`, append diagnostics (still inside the lock for the didChange; the write itself has already landed) |
 | `diagnostics_on_edit` | `false` | After `edit_file`, append diagnostics |
 | `diagnostics_deduplicate` | `true` | Suppress diagnostics already shown for that file |
-| `servers` | `{}` | Per-server override map, merged onto the compiled-in catalog |
+| `network_mode` | `disabled` | Meet with `CommandExecutionPolicy.network_mode` (more restrictive wins) |
+| `servers` | `{}` | Per-name override map, merged onto the compiled-in **ordered** catalog |
 
-Server override / catalog fields (snake_case), matching OMP `ServerConfig`:
-
-`command`, `args`, `file_types`, `language_id`, `root_markers`,
+Server fields: `command`, `args`, `file_types`, `language_id`, `root_markers`,
 `init_options`, `settings`, `disabled`, `warmup_timeout_ms`, `is_linter`,
-`capabilities`, `workspace_ready_timings`.
+`priority`, `capabilities`, `workspace_ready_timings`.
 
 A new server is valid only when `command`, `file_types`, and `root_markers`
-are all non-empty after merge. Invalid entries are dropped with a warning
-(`tools explain` surfaces them). Runtime-owned OMP fields (`resolvedCommand`,
-`createClient`) are not configurable.
+are all non-empty after merge. Invalid entries are dropped with a warning.
+Runtime-owned OMP fields (`resolvedCommand`, `createClient`) are not
+configurable.
 
 ### 3. Built-in catalog
 
-Port `defaults.json` into the runtime as `include_str!` JSON under
-`crates/gents/src/toolset/lsp/defaults.json`. Detection is Gents-native:
+Port `defaults.json` into `crates/gents/src/toolset/lsp/defaults.json` as an
+**array** (ordered). JSON object iteration is not a routing contract.
+
+Each entry has a stable `name` plus the server fields above. `priority` is a
+`u16`; lower wins among non-linter matches. Equal priority keeps catalog
+order.
+
+Detection:
 
 1. Workspace root = `ToolContext` effective base (request `workspace_cwd` if
-   set, otherwise `file_tool_root` / the tool base). Never Gents `--home`.
-2. A server is eligible when at least one `root_markers` entry exists **in
-   that workspace root** (one-level wildcard such as `*.cabal` allowed; no
-   parent walk, no recursive scan) **and** `command` resolves.
-3. Resolve `command` in this order: absolute path; workspace-local bins
-   (`node_modules/.bin`, `.venv/bin`, `venv/bin`, `bin`); then `$PATH`.
-4. Drop `disabled` servers after merge.
+   set, otherwise `file_tool_root`). Never Gents `--home`.
+2. Eligible when a `root_markers` entry exists **in that workspace root**
+   (one-level wildcard such as `*.cabal`; no parent walk, no recursive scan)
+   **and** the command is **admitted** (next section).
+3. Drop `disabled` servers after merge.
 
-Custom linter adapters that OMP implements out of process (Biome CLI,
-SwiftLint CLI) ship as Rust adapters behind the same `is_linter` catalog
-entries. They participate in `diagnostics` (and format-on-write when they
-can format). They do not handle navigation or rename.
+Mutually exclusive families — first eligible by `priority` then catalog
+order, after the family rule:
+
+| Family | Rule |
+| --- | --- |
+| TypeScript / JS | `denols` if `deno.json` / `deno.jsonc` / `deno.lock` is in the workspace root; otherwise `typescript-language-server` |
+| Python | `basedpyright`, then `pyright`, then `pylsp` |
+| Ruby | `ruby-lsp`, then `solargraph` |
+| Elixir | `expert`, then `elixirls` |
+| Nix | `nixd`, then `nil` |
+| PHP | `intelephense`, then `phpactor` |
+
+Linters (`is_linter`) never win primary routing. They participate only in
+`diagnostics` and format-on-write.
+
+Custom linter adapters (Biome CLI, SwiftLint CLI) are Rust adapters behind
+the same catalog entries. They are still admitted as executables (PATH /
+absolute-outside-root) and spawned through `managed_exec`.
 
 Catalog `capabilities` (rust-analyzer `flycheck`, `ssr`, `expandMacro`,
 `runnables`, `relatedTests`, plus `workspace_ready_timings`) are honored
-inside this same tool — readiness waits and extra requests — not as new
-tool names. They remain off unless the merged server entry sets them.
+inside this tool for readiness waits and extra **read** requests. They do
+not add tool names and do not authorize writes.
 
-### 4. Native tool
+### 4. Executable admission and spawn
+
+Language-server startup is **command execution**, not file IO. Reuse the
+existing stack:
+
+| Concern | Existing owner |
+| --- | --- |
+| Argv admission | `CommandExecutionPolicy` / Lean `CommandPolicy` (`forbidden` prefixes, optional `allowed` prefixes) |
+| Process group / cancel / deadline | `managed_exec` (`setsid` + `terminate_process_group` / job object) |
+| Environment | `build_shell_env()` — `CORE_ENV_VARS` only, `env_clear` |
+| Sandbox | Same `CommandExecutionMode` seatbelt as bash (`workspace_write` on macOS) |
+| Network | `CommandNetworkMode`, default **disabled** for LSP, meet with selection |
+| Binary pinning | CLI-tool pattern: operator-chosen name/path, never workspace discovery |
+
+**Admission** of `command`:
+
+1. If `command` is absolute or contains a path separator: canonicalize. If
+   the path is under the tool root → `policyDenied` (workspace-controlled
+   binary). If it does not exist → `serviceUnavailable`. Otherwise admit
+   (operator-installed path, same as `CliToolConfig.binary_path`).
+2. If `command` is a bare name: resolve on the **host PATH only** (the same
+   PATH bash uses). Never `node_modules/.bin`, `.venv/bin`, `venv/bin`, or
+   workspace `bin/`.
+3. Build `CommandRequest { command, lookupCommand: resolved, args }` and
+   run the existing CommandPolicy checks that apply to a non-interactive
+   spawn (forbidden prefixes always; allowed prefixes when the selection
+   has a non-empty allowlist). Do **not** require the binary to be in
+   `default_read_only_commands` — `enable_lsp` is the grant, like adding a
+   CLI tool.
+4. `lsp_config.servers.*.command` / `args` are part of that argv. They are
+   not a model-facing escape hatch.
+
+**Spawn policy** is independent of `FileCap` (file-tier still blocks
+tool-applied edits). Default matches `CommandExecutionPolicy::write_capable()`:
+`WorkspaceWrite` + seatbelt on macOS, `Unrestricted` elsewhere. Network is
+`lsp_config.network_mode` (default disabled) meet the selection's
+`command_network_mode`. On macOS, missing `sandbox-exec` is the existing
+`workspaceWriteSandboxUnavailable` denial.
+
+Do **not** run `default_read_only_commands` against rust-analyzer. Use
+forbidden/allowed argv prefixes from the selection when those lists are
+set. Bash `Off` still spawns (CLI tools already do).
+
+The language server will fork compilers (`rustc`, `cargo`, `go`) and will
+write analysis caches. Children sit in the managed process group and die
+with it. Seatbelt, when active, restricts those writes to `WRITABLE_ROOT`.
+That can mutate the workspace even when `FileCap` is `readOnly` — file-tier
+only blocks **foreground WorkspaceEdit application**. `tools explain` must
+say this; it is why `enable_lsp` is a host-exec grant, not a read tool.
+Servers may still **read** toolchains and caches outside the root.
+
+### 5. Native tool
 
 `crates/gents/src/toolset/lsp/` — one `NativeTool::Lsp` / tool name `lsp`.
 
-Actions (OMP set):
-
-| Action | Kind | Notes |
+| Action | Mutates files? | Notes |
 | --- | --- | --- |
-| `diagnostics` | read | File, glob, or `file: "*"` (every eligible server). Workspace mode is LSP-only — do not spawn `cargo check` / `tsc` / `go build` / `pyright`; the agent already has bash for that. |
-| `definition` | read | `file` + `line` + `symbol` |
-| `type_definition` | read | same position rules |
-| `implementation` | read | same position rules |
-| `references` | read | include declaration; project-aware retry |
-| `hover` | read | |
-| `symbols` | read | document, or `file: "*"` + `query` for workspace |
-| `status` | read | configured vs started |
-| `capabilities` | read | dump server capabilities |
-| `rename` | write | apply unless `apply: false` |
-| `rename_file` | write | filesystem rename + `will/didRenameFiles` |
-| `code_actions` | write | list by default; apply one with `apply: true` + `query` |
-| `reload` | write | restart one server or all (`file: "*"`); `*` also reloads config |
-| `request` | write | raw method + optional JSON `payload` |
+| `diagnostics` | no | File, glob (existing glob + cap), or `file: "*"`. See workspace diagnostics. |
+| `definition` | no | `file` + `line` + `symbol` |
+| `type_definition` | no | |
+| `implementation` | no | |
+| `references` | no | include declaration; project-aware retry |
+| `hover` | no | |
+| `symbols` | no | document, or `file: "*"` + `query` |
+| `status` | no | configured vs started |
+| `capabilities` | no | dump server capabilities (capped) |
+| `reload` | no | process control; allowed whenever `lsp` is advertised |
+| `rename` | yes | apply unless `apply: false` |
+| `rename_file` | yes | filesystem rename + `will/didRenameFiles` |
+| `code_actions` | list = no; apply = yes | list by default; apply one with `apply: true` + `query`, **edit field only** |
+| `request` | yes unless method is on the read-method allowlist | raw method + optional JSON `payload` |
 
-Position convention matches OMP: `line` is 1-indexed; `symbol` is a
-substring on that line; `name#N` selects the Nth match. For
-`definition` / `references` / `rename` against project-aware servers,
-`line` without `symbol` is `argumentInvalid` — no silent first-column
-fallback.
+Read-method allowlist for `request` (ReadOnly-legal):
+`textDocument/hover`, `textDocument/definition`, `textDocument/typeDefinition`,
+`textDocument/implementation`, `textDocument/references`,
+`textDocument/documentSymbol`, `textDocument/diagnostic`,
+`workspace/symbol`, `workspace/diagnostic`, `shutdown` is not here
+(`reload` owns restart). Anything else on a ReadOnly surface is
+`policyDenied`.
 
-Output is a single text block, OMP-shaped (locations with context,
-grouped diagnostics, preview vs applied edits). Empty navigation
-(`No definition found`) is a **successful** `completed` call, same as
-grep with no matches.
+Position convention: `line` is 1-indexed; `symbol` is a substring on that
+line; `name#N` selects the Nth match. For `definition` / `references` /
+`rename` against project-aware servers, `line` without `symbol` is
+`argumentInvalid`.
 
-### 5. Session-scoped `LspPool`
+Positions and ranges are **LSP-encoded**, not Rust `char`/`byte` indexes.
+See Position encoding.
 
-Host-side cache, not a document.
+Empty navigation is a successful `completed` call (grep-with-no-matches).
 
-- Key: `(session_id, workspace_root, server_name)`.
-- Value: one stdio JSON-RPC client (initialize once, reuse).
-- Create on first use for that key.
-- `idle_timeout_ms` stops an idle client inside the session; the next call
-  cold-starts it.
-- `close_session` / session teardown sends `shutdown` + `exit`, then kills
-  the process if it does not leave.
-- A request that changes `workspace_cwd` uses a different key; it does not
-  reuse another workspace's client.
-- Child behaviors get `lsp` only if **their** `ToolSelection.enable_lsp` is
-  true. Their session is a different key.
+### 6. Client capabilities (do not port OMP here)
 
-Implementation sits next to the existing host-level `McpPool` but is keyed
-by session, not shared across the host. Do not put process handles in
-DefraDB.
+Initialize with:
 
-JSON-RPC framing, `didOpen` / `didChange` / `didClose`,
-`publishDiagnostics` cache, `$/cancelRequest` on abort, initialize
-backoff after a failed handshake: port OMP `client.ts` semantics.
+- `workspace.applyEdit = false`
+- `workspace.workspaceEdit.documentChanges = true` (we understand the
+  shape for **returned** edits)
+- `workspace.workspaceEdit.resourceOperations = ["create", "rename", "delete"]`
+- `general.positionEncodings = ["utf-8", "utf-16"]`, prefer `utf-8` if the
+  server agrees, else UTF-16
 
-### 6. File-tool writethrough
+The client **does not** implement `workspace/applyEdit`. If a server sends
+it anyway, reply `{ applied: false }` and log. No file IO.
 
-After a successful `write_file` / `edit_file`, if `surface.lsp` and the
-matching flag:
+The client **does not** send `workspace/executeCommand` in v1.
+`code_actions` apply uses only `CodeAction.edit`. A bare `Command` action
+is `argumentInvalid` ("action has no workspace edit; executeCommand is not
+supported").
 
-1. `didChange` (or reopen) the file on matching servers.
-2. If `format_on_write` and the mutator was `write_file`, request formatting
-   and apply the text edits through the same `file_mutation_lock_for` path
-   `write_file` already uses.
-3. If diagnostics-on-write/edit, wait briefly for `publishDiagnostics` and
-   append the formatted diagnostics to the tool result. Dedup when
-   `diagnostics_deduplicate` is true.
+`didOpen` / `didChange` / `didClose`, `publishDiagnostics` cache, and
+`$/cancelRequest` on abort are kept. Those are protocol, not OMP's mutation
+policy.
 
-Writethrough failures never fail the original write. They append a note.
+### 7. Session-scoped `LspPool`
+
+Host-side cache, not a document. Same ownership idea as `McpPool` on
+`ToolRuntimeContext`, but keyed by session.
+
+**Key:** `(session_id, workspace_root, server_name, config_digest)`
+
+`config_digest` is a hash of the normalized spawn identity: resolved
+command path, args, `init_options`, `settings`, `capabilities`,
+`is_linter`, spawn mode, network mode. A ToolSelection / `lsp_config`
+change that alters any of those is a different key. Reconcile evicts
+entries whose digest is no longer in the effective surface.
+
+**Backoff key:** the same 4-tuple. The first draft omitted workspace and
+config; do not.
+
+- Create on first use.
+- `idle_timeout_ms` stops an idle client; next call cold-starts.
+- `close_session`, runtime shutdown, and digest eviction send
+  `shutdown`/`exit` then `managed_exec` process-group kill. In-flight
+  initialize uses the same `CancellationToken` as the tool scope.
+- Different `workspace_cwd` → different key.
+- Child behaviors use their own `enable_lsp` and their own `session_id`.
+
+`session_id` is **not** on today's `ToolRuntimeScope`
+(`tool_call_lifecycle/runtime.rs`). Add it there — the same task-local
+that already carries `deadline_at`, `cancellation_token`, `workspace_cwd`,
+and `live_output`. The dispatcher (`loop_stream`, `daemon/inference`)
+already has `session_id` in hand. `close_session` gains an `LspPool`
+teardown call; the document mutation stays as it is.
+
+Do not put process handles in DefraDB.
+
+### 8. WorkspaceEdit apply
+
+Applies only to edits **returned** by a write-authorized foreground action
+(`rename`, `rename_file`, `code_actions` apply, format-on-write).
+
+Pipeline, using existing file-tool primitives:
+
+1. Accept `documentChanges` or legacy `changes`. Reject mixed unsupported
+   shapes.
+2. Reject any URI whose scheme is not `file:`.
+3. Resolve every source and destination through `ToolContext`
+   (`resolve_path` / `resolve_path_allow_create`). Escape → `policyDenied`.
+4. Validate text-edit ranges (start ≤ end). Overlapping ranges on one file
+   → `argumentInvalid` (do not apply in declared order and hope).
+5. If `version` is present, it must match the version we last sent in
+   `didOpen`/`didChange`. Mismatch → `argumentInvalid` (stale edit).
+6. Sort canonical lock keys and acquire `file_mutation_lock_for` in that
+   order (same lock `write_file` / `edit_file` use).
+7. Under the locks, re-read each existing file and check `content_hash`
+   against the snapshot used to interpret the edit (the #724
+   `expected_content_hash` pattern). Mismatch → abort **all** paths, no
+   writes.
+8. Compute every new byte image in memory. Then write. If a write fails
+   after preflight, **stop**, report applied vs pending, do not continue.
+   There is no cross-file atomic rename in this runtime.
+
+`rename_file` is the same preflight for every `willRenameFiles` pair plus
+the filesystem rename itself, still under the sorted locks.
+
+### 9. File-tool writethrough
+
+Runs **inside** `write_file` / `edit_file`'s existing lock, after the
+bytes hit disk, before the lock is released. Do not return from
+`write_file` and then re-acquire.
+
+1. Record `content_hash` of the bytes just written (already on the
+   metadata).
+2. `didChange` matching servers.
+3. If `format_on_write` and the mutator was `write_file`: request
+   formatting with a short timeout. Before applying, re-hash under the
+   **still-held** lock. Hash mismatch or version mismatch → skip format,
+   append a non-fatal note. Apply format edits through the same
+   WorkspaceEdit preflight (single path).
+4. If diagnostics-on-write/edit: wait briefly for `publishDiagnostics`,
+   append formatted diagnostics. Dedup when configured.
+
+Writethrough failures never fail the original write.
+
+### 10. Position encoding
+
+LSP positions default to UTF-16 code units. Rust `String` indexes are UTF-8
+bytes; `chars()` are Unicode scalars. Either will mis-hit emoji and
+non-BMP text.
+
+On initialize, advertise `utf-8` and `utf-16`; use the server's chosen
+`positionEncoding`. Convert in both directions in one module
+(`toolset/lsp/encoding.rs`):
+
+- UTF-8: `line` + byte offset into that line (LSP utf-8)
+- UTF-16: `line` + UTF-16 code units into that line
+
+Symbol search on a line uses the same encoding to compute `character`.
+Tests must cover ASCII, combining marks, CJK, and non-BMP (e.g. `😀`) for
+navigation **and** for applied edits.
+
+### 11. Workspace diagnostics and routing
+
+`file: "*"` diagnostics:
+
+1. If the routed primary (or any eligible server) advertises
+   `workspace/diagnostic`, send that and format the result (capped).
+2. Otherwise do **not** enumerate the tree (that is #729). Return a
+   completed note: pass a file or a glob. Glob expansion uses the existing
+   glob tool + `MAX_GLOB_DIAGNOSTIC_TARGETS` (20).
+
+Primary server for a concrete file: family rule, then lowest `priority`,
+then catalog order, excluding `is_linter`. If none remain,
+`serviceUnavailable`.
 
 ## Data flow
 
-1. Reconcile builds the behavior tool surface. `enable_lsp && file != Off`
-   after policy meet advertises `lsp`.
-2. First `lsp` call in a session: load catalog, merge `lsp_config`, select
-   eligible servers for the workspace, start the routed server if needed.
-3. Route by `file_types` (extension or exact basename). Primary
-   (non-`is_linter`) servers handle navigation and refactor. `diagnostics`
-   queries matching primaries **and** linter adapters.
-4. Position actions `didOpen` the file, resolve the column, send the LSP
-   request, format the result.
-5. Write actions produce a `WorkspaceEdit` or filesystem rename, apply
-   through `ToolContext` (path must stay under the tool root), then notify
-   the server.
-6. Session close drains that session's clients.
+1. Reconcile builds the surface. `enable_lsp && file != Off` after meet
+   advertises `lsp`. Digest-evict stale pool entries for live sessions on
+   that behavior.
+2. First call: merge catalog, admit servers, spawn via `managed_exec`.
+3. Route by `file_types` + family/priority. Linters only on diagnostics /
+   format.
+4. Position actions convert line/symbol through the negotiated encoding,
+   `didOpen` if needed, send, format, truncate.
+5. Write actions require `file = readWrite`, take only returned edits,
+   preflight, lock, hash-check, apply.
+6. Session close / shutdown drains that `session_id`.
 
-## Error handling (Lean + existing classes)
+## Formal model
 
-Foundation flow: this **does** change `ToolPolicy.Surface`, so Lean goes
-first. It does **not** change legal `ToolExecution` transitions.
+Foundation flow: Lean first. No new `ToolExecution` states. `lsp` stays
+`nativeCommand`.
 
-### ToolPolicy
+### ToolPolicy advertisement
 
 Add `lsp : Bool` to `Proofs.ToolPolicy.Types.Surface`.
 
 - `Surface.meet`: `a.lsp && b.lsp`
-- `effective_lsp_le_ceiling` / `effective_lsp_le_behavior` next to the
-  `memory` lemmas
-- `SurfaceView.lsp` in `Cases.lean` and
-  `Conformance.Contracts.Json.ToolPolicy`
-- Rust `ToolPolicySurface.lsp` + `lean_vocab_test` stay byte-aligned
+- `effective_lsp_le_ceiling` / `effective_lsp_le_behavior`
+- `SurfaceView.lsp` in Cases + conformance JSON
+- Rust `ToolPolicySurface.lsp` + `lean_vocab_test` stay aligned
 
-`secure_minimal` / default-false selections have `lsp = false`.
-`runtime_all` and the current `legacy_non_host_wide` ceiling stay
-permissive (`true`) so an explicit selection can enable it, matching
-`defra_query`.
+`secure_minimal` is `lsp = false`. `runtime_all` and
+`legacy_non_host_wide` ceilings stay permissive so an explicit selection
+can enable it.
+
+### LspAction authorization (`Proofs/Lsp/` or `ToolPolicy/Lsp.lean`)
+
+This is the missing formal piece from the first draft. A boolean cannot
+express "read actions on ReadOnly, writes only on ReadWrite."
+
+```lean
+inductive LspAction
+  | diagnostics | definition | typeDefinition | implementation
+  | references | hover | symbols | status | capabilities | reload
+  | rename | renameFile | codeActionsList | codeActionsApply
+  | requestRead | requestWrite
+
+def LspAction.mutates : LspAction → Bool
+  -- rename, renameFile, codeActionsApply, requestWrite = true; else false
+
+def lspAdvertised (lsp : Bool) (file : FileCap) : Bool :=
+  lsp && file ≠ .off
+
+def lspActionAuthorized (file : FileCap) (action : LspAction) : Bool :=
+  lspAdvertised true file &&
+    (!action.mutates || file = .readWrite)
+
+inductive LspMutationSource
+  | foregroundReturnedEdit
+  | serverApplyEdit
+
+def lspApplyAuthorized (file : FileCap) (src : LspMutationSource) : Bool :=
+  file = .readWrite && src = .foregroundReturnedEdit
+```
+
+Theorems (zero `sorry`s):
+
+- `¬lspActionAuthorized .readOnly a` when `a.mutates`
+- `lspActionAuthorized .readWrite a` when advertised
+- `¬lspAdvertised true .off`
+- `¬lspApplyAuthorized file .serverApplyEdit` for every `file`
+- `lspApplyAuthorized .readWrite .foregroundReturnedEdit`
+
+Conformance JSON cases for those rows, consumed like ToolPolicy cases.
+
+Client `applyEdit = false` is a Rust fixture assertion on the initialize
+payload (not a new Lean machine).
+
+### CommandPolicy
+
+Spawn argv is a `CommandRequest`. Existing denial reasons apply
+(`forbiddenPrefix`, `allowedPrefixRequired`). Add
+`DenialReason.workspaceExecutable` in Lean `CommandPolicy` (and the Rust
+mirror) for a command path that resolves under the tool root. Thread it
+like the other reasons through `toContract`, conformance cases, and
+`CommandPolicyDenial`.
+
+ReadOnly `requestWrite` is `policyDenied` via `lspActionAuthorized`, not
+CommandPolicy.
 
 ### ToolExecution
 
-`lsp` is `ToolOperation.nativeCommand`. Allowed transitions are the ones
-already proven: dispatch, spawnFailed, complete, fail, timeout, cancel,
-approval hold/deny.
-
-Do not invent a parallel "text result with success=false" channel. The
-tool uses `ToolError::ReportedFailure` like file and bash tools.
+Unchanged transitions. Failures are `ReportedFailure` with existing
+classes.
 
 | Situation | Class | Terminal |
 | --- | --- | --- |
-| Missing/invalid `action`, `file`, `query`, `new_name`, `payload` JSON, or required `symbol` | `argumentInvalid` | `failed` |
-| Path outside tool root | `policyDenied` | `failed` |
-| Write action while `file != ReadWrite` | `policyDenied` | `failed` |
-| Policy meet has `lsp = false` (should not be advertised; defense in depth) | `policyDenied` | `failed` |
+| Missing/invalid args, payload JSON, required `symbol`, overlapping ranges, version mismatch | `argumentInvalid` | `failed` |
+| Path outside tool root; under-root executable; write action / `serverApplyEdit` / non-allowlisted `request` on ReadOnly | `policyDenied` | `failed` |
+| `surface.lsp = false` | `policyDenied` | `failed` |
 | No matching server, binary missing, initialize failure | `serviceUnavailable` | `failed` |
-| Stdio/process death mid-request | `transport` | `failed` |
-| LSP error response (`method not found`, server-side rename error) | `toolReturnedError` | `failed` |
-| Wall-clock / request deadline | `external` (or existing timeout transition) | `timedOut` / `failed` |
-| `approval_required_tools` contains `lsp` and operator denies | `approvalDenied` | `failed` (existing path) |
-| Empty definition/references/hover/diagnostics-clean | none | `completed` |
+| Stdio / process death mid-request | `transport` | `failed` |
+| LSP error response | `toolReturnedError` | `failed` |
+| Wall-clock / request deadline | `external` / timeout transition | `timedOut` / `failed` |
+| `approval_required_tools` contains `lsp` and deny | `approvalDenied` | `failed` |
+| Empty definition / clean diagnostics | none | `completed` |
 
-Initialize failures cache a backoff on `(session_id, server)` so a dead
-binary does not respawn every call. Workspace `reload` clears that cache.
+## Limits
 
-One server failing inside a multi-server `diagnostics` call does not fail
-the others; those errors are notes in a still-`completed` result.
+Reuse `truncate()` / `TruncationLimits` for the model-facing text. Named
+caps in `toolset/lsp` (OMP numbers, Gents names):
 
-Session teardown is best-effort `shutdown`/`exit`, then kill. Teardown
-errors are logged, not persisted as tool calls.
+| Cap | Value |
+| --- | --- |
+| Tool timeout default / min / max | 20s / 5s / 300s |
+| JSON-RPC request timeout | 30s |
+| Initialize / warmup | 5s |
+| Project-load wait | 15s |
+| Idle sweep | 60s when idle timeout set |
+| Init-failure backoff | 3 min |
+| JSON-RPC `Content-Length` max | 8 MiB (reject / `toolReturnedError`) |
+| Server stderr ring | `DEFAULT_MAX_COMMAND_CHARS` (16_000) |
+| Pending requests per client | 32 |
+| Diagnostic messages | 50 |
+| Single-file diagnostics wait | 3s |
+| Glob diagnostic wait / targets | 400ms / 20 |
+| Workspace symbols | 200 |
+| Reference context lines | 50 |
+| References retries | 2 × 250ms |
+| Rename pairs | 1_000 |
+| Capabilities / raw `request` JSON | `TruncationLimits` default (2000 lines / 50 KiB) |
+
+An untrusted subprocess does not get unbounded allocation into the owned
+loop.
+
+## Error handling notes
+
+One server failing inside multi-server `diagnostics` does not fail the
+others; those errors are notes on a `completed` result.
+
+Session teardown errors are logged, not persisted as tool calls.
+
+`reload` with `file: "*"` drops the session's pool entries and re-reads
+the **ToolSelection document** via the existing config client. There is no
+config file to re-stat.
 
 ## Testing
 
 ### Lean
 
-- `lake build` after the `Surface.lsp` field and meet lemmas.
-- New / updated ToolPolicy conformance JSON cases: enable ∩ ceiling,
-  enable ∩ file Off, disable wins.
+- `lake build` after `Surface.lsp`, `LspAction` lemmas, and
+  `DenialReason.workspaceExecutable` if added.
+- ToolPolicy + LspAction conformance JSON cases: advertise ∩ file Off;
+  ReadOnly ∩ mutating action; ReadWrite ∩ mutate; `serverApplyEdit`
+  never authorized; disable wins.
 - Zero `sorry`s.
 
 ### Rust
 
-- Reserved name `lsp`; `enable_lsp` default false; no true backfill.
-- `lsp_config` parse, shallow server merge, invalid custom server dropped.
-- Policy meet and advertisement (`tools explain`).
-- `FailureClass` mapping table above.
-- `ToolContext` sandbox on reads and on every `WorkspaceEdit` URI.
-- Session pool: start, reuse same key, different workspace → different
-  client, session close drops the process, idle timeout drops the process.
-- Fake stdio language-server fixture covering the full action set
-  (diagnostics, navigation, symbols, rename preview/apply, rename_file,
-  code_actions list/apply, status, capabilities, request, reload).
-- File-tool writethrough: format-on-write applies, diagnostics append,
-  writethrough failure does not fail the write.
+- Reserved name; `enable_lsp` default false; no true backfill.
+- `lsp_config` parse, ordered catalog merge, family/priority routing.
+- PATH-only resolution; under-root absolute path denied; workspace
+  `node_modules/.bin` ignored even if it exists.
+- Spawn uses `managed_exec` + filtered env; process-group kill on
+  session close and on digest change.
+- Initialize payload has `applyEdit: false`; a fake server
+  `workspace/applyEdit` does not touch the filesystem.
+- `FailureClass` table above.
+- WorkspaceEdit preflight: non-`file:` URI, overlap, version mismatch,
+  hash mismatch, escape — no writes. Happy path applies under sorted
+  locks.
+- Format-on-write: concurrent `edit_file` cannot land between write and
+  format (lock held); stale format after a hash change is skipped.
+- Position encoding: UTF-8 and UTF-16 fixtures with `😀` and CJK.
+- Pool key: config change evicts; backoff key includes workspace + digest.
+- `ToolRuntimeScope` carries `session_id`; close_session drains the pool.
+- Fake stdio fixture for the action set, including `file: "*"`
+  workspace/diagnostic vs unsupported note.
+- `cargo test -p gents` then `cargo check --workspace --all-targets`.
 
-No live rust-analyzer (or other real server) in CI. An `#[ignore]` live
-test may be added later if useful; it is not a gate.
+No live rust-analyzer in CI.
 
-Gates: `cargo test -p gents`, then
-`cargo check --workspace --all-targets` for every crate that grows a
-required field (desktop-core, protocol rows, CLI apply, fixtures).
+## Implementation sketch
 
-## Implementation sketch (for the plan, not this PR)
+1. Lean: `Surface.lsp`, `LspAction` authorization, CommandPolicy
+   `workspaceExecutable`, conformance JSON.
+2. Schema + document_config + apply/validate + reserved name + Rust
+   policy + vocab tests.
+3. Catalog (ordered) + admission (PATH / outside-root) + merge. No
+   process yet.
+4. `session_id` on `ToolRuntimeScope`; `LspPool` on `ToolRuntimeContext`;
+   close_session / shutdown drain.
+5. `managed_exec` client + encoding + fake server fixture.
+6. Read actions, then write actions with WorkspaceEdit preflight.
+7. Writethrough **inside** `write_file` / `edit_file` locks.
+8. Prompt text + `tools explain`.
+9. Desktop/protocol preserve-on-absent (no editor UI).
 
-Foundation order:
+Modules: `toolset/lsp/{mod,catalog,config,admit,encoding,client,pool,actions,edits,fixture}`.
 
-1. Lean `ToolPolicy.Surface.lsp` + lemmas + conformance JSON.
-2. Schema + document_config + apply/validate + reserved name + policy
-   rust + vocab tests.
-3. Catalog + merge + detection (no process).
-4. JSON-RPC client + session pool + fake server fixture.
-5. Action dispatcher (read, then write).
-6. File-tool writethrough.
-7. Prompt text + `tools explain`.
-8. Desktop/protocol preserve-on-absent (no editor UI).
+## Review findings (this pass)
 
-Keep modules small: `toolset/lsp/{mod,catalog,config,client,pool,actions,edits,fixture}`.
+| # | Resolution |
+| --- | --- |
+| 1 | `enable_lsp` is a host-exec grant. Spawn goes through CommandPolicy + `managed_exec` + `build_shell_env` + sandbox/network. Workspace-local bins are forbidden. |
+| 2 | `LspAction` + `lspActionAuthorized` / `lspApplyAuthorized` in Lean with conformance cases. `Surface.lsp` stays the advertise bit. |
+| 3 | `applyEdit: false`. No `executeCommand`. Apply only foreground-returned edits. |
+| 4 | Preflight every URI/range/version; sorted `file_mutation_lock_for`; `content_hash` check; stop-on-first-failure. No fake multi-file atomicity. |
+| 5 | Negotiate utf-8/utf-16; convert both ways; non-ASCII tests. |
+| 6 | Format-on-write stays inside the existing write lock; re-hash before apply. |
+| 7 | Pool and backoff keys include `config_digest`. Reconcile evicts. |
+| 8 | Add `session_id` to `ToolRuntimeScope`. Pool lives next to `McpPool`. `close_session` drains it. |
+| 9 | OMP numeric caps + `truncate()` / `TruncationLimits` + Content-Length / pending-request bounds. |
+| 10 | `file: "*"` uses `workspace/diagnostic` or a glob/note. Ordered catalog + family/priority routing. |
 
 ## Related
 
 - #1106 — this work
 - #580 — desktop tool-selection panel (out of scope)
+- #724 — content-addressed stale-write rejection (hash/lock pattern)
+- #729 / #732 — unbounded search; do not reintroduce via workspace diagnostics
 - #937 — native long-running tool backgrounding (lsp is not backgrounded)
-- #728 — AGENTS.md at the tool root (workspace binding is the same root)
-- #732 — ripgrep-backed search (orthogonal text search)
-- #739 — structural edit_file mode (orthogonal to LSP rename)
+- #728 — AGENTS.md at the tool root (same workspace binding)
+- #739 — structural `edit_file` (orthogonal to LSP rename)
