@@ -670,8 +670,8 @@ test("the marker is independent of label order", () => {
 
 test("the marker is injective across label sets that share a separator", () => {
   assert.notEqual(
-    conflictMarker(["roadmap: a|b"]),
-    conflictMarker(["roadmap: a", "roadmap: b"]),
+    conflictMarker(["a|b"]),
+    conflictMarker(["a", "b"]),
   );
 });
 
