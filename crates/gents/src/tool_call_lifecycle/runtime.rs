@@ -169,6 +169,7 @@ struct ToolRuntimeScope {
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace_cwd: Option<PathBuf>,
+    session_id: Option<String>,
     live_output: Option<LiveToolOutputWriter>,
     // True only for executions spawned through the R6 background bridge;
     // tools with per-call budgets (bash) use the background lifetime budget
@@ -183,6 +184,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
+    pub(crate) session_id: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
     pub(crate) background: bool,
     pub(crate) correlation: Option<String>,
@@ -279,6 +281,7 @@ where
                 deadline_at,
                 cancellation_token,
                 workspace_cwd,
+                session_id: None,
                 live_output,
                 background,
                 correlation,
@@ -329,6 +332,7 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
+            session_id: scope.session_id,
             live_output: scope.live_output,
             background: scope.background,
             correlation: scope.correlation,

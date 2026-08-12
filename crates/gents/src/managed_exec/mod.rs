@@ -10,7 +10,10 @@ mod process;
 mod tests;
 
 pub(crate) use output::ManagedExecOutcome;
-pub(crate) use process::{active_executor_snapshots, run_managed_exec, ManagedExecRequest};
+pub(crate) use process::{
+    active_executor_snapshots, run_managed_exec, spawn_managed_process, ManagedExecKind,
+    ManagedExecRequest, ManagedProcess, SpawnManagedProcessRequest,
+};
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

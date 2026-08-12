@@ -4,11 +4,13 @@ use defra_node::EmbeddedNode;
 
 use crate::health_checker::ServiceHealthMap;
 use crate::mcp_pool::McpPool;
+use crate::toolset::lsp::LspPool;
 
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) mcp_pool: McpPool,
+    pub(crate) lsp_pool: LspPool,
     pub(super) health_map: ServiceHealthMap,
     pub(super) local_hostname: String,
     pub(super) local_subnet: Option<String>,
@@ -37,6 +39,7 @@ impl ToolRuntimeContext {
         Self {
             node,
             mcp_pool,
+            lsp_pool: LspPool::new(),
             health_map,
             local_hostname: local_hostname.into(),
             local_subnet,
@@ -52,6 +55,7 @@ impl ToolRuntimeContext {
         Self {
             node,
             mcp_pool: McpPool::default(),
+            lsp_pool: LspPool::new(),
             health_map: ServiceHealthMap::default(),
             local_hostname: "localhost".to_string(),
             local_subnet: None,

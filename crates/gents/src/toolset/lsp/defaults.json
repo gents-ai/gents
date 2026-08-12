@@ -1,0 +1,67 @@
+[
+  {
+    "name": "rust-analyzer",
+    "command": "rust-analyzer",
+    "args": [],
+    "file_types": [".rs"],
+    "root_markers": ["Cargo.toml", "rust-analyzer.toml"],
+    "priority": 10
+  },
+  {
+    "name": "gopls",
+    "command": "gopls",
+    "args": ["serve"],
+    "file_types": [".go", ".mod", ".sum"],
+    "root_markers": ["go.mod", "go.work", "go.sum"],
+    "priority": 10
+  },
+  {
+    "name": "typescript-language-server",
+    "command": "typescript-language-server",
+    "args": ["--stdio"],
+    "file_types": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+    "root_markers": ["package.json", "tsconfig.json", "jsconfig.json"],
+    "priority": 20
+  },
+  {
+    "name": "denols",
+    "command": "deno",
+    "args": ["lsp"],
+    "file_types": [".ts", ".tsx", ".js", ".jsx"],
+    "root_markers": ["deno.json", "deno.jsonc", "deno.lock"],
+    "priority": 10
+  },
+  {
+    "name": "basedpyright",
+    "command": "basedpyright-langserver",
+    "args": ["--stdio"],
+    "file_types": [".py", ".pyi"],
+    "root_markers": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"],
+    "priority": 10
+  },
+  {
+    "name": "pyright",
+    "command": "pyright-langserver",
+    "args": ["--stdio"],
+    "file_types": [".py", ".pyi"],
+    "root_markers": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"],
+    "priority": 20
+  },
+  {
+    "name": "pylsp",
+    "command": "pylsp",
+    "args": [],
+    "file_types": [".py", ".pyi"],
+    "root_markers": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"],
+    "priority": 30
+  },
+  {
+    "name": "biome",
+    "command": "biome",
+    "args": ["lsp-proxy"],
+    "file_types": [".ts", ".tsx", ".js", ".jsx", ".json"],
+    "root_markers": ["biome.json", "biome.jsonc"],
+    "is_linter": true,
+    "priority": 100
+  }
+]

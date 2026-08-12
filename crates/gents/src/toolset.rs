@@ -13,6 +13,7 @@ mod denial;
 pub mod edit_match;
 mod file_tools;
 mod goal;
+pub(crate) mod lsp;
 #[cfg(feature = "agent-memory")]
 mod memory;
 mod native_runner;
@@ -52,7 +53,11 @@ pub use session_history::{
     SessionHistorySnapshot, SESSION_HISTORY_TOOL_NAME,
 };
 pub(crate) use shared::parse_argv_prefixes;
+pub(crate) use shared::build_shell_env;
 pub use shared::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode};
+pub use lsp::{
+    lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
+};
 
 pub(crate) fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())
@@ -199,6 +204,13 @@ impl ToolSet {
     }
 
     pub fn build_native_tools(&self) -> Result<Vec<Box<dyn ToolDyn>>> {
+        self.build_native_tools_with_writethrough(None)
+    }
+
+    pub fn build_native_tools_with_writethrough(
+        &self,
+        writethrough: Option<lsp::LspWritethrough>,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let read_context = match &self.read_root {
             Some(root) => ToolContext::new(root.clone(), read_root_requires_create(&self.tools))?,
             None => ToolContext::from_default_read_root()?,
@@ -221,12 +233,20 @@ impl ToolSet {
                 NativeTool::Grep { max_matches } => {
                     built.push(Box::new(GrepTool::new(read_context.clone(), *max_matches)))
                 }
-                NativeTool::WriteFile { root } => built.push(Box::new(WriteFileTool::new(
-                    ToolContext::new(root.clone(), true)?,
-                ))),
-                NativeTool::EditFile { root } => built.push(Box::new(EditFileTool::new(
-                    ToolContext::new(root.clone(), true)?,
-                ))),
+                NativeTool::WriteFile { root } => {
+                    let mut writer = WriteFileTool::new(ToolContext::new(root.clone(), true)?);
+                    if let Some(writethrough) = writethrough.clone() {
+                        writer = writer.with_writethrough(writethrough);
+                    }
+                    built.push(Box::new(writer));
+                }
+                NativeTool::EditFile { root } => {
+                    let mut editor = EditFileTool::new(ToolContext::new(root.clone(), true)?);
+                    if let Some(writethrough) = writethrough.clone() {
+                        editor = editor.with_writethrough(writethrough);
+                    }
+                    built.push(Box::new(editor));
+                }
                 NativeTool::BashReadOnly {
                     timeout,
                     timeout_max,

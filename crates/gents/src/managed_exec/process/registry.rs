@@ -5,12 +5,29 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedExecKind {
+    ForegroundCommand,
+    PersistentService,
+}
+
+impl ManagedExecKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ForegroundCommand => "foregroundCommand",
+            Self::PersistentService => "persistentService",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ActiveManagedExecSnapshot {
     pub(crate) id: u64,
     pub(crate) pid: i32,
     pub(crate) argv0: String,
     pub(crate) tool_name: Option<String>,
+    pub(crate) kind: ManagedExecKind,
     pub(crate) started_at: String,
     pub(crate) age_ms: i64,
 }
@@ -21,6 +38,7 @@ struct ActiveManagedExecRecord {
     pid: i32,
     argv0: String,
     tool_name: Option<String>,
+    kind: ManagedExecKind,
     started_at: DateTime<Utc>,
     started_instant: Instant,
 }
@@ -42,6 +60,7 @@ pub(crate) fn active_executor_snapshots() -> Vec<ActiveManagedExecSnapshot> {
             pid: record.pid,
             argv0: record.argv0.clone(),
             tool_name: record.tool_name.clone(),
+            kind: record.kind,
             started_at: record.started_at.to_rfc3339(),
             age_ms: i64::try_from(record.started_instant.elapsed().as_millis()).unwrap_or(i64::MAX),
         })
@@ -53,13 +72,19 @@ pub(super) struct ActiveExecGuard {
 }
 
 impl ActiveExecGuard {
-    pub(super) fn insert(pid: i32, argv0: String, tool_name: Option<String>) -> Self {
+    pub(super) fn insert(
+        pid: i32,
+        argv0: String,
+        tool_name: Option<String>,
+        kind: ManagedExecKind,
+    ) -> Self {
         let id = NEXT_EXEC_ID.fetch_add(1, Ordering::Relaxed);
         let record = ActiveManagedExecRecord {
             id,
             pid,
             argv0,
             tool_name,
+            kind,
             started_at: Utc::now(),
             started_instant: Instant::now(),
         };

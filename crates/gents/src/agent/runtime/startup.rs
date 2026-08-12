@@ -157,6 +157,7 @@ pub(in crate::agent) async fn run_agent(
             .collect::<Vec<_>>(),
     ));
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
+    let lsp_pool = tool_runtime.lsp_pool.clone();
     let runtime = RuntimeContext {
         node: agent.node.clone(),
         tool_runtime,
@@ -648,6 +649,7 @@ pub(in crate::agent) async fn run_agent(
 
     let _ = readiness_handle.await;
     let _ = trigger_engine_handle.await;
+    lsp_pool.shutdown().await;
 
     if let Some(observer) = &agent.process_state_observer {
         observer.on_process_state_change(ProcessLifecycleState::Shutdown);

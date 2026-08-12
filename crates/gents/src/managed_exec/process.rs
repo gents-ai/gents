@@ -26,7 +26,7 @@ use job_object::{terminate_job, ManagedChildJob};
 use process_group::{terminate_process_group, ManagedChild};
 use registry::ActiveExecGuard;
 
-pub(crate) use registry::active_executor_snapshots;
+pub(crate) use registry::{active_executor_snapshots, ManagedExecKind};
 
 const CAPTURE_DRAIN_AFTER_CHILD_EXIT: Duration = Duration::from_millis(100);
 
@@ -89,7 +89,14 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
 
     let pid = child.pgid();
     let _active =
-        pid.map(|pid| ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone()));
+        pid.map(|pid| {
+            ActiveExecGuard::insert(
+                pid,
+                program.clone(),
+                request.tool_name.clone(),
+                ManagedExecKind::ForegroundCommand,
+            )
+        });
 
     if !request.stdin.is_empty() {
         if let Some(mut stdin) = child.inner.stdin.take() {
@@ -222,7 +229,14 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
 
     let pid = child.pid();
     let _active =
-        pid.map(|pid| ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone()));
+        pid.map(|pid| {
+            ActiveExecGuard::insert(
+                pid,
+                program.clone(),
+                request.tool_name.clone(),
+                ManagedExecKind::ForegroundCommand,
+            )
+        });
 
     if !request.stdin.is_empty() {
         if let Some(mut stdin) = child.inner.stdin.take() {
@@ -332,6 +346,133 @@ pub(crate) async fn run_managed_exec(_request: ManagedExecRequest) -> ManagedExe
 enum OutcomeKind {
     TimedOut,
     Cancelled,
+}
+
+#[derive(Debug)]
+pub(crate) struct SpawnManagedProcessRequest {
+    pub(crate) argv: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) environment: Option<HashMap<String, String>>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) kind: ManagedExecKind,
+}
+
+pub(crate) struct ManagedProcess {
+    #[cfg(unix)]
+    child: ManagedChild,
+    #[cfg(windows)]
+    child: ManagedChildJob,
+    pub(crate) stdin: Option<tokio::process::ChildStdin>,
+    pub(crate) stdout: Option<tokio::process::ChildStdout>,
+    pub(crate) stderr: Option<tokio::process::ChildStderr>,
+    _guard: Option<ActiveExecGuard>,
+}
+
+impl ManagedProcess {
+    pub(crate) async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.inner.wait().await
+    }
+
+    pub(crate) async fn terminate(&mut self) {
+        #[cfg(unix)]
+        {
+            let pgid = self.child.pgid();
+            {
+                let mut wait = Box::pin(self.child.inner.wait());
+                let _ = terminate_process_group(pgid, &mut wait).await;
+            }
+            self.child.mark_finished(true);
+        }
+        #[cfg(windows)]
+        {
+            let job = self.child.job();
+            let mut wait = Box::pin(self.child.inner.wait());
+            let _ = terminate_job(job, &mut wait).await;
+            self.child.mark_finished(true);
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) async fn spawn_managed_process(
+    request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    let Some((program, args)) = request.argv.split_first() else {
+        return Err("managed exec argv must not be empty".to_string());
+    };
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&request.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command.spawn().map(ManagedChild::new).map_err(|error| error.to_string())?;
+    let pid = child.pgid();
+    let guard = pid.map(|pid| {
+        ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone(), request.kind)
+    });
+    Ok(ManagedProcess {
+        stdin: child.inner.stdin.take(),
+        stdout: child.inner.stdout.take(),
+        stderr: child.inner.stderr.take(),
+        child,
+        _guard: guard,
+    })
+}
+
+#[cfg(windows)]
+pub(crate) async fn spawn_managed_process(
+    request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    let Some((program, args)) = request.argv.split_first() else {
+        return Err("managed exec argv must not be empty".to_string());
+    };
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(&request.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(environment) = request.environment.as_ref() {
+        command.env_clear().envs(environment);
+    }
+    let mut child = ManagedChildJob::spawn(&mut command).map_err(|error| error.to_string())?;
+    let pid = child.pid();
+    let guard = pid.map(|pid| {
+        ActiveExecGuard::insert(pid, program.clone(), request.tool_name.clone(), request.kind)
+    });
+    Ok(ManagedProcess {
+        stdin: child.inner.stdin.take(),
+        stdout: child.inner.stdout.take(),
+        stderr: child.inner.stderr.take(),
+        child,
+        _guard: guard,
+    })
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub(crate) async fn spawn_managed_process(
+    _request: SpawnManagedProcessRequest,
+) -> Result<ManagedProcess, String> {
+    Err("ManagedExec process-tree termination is not yet supported on this platform".to_string())
 }
 
 async fn sleep_until_deadline(deadline_at: Option<DateTime<Utc>>) {

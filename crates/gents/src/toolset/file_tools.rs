@@ -131,22 +131,46 @@ impl GrepTool {
 #[derive(Clone)]
 pub(super) struct WriteFileTool {
     context: ToolContext,
+    writethrough: Option<crate::toolset::lsp::LspWritethrough>,
 }
 
 impl WriteFileTool {
     pub(super) fn new(context: ToolContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            writethrough: None,
+        }
+    }
+
+    pub(super) fn with_writethrough(
+        mut self,
+        writethrough: crate::toolset::lsp::LspWritethrough,
+    ) -> Self {
+        self.writethrough = Some(writethrough);
+        self
     }
 }
 
 #[derive(Clone)]
 pub(super) struct EditFileTool {
     context: ToolContext,
+    writethrough: Option<crate::toolset::lsp::LspWritethrough>,
 }
 
 impl EditFileTool {
     pub(super) fn new(context: ToolContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            writethrough: None,
+        }
+    }
+
+    pub(super) fn with_writethrough(
+        mut self,
+        writethrough: crate::toolset::lsp::LspWritethrough,
+    ) -> Self {
+        self.writethrough = Some(writethrough);
+        self
     }
 }
 
@@ -476,6 +500,10 @@ impl Tool for WriteFileTool {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, args.content.as_bytes()).await?;
+        drop(_guard);
+        if let Some(writethrough) = &self.writethrough {
+            let _ = writethrough.after_mutation(&path).await;
+        }
 
         let output = WriteFileOutput {
             metadata: WriteFileMetadata {
@@ -646,6 +674,10 @@ impl Tool for EditFileTool {
                             "post-write verification failed for {display}: the bytes on disk do not match the edited content"
                         )
                         .into());
+                    }
+                    drop(_guard);
+                    if let Some(writethrough) = &self.writethrough {
+                        let _ = writethrough.after_mutation(&path).await;
                     }
                 }
                 let output = EditFileOutput {
