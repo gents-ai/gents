@@ -80,11 +80,16 @@ jobs:
         run: |
           bash -n scripts/harbor/run_gents.sh
           bash -n scripts/measure-gents-binary.sh
+          bash -n scripts/measure-gents-build-attribution.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
+          shellcheck scripts/measure-gents-build-attribution.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
+
+      - name: Run build attribution parser self-test
+        run: scripts/measure-gents-build-attribution.sh self-test
 
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py

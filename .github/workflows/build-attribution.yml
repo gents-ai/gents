@@ -1,0 +1,86 @@
+name: Build attribution
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character commit SHA expected at the dispatched ref.
+        required: true
+        type: string
+
+concurrency:
+  group: build-attribution-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64-cold:
+    name: macOS arm64 cold release attribution
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      GENTS_BUILD_GIT_SHA: ${{ github.sha }}
+      GENTS_BUILD_GIT_REF: ${{ github.ref }}
+      GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      GENTS_BUILD_GIT_DIRTY: "false"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      TARGET_TRIPLE: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable candidate
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a full lowercase 40-character commit SHA."
+            exit 1
+          fi
+          if [[ "${CANDIDATE_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::candidate_sha ${CANDIDATE_SHA} does not match checked-out GITHUB_SHA ${GITHUB_SHA}."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install protobuf compiler
+        run: .github/scripts/setup-protoc.sh
+
+      - name: Install pinned attribution tools
+        run: |
+          set -euo pipefail
+          if [[ "$(cargo bloat --version 2>/dev/null || true)" != "0.12.1" ]]; then
+            cargo install --locked cargo-bloat --version 0.12.1
+          fi
+          cargo bloat --version
+          jq --version
+
+      - name: Measure cold release build and linked size
+        env:
+          ATTRIBUTION_CACHE_STATE: cold-target-no-compiler-cache
+          ATTRIBUTION_OUTPUT_DIR: ${{ runner.temp }}/gents-build-attribution-${{ github.sha }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/gents-build-attribution-target-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          unset CARGO_BUILD_RUSTC_WRAPPER RUSTC_WRAPPER SCCACHE_RECACHE
+          scripts/measure-gents-build-attribution.sh
+
+      - name: Upload attribution reports
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-build-attribution-${{ github.sha }}
+          path: ${{ runner.temp }}/gents-build-attribution-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 30

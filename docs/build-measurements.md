@@ -11,11 +11,20 @@ Use:
 ```sh
 make measure-build-graph
 make measure-release-cli
+make measure-build-attribution
 ```
 
 Release workflows attach `*.build-metrics.json` beside each published archive.
 CI uploads the dependency-graph report as a retained workflow artifact and
 renders the same signals in the Actions step summary.
+
+The manual Build attribution workflow uses a fresh target directory with no
+compiler cache and uploads raw Cargo timings, resolved metadata and feature
+tree, duplicate-version paths, and `cargo-bloat` 0.12.1 linked-size rankings.
+Its `summary.json` keeps build time, peak memory, binary size, dependency count,
+aggregate per-package compile duration, and linked contribution as separate
+signals. The raw reports are retained as workflow artifacts rather than checked
+into the repository.
 
 ## 2026-08-11 release-profile experiment
 
