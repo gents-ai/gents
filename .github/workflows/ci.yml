@@ -200,7 +200,16 @@ jobs:
         env:
           MEASURE_MODE: graph
           OUTPUT_JSON: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
-        run: scripts/measure-gents-binary.sh
+        run: |
+          scripts/measure-gents-binary.sh
+          jq -e '
+            .schema_version == 2
+            and .dependencies.root_package == "gents-cli"
+            and .dependencies.target == .target_triple
+            and .dependencies.normal_packages > 0
+            and .dependencies.all_target_normal_packages >= .dependencies.normal_packages
+            and (.dependencies.duplicate_packages | length) == .dependencies.duplicate_package_names
+          ' "${OUTPUT_JSON}" >/dev/null
 
       - name: Upload Rust dependency graph metrics
         if: matrix.suite == 'support'

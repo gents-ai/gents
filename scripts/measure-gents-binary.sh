@@ -55,6 +55,21 @@ json_escape() {
   printf '%s' "$value"
 }
 
+json_array_from_lines() {
+  local first=1
+  local value
+  printf '['
+  while IFS= read -r value; do
+    [[ -n "$value" ]] || continue
+    if [[ "$first" == "0" ]]; then
+      printf ','
+    fi
+    printf '"%s"' "$(json_escape "$value")"
+    first=0
+  done
+  printf ']'
+}
+
 file_bytes() {
   wc -c < "$1" | tr -d '[:space:]'
 }
@@ -92,22 +107,53 @@ case "$release_lto" in
   false) release_lto=local-thin ;;
 esac
 
-# Cargo repeats already-rendered nodes with a trailing `(*)`. Strip that
-# presentation marker before counting package/version identities; otherwise a
-# package's position in the tree changes the metric.
+# GitHub's Rust setup action exports CARGO_TERM_COLOR=always. Override it for
+# machine-readable tree output: Cargo colors the `(*)` marker itself, so the
+# escape codes used to make the old normalization miss the marker and inflate
+# the v0.11.0 reports from 819 to 1,141 packages on macOS.
+#
+# Also select the recorded target explicitly. Without that, a report labelled
+# for a cross target can silently describe the host graph instead.
 package_lines=$(
-  cargo tree --locked -p gents-cli --edges normal --prefix none --format '{p}' \
+  CARGO_TERM_COLOR=never cargo tree --locked -p gents-cli --edges normal \
+    --target "$target_triple" --prefix none --format '{p}' \
     | sed 's/ (\*)$//' \
     | LC_ALL=C sort -u
 )
 resolved_packages=$(printf '%s\n' "$package_lines" | awk 'NF { count++ } END { print count + 0 }')
-duplicate_package_names=$(
+all_target_packages=$(
+  CARGO_TERM_COLOR=never cargo tree --locked -p gents-cli --edges normal \
+    --target all --prefix none --format '{p}' \
+    | sed 's/ (\*)$//' \
+    | LC_ALL=C sort -u
+)
+all_target_resolved_packages=$(
+  printf '%s\n' "$all_target_packages" | awk 'NF { count++ } END { print count + 0 }'
+)
+duplicate_names=$(
   printf '%s\n' "$package_lines" \
     | awk 'NF { print $1 }' \
     | LC_ALL=C sort \
-    | uniq -d \
-    | awk 'NF { count++ } END { print count + 0 }'
+    | uniq -d
 )
+duplicate_package_names=$(printf '%s\n' "$duplicate_names" | awk 'NF { count++ } END { print count + 0 }')
+duplicate_packages_json='['
+duplicate_separator=
+while IFS= read -r duplicate_name; do
+  [[ -n "$duplicate_name" ]] || continue
+  duplicate_identities_json=$(
+    printf '%s\n' "$package_lines" \
+      | awk -v name="$duplicate_name" '$1 == name' \
+      | json_array_from_lines
+  )
+  duplicate_packages_json+=$(printf \
+    '%s{"name":"%s","identities":%s}' \
+    "$duplicate_separator" \
+    "$(json_escape "$duplicate_name")" \
+    "$duplicate_identities_json")
+  duplicate_separator=,
+done <<< "$duplicate_names"
+duplicate_packages_json+=']'
 codex_packages=$(
   printf '%s\n' "$package_lines" \
     | sed -n 's/^\(codex-[^ ]*\).*/\1/p' \
@@ -184,7 +230,7 @@ fi
 
 report=$(printf '%s\n' \
   '{' \
-  '  "schema_version": 1,' \
+  '  "schema_version": 2,' \
   "  \"measurement_kind\": \"$(json_escape "$mode")\"," \
   "  \"git_sha\": \"$(json_escape "$git_sha")\"," \
   "  \"git_dirty\": $git_dirty," \
@@ -203,8 +249,14 @@ report=$(printf '%s\n' \
   "  \"binary\": $binary_json," \
   "  \"archive\": $archive_json," \
   '  "dependencies": {' \
+  '    "root_package": "gents-cli",' \
+  '    "edge_kinds": ["normal"],' \
+  '    "root_features": ["default"],' \
+  "    \"target\": \"$(json_escape "$target_triple")\"," \
   "    \"normal_packages\": $resolved_packages," \
+  "    \"all_target_normal_packages\": $all_target_resolved_packages," \
   "    \"duplicate_package_names\": $duplicate_package_names," \
+  "    \"duplicate_packages\": $duplicate_packages_json," \
   "    \"codex_packages\": $codex_packages" \
   '  }' \
   '}')
@@ -236,6 +288,7 @@ if [[ -n "$archive_path" ]]; then
   echo "archive_sha256: $archive_sha256"
 fi
 echo "resolved_packages: $resolved_packages"
+echo "all_target_resolved_packages: $all_target_resolved_packages"
 echo "duplicate_package_names: $duplicate_package_names"
 echo "codex_packages: $codex_packages"
 
@@ -243,6 +296,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "measurement_kind=$mode"
     echo "normal_packages=$resolved_packages"
+    echo "all_target_normal_packages=$all_target_resolved_packages"
     echo "duplicate_package_names=$duplicate_package_names"
     echo "codex_packages=$codex_packages"
     [[ -z "$binary_bytes" ]] || echo "binary_bytes=$binary_bytes"
@@ -261,6 +315,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo "| Target | \`$target_triple\` |"
     echo "| Release profile | LTO \`$release_lto\`, $release_codegen_units CGUs, strip \`$release_strip\` |"
     echo "| Normal dependency packages | $resolved_packages |"
+    echo "| Normal dependency packages (all targets) | $all_target_resolved_packages |"
     echo "| Duplicate package names | $duplicate_package_names |"
     echo "| Upstream Codex packages | $codex_packages |"
     [[ -z "$build_elapsed_seconds" ]] || echo "| Release build | ${build_elapsed_seconds}s |"

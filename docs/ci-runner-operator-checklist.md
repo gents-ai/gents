@@ -150,12 +150,20 @@ If the daemon must be restarted for maintenance, first confirm that every
 runner on that host is idle in the GitHub API.
 
 The macOS release workflow uses a separate
-`/Users/admin/.cache/gents-cargo-target-release/<runner-name>` tree and sets
-`SCCACHE_RECACHE=1`. Release rustc invocations therefore bypass compiler
+`/Users/admin/.cache/gents-cargo-target-release/studio-2-2` tree and is pinned
+to the `studio-2` host's `ci-desktop` registration. It sets
+`SCCACHE_RECACHE=1`, so release rustc invocations bypass compiler
 objects populated by pull-request jobs and cannot reuse their linked target
 artifacts through normal Cargo operation. This is defense in depth against
 cache poisoning, not a substitute for ephemeral release hosts: PR code still
 runs without a strong isolation boundary on the same machines.
+
+Keep the `studio-2`, `ci-desktop`, and common Studio labels on that
+registration. Runner affinity trades failover for deterministic reuse of the
+trusted release target; if `studio-2-2` is offline, release jobs intentionally
+queue until an operator restores it or explicitly moves the `ci-desktop` label
+and its release target tree to another trusted registration. Never satisfy the
+label by pointing a release at a Cargo target tree populated by PR jobs.
 
 Mathlib is a separate cache surface. Runtime, desktop, and proof work each use a
 persistent Lake directory under `/Users/admin/.cache/gents-lean/<runner-name>`,

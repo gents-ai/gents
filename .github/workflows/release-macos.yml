@@ -59,7 +59,13 @@ env:
 jobs:
   build-sign-package:
     name: Build, sign, and package macOS CLI
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    # Release artifacts remain isolated under CARGO_RELEASE_TARGET_ROOT. Pin the
+    # job to the registration that owns the trusted release target tree so a
+    # normal source edit reuses prior release artifacts instead of randomly
+    # landing on one of three cold Studio registrations. SCCACHE_RECACHE stays
+    # enabled below: rustc invocations still cannot consume PR-populated cache
+    # objects.
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-desktop]
     timeout-minutes: 120
 
     steps:

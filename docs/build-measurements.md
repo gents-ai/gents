@@ -1,9 +1,10 @@
 # Build measurements
 
 The repository records release and dependency-graph measurements with
-`scripts/measure-gents-binary.sh`. Reports use a stable JSON schema and include
+`scripts/measure-gents-binary.sh`. Reports use a versioned JSON schema and include
 the commit, dirty state, `Cargo.lock` hash, Rust version, target triple, release
-profile, build time, binary and archive hashes/sizes, and dependency counts.
+profile, build time, binary and archive hashes/sizes, target-scoped dependency
+counts, and machine-readable duplicate-version identities.
 
 Use:
 
@@ -54,7 +55,8 @@ invalidated profile in 257 seconds and linked all three test executables.
 
 ## Dependency baseline
 
-The normal `gents-cli` graph currently contains:
+At the PR #1097 measurement commit, the normal macOS `gents-cli` graph
+contained:
 
 - 820 unique package/version entries
 - 69 package names resolved at more than one version or source
@@ -64,7 +66,73 @@ The earlier 1,142-package result counted Cargo tree's repeated `(*)` display
 rows as distinct entries. The measurement script strips that marker before
 deduplicating package/version identities.
 
+### v0.11.0 report reconciliation
+
+The published v0.11.0 reports showed 1,141 macOS packages and 1,129/1,131
+Linux packages even though the same lockfile resolves to 819, 813, and 815
+packages respectively. This was a measurement defect, not dependency growth
+from DefraDB v0.18.0. `dtolnay/rust-toolchain` sets
+`CARGO_TERM_COLOR=always` in Actions; Cargo then surrounds only the repeated
+`(*)` marker with ANSI escapes, so the script's plain-text suffix removal did
+not match. Reproducing the script locally with that environment produced the
+published 1,141 count exactly.
+
+Schema version 2 forces color off for Cargo tree data, passes the recorded
+target explicitly, records the target-independent `--target all` count, and
+includes each duplicated package name with its resolved identities. Current
+main (`b254258c`, lockfile SHA-256
+`72e775bf1cf70e186f1afa5d0ca314267973b68739995664fa8d0604ad5e1be6`)
+measures:
+
+| Target scope | Normal packages |
+|---|---:|
+| `aarch64-apple-darwin` | 819 |
+| `aarch64-unknown-linux-gnu` | 813 |
+| `x86_64-unknown-linux-gnu` | 815 |
+| all targets | 962 |
+
+Do not compare these target-scoped counts to `cargo tree --target all`, and do
+not establish a dependency budget until multiple schema-version-2 reports have
+established normal variance.
+
+## v0.11.0 macOS release latency
+
+The tagged release spent 2,005 seconds in Cargo; signing, notarization, dSYM
+generation, packaging, and upload together took about two additional minutes.
+Its log confirms `SCCACHE_RECACHE=1`, a cold release-only target tree, and a
+full compile ending in a roughly ten-minute `gents` compile/link tail. The
+209–214 second profile experiment also used a fresh target, but read from the
+host's warm shared sccache. Those are intentionally different trust/cache
+states: a signed release must not read compiler objects populated by public PR
+jobs.
+
+Release Cargo output is already isolated beneath
+`CARGO_RELEASE_TARGET_ROOT`, and forced recaching applies only when Cargo
+actually invokes rustc. The release workflow is therefore pinned to the
+`studio-2-2` (`studio-2`, `ci-desktop`) registration that owns the trusted
+release target tree. This makes prior signed-release artifacts reliably warm
+without weakening the sccache boundary. Record cold, unchanged-source warm,
+and representative source-edit timings separately; the pin trades automatic
+runner failover for deterministic trusted-cache reuse.
+
+An unsigned workflow dispatch at commit `d0e1ca3b` measured the representative
+trusted-target rebuild after this change. Cargo rebuilt only `gents-cli`; all
+dependencies and the core `gents` runtime remained reusable. The changed Git
+revision still invalidated the final crate's compile/link, so this is not an
+unchanged-source no-op measurement:
+
+| Cache state | Cargo build | Raw binary | gzip -9 | Archive |
+|---|---:|---:|---:|---:|
+| v0.11.0 cold trusted target | 2,005s | 70,300,272 | 26,580,064 | 26,641,927 |
+| pinned trusted target, new revision | 524s | 70,299,648 | 26,577,430 | 26,639,171 |
+
+The representative new-revision build is 73.9% faster (3.83x) than the cold
+v0.11.0 release. The second row came from an unsigned dry run, so its size
+differences include the missing Developer ID signature and are not a claim of
+binary-size improvement. Raw workflow:
+https://github.com/source-inc/gents/actions/runs/31601223603.
+
 Useful next investigations are to rank duplicate packages by compiled size,
 map features that pull each duplicate version, split optional desktop/provider
-surfaces from the runtime-critical CLI graph, and add explicit regression
-budgets only after several release reports establish normal variance.
+surfaces from the runtime-critical CLI graph, and pursue DefraDB feature
+boundaries for its internally enabled Wasmtime and libp2p graphs.
