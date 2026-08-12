@@ -9,7 +9,7 @@ use super::support::fixtures::test_identity;
 use super::support::interrupt::{
     create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
     wait_for_response_content_contains, wait_for_response_doc_id, wait_for_runtime_ready,
-    BootedAgent, InferenceCallSnapshot,
+    BootedAgent, InferenceCallSnapshot, TEST_RUNTIME_READY_TIMEOUT,
 };
 use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
 
@@ -1070,7 +1070,8 @@ async fn upsert_streaming_backend(
 async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
     let started = std::time::Instant::now();
     loop {
-        if let Some(snapshot) = support::snapshots::fetch_runtime_snapshot(node, agent_did).await {
+        let snapshot = support::snapshots::fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
                 && snapshot.runnable_behavior_count >= 1
@@ -1079,8 +1080,9 @@ async fn wait_for_runtime_ready_realtime(node: &EmbeddedNode, agent_did: &str) {
             }
         }
         assert!(
-            started.elapsed() < Duration::from_secs(30),
-            "agent did not reach ready state"
+            started.elapsed() < TEST_RUNTIME_READY_TIMEOUT,
+            "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
+             last runtime snapshot: {snapshot:?}"
         );
         tokio::task::yield_now().await;
     }

@@ -34,7 +34,9 @@ permissions:
   contents: write
 
 env:
-  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
+  # No LTO/16 CGUs can use the release host instead of spending minutes in a
+  # single-core fat-LTO tail. Leave four cores free on the 16-core Studio.
+  CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   # Do not reuse linked artifacts from the target trees populated by PR jobs.
@@ -282,7 +284,9 @@ jobs:
             echo "::error::Expected ${TARGET_TRIPLE} macOS runner, got ${host_triple}."
             exit 1
           fi
+          build_started_at="$(date +%s)"
           cargo build -p gents-cli --release --locked
+          echo "GENTS_RELEASE_BUILD_SECONDS=$(($(date +%s) - build_started_at))" >> "${GITHUB_ENV}"
           file "${CARGO_TARGET_DIR}/release/gents"
 
       - name: Generate dSYM and strip release binary
@@ -617,6 +621,21 @@ jobs:
             fi
           fi
 
+      - name: Measure release artifact
+        id: measurement
+        env:
+          ARCHIVE_PATH: ${{ steps.package.outputs.tarball }}
+          ARTIFACT_BASENAME: ${{ steps.package.outputs.artifact_basename }}
+          BINARY_PATH: ${{ env.CARGO_TARGET_DIR }}/release/gents
+          SKIP_BUILD: "1"
+        run: |
+          set -euo pipefail
+          metrics_file="$(dirname "${ARCHIVE_PATH}")/${ARTIFACT_BASENAME}.build-metrics.json"
+          BUILD_ELAPSED_SECONDS="${GENTS_RELEASE_BUILD_SECONDS}" \
+            OUTPUT_JSON="${metrics_file}" \
+            scripts/measure-gents-binary.sh
+          echo "metrics_file=${metrics_file}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
@@ -626,6 +645,7 @@ jobs:
             ${{ steps.package.outputs.checksum_file }}
             ${{ steps.package.outputs.dsym_tarball }}
             ${{ steps.package.outputs.dsym_checksum_file }}
+            ${{ steps.measurement.outputs.metrics_file }}
           if-no-files-found: error
 
       - name: Attach artifacts to GitHub Release
@@ -636,6 +656,7 @@ jobs:
           CHECKSUM_FILE: ${{ steps.package.outputs.checksum_file }}
           DSYM_TARBALL: ${{ steps.package.outputs.dsym_tarball }}
           DSYM_CHECKSUM_FILE: ${{ steps.package.outputs.dsym_checksum_file }}
+          METRICS_FILE: ${{ steps.measurement.outputs.metrics_file }}
         run: |
           set -euo pipefail
 
@@ -656,6 +677,7 @@ jobs:
             "${CHECKSUM_FILE}" \
             "${DSYM_TARBALL}" \
             "${DSYM_CHECKSUM_FILE}" \
+            "${METRICS_FILE}" \
             --clobber
 
       - name: Restore keychain search list

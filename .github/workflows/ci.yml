@@ -79,7 +79,9 @@ jobs:
       - name: Check Harbor runner syntax
         run: |
           bash -n scripts/harbor/run_gents.sh
+          bash -n scripts/measure-gents-binary.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
+          shellcheck scripts/measure-gents-binary.sh
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
@@ -193,6 +195,22 @@ jobs:
         if: matrix.suite == 'support'
         run: .github/scripts/check-rust-ci-package-coverage.sh
 
+      - name: Record Rust dependency graph metrics
+        if: matrix.suite == 'support'
+        env:
+          MEASURE_MODE: graph
+          OUTPUT_JSON: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
+        run: scripts/measure-gents-binary.sh
+
+      - name: Upload Rust dependency graph metrics
+        if: matrix.suite == 'support'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-build-graph-${{ github.sha }}
+          path: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
+          if-no-files-found: error
+          retention-days: 30
+
       # Together these four jobs compile and link the FULL workspace target
       # surface — examples, benches, every test target, and the desktop crates.
       # This preserves the #646 construction-site fence without doing a
@@ -203,6 +221,11 @@ jobs:
 
       - name: Run proof conformance tests
         if: matrix.suite == 'runtime'
+        # DefraDB operations can exceed the platform-default worker stack.
+        # Production runtimes reserve 16 MiB for the same work; keep the
+        # conformance gate representative and deterministic under parallelism.
+        env:
+          RUST_MIN_STACK: 16777216
         run: cargo test -p gents --test conformance
 
       - name: Compile and link CLI targets
@@ -262,6 +285,8 @@ jobs:
 
       - name: Run full library and integration tests
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
+        env:
+          RUST_MIN_STACK: 16777216
         run: cargo test -p gents --lib --tests
 
       - name: Run desktop Rust package tests

@@ -29,7 +29,7 @@ async fn exec(node: &EmbeddedNode, statement: &str) {
     );
 }
 
-async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: &str) {
+async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: &str) -> String {
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -46,11 +46,16 @@ async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: 
         }}"#
     );
     exec(node, &mutation).await;
+    crate::request_binding::resolve_request_doc_id(node, request_id)
+        .await
+        .expect("resolve parent request document")
+        .expect("created parent request document")
 }
 
 async fn write_bridge(
     node: &EmbeddedNode,
     request_id: &str,
+    request_doc_id: &str,
     tool_call_id: &str,
     extra_fields: &str,
 ) {
@@ -59,6 +64,7 @@ async fn write_bridge(
             create_AgentToolCall(input: {{
                 tool_call_key: "{request_id}:{tool_call_id}",
                 request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
                 session_id: "session-{request_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
@@ -109,10 +115,12 @@ async fn load_tool(node: &EmbeddedNode, tool_call_id: &str) -> ToolRow {
 #[tokio::test]
 async fn unclaimed_reconciler_skips_foreign_parent_bridge() {
     let node = test_node().await;
-    write_parent_request(node.as_ref(), "parent-foreign-unclaimed", FOREIGN_DID).await;
+    let parent_doc_id =
+        write_parent_request(node.as_ref(), "parent-foreign-unclaimed", FOREIGN_DID).await;
     write_bridge(
         node.as_ref(),
         "parent-foreign-unclaimed",
+        &parent_doc_id,
         "foreign-unclaimed",
         r#", unclaimed_deadline_at: "2020-01-01T00:00:00Z""#,
     )
@@ -131,10 +139,12 @@ async fn unclaimed_reconciler_skips_foreign_parent_bridge() {
 #[tokio::test]
 async fn cancel_ack_observer_skips_foreign_parent_bridge() {
     let node = test_node().await;
-    write_parent_request(node.as_ref(), "parent-foreign-cancel", FOREIGN_DID).await;
+    let parent_doc_id =
+        write_parent_request(node.as_ref(), "parent-foreign-cancel", FOREIGN_DID).await;
     write_bridge(
         node.as_ref(),
         "parent-foreign-cancel",
+        &parent_doc_id,
         "foreign-cancel",
         r#", cancel_cascade_intent_at: "2020-01-01T00:00:00Z", cancel_pending_remote_ack: true"#,
     )
@@ -146,6 +156,50 @@ async fn cancel_ack_observer_skips_foreign_parent_bridge() {
     assert!(outcomes.is_empty());
 
     let tool = load_tool(node.as_ref(), "foreign-cancel").await;
+    assert_eq!(tool.cancel_pending_remote_ack, Some(true));
+    assert!(tool.stuck_since.is_none());
+}
+
+#[tokio::test]
+async fn unclaimed_reconciler_skips_bridge_whose_parent_is_remote_only() {
+    let node = test_node().await;
+    write_bridge(
+        node.as_ref(),
+        "parent-remote-unclaimed",
+        "bae-remote-parent-unclaimed",
+        "remote-unclaimed",
+        r#", unclaimed_deadline_at: "2020-01-01T00:00:00Z""#,
+    )
+    .await;
+
+    let outcomes = reconcile_unclaimed_cross_deployment_spawns(node.clone(), LOCAL_DID)
+        .await
+        .expect("remote-only parent should be an ownership-negative result");
+    assert!(outcomes.is_empty());
+
+    let tool = load_tool(node.as_ref(), "remote-unclaimed").await;
+    assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
+    assert!(tool.unclaimed_deadline_at.is_some());
+}
+
+#[tokio::test]
+async fn cancel_ack_observer_skips_bridge_whose_parent_is_remote_only() {
+    let node = test_node().await;
+    write_bridge(
+        node.as_ref(),
+        "parent-remote-cancel",
+        "bae-remote-parent-cancel",
+        "remote-cancel",
+        r#", cancel_cascade_intent_at: "2020-01-01T00:00:00Z", cancel_pending_remote_ack: true"#,
+    )
+    .await;
+
+    let outcomes = observe_cancel_cascade_ack(node.clone(), LOCAL_DID)
+        .await
+        .expect("remote-only parent should be an ownership-negative result");
+    assert!(outcomes.is_empty());
+
+    let tool = load_tool(node.as_ref(), "remote-cancel").await;
     assert_eq!(tool.cancel_pending_remote_ack, Some(true));
     assert!(tool.stuck_since.is_none());
 }

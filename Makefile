@@ -24,6 +24,10 @@ help:
 	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
 	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
 	@echo
+	@echo "Measurements:"
+	@echo "  make measure-build-graph   Report the normal CLI dependency graph"
+	@echo "  make measure-release-cli   Build and report release binary metrics"
+	@echo
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
@@ -98,12 +102,18 @@ TARGET_TRIPLE := $(if $(TARGET),$(TARGET),$(shell rustc -Vv | awk '/^host:/ { pr
 RELEASE_BIN := target/$(if $(TARGET),$(TARGET)/,)release/gents
 RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
-.PHONY: release-cli release-cli-headless dist-cli
+.PHONY: release-cli release-cli-headless dist-cli measure-build-graph measure-release-cli
 release-cli:
 	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
 	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
+
+measure-build-graph:
+	MEASURE_MODE=graph scripts/measure-gents-binary.sh
+
+measure-release-cli:
+	scripts/measure-gents-binary.sh
 
 dist-cli: release-cli
 	@rm -rf "$(DIST_DIR)/$(RELEASE_ARTIFACT)"
