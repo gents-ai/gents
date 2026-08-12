@@ -275,3 +275,44 @@ Useful next investigations are to rank duplicate packages by compiled size,
 map features that pull each duplicate version, split optional desktop/provider
 surfaces from the runtime-critical CLI graph, and pursue DefraDB feature
 boundaries for its internally enabled Wasmtime and libp2p graphs.
+
+### Lark default-storage follow-up
+
+A directly comparable run at commit `28269d4f` replaced RocksDB with Lark as
+Gents' default persistent runtime backend. It used the same Rust version,
+target, release profile, 12 Cargo jobs, fresh target directory, direct rustc,
+disabled incremental compilation, and attribution script as the `ac11b9e0`
+run above. The measurement commit differs from the final implementation only
+by the temporary workflow-dispatch bridge required before the reusable
+attribution workflow reaches the default branch.
+
+| Metric | RocksDB parent | Lark candidate | Change |
+|---|---:|---:|---:|
+| cold release build | 1,788s | 874s | -914s (-51.1%) |
+| stripped binary | 70,693,328 | 64,626,896 | -6,066,432 (-8.6%) |
+| gzip payload | 26,994,237 | 24,462,339 | -2,531,898 (-9.4%) |
+| target-scoped normal packages | 819 | 819 | 0 |
+| all-target normal packages | 962 | 962 | 0 |
+| duplicate package names | 68 | 68 | 0 |
+
+The 874-second (14m34s) build peaked at 10,147,430,400 bytes RSS. The package
+counts stay flat because small pure-Rust Lark packages replace the native
+RocksDB subtree; package count is not a proxy for the measured compile-time or
+linked-size improvement. `librocksdb-sys`, `rocksdb`, `bindgen`, and their
+native compression/sys dependencies are absent from the candidate normal
+graph.
+
+The separate symbol-preserving inspection build produced a 113,352,008-byte
+file with a 52,619,664-byte text section, down from 122,703,208 and 57,632,052
+bytes respectively. Its largest remaining linked crates are `gents_server`
+(7,058,176 bytes), `std` (6,890,816), `gents` (5,694,352), DefraDB `db`
+(2,592,192), DefraDB `query` (2,155,884), `cranelift_codegen` (2,106,924), and
+DefraDB `p2p` (1,880,936). The remaining cold-build leaders are `aws-lc-sys`
+(292.95s aggregate), `gents-cli` (222.28s), and `cranelift-codegen` (212.56s),
+which leaves the upstream DefraDB feature boundaries as the next large target.
+
+The complete attribution job took 28m48s because it includes both the ordinary
+stripped build and the separate symbol build; only the embedded 874-second
+Cargo measurement is comparable with release build time. Exact commands, tool
+versions, timings, dependency trees, and linked-size reports are stored in
+https://github.com/source-inc/gents/actions/runs/31622045427.
