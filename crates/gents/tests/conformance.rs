@@ -113,6 +113,8 @@ mod coverage;
 mod directory_projection;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
+#[path = "conformance/lsp.rs"]
+mod lsp;
 #[path = "conformance/fleet.rs"]
 mod fleet;
 #[path = "conformance/goals.rs"]
@@ -340,6 +342,11 @@ fn generated_tool_execution_cases_cover_preflight_and_retry_contracts() {
 #[test]
 fn generated_tool_policy_cases_match_lean_composition() {
     tool_policy::generated_tool_policy_cases_match_lean_composition();
+}
+
+#[test]
+fn generated_lsp_action_cases_match_rust_authorization() {
+    lsp::generated_lsp_action_cases_match_rust_authorization();
 }
 
 #[test]

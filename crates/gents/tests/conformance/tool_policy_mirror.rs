@@ -187,6 +187,7 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         orchestration: view.orchestration,
         cross_deployment: view.cross_deployment,
         skills: view.skills,
+        lsp: view.lsp,
         cli_tools: cli_scope_from_keys(&view.cli_scope_kind, &view.cli_keys),
         mcp_services: unit_scope_from_strings(&view.mcp_scope_kind, &view.mcp_services),
         defra_collections: unit_scope_from_strings(
@@ -236,6 +237,7 @@ fn view_from_surface(
         orchestration: surface.orchestration,
         cross_deployment: surface.cross_deployment,
         skills: surface.skills,
+        lsp: surface.lsp,
         bash_mode: exec_rank(surface.bash.execution_mode),
         bash_net: net_rank(surface.bash.network_mode),
         bash_sandbox: surface.bash.sandbox,

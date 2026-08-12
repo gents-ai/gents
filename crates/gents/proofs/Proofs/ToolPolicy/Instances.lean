@@ -26,6 +26,7 @@ def Surface.meet (a b : Surface) : Surface :=
   , orchestration := a.orchestration && b.orchestration
   , crossDeployment := a.crossDeployment && b.crossDeployment
   , skills := a.skills && b.skills
+  , lsp := a.lsp && b.lsp
   , cliTools := a.cliTools.meet rootVM b.cliTools
   , mcpServices := a.mcpServices.meet unitVM b.mcpServices
   , defraCollections := a.defraCollections.meet unitVM b.defraCollections
@@ -211,6 +212,18 @@ theorem effective_skills_le_ceiling :
 
 theorem effective_skills_le_behavior :
     (effective behavior ceiling runtime).skills = true → behavior.skills = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_left (bool_and_left h)
+
+theorem effective_lsp_le_ceiling :
+    (effective behavior ceiling runtime).lsp = true → ceiling.lsp = true := by
+  unfold effective Surface.meet
+  intro h
+  exact bool_and_right (bool_and_left h)
+
+theorem effective_lsp_le_behavior :
+    (effective behavior ceiling runtime).lsp = true → behavior.lsp = true := by
   unfold effective Surface.meet
   intro h
   exact bool_and_left (bool_and_left h)

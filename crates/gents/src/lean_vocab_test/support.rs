@@ -50,6 +50,8 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
     #[serde(default)]
+    pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
+    #[serde(default)]
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     #[serde(default)]
     pub(crate) self_config_cases: Vec<LeanSelfConfigCase>,
@@ -490,6 +492,10 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
 
 pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
+}
+
+pub(crate) fn lean_lsp_action_cases() -> &'static [LeanLspActionCase] {
+    &lean_contract_snapshot().lsp_action_cases
 }
 
 pub(crate) fn lean_self_config_field_tables() -> &'static [LeanSelfConfigFieldTable] {

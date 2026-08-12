@@ -24,6 +24,7 @@ structure SurfaceView where
   orchestration : Bool
   crossDeployment : Bool
   skills : Bool
+  lsp : Bool
   bashMode : Nat
   bashNet : Nat
   bashSandbox : Bool
@@ -204,6 +205,7 @@ def surface (file : FileCap) (bash : BashPolicy)
   , orchestration := spawn
   , crossDeployment := spawn
   , skills := meta
+  , lsp := meta
   , cliTools := .all
   , mcpServices := mcp
   , defraCollections := .all
@@ -226,6 +228,7 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , orchestration := s.orchestration
   , crossDeployment := s.crossDeployment
   , skills := s.skills
+  , lsp := s.lsp
   , bashMode := s.bash.mode.rank
   , bashNet := s.bash.network.rank
   , bashSandbox := s.bash.sandbox
@@ -341,6 +344,7 @@ def behaviorEachCategory : Surface :=
 def ceilingClampsEachCategory : Surface :=
   { wideOpen with
     memory := false
+  , lsp := false
   , sessionHistory := false
   , contextBudget := false
   , steering := false

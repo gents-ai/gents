@@ -22,6 +22,8 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) orchestration: bool,
     pub(crate) cross_deployment: bool,
     pub(crate) skills: bool,
+    #[serde(default)]
+    pub(crate) lsp: bool,
     pub(crate) bash_mode: u8,
     pub(crate) bash_net: u8,
     pub(crate) bash_sandbox: bool,
@@ -58,4 +60,17 @@ pub(crate) struct LeanToolPolicyCase {
     pub(crate) ceiling: LeanToolPolicySurfaceView,
     pub(crate) runtime: LeanToolPolicySurfaceView,
     pub(crate) expected: LeanToolPolicySurfaceView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanLspActionCase {
+    pub(crate) name: String,
+    pub(crate) lsp: bool,
+    pub(crate) file_rank: u8,
+    pub(crate) action: String,
+    pub(crate) mutates: bool,
+    pub(crate) source: String,
+    pub(crate) advertised: bool,
+    pub(crate) action_authorized: bool,
+    pub(crate) apply_authorized: bool,
 }
