@@ -5,7 +5,8 @@
     "args": [],
     "file_types": [".rs"],
     "root_markers": ["Cargo.toml", "rust-analyzer.toml"],
-    "priority": 10
+    "priority": 10,
+    "warmup_timeout_ms": 30000
   },
   {
     "name": "gopls",

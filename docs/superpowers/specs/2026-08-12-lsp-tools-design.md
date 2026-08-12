@@ -709,7 +709,9 @@ allowlist (scalars + per-server `disabled` / `priority` /
   commands.
 - `cargo test -p gents` then `cargo check --workspace --all-targets`.
 
-No live rust-analyzer in CI.
+No live rust-analyzer in required CI. Operator-run proof is
+`demo/lsp-rust` plus the ignored `e2e_live::lsp_live` test
+(`GENTS_LIVE_LSP=1`).
 
 ## Implementation sketch
 

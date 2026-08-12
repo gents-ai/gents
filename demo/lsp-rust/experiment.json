@@ -1,0 +1,20 @@
+{
+  "name": "lsp-rust",
+  "description": "Least-privilege lsp tool against rust-analyzer on a tiny Rust crate. Not a CI gate.",
+  "init": {
+    "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "model_name": "${GENTS_EXP_MODEL:-d4f}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "LspDemoJob",
+    "job_id_field": "job_id",
+    "prompt_field": "prompt"
+  },
+  "default_prompt": "Use the lsp tool on src/lib.rs. Hover the add function (line 4, symbol add), then request its definition, then call lsp status. Quote the hover signature. Do not guess types. Reply DONE when you have used lsp.",
+  "expect": {
+    "trigger_ids": ["lsp-hover"]
+  },
+  "await_timeout_secs": 300
+}

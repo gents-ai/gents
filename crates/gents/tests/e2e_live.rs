@@ -8,6 +8,8 @@ mod edit_file_live;
 mod goal_continuation_live;
 #[path = "e2e_live/interrupt_live.rs"]
 mod interrupt_live;
+#[path = "e2e_live/lsp_live.rs"]
+mod lsp_live;
 #[path = "e2e_live/p2p_admission_concurrent_live.rs"]
 mod p2p_admission_concurrent_live;
 #[path = "e2e_live/post_status_json_live.rs"]
