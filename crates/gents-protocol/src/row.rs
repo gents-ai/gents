@@ -801,6 +801,10 @@ pub struct ToolSelectionRow {
     pub self_config_no_lockout: Option<bool>,
     #[serde(default)]
     pub self_config_dry_run: Option<bool>,
+    #[serde(default)]
+    pub enable_lsp: Option<bool>,
+    #[serde(default)]
+    pub lsp_config: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

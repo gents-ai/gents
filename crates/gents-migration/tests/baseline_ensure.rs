@@ -51,6 +51,11 @@ fn default_baseline_matches_ordered_protocol_catalog() {
             if *collection == gents_protocol::schemas::INFERENCE_PROFILE_NAME
     )));
     assert!(versioned_collections.contains(gents_protocol::schemas::AGENT_REQUEST_NAME));
+    assert!(gents_migration::DEFAULT_STEPS.iter().any(|step| matches!(
+        step,
+        MigrationStep::PatchVersioned { collection, .. }
+            if *collection == gents_protocol::schemas::TOOL_SELECTION_NAME
+    )));
 }
 
 async fn fresh_node() -> Arc<EmbeddedNode> {
@@ -251,6 +256,62 @@ async fn agent_request_additive_migrations_preserve_existing_document() {
     assert!(rows[0]["max_total_tokens"].is_null());
     assert!(rows[0]["background_completion_input_through_sequence"].is_null());
     assert!(rows[0]["background_completion_notification_keys_json"].is_null());
+
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn tool_selection_lsp_migrations_preserve_existing_document() {
+    let node = fresh_node().await;
+    let baseline = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == gents_protocol::schemas::TOOL_SELECTION_NAME)
+        .expect("ToolSelection baseline");
+    node.add_schema(baseline.sdl)
+        .await
+        .expect("register frozen tool-selection baseline");
+
+    let create = r#"mutation {
+        create_ToolSelection(input: {
+            selection_id: "existing-selection"
+            agent_did: "did:key:existing"
+            display_name: "Existing"
+        }) { selection_id display_name }
+    }"#;
+    let response = node.execute(create).await;
+    assert!(
+        !response.has_errors(),
+        "create selection: {:?}",
+        response.errors
+    );
+
+    ensure_migrations(node.as_ref())
+        .await
+        .expect("apply production migrations");
+
+    let response = node
+        .execute(
+            r#"{ ToolSelection(filter: {selection_id: {_eq: "existing-selection"}}) {
+                selection_id display_name enable_lsp lsp_config
+            } }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query selection: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("ToolSelection"))
+        .and_then(serde_json::Value::as_array)
+        .expect("ToolSelection rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["selection_id"], "existing-selection");
+    assert_eq!(rows[0]["display_name"], "Existing");
+    assert!(rows[0]["enable_lsp"].is_null());
+    assert!(rows[0]["lsp_config"].is_null());
 
     node.shutdown().await;
 }

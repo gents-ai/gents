@@ -15,6 +15,7 @@ pub(crate) enum DenialReason {
     DisabledNetworkUnenforceable,
     DisabledNetworkCommand { command: String },
     WorkspaceWriteSandboxUnavailable,
+    WorkspaceExecutable,
 }
 
 impl DenialReason {
@@ -30,6 +31,7 @@ impl DenialReason {
             Self::DisabledNetworkUnenforceable => "disabledNetworkUnenforceable",
             Self::DisabledNetworkCommand { .. } => "disabledNetworkCommand",
             Self::WorkspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable",
+            Self::WorkspaceExecutable => "workspaceExecutable",
         }
     }
 
@@ -171,6 +173,9 @@ impl DenialReason {
                         .into()
                 }
             }
+            Self::WorkspaceExecutable => {
+                "language-server executable is not admitted (workspace-local or missing)".into()
+            }
         }
     }
 
@@ -209,6 +214,7 @@ impl DenialReason {
                 command: denied_command?,
             }),
             "workspaceWriteSandboxUnavailable" => Some(Self::WorkspaceWriteSandboxUnavailable),
+            "workspaceExecutable" => Some(Self::WorkspaceExecutable),
             _ => None,
         }
     }

@@ -332,5 +332,9 @@ pub(crate) fn guard_selection_keeps_gate(merged: &Map<String, Value>) -> Result<
 /// Structural + reference validation for a merged ToolSelection.
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
     let selection: ToolSelectionDocument = decode_merged("ToolSelection", merged)?;
+    if let Some(raw) = selection.lsp_config.as_deref() {
+        crate::toolset::lsp::LspConfigDocument::parse_self_config(Some(raw))
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+    }
     selection.validate()
 }

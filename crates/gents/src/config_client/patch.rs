@@ -176,6 +176,8 @@ impl SelfConfigTarget {
                 "self_config_categories",
                 "self_config_no_lockout",
                 "self_config_dry_run",
+                "enable_lsp",
+                "lsp_config",
                 "updated_at",
             ],
             Self::InferenceProfile => &[
@@ -349,6 +351,8 @@ impl SelfConfigTarget {
                 "self_config_categories",
                 "self_config_no_lockout",
                 "self_config_dry_run",
+                "enable_lsp",
+                "lsp_config",
             ],
             Self::InferenceProfile => &[
                 "display_name",

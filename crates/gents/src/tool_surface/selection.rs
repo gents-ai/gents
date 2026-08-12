@@ -124,6 +124,8 @@ pub struct ToolSelection {
     pub self_config_categories: Option<Vec<String>>,
     pub self_config_no_lockout: bool,
     pub self_config_dry_run: bool,
+    pub enable_lsp: bool,
+    pub lsp_config: Option<String>,
 }
 
 impl Default for ToolSelection {
@@ -149,6 +151,8 @@ impl Default for ToolSelection {
             self_config_categories: None,
             self_config_no_lockout: false,
             self_config_dry_run: false,
+            enable_lsp: false,
+            lsp_config: None,
         }
     }
 }
@@ -208,6 +212,13 @@ impl ToolSelection {
             self_config_categories: selection.self_config_categories.clone(),
             self_config_no_lockout: selection.self_config_no_lockout.unwrap_or(false),
             self_config_dry_run: selection.self_config_dry_run.unwrap_or(false),
+            enable_lsp: selection.enable_lsp.unwrap_or(false),
+            lsp_config: selection
+                .lsp_config
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
         })
     }
 }

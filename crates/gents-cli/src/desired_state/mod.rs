@@ -209,6 +209,10 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) self_config_no_lockout: bool,
     #[serde(default)]
     pub(crate) self_config_dry_run: bool,
+    #[serde(default)]
+    pub(crate) enable_lsp: bool,
+    #[serde(default)]
+    pub(crate) lsp_config: Option<String>,
 }
 
 fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

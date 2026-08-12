@@ -87,6 +87,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         self_config_categories: Vec::new(),
         self_config_no_lockout: None,
         self_config_dry_run: None,
+        enable_lsp: None,
+        lsp_config: None,
         enable_file_tools: Some(true),
         file_tools_mode: Some("workspace-write".to_string()),
         file_tool_root: Some("/workspace".to_string()),

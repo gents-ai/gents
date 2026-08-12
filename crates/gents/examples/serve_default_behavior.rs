@@ -159,6 +159,8 @@ async fn seed_demo_documents(
             self_config_categories: None,
             self_config_no_lockout: None,
             self_config_dry_run: None,
+        enable_lsp: None,
+        lsp_config: None,
         },
     )
     .await?;

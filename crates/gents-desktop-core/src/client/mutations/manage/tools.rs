@@ -153,6 +153,8 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "self_config_dry_run",
             row.self_config_dry_run,
         )),
+        Some(graphql_optional_bool_field("enable_lsp", row.enable_lsp)),
+        Some(graphql_string_field("lsp_config", row.lsp_config.as_deref())),
         Some(graphql_string_field(
             "subagent_default_await_mode",
             row.subagent_default_await_mode.as_deref(),
@@ -282,6 +284,8 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
             "self_config_dry_run",
             row.self_config_dry_run,
         )),
+        Some(graphql_optional_bool_field("enable_lsp", row.enable_lsp)),
+        Some(graphql_string_field("lsp_config", row.lsp_config.as_deref())),
         Some(graphql_string_field(
             "subagent_default_await_mode",
             row.subagent_default_await_mode.as_deref(),
