@@ -15,8 +15,10 @@ export const EXEMPT_ISSUES = new Set([839]);
 
 const MARKER_OPEN = "<!-- triage-hygiene:conflict:";
 
+// Use JSON encoding to ensure the marker is unambiguous: label names may
+// contain any character including separator characters, so encoding must be injective.
 export function conflictMarker(labels) {
-  return `${MARKER_OPEN}${[...labels].sort().join("|")} -->`;
+  return `${MARKER_OPEN}${JSON.stringify([...labels].sort())} -->`;
 }
 
 export function reconcile({ number, labels, comments = [] }) {

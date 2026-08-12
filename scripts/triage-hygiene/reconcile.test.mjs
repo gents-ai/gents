@@ -84,6 +84,13 @@ test("the marker is independent of label order", () => {
   );
 });
 
+test("the marker is injective across label sets that share a separator", () => {
+  assert.notEqual(
+    conflictMarker(["roadmap: a|b"]),
+    conflictMarker(["roadmap: a", "roadmap: b"]),
+  );
+});
+
 test("issue 839 is exempt by number even with no horizon", () => {
   const r = reconcile({ ...base, number: 839, labels: ["meta"] });
   assert.deepEqual(r, { add: [], remove: [], comment: null });

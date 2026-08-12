@@ -668,6 +668,13 @@ test("the marker is independent of label order", () => {
   );
 });
 
+test("the marker is injective across label sets that share a separator", () => {
+  assert.notEqual(
+    conflictMarker(["roadmap: a|b"]),
+    conflictMarker(["roadmap: a", "roadmap: b"]),
+  );
+});
+
 test("issue 839 is exempt by number even with no horizon", () => {
   const r = reconcile({ ...base, number: 839, labels: ["meta"] });
   assert.deepEqual(r, { add: [], remove: [], comment: null });
@@ -707,8 +714,10 @@ export const EXEMPT_ISSUES = new Set([839]);
 
 const MARKER_OPEN = "<!-- triage-hygiene:conflict:";
 
+// Use JSON encoding to ensure the marker is unambiguous: label names may
+// contain any character including separator characters, so encoding must be injective.
 export function conflictMarker(labels) {
-  return `${MARKER_OPEN}${[...labels].sort().join("|")} -->`;
+  return `${MARKER_OPEN}${JSON.stringify([...labels].sort())} -->`;
 }
 
 export function reconcile({ number, labels, comments = [] }) {
