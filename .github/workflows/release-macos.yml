@@ -64,16 +64,7 @@ env:
   TARGET_TRIPLE: aarch64-apple-darwin
 
 jobs:
-  # Temporary pre-merge measurement bridge. The standalone workflow cannot be
-  # dispatched until its file exists on the default branch.
-  build-attribution-measurement:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/perf/lark-default-storage' && inputs.dry_run_unsigned && inputs.codesign_timestamp == 'none'
-    uses: ./.github/workflows/build-attribution.yml
-    with:
-      candidate_sha: ${{ github.sha }}
-
   build-sign-package:
-    if: github.ref != 'refs/heads/perf/lark-default-storage' || !inputs.dry_run_unsigned || inputs.codesign_timestamp != 'none'
     name: Build, sign, and package macOS CLI
     # Release artifacts remain isolated under CARGO_RELEASE_TARGET_ROOT. Pin the
     # job to the registration that owns the trusted release target tree so a
