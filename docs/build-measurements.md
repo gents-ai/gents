@@ -134,6 +134,34 @@ binary-size improvement. Raw workflows:
 https://github.com/source-inc/gents/actions/runs/31601223603 and
 https://github.com/source-inc/gents/actions/runs/31602179888.
 
+### Same-commit release retries
+
+Cargo build-script fallback discovery watches the checkout's Git `HEAD` and
+resolved ref so local builds report accurate provenance. A release checkout is
+new on every workflow invocation, however, and those Git files receive new
+timestamps even when the source commit is unchanged. That invalidated
+`gents-cli` and its final link on every retry.
+
+Release workflows now pass the trusted GitHub event SHA, ref, tag, and clean
+state to the build script explicitly. The local discovery fallback is
+unchanged, while an explicit-metadata release no longer watches checkout-local
+Git files. Two unsigned dispatches of commit `ef1585af` on the same trusted
+target tree measured the creation and reuse of that artifact:
+
+| Cache state | Cargo build | Workflow job | Raw binary | gzip -9 | Archive |
+|---|---:|---:|---:|---:|---:|
+| first explicit-metadata artifact | 424s | 8m32s | 70,300,112 | 26,575,189 | 26,637,333 |
+| identical-SHA retry | 0.53s | 1m34s | 70,300,112 | 26,575,189 | 26,637,341 |
+
+The retry avoids 423 seconds (99.9%) of Cargo work and cuts the complete job by
+6m58s (81.6%). The eight-byte archive difference is packaging metadata; the raw
+binary and gzip payload sizes are identical. This optimization affects only
+exact same-commit retries. A source edit still requires the representative
+final-crate compile/link measured above. `SCCACHE_RECACHE=1` remains enabled,
+and no public-PR compiler artifacts enter the trusted release target. Raw
+workflows: https://github.com/source-inc/gents/actions/runs/31608891843 and
+https://github.com/source-inc/gents/actions/runs/31609716279.
+
 Useful next investigations are to rank duplicate packages by compiled size,
 map features that pull each duplicate version, split optional desktop/provider
 surfaces from the runtime-critical CLI graph, and pursue DefraDB feature
